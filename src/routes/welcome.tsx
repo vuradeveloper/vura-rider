@@ -32,13 +32,13 @@ function Welcome() {
       <div className="px-6 py-6 space-y-3 bg-surface">
         <Link
           to="/signup"
-          className="flex items-center justify-center gap-2 rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm"
+          className="flex items-center justify-center gap-2 rounded-2xl bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm"
         >
           Create an account <ChevronRight className="h-4 w-4" />
         </Link>
         <Link
           to="/login"
-          className="flex items-center justify-center rounded-full border border-border bg-surface py-4 text-sm font-bold"
+          className="flex items-center justify-center rounded-2xl border border-border bg-surface py-4 text-sm font-bold"
         >
           I already have an account
         </Link>

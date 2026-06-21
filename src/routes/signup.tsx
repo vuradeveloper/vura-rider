@@ -61,7 +61,7 @@ function Signup() {
                       <select
                         value={countryCode}
                         onChange={(e) => setCountryCode(e.target.value)}
-                        className="w-24 rounded-full bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-3 text-sm font-medium outline-none appearance-none text-center"
+                        className="w-24 rounded-xl bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-3 text-sm font-medium outline-none appearance-none text-center"
                       >
                         {countries.map((c) => (
                           <option key={c.code} value={c.dial_code}>
@@ -75,7 +75,7 @@ function Signup() {
                         onChange={(e) => f.set(e.target.value)}
                         placeholder={f.placeholder}
                         required
-                        className="flex-1 w-full rounded-full bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-3 text-sm font-medium outline-none"
+                        className="flex-1 w-full rounded-xl bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-3 text-sm font-medium outline-none"
                       />
                     </div>
                   ) : (
@@ -85,7 +85,7 @@ function Signup() {
                       onChange={(e) => f.set(e.target.value)}
                       placeholder={f.placeholder}
                       required
-                      className="mt-1 w-full rounded-full bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-3 text-sm font-medium outline-none"
+                      className="mt-1 w-full rounded-xl bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-3 text-sm font-medium outline-none"
                     />
                   )}
                 </label>
@@ -93,7 +93,7 @@ function Signup() {
 
               <button
                 type="submit"
-                className="mt-6 w-full rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm active:scale-[0.99] transition"
+                className="mt-6 w-full rounded-2xl bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm active:scale-[0.99] transition"
               >
                 Continue
               </button>
@@ -121,14 +121,14 @@ function Signup() {
                   onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
                   placeholder="123456"
                   required
-                  className="mt-1 w-full rounded-full bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-4 text-center text-2xl font-extrabold tracking-widest outline-none"
+                  className="mt-1 w-full rounded-xl bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-4 text-center text-2xl font-extrabold tracking-widest outline-none"
                 />
               </label>
 
               <button
                 type="submit"
                 disabled={otp.length < 4}
-                className="mt-6 w-full rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm disabled:opacity-50 active:scale-[0.99] transition"
+                className="mt-6 w-full rounded-2xl bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm disabled:opacity-50 active:scale-[0.99] transition"
               >
                 Create account
               </button>

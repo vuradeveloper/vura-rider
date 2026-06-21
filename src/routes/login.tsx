@@ -39,7 +39,7 @@ function Login() {
           <form onSubmit={submit} className="space-y-4">
             <label className="block">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground ml-1">Email</span>
-              <div className="mt-1 flex items-center gap-2 rounded-full bg-secondary border border-transparent focus-within:bg-background focus-within:border-primary px-4 py-3 transition-colors">
+              <div className="mt-1 flex items-center gap-2 rounded-xl bg-secondary border border-transparent focus-within:bg-background focus-within:border-primary px-4 py-3 transition-colors">
                 <Mail className="h-4 w-4 text-muted-foreground" />
                 <input
                   type="email"
@@ -52,7 +52,7 @@ function Login() {
             </label>
             <label className="block">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground ml-1">Password</span>
-              <div className="mt-1 flex items-center gap-2 rounded-full bg-secondary border border-transparent focus-within:bg-background focus-within:border-primary px-4 py-3 transition-colors">
+              <div className="mt-1 flex items-center gap-2 rounded-xl bg-secondary border border-transparent focus-within:bg-background focus-within:border-primary px-4 py-3 transition-colors">
                 <Lock className="h-4 w-4 text-muted-foreground" />
                 <input
                   type={show ? "text" : "password"}
@@ -73,7 +73,7 @@ function Login() {
 
             <button
               type="submit"
-              className="w-full rounded-full bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm active:scale-[0.99] transition mt-2"
+              className="w-full rounded-2xl bg-primary py-4 text-sm font-bold text-primary-foreground shadow-sm active:scale-[0.99] transition mt-2"
             >
               Sign in
             </button>
@@ -84,7 +84,7 @@ function Login() {
           </div>
           <div className="mt-4 grid grid-cols-3 gap-2">
             {["Google", "Apple", "Phone"].map((p) => (
-              <button key={p} className="rounded-full border border-border py-2.5 text-xs font-bold transition hover:border-primary/40 shadow-sm">{p}</button>
+              <button key={p} className="rounded-xl border border-border py-2.5 text-xs font-bold transition hover:border-primary/40 shadow-sm">{p}</button>
             ))}
           </div>
         </div>
