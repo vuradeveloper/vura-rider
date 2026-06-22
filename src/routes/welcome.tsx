@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Car, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { PhoneShell } from "@/components/PhoneShell";
 
 export const Route = createFileRoute("/welcome")({
@@ -15,8 +15,8 @@ function Welcome() {
         <div className="absolute -left-10 bottom-24 h-40 w-40 rounded-full bg-white/10" />
 
         <div className="flex items-center gap-2 relative">
-          <div className="grid place-items-center h-10 w-10 rounded-2xl bg-white/15 backdrop-blur">
-            <Car className="h-5 w-5" />
+          <div className="grid place-items-center h-18 w-12 overflow-hidden p-1.5">
+            <img src="/CarLocator.png" className="h-full w-full object-fill" alt="Car" />
           </div>
           <span className="text-lg font-extrabold tracking-tight">Vura Ride</span>
         </div>
