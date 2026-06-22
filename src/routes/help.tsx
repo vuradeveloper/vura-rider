@@ -60,7 +60,7 @@ function HelpPage() {
                 </div>
                 {activeTopic === t.id && (
                   <div className="px-4 pb-4 animate-in slide-in-from-top-2">
-                    <div className="rounded-full bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary/50 p-4 border border-border">
+                    <div className="rounded-full bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary p-4 border border-border">
                       <p className="text-sm font-bold text-foreground">Support Assistant</p>
                       <p className="text-xs text-muted-foreground mt-1">Our team is available to assist you with {t.title.toLowerCase()}. We typically reply within 2 hours.</p>
                       <button onClick={() => alert("Connecting to support...")} className="mt-3 text-xs font-bold bg-primary text-primary-foreground px-3 py-1.5 rounded-lg shadow-sm">Contact Support</button>
