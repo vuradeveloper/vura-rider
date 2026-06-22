@@ -61,11 +61,11 @@ function Signup() {
                       <select
                         value={countryCode}
                         onChange={(e) => setCountryCode(e.target.value)}
-                        className="w-24 rounded-xl bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-3 py-3 text-sm font-medium outline-none appearance-none text-center"
+                        className="w-20 rounded-lg bg-secondary border border-transparent transition-colors focus-within:bg-background focus-within:border-primary focus:bg-background focus:border-primary px-1 py-1.5 text-xs font-medium outline-none text-muted-foreground"
                       >
-                        {countries.map((c) => (
-                          <option key={c.code} value={c.dial_code}>
-                            {c.flag} {c.dial_code}
+                        {countries.sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
+                          <option key={c.code} value={c.dial_code} className="text-foreground">
+                            {c.flag} {c.name} {c.dial_code}
                           </option>
                         ))}
                       </select>
