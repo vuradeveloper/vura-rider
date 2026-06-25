@@ -73,6 +73,6 @@ export function PhoneShell({ children, hideTabs = false }: { children: ReactNode
 
 import { AnimatedMap } from "@/components/AnimatedMap";
 
-export function FakeMap({ height = 320, mode = "idle", onComplete }: { height?: number, mode?: "idle" | "track", onComplete?: () => void }) {
-  return <AnimatedMap height={height} mode={mode} onComplete={onComplete} />;
+export function FakeMap({ height = 320, mode = "idle", onComplete, onEnRoute }: { height?: number, mode?: "idle" | "track", onComplete?: () => void, onEnRoute?: () => void }) {
+  return <AnimatedMap height={height} mode={mode} onComplete={onComplete} onEnRoute={onEnRoute} />;
 }

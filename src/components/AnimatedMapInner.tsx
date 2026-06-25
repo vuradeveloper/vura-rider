@@ -111,7 +111,7 @@ function playPing8Times() {
 
 type IdleCar = { id: number; pos: [number, number]; route: [number, number][]; step: number };
 
-export default function AnimatedMapInner({ mode = "idle", height = 320, onComplete }: { mode?: "idle" | "track", height?: number, onComplete?: () => void }) {
+export default function AnimatedMapInner({ mode = "idle", height = 320, onComplete, onEnRoute }: { mode?: "idle" | "track", height?: number, onComplete?: () => void, onEnRoute?: () => void }) {
   const [userLocation, setUserLocation] = useState<[number, number]>([-26.2041, 28.0473]);
   const [route, setRoute] = useState<[number, number][]>([]);
   const [carPos, setCarPos] = useState<[number, number]>([-26.2041, 28.0473]);
@@ -309,6 +309,7 @@ export default function AnimatedMapInner({ mode = "idle", height = 320, onComple
                 setRoute(path);
                 setTrackStep(0);
                 setTrackStage("en_route");
+                if (onEnRoute) onEnRoute();
               }
             });
           }, 4500); // wait ~4.5 seconds for ping to finish
@@ -321,7 +322,7 @@ export default function AnimatedMapInner({ mode = "idle", height = 320, onComple
     }, 300);
 
     return () => clearInterval(interval);
-  }, [route, trackStage, mode, onComplete]);
+  }, [route, trackStage, mode, onComplete, onEnRoute]);
 
   if (typeof window === 'undefined') {
     return <div style={{ height, background: "#f8f9fa" }} />;
