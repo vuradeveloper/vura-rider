@@ -12,6 +12,7 @@ function Track() {
   const navigate = useNavigate();
   const [showCancel, setShowCancel] = useState(false);
   const [isCompleted, setIsCompleted] = useState(false);
+  const [isEnRoute, setIsEnRoute] = useState(false);
   const [rating, setRating] = useState(0);
 
   const cancelOptions = [
@@ -26,7 +27,7 @@ function Track() {
   return (
     <PhoneShell hideTabs>
       <div className="relative">
-        <FakeMap height={420} mode="track" onComplete={() => setIsCompleted(true)} />
+        <FakeMap height={420} mode="track" onComplete={() => setIsCompleted(true)} onEnRoute={() => setIsEnRoute(true)} />
         <Link to="/" className="absolute top-3 right-4 grid place-items-center h-9 w-9 rounded-full bg-surface border border-border shadow-sm">
           <X className="h-4 w-4" />
         </Link>
@@ -91,8 +92,12 @@ function Track() {
           </div>
         </div>
 
-        <button onClick={() => setShowCancel(true)} className="mt-auto grid place-items-center rounded-md bg-secondary py-3.5 text-sm font-bold w-full hover:bg-secondary/80 transition">
-          Cancel trip
+        <button 
+          onClick={() => !isEnRoute && setShowCancel(true)} 
+          disabled={isEnRoute}
+          className={`mt-auto grid place-items-center rounded-md py-3.5 text-sm font-bold w-full transition ${isEnRoute ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-secondary hover:bg-secondary/80"}`}
+        >
+          {isEnRoute ? "Trip in progress" : "Cancel trip"}
         </button>
       </div>
 
