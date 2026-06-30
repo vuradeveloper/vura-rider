@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Navigate, useNavigate } from "@tanstack/react-router";
-import { Star, Wallet, Gift, Settings, HelpCircle, Shield, LogOut, ChevronRight, RefreshCw, BadgeCheck, ShieldCheck } from "lucide-react";
+import { Star, Wallet, Gift, Settings, HelpCircle, Shield, LogOut, ChevronRight, RefreshCw, BadgeCheck, ShieldCheck, Car, AlertTriangle } from "lucide-react";
 import { PhoneShell } from "@/components/PhoneShell";
 import { clearUser, setUser, useAuth } from "@/lib/auth";
 import { useEffect, useState } from "react";
@@ -90,6 +90,42 @@ function Account() {
             </div>
             <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
           </button>
+
+          {user.role === "driver" && (
+            <>
+              <button
+                onClick={() => nav({ to: "/car-scanner" })}
+                className="col-span-2 rounded-xl bg-surface border border-border p-4 flex items-center justify-between shadow-sm hover:border-primary/40 transition"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="grid place-items-center h-10 w-10 rounded-full bg-accent text-primary shrink-0">
+                    <Car className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-bold">Car Scanner</p>
+                    <p className="text-xs text-muted-foreground">Inspect your vehicle inside & out</p>
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+              </button>
+
+              <button
+                onClick={() => nav({ to: "/car-scanner", search: { complaint: "true" } })}
+                className="col-span-2 rounded-xl bg-surface border border-red-200 p-4 flex items-center justify-between shadow-sm hover:border-red-400 transition"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="grid place-items-center h-10 w-10 rounded-full bg-red-100 text-red-600 shrink-0">
+                    <AlertTriangle className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-bold text-red-700">Complaint Scan</p>
+                    <p className="text-xs text-muted-foreground">Rescan after a rider complaint</p>
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+              </button>
+            </>
+          )}
 
           <Link to="/architecture" className="col-span-2 rounded-xl bg-surface border border-border p-4 flex items-center justify-between shadow-sm hover:border-purple-600/40 transition">
             <div className="flex items-center gap-3">

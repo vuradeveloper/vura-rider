@@ -156,14 +156,14 @@ function SettingsPage() {
 
           {isDriver && (
             <div className="mt-2 pt-4 border-t border-border">
-              <Link to="/driver/vehicle" className="flex items-center justify-between p-4 rounded-md bg-secondary hover:bg-secondary/80 transition">
+              <Link to="/car-scanner" className="flex items-center justify-between p-4 rounded-md bg-secondary hover:bg-secondary/80 transition">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-md bg-primary/10 grid place-items-center text-primary">
                     <BadgeCheck className="h-5 w-5" />
                   </div>
                   <div>
                     <p className="text-sm font-bold">Vehicle Verification</p>
-                    <p className="text-xs text-muted-foreground">PRDP & Scans</p>
+                    <p className="text-xs text-muted-foreground">Scan your car inside & out</p>
                   </div>
                 </div>
                 <ArrowLeft className="h-4 w-4 rotate-180 text-muted-foreground" />

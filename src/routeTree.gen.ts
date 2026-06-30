@@ -19,6 +19,7 @@ import { Route as SafetyRouteImport } from './routes/safety'
 import { Route as PromotionsRouteImport } from './routes/promotions'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as HelpRouteImport } from './routes/help'
+import { Route as CarScannerRouteImport } from './routes/car-scanner'
 import { Route as ArchitectureRouteImport } from './routes/architecture'
 import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as AccountRouteImport } from './routes/account'
@@ -76,6 +77,11 @@ const HelpRoute = HelpRouteImport.update({
   path: '/help',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CarScannerRoute = CarScannerRouteImport.update({
+  id: '/car-scanner',
+  path: '/car-scanner',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ArchitectureRoute = ArchitectureRouteImport.update({
   id: '/architecture',
   path: '/architecture',
@@ -112,6 +118,7 @@ export interface FileRoutesByFullPath {
   '/account': typeof AccountRoute
   '/activity': typeof ActivityRoute
   '/architecture': typeof ArchitectureRoute
+  '/car-scanner': typeof CarScannerRoute
   '/help': typeof HelpRoute
   '/login': typeof LoginRoute
   '/promotions': typeof PromotionsRoute
@@ -130,6 +137,7 @@ export interface FileRoutesByTo {
   '/account': typeof AccountRoute
   '/activity': typeof ActivityRoute
   '/architecture': typeof ArchitectureRoute
+  '/car-scanner': typeof CarScannerRoute
   '/help': typeof HelpRoute
   '/login': typeof LoginRoute
   '/promotions': typeof PromotionsRoute
@@ -149,6 +157,7 @@ export interface FileRoutesById {
   '/account': typeof AccountRoute
   '/activity': typeof ActivityRoute
   '/architecture': typeof ArchitectureRoute
+  '/car-scanner': typeof CarScannerRoute
   '/help': typeof HelpRoute
   '/login': typeof LoginRoute
   '/promotions': typeof PromotionsRoute
@@ -169,6 +178,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/architecture'
+    | '/car-scanner'
     | '/help'
     | '/login'
     | '/promotions'
@@ -187,6 +197,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/architecture'
+    | '/car-scanner'
     | '/help'
     | '/login'
     | '/promotions'
@@ -205,6 +216,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/architecture'
+    | '/car-scanner'
     | '/help'
     | '/login'
     | '/promotions'
@@ -224,6 +236,7 @@ export interface RootRouteChildren {
   AccountRoute: typeof AccountRoute
   ActivityRoute: typeof ActivityRoute
   ArchitectureRoute: typeof ArchitectureRoute
+  CarScannerRoute: typeof CarScannerRoute
   HelpRoute: typeof HelpRoute
   LoginRoute: typeof LoginRoute
   PromotionsRoute: typeof PromotionsRoute
@@ -310,6 +323,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HelpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/car-scanner': {
+      id: '/car-scanner'
+      path: '/car-scanner'
+      fullPath: '/car-scanner'
+      preLoaderRoute: typeof CarScannerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/architecture': {
       id: '/architecture'
       path: '/architecture'
@@ -360,6 +380,7 @@ const rootRouteChildren: RootRouteChildren = {
   AccountRoute: AccountRoute,
   ActivityRoute: ActivityRoute,
   ArchitectureRoute: ArchitectureRoute,
+  CarScannerRoute: CarScannerRoute,
   HelpRoute: HelpRoute,
   LoginRoute: LoginRoute,
   PromotionsRoute: PromotionsRoute,
