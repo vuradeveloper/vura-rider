@@ -8,67 +8,87 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
-import { setUser, useAuth, type Role } from "@/lib/auth";
+import { register, useAuth, type Role } from "@/lib/auth";
 import { countries } from "@/lib/countries";
 
 export default function Signup() {
   const router = useRouter();
   const { refresh } = useAuth();
   const role: Role = "rider";
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [step, setStep] = useState<1 | 2>(1);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [countryCode, setCountryCode] = useState("+44");
+  const [countryCode, setCountryCode] = useState("+27");
   const [phone, setPhone] = useState("");
   const [pwd, setPwd] = useState("");
-
-  const [sendingEmail, setSendingEmail] = useState(false);
-  const [generatedCode, setGeneratedCode] = useState("");
-  const [otp, setOtp] = useState("");
-  const [otpError, setOtpError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [dob, setDob] = useState("");
   const [idNumber, setIdNumber] = useState("");
 
-  function submitDetails() {
-    setStep(2);
-  }
-
-  async function triggerEmailSend() {
-    setSendingEmail(true);
-    setOtpError("");
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedCode(code);
-    // In production, use the /api/users/sync backend endpoint
-    setSendingEmail(false);
-    setStep(3);
-  }
-
-  function submitOtp() {
-    if (otp === generatedCode) {
-      setStep(4);
-    } else {
-      setOtpError("Invalid verification code. Please try again.");
+  async function submitStep1() {
+    setError("");
+    if (!name || !email || !pwd) {
+      setError("Please fill in all required fields.");
+      return;
     }
+    if (pwd.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await register(email, pwd, role, {
+        full_name: name,
+        phone: phone ? `${countryCode} ${phone}` : undefined,
+      });
+      refresh();
+      router.replace("/");
+    } catch (err: any) {
+      const code = err.code;
+      if (code === "auth/email-already-in-use") {
+        setError("This email is already registered. Please sign in instead.");
+      } else if (code === "auth/invalid-email") {
+        setError("Please enter a valid email address.");
+      } else if (code === "auth/weak-password") {
+        setError("Password is too weak. Use at least 6 characters.");
+      } else {
+        setError(err.message || "Signup failed. Please try again.");
+      }
+    }
+    setLoading(false);
   }
 
   async function submitPersonalInfo() {
-    await setUser({
-      name: `${firstName} ${lastName}`,
-      email,
-      phone: `${countryCode} ${phone}`,
-      role,
-      idNumber,
-    });
-    refresh();
-    router.replace("/");
+    setError("");
+    setLoading(true);
+    try {
+      // The Firebase account is already created in step 1,
+      // update the stored user with personal info
+      const { setUser } = await import("@/lib/auth");
+      await setUser({
+        uid: "",
+        name: `${firstName} ${lastName}`,
+        email,
+        phone: `${countryCode} ${phone}`,
+        role,
+        idNumber,
+      });
+      refresh();
+      router.replace("/");
+    } catch (err: any) {
+      setError(err.message || "Failed to save details.");
+    }
+    setLoading(false);
   }
 
   return (
@@ -88,7 +108,7 @@ export default function Signup() {
       </View>
 
       <View className="flex-row gap-2 px-5 py-2">
-        {[1, 2, 3, 4].map((s) => (
+        {[1, 2].map((s) => (
           <View
             key={s}
             className={`h-1 flex-1 rounded-full ${step >= s ? "bg-primary" : "bg-secondary"}`}
@@ -125,6 +145,7 @@ export default function Signup() {
                       value={name}
                       onChangeText={setName}
                       placeholder="Sagar Dash"
+                      placeholderTextColor="#80716b"
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                     />
                   </View>
@@ -136,6 +157,7 @@ export default function Signup() {
                       value={email}
                       onChangeText={setEmail}
                       placeholder="you@email.com"
+                      placeholderTextColor="#80716b"
                       keyboardType="email-address"
                       autoCapitalize="none"
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
@@ -167,6 +189,7 @@ export default function Signup() {
                         value={phone}
                         onChangeText={setPhone}
                         placeholder="7700 900123"
+                        placeholderTextColor="#80716b"
                         keyboardType="phone-pad"
                         className="flex-1 rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                       />
@@ -180,18 +203,28 @@ export default function Signup() {
                       value={pwd}
                       onChangeText={setPwd}
                       placeholder="••••••••"
+                      placeholderTextColor="#80716b"
                       secureTextEntry
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                     />
                   </View>
 
+                  {error ? (
+                    <Text className="text-xs text-red-500 font-semibold">{error}</Text>
+                  ) : null}
+
                   <TouchableOpacity
-                    onPress={submitDetails}
-                    className="mt-6 w-full rounded-2xl bg-primary py-4 items-center"
+                    onPress={submitStep1}
+                    disabled={loading}
+                    className={`mt-6 w-full rounded-2xl py-4 items-center ${loading ? "bg-primary/50" : "bg-primary"}`}
                   >
-                    <Text className="text-sm font-bold text-primary-foreground">
-                      Continue
-                    </Text>
+                    {loading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text className="text-sm font-bold text-primary-foreground">
+                        Create account
+                      </Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -212,93 +245,6 @@ export default function Signup() {
           )}
 
           {step === 2 && (
-            <View className="px-5 pt-4 pb-6 flex-1 justify-center">
-              <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8 items-center">
-                <Ionicons
-                  name="shield-checkmark"
-                  size={48}
-                  color="#e04e2f"
-                />
-                <Text className="text-2xl font-extrabold text-foreground mt-4">
-                  Security Check
-                </Text>
-                <Text className="text-sm text-muted-foreground mt-1 mb-8 text-center">
-                  Verify you are not a robot to receive your email code.
-                </Text>
-                <TouchableOpacity
-                  onPress={triggerEmailSend}
-                  disabled={sendingEmail}
-                  className="w-full rounded-2xl bg-primary py-4 items-center"
-                >
-                  <Text className="text-sm font-bold text-primary-foreground">
-                    {sendingEmail ? "Sending..." : "I'm not a robot"}
-                  </Text>
-                </TouchableOpacity>
-                {sendingEmail && (
-                  <Text className="mt-4 text-sm text-muted-foreground">
-                    Sending verification email...
-                  </Text>
-                )}
-              </View>
-            </View>
-          )}
-
-          {step === 3 && (
-            <View className="px-5 pt-4 pb-6 flex-1 justify-center">
-              <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8">
-                <Text className="text-2xl font-extrabold text-foreground">
-                  Verify your email
-                </Text>
-                <Text className="text-sm text-muted-foreground mt-1 mb-5">
-                  We sent a verification code to{" "}
-                  <Text className="font-bold text-foreground">{email}</Text>
-                </Text>
-
-                <View className="gap-y-4">
-                  <View>
-                    <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
-                      Verification Code
-                    </Text>
-                    <TextInput
-                      value={otp}
-                      onChangeText={(t) => {
-                        setOtp(t.replace(/\D/g, ""));
-                        setOtpError("");
-                      }}
-                      maxLength={6}
-                      placeholder="123456"
-                      keyboardType="number-pad"
-                      className="mt-1 w-full rounded-xl bg-secondary px-3 py-4 text-center text-2xl font-extrabold text-foreground"
-                    />
-                  </View>
-
-                  {otpError ? (
-                    <Text className="text-xs text-red-500 font-semibold text-center">
-                      {otpError}
-                    </Text>
-                  ) : null}
-
-                  <TouchableOpacity
-                    onPress={submitOtp}
-                    disabled={otp.length < 4}
-                    className={`mt-6 w-full rounded-2xl py-4 items-center ${otp.length < 4 ? "bg-primary/50" : "bg-primary"}`}
-                  >
-                    <Text className="text-sm font-bold text-primary-foreground">
-                      Create account
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <TouchableOpacity onPress={() => setStep(1)} className="mt-8">
-                <Text className="text-center text-sm font-bold text-primary">
-                  Go back
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {step === 4 && (
             <View className="px-5 pt-4 pb-6">
               <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8 gap-y-5">
                 <View>
@@ -319,6 +265,7 @@ export default function Signup() {
                       value={firstName}
                       onChangeText={setFirstName}
                       placeholder="First name"
+                      placeholderTextColor="#80716b"
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                     />
                   </View>
@@ -330,6 +277,7 @@ export default function Signup() {
                       value={lastName}
                       onChangeText={setLastName}
                       placeholder="Last name"
+                      placeholderTextColor="#80716b"
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                     />
                   </View>
@@ -341,6 +289,7 @@ export default function Signup() {
                       value={dob}
                       onChangeText={setDob}
                       placeholder="YYYY-MM-DD"
+                      placeholderTextColor="#80716b"
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                     />
                   </View>
@@ -352,6 +301,7 @@ export default function Signup() {
                       value={idNumber}
                       onChangeText={setIdNumber}
                       placeholder="Enter your ID or passport number"
+                      placeholderTextColor="#80716b"
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                     />
                     <Text className="text-[10px] text-muted-foreground mt-1 ml-1">
@@ -359,13 +309,22 @@ export default function Signup() {
                     </Text>
                   </View>
 
+                  {error ? (
+                    <Text className="text-xs text-red-500 font-semibold">{error}</Text>
+                  ) : null}
+
                   <TouchableOpacity
                     onPress={submitPersonalInfo}
-                    className="mt-6 w-full rounded-2xl bg-primary py-4 items-center"
+                    disabled={loading}
+                    className={`mt-6 w-full rounded-2xl py-4 items-center ${loading ? "bg-primary/50" : "bg-primary"}`}
                   >
-                    <Text className="text-sm font-bold text-primary-foreground">
-                      Create account
-                    </Text>
+                    {loading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text className="text-sm font-bold text-primary-foreground">
+                        Complete setup
+                      </Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>

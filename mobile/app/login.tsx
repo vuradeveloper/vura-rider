@@ -7,23 +7,42 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { setUser, useAuth, type Role } from "@/lib/auth";
+import { login, useAuth, type Role } from "@/lib/auth";
 
 export default function Login() {
   const router = useRouter();
   const { refresh } = useAuth();
-  const [email, setEmail] = useState("sagar@vura.app");
-  const [pwd, setPwd] = useState("password");
+  const [email, setEmail] = useState("");
+  const [pwd, setPwd] = useState("");
   const [show, setShow] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const role: Role = "rider";
 
   async function submit() {
-    await setUser({ name: email.split("@")[0] || "Rider", email, role });
-    refresh();
-    router.replace("/");
+    setError("");
+    setLoading(true);
+    try {
+      await login(email, pwd, role);
+      refresh();
+      router.replace("/");
+    } catch (err: any) {
+      const code = err.code;
+      if (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password") {
+        setError("Invalid email or password.");
+      } else if (code === "auth/invalid-email") {
+        setError("Please enter a valid email address.");
+      } else if (code === "auth/too-many-requests") {
+        setError("Too many attempts. Please try again later.");
+      } else {
+        setError(err.message || "Login failed. Please try again.");
+      }
+    }
+    setLoading(false);
   }
 
   return (
@@ -59,6 +78,8 @@ export default function Login() {
                 <TextInput
                   value={email}
                   onChangeText={setEmail}
+                  placeholder="you@email.com"
+                  placeholderTextColor="#80716b"
                   className="flex-1 text-sm font-medium text-foreground"
                   autoCapitalize="none"
                   keyboardType="email-address"
@@ -75,6 +96,8 @@ export default function Login() {
                 <TextInput
                   value={pwd}
                   onChangeText={setPwd}
+                  placeholder="••••••••"
+                  placeholderTextColor="#80716b"
                   secureTextEntry={!show}
                   className="flex-1 text-sm font-medium text-foreground"
                 />
@@ -88,6 +111,10 @@ export default function Login() {
               </View>
             </View>
 
+            {error ? (
+              <Text className="text-xs text-red-500 font-semibold">{error}</Text>
+            ) : null}
+
             <View className="flex-row justify-end mt-1 mb-2">
               <TouchableOpacity>
                 <Text className="text-xs font-semibold text-primary">
@@ -98,11 +125,16 @@ export default function Login() {
 
             <TouchableOpacity
               onPress={submit}
-              className="w-full rounded-2xl bg-primary py-4 items-center active:opacity-90"
+              disabled={loading || !email || !pwd}
+              className={`w-full rounded-2xl py-4 items-center ${loading || !email || !pwd ? "bg-primary/50" : "bg-primary"}`}
             >
-              <Text className="text-sm font-bold text-primary-foreground">
-                Sign in
-              </Text>
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text className="text-sm font-bold text-primary-foreground">
+                  Sign in
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
 

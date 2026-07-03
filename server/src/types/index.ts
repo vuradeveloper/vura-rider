@@ -120,6 +120,42 @@ export interface DriverStats {
   rating: { average: number; total: number };
 }
 
+export interface PaymentMethod {
+  id: string;
+  user_id: string;
+  authorization_code: string;
+  card_type: string | null;
+  last4: string | null;
+  bank: string | null;
+  is_default: boolean;
+  created_at: string;
+}
+
+export interface Payment {
+  id: string;
+  ride_id: string;
+  user_id: string;
+  amount: number;
+  reference: string;
+  status: "pending" | "success" | "failed";
+  paid_at: string | null;
+  created_at: string;
+}
+
+export interface DriverPayout {
+  id: string;
+  driver_id: string;
+  amount: number;
+  reference: string | null;
+  ride_count: number;
+  status: "pending" | "processing" | "paid" | "failed";
+  failure_reason: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  paid_at: string | null;
+  created_at: string;
+}
+
 export interface RideRequestPayload {
   pickupAddress: string;
   pickupLat: number;

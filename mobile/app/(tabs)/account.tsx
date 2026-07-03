@@ -8,7 +8,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { clearUser, setUser, useAuth } from "@/lib/auth";
+import { logout, setUser, useAuth } from "@/lib/auth";
 
 const items = [
   {
@@ -74,7 +74,7 @@ export default function Account() {
   );
 
   async function signOut() {
-    await clearUser();
+    await logout();
     refresh();
     router.replace("/welcome");
   }

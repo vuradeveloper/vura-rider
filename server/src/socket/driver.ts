@@ -196,7 +196,8 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
           return;
         }
 
-        const serviceFee = Math.round(data.fare * 0.15 * 100) / 100; // 15% commission
+        const commissionPercent = data.fare * 0.2;
+        const serviceFee = Math.round(Math.min(commissionPercent, 5) * 100) / 100; // 20% capped at R5
         const netEarnings = Math.round((data.fare - serviceFee) * 100) / 100;
 
         await client.query(

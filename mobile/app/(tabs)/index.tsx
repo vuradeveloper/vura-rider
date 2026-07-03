@@ -17,11 +17,7 @@ export default function Home() {
 
   useEffect(() => setReady(true), []);
 
-  if (!ready) return null;
-  if (!user) {
-    router.replace("/welcome");
-    return null;
-  }
+  if (!ready || !user) return null;
 
   return (
     <SafeAreaView className="flex-1 bg-background" edges={["top"]}>

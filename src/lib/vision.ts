@@ -101,8 +101,8 @@ Be thorough but realistic. Small stone chips or normal wear-and-tear on the road
           };
         }
       }
-    } catch (err: any) {
-      console.error("OpenAI Vision error:", err?.message || err);
+    } catch (err: unknown) {
+      console.error("OpenAI Vision error:", (err as Error)?.message || err);
       return mockAnalysis();
     }
   });

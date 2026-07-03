@@ -1,3 +1,5 @@
+import { auth } from "./firebase";
+
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3001";
 
 export async function apiFetch<T = any>(
@@ -5,11 +7,23 @@ export async function apiFetch<T = any>(
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE}${path}`;
+
+  let authHeader: Record<string, string> = {};
+  if (auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      authHeader = { Authorization: `Bearer ${token}` };
+    } catch {
+      // token refresh failed, continue without token
+    }
+  }
+
   const res = await fetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...options.headers,
+      ...authHeader,
+      ...(options.headers as Record<string, string> | undefined),
     },
   });
 

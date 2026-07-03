@@ -132,3 +132,74 @@ CREATE TRIGGER set_driver_profiles_updated_at
 CREATE TRIGGER set_rides_updated_at
   BEFORE UPDATE ON rides
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ─────────────────────────────
+-- Payment methods (saved cards)
+-- ─────────────────────────────
+CREATE TABLE IF NOT EXISTS payment_methods (
+  id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id            UUID REFERENCES users(id) ON DELETE CASCADE,
+  authorization_code VARCHAR(100) NOT NULL,
+  card_type          VARCHAR(20),
+  last4              VARCHAR(4),
+  bank               VARCHAR(100),
+  is_default         BOOLEAN DEFAULT false,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (user_id, last4)
+);
+
+-- ─────────────────────────────
+-- Payments (transaction log)
+-- ─────────────────────────────
+CREATE TABLE IF NOT EXISTS payments (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  ride_id    UUID REFERENCES rides(id),
+  user_id    UUID REFERENCES users(id),
+  amount     DECIMAL(10,2) NOT NULL,
+  reference  VARCHAR(100) UNIQUE NOT NULL,
+  status     VARCHAR(20) DEFAULT 'pending',
+  paid_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ─────────────────────────────
+-- Driver payouts
+-- ─────────────────────────────
+CREATE TABLE IF NOT EXISTS driver_payouts (
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  driver_id      UUID REFERENCES users(id),
+  amount         DECIMAL(10,2) NOT NULL,
+  reference      VARCHAR(100),
+  ride_count     INT DEFAULT 0,
+  status         VARCHAR(20) DEFAULT 'pending',
+  failure_reason TEXT,
+  period_start   TIMESTAMPTZ,
+  period_end     TIMESTAMPTZ,
+  paid_at        TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ─────────────────────────────
+-- Add payment columns to rides
+-- ─────────────────────────────
+ALTER TABLE rides
+  ADD COLUMN IF NOT EXISTS payment_status    VARCHAR(20) DEFAULT 'unpaid',
+  ADD COLUMN IF NOT EXISTS payment_reference VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS payment_method    VARCHAR(20) DEFAULT 'cash';
+
+-- ─────────────────────────────
+-- Add payout column to driver_earnings
+-- ─────────────────────────────
+ALTER TABLE driver_earnings
+  ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20) DEFAULT 'pending';
+
+-- ─────────────────────────────
+-- Add banking columns to driver_profiles
+-- ─────────────────────────────
+ALTER TABLE driver_profiles
+  ADD COLUMN IF NOT EXISTS bank_account_number VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS bank_code           VARCHAR(10),
+  ADD COLUMN IF NOT EXISTS bank_name           VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS paystack_recipient  VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS paystack_subaccount VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS banking_verified    BOOLEAN DEFAULT false;

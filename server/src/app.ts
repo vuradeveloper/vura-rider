@@ -5,6 +5,7 @@ import driversRouter from "./routes/drivers";
 import ridesRouter from "./routes/rides";
 import earningsRouter from "./routes/earnings";
 import ratingsRouter from "./routes/ratings";
+import paymentsRouter from "./routes/payments";
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use("/api/drivers", driversRouter);
 app.use("/api/rides", ridesRouter);
 app.use("/api/earnings", earningsRouter);
 app.use("/api/ratings", ratingsRouter);
+app.use("/api/payments", paymentsRouter);
 
 // 404
 app.use((_req, res) => {

@@ -26,6 +26,7 @@
     "react-hook-form": "^7.71.2",
     "react-native": "0.86.0",
     "react-native-gesture-handler": "~2.24.0",
+    "react-native-inappbrowser-reborn": "^3.7.1",
     "react-native-maps": "^1.18.0",
     "react-native-reanimated": "4.5.0",
     "react-native-safe-area-context": "~5.7.0",
