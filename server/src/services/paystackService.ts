@@ -26,10 +26,12 @@ async function paystackRequest<T = any>(
 }
 
 export const calculateFare = (amountRands: number) => {
-  const commissionPercent = amountRands * 0.2;
-  const commission = Math.min(commissionPercent, 5); // capped at R5
+  const commissionPercent = amountRands * 0.25;
+  const commission = Math.min(commissionPercent, 5); // 25% capped at R5
+  const rideRequestFee = amountRands * 0.04; // 4% passed to rider
   const driverEarns = amountRands - commission;
-  return { commission, driverEarns };
+  const riderTotal = amountRands + rideRequestFee;
+  return { commission, rideRequestFee, driverEarns, riderTotal };
 };
 
 export interface InitializePaymentResult {
@@ -120,7 +122,7 @@ export const createDriverSubaccount = async ({
     business_name: driverName,
     bank_code: bankCode,
     account_number: accountNumber,
-    percentage_charge: 20,
+    percentage_charge: 25,
     primary_contact_email: email,
     description: `Vura Driver - ${driverName}`,
   });

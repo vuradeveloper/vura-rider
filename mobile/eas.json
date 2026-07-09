@@ -1,0 +1,55 @@
+{
+  "cli": {
+    "version": ">= 14.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ridevura.com",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBGm-ZLGapWTSc2T9NUP9M5ytk6z-qzoHU",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "vura-a272c.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "vura-a272c",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "vura-a272c.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "117456561164",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:117456561164:web:8406918a7420b82e0b3a29"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ridevura.com",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBGm-ZLGapWTSc2T9NUP9M5ytk6z-qzoHU",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "vura-a272c.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "vura-a272c",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "vura-a272c.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "117456561164",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:117456561164:web:8406918a7420b82e0b3a29"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ridevura.com",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBGm-ZLGapWTSc2T9NUP9M5ytk6z-qzoHU",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "vura-a272c.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "vura-a272c",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "vura-a272c.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "117456561164",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:117456561164:web:8406918a7420b82e0b3a29"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

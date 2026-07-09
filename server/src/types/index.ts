@@ -55,6 +55,7 @@ export interface Ride {
   destination_lng: number;
   status: RideStatus;
   fare: number | null;
+  ride_request_fee: number | null;
   distance_km: number | null;
   duration_mins: number | null;
   cancelled_by: string | null;
@@ -81,6 +82,7 @@ export interface DriverEarning {
   ride_id: string;
   gross_fare: number;
   service_fee: number;
+  ride_request_fee: number;
   net_earnings: number;
   distance_km: number;
   duration_mins: number;
@@ -102,6 +104,7 @@ export interface EarningsSummary {
     rides: number;
     gross: number;
     fee: number;
+    request_fee: number;
     net: number;
   };
   breakdown: {
@@ -109,6 +112,7 @@ export interface EarningsSummary {
     rides: number;
     gross: number;
     fee: number;
+    request_fee: number;
     net: number;
   }[];
 }

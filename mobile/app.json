@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Vura Rider",
-    "slug": "vura-rider",
+    "slug": "vurarider",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -10,8 +10,10 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Vura needs your location to find nearby drivers and set your pickup point."
-      }
+        "NSLocationWhenInUseUsageDescription": "Vura needs your location to find nearby drivers and set your pickup point.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.nhlanhlanb.vurarider"
     },
     "android": {
       "adaptiveIcon": {
@@ -20,7 +22,13 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.nhlanhlanb.vurarider"
     },
     "web": {
       "bundler": "metro",
@@ -42,6 +50,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "240a2b06-15df-4ff9-b21a-ceace1aa6c7a"
+      }
+    },
+    "owner": "nhlanhlanb"
   }
 }

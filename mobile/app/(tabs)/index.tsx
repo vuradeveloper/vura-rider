@@ -8,14 +8,60 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as Location from "expo-location";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { getNearbyDrivers } from "@/services/DriverService";
+import { haversineKm, estimateEtaMins } from "@/lib/utils";
 
 export default function Home() {
   const router = useRouter();
   const { user } = useAuth();
   const [ready, setReady] = useState(false);
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
+    null
+  );
 
   useEffect(() => setReady(true), []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (status !== "granted") return;
+        const pos = await Location.getCurrentPositionAsync({});
+        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  const nearbyQuery = useQuery({
+    queryKey: ["nearby-drivers", coords?.lat, coords?.lng],
+    queryFn: () => getNearbyDrivers(coords!.lat, coords!.lng),
+    enabled: !!coords && user?.role !== "driver",
+    refetchInterval: 20000,
+  });
+
+  const nearestEta = (() => {
+    const drivers = nearbyQuery.data?.drivers ?? [];
+    if (!coords || drivers.length === 0) return null;
+    let best = Infinity;
+    for (const d of drivers) {
+      if (d.current_lat == null || d.current_lng == null) continue;
+      const km = haversineKm(coords.lat, coords.lng, d.current_lat, d.current_lng);
+      if (km < best) best = km;
+    }
+    if (best === Infinity) return null;
+    return estimateEtaMins(best);
+  })();
+
+  const nearestLabel = nearbyQuery.isLoading
+    ? "Checking…"
+    : nearestEta != null
+      ? `${nearestEta} min away`
+      : "No drivers nearby";
 
   if (!ready || !user) return null;
 
@@ -118,7 +164,7 @@ export default function Home() {
             <View>
               <Text className="text-xs text-muted-foreground">Nearest driver</Text>
               <Text className="text-sm font-bold text-foreground">
-                2 min away
+                {nearestLabel}
               </Text>
             </View>
             <Link href="/search" asChild>

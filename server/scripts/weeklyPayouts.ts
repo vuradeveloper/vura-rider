@@ -19,7 +19,7 @@ const runWeeklyPayouts = async () => {
       `SELECT
         u.id AS driver_id, u.full_name AS driver_name,
         dp.paystack_recipient,
-        SUM(de.gross_fare - LEAST(de.gross_fare * 0.20, 5::double precision)) AS total_earnings,
+        SUM(de.gross_fare - LEAST(de.gross_fare * 0.25, 5::double precision)) AS total_earnings,
         COUNT(de.id) AS total_rides,
         ARRAY_AGG(de.ride_id) AS ride_ids
       FROM driver_earnings de
@@ -29,7 +29,7 @@ const runWeeklyPayouts = async () => {
         AND dp.paystack_recipient IS NOT NULL
         AND dp.banking_verified = true
       GROUP BY u.id, u.full_name, dp.paystack_recipient
-      HAVING SUM(de.gross_fare - LEAST(de.gross_fare * 0.20, 5::double precision)) >= 50`
+      HAVING SUM(de.gross_fare - LEAST(de.gross_fare * 0.25, 5::double precision)) >= 50`
     );
 
     if (!driversResult.rows.length) {

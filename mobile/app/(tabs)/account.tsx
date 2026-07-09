@@ -8,13 +8,18 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useQuery } from "@tanstack/react-query";
 import { logout, setUser, useAuth } from "@/lib/auth";
+import { getDriverStats } from "@/services/DriverService";
+import { getRideHistory } from "@/services/RideService";
+import { getSavedCards } from "@/services/PaymentService";
+import type { DriverStats, SavedCard } from "@/lib/types";
 
 const items = [
   {
     icon: "wallet" as const,
     label: "Wallet",
-    sub: "•••• 4242 · R24.10 credits",
+    sub: "Payment methods & cash",
     to: "/wallet",
     wide: true,
   },
@@ -86,6 +91,55 @@ export default function Account() {
     router.replace("/");
   }
 
+  const isDriver = user.role === "driver";
+
+  const driverStatsQuery = useQuery<DriverStats>({
+    queryKey: ["driver-stats"],
+    queryFn: getDriverStats,
+    enabled: isDriver,
+  });
+
+  const historyQuery = useQuery({
+    queryKey: ["ride-history"],
+    queryFn: () => getRideHistory(1, 1),
+    enabled: !isDriver,
+  });
+
+  const cardsQuery = useQuery<SavedCard[]>({
+    queryKey: ["saved-cards"],
+    queryFn: getSavedCards,
+  });
+
+  const tripCount = isDriver
+    ? driverStatsQuery.data?.allTime.rides
+    : historyQuery.data?.pagination.total;
+  const ratingValue = isDriver ? driverStatsQuery.data?.rating.average : null;
+  const cardCount = cardsQuery.data?.length ?? 0;
+
+  const statCards = isDriver
+    ? [
+        { v: tripCount != null ? String(tripCount) : "—", l: "Trips" },
+        {
+          v:
+            driverStatsQuery.data != null
+              ? `R${Math.round(driverStatsQuery.data.allTime.earned)}`
+              : "—",
+          l: "Earned",
+        },
+        {
+          v:
+            ratingValue != null && ratingValue > 0
+              ? ratingValue.toFixed(2)
+              : "New",
+          l: "Rating",
+        },
+      ]
+    : [
+        { v: tripCount != null ? String(tripCount) : "—", l: "Trips" },
+        { v: String(cardCount), l: "Cards" },
+        { v: "Gold", l: "Tier" },
+      ];
+
   return (
     <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
@@ -116,7 +170,13 @@ export default function Account() {
               <View className="mt-1 flex-row items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 self-start">
                 <Ionicons name="star" size={12} color="#fff" />
                 <Text className="text-xs font-semibold text-white capitalize">
-                  4.92 · {user.role}
+                  {ratingValue != null && ratingValue > 0
+                    ? ratingValue.toFixed(2)
+                    : isDriver
+                      ? "New"
+                      : ""}
+                  {ratingValue != null && ratingValue > 0 ? " · " : ""}
+                  {user.role}
                 </Text>
               </View>
             </View>
@@ -125,11 +185,7 @@ export default function Account() {
 
         <View className="px-5 -mt-6">
           <View className="flex-row rounded-2xl bg-surface border border-border p-4">
-            {[
-              { v: "128", l: "Trips" },
-              { v: "R24", l: "Credits" },
-              { v: "Gold", l: "Tier" },
-            ].map((s) => (
+            {statCards.map((s) => (
               <View key={s.l} className="flex-1 items-center">
                 <Text className="text-lg font-extrabold text-foreground">
                   {s.v}

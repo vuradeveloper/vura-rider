@@ -194,6 +194,15 @@ ALTER TABLE driver_earnings
   ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20) DEFAULT 'pending';
 
 -- ─────────────────────────────
+-- Add ride request fee to driver_earnings & rides
+-- ─────────────────────────────
+ALTER TABLE driver_earnings
+  ADD COLUMN IF NOT EXISTS ride_request_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+ALTER TABLE rides
+  ADD COLUMN IF NOT EXISTS ride_request_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+-- ─────────────────────────────
 -- Add banking columns to driver_profiles
 -- ─────────────────────────────
 ALTER TABLE driver_profiles

@@ -196,21 +196,23 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
           return;
         }
 
-        const commissionPercent = data.fare * 0.2;
-        const serviceFee = Math.round(Math.min(commissionPercent, 5) * 100) / 100; // 20% capped at R5
+        const commission = data.fare * 0.25;
+        const serviceFee = Math.round(Math.min(commission, 5) * 100) / 100; // 25% capped at R5
+        const rideRequestFee = Math.round(data.fare * 0.04 * 100) / 100; // 4% ride request fee
         const netEarnings = Math.round((data.fare - serviceFee) * 100) / 100;
+        const riderTotal = Math.round((data.fare + rideRequestFee) * 100) / 100;
 
         await client.query(
-          `UPDATE rides SET status = 'completed', fare = $1, distance_km = $2,
-           duration_mins = $3, completed_at = NOW(), updated_at = NOW()
-           WHERE id = $4`,
-          [data.fare, data.distanceKm, data.durationMins, data.rideId]
+          `UPDATE rides SET status = 'completed', fare = $1, ride_request_fee = $2,
+           distance_km = $3, duration_mins = $4, completed_at = NOW(), updated_at = NOW()
+           WHERE id = $5`,
+          [data.fare, rideRequestFee, data.distanceKm, data.durationMins, data.rideId]
         );
 
         await client.query(
-          `INSERT INTO driver_earnings (driver_id, ride_id, gross_fare, service_fee, net_earnings, distance_km, duration_mins)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [user.id, data.rideId, data.fare, serviceFee, netEarnings, data.distanceKm, data.durationMins]
+          `INSERT INTO driver_earnings (driver_id, ride_id, gross_fare, service_fee, ride_request_fee, net_earnings, distance_km, duration_mins)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [user.id, data.rideId, data.fare, serviceFee, rideRequestFee, netEarnings, data.distanceKm, data.durationMins]
         );
 
         await client.query("COMMIT");
@@ -221,6 +223,8 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
         io.to(`user:${r.passenger_id}`).emit("ride:completed", {
           rideId: data.rideId,
           fare: data.fare,
+          rideRequestFee,
+          riderTotal,
           distanceKm: data.distanceKm,
           durationMins: data.durationMins,
         });
@@ -229,6 +233,8 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
           rideId: data.rideId,
           fare: data.fare,
           netEarnings,
+          rideRequestFee,
+          riderTotal,
           distanceKm: data.distanceKm,
           durationMins: data.durationMins,
         });

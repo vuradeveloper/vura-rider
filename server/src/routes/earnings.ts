@@ -44,6 +44,7 @@ router.get("/", authMiddleware, async (req: Request, res: Response) => {
       `SELECT COALESCE(COUNT(*),0)::int AS rides,
               COALESCE(SUM(gross_fare),0) AS gross,
               COALESCE(SUM(service_fee),0) AS fee,
+              COALESCE(SUM(ride_request_fee),0) AS request_fee,
               COALESCE(SUM(net_earnings),0) AS net
        FROM driver_earnings
        WHERE driver_id = $1 AND ${dateCondition}`,
@@ -55,6 +56,7 @@ router.get("/", authMiddleware, async (req: Request, res: Response) => {
               COALESCE(COUNT(*),0)::int AS rides,
               COALESCE(SUM(gross_fare),0) AS gross,
               COALESCE(SUM(service_fee),0) AS fee,
+              COALESCE(SUM(ride_request_fee),0) AS request_fee,
               COALESCE(SUM(net_earnings),0) AS net
        FROM driver_earnings
        WHERE driver_id = $1 AND ${dateCondition}
@@ -68,6 +70,7 @@ router.get("/", authMiddleware, async (req: Request, res: Response) => {
         rides: totalsRows[0]?.rides ?? 0,
         gross: parseFloat((totalsRows[0]?.gross ?? 0).toString()),
         fee: parseFloat((totalsRows[0]?.fee ?? 0).toString()),
+        request_fee: parseFloat((totalsRows[0]?.request_fee ?? 0).toString()),
         net: parseFloat((totalsRows[0]?.net ?? 0).toString()),
       },
       breakdown: breakdownRows.map((r: any) => ({
@@ -75,6 +78,7 @@ router.get("/", authMiddleware, async (req: Request, res: Response) => {
         rides: r.rides,
         gross: parseFloat((r.gross ?? 0).toString()),
         fee: parseFloat((r.fee ?? 0).toString()),
+        request_fee: parseFloat((r.request_fee ?? 0).toString()),
         net: parseFloat((r.net ?? 0).toString()),
       })),
     };

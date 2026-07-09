@@ -33,12 +33,15 @@ router.post(
         return;
       }
 
-      const { fare } = rideResult[0];
+      const ride = rideResult[0];
+      const fare = parseFloat(ride.fare);
+      const rideRequestFee = Math.round(fare * 0.04 * 100) / 100;
+      const riderTotal = Math.round((fare + rideRequestFee) * 100) / 100;
 
       if (paymentMethod === "cash") {
         await query(
-          `UPDATE rides SET payment_status = 'pending_cash', payment_method = 'cash' WHERE id = $1`,
-          [rideId]
+          `UPDATE rides SET payment_status = 'pending_cash', payment_method = 'cash', ride_request_fee = $1 WHERE id = $2`,
+          [rideRequestFee, rideId]
         );
         res.json({ paymentMethod: "cash", message: "Pay driver in cash" });
         return;
@@ -53,15 +56,15 @@ router.post(
         const charge = await chargeCard({
           authorizationCode: savedCard.authorization_code,
           email: email!,
-          amountRands: fare,
+          amountRands: riderTotal,
           rideId,
         });
 
         if (charge.status === "success") {
           await query(
             `UPDATE rides SET payment_method = 'card', payment_status = 'paid',
-             payment_reference = $1 WHERE id = $2`,
-            [charge.reference, rideId]
+             payment_reference = $1, ride_request_fee = $2 WHERE id = $3`,
+            [charge.reference, rideRequestFee, rideId]
           );
           res.json({ status: "success", message: "Payment successful" });
           return;
@@ -70,7 +73,7 @@ router.post(
 
       const payment = await initializePayment({
         email: email!,
-        amountRands: fare,
+        amountRands: riderTotal,
         rideId,
         userId,
       });
@@ -78,7 +81,7 @@ router.post(
       await query(
         `INSERT INTO payments (ride_id, user_id, amount, reference, status)
          VALUES ($1, $2, $3, $4, 'pending')`,
-        [rideId, userId, fare, payment.reference]
+        [rideId, userId, riderTotal, payment.reference]
       );
 
       res.json({

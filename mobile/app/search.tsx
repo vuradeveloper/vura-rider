@@ -47,7 +47,9 @@ export default function Search() {
         );
         const d = await res.json();
         if (d && d.display_name) {
-          setPickup(d.display_name.split(",").slice(0, 2).join(", "));
+          const label = d.display_name.split(",").slice(0, 2).join(", ");
+          setPickup(label);
+          await AsyncStorage.setItem("vura.ride.pickup.address", label);
         } else {
           setPickup("Current location");
         }
@@ -151,11 +153,13 @@ export default function Search() {
     ) {
       setPickup(displayName);
       AsyncStorage.setItem("vura.ride.pickup", JSON.stringify([s.lat, s.lon]));
+      AsyncStorage.setItem("vura.ride.pickup.address", displayName);
       setActiveInput("dropoff");
       setEntranceModal(null);
     } else {
       setDropoff(displayName);
       AsyncStorage.setItem("vura.ride.dropoff", JSON.stringify([s.lat, s.lon]));
+      AsyncStorage.setItem("vura.ride.dropoff.address", displayName);
       setEntranceModal(null);
       router.push("/ride/options");
     }
