@@ -18,6 +18,11 @@ router.post("/", authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
+    if (comment && typeof comment === "string" && comment.length > 1000) {
+      res.status(400).json({ error: "Comment must be under 1000 characters" });
+      return;
+    }
+
     // Verify ride belongs to this passenger and is completed
     const ride = await queryOne(
       `SELECT id, driver_id FROM rides

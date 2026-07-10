@@ -16,7 +16,7 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
       socket.emit("driver:online:ack", { success: true });
       console.log(`[driver] ${user.id} is now online`);
     } catch (err: any) {
-      socket.emit("error", { message: "Failed to go online", detail: err.message });
+      socket.emit("error", { message: "Failed to go online" });
     }
   });
 
@@ -29,7 +29,7 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
       );
       socket.emit("driver:offline:ack", { success: true });
     } catch (err: any) {
-      socket.emit("error", { message: "Failed to go offline", detail: err.message });
+      socket.emit("error", { message: "Failed to go offline" });
     }
   });
 
@@ -137,7 +137,7 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
       }
     } catch (err: any) {
       console.error("driver:ride:accept error:", err.message);
-      socket.emit("error", { message: "Failed to accept ride", detail: err.message });
+      socket.emit("error", { message: "Failed to accept ride" });
     }
   });
 
@@ -155,7 +155,7 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
         io.to(`user:${ride.passenger_id}`).emit("ride:driver:arrived", { rideId: data.rideId });
       }
     } catch (err: any) {
-      socket.emit("error", { message: "Failed to mark arrived", detail: err.message });
+      socket.emit("error", { message: "Failed to mark arrived" });
     }
   });
 
@@ -173,7 +173,7 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
         io.to(`user:${ride.passenger_id}`).emit("ride:started", { rideId: data.rideId });
       }
     } catch (err: any) {
-      socket.emit("error", { message: "Failed to start trip", detail: err.message });
+      socket.emit("error", { message: "Failed to start trip" });
     }
   });
 
@@ -279,7 +279,7 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
 
       socket.emit("driver:ride:cancel:ack", { success: true });
     } catch (err: any) {
-      socket.emit("error", { message: "Failed to cancel ride", detail: err.message });
+      socket.emit("error", { message: "Failed to cancel ride" });
     }
   });
 
@@ -307,7 +307,7 @@ export function registerDriverHandlers(io: Server, socket: Socket, user: any) {
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
-      socket.emit("error", { message: "Failed to send message", detail: err.message });
+      socket.emit("error", { message: "Failed to send message" });
     }
   });
 }

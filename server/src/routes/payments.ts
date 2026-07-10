@@ -23,6 +23,16 @@ router.post(
     const userId = req.user!.dbUser.id;
     const email = req.user!.dbUser.email;
 
+    if (!rideId) {
+      res.status(400).json({ error: "rideId is required" });
+      return;
+    }
+
+    if (paymentMethod && !["card", "cash"].includes(paymentMethod)) {
+      res.status(400).json({ error: "paymentMethod must be 'card' or 'cash'" });
+      return;
+    }
+
     try {
       const rideResult = await query(
         "SELECT * FROM rides WHERE id = $1 AND passenger_id = $2",
@@ -90,7 +100,8 @@ router.post(
         accessCode: payment.access_code,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("POST /api/payments/initialize error:", err.message);
+      res.status(500).json({ error: "Failed to initialize payment" });
     }
   }
 );
@@ -98,6 +109,10 @@ router.post(
 // ── RIDER: Verify payment ──────────────────────────────────────────────────
 router.get("/verify", async (req: Request, res: Response) => {
   const { reference } = req.query;
+  if (!reference) {
+    res.status(400).json({ error: "reference is required" });
+    return;
+  }
   try {
     const payment = await verifyPayment(reference as string);
     if (payment.status !== "success") {
@@ -135,7 +150,8 @@ router.get("/verify", async (req: Request, res: Response) => {
 
     res.json({ status: "success", message: "Payment verified" });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("GET /api/payments/verify error:", err.message);
+    res.status(500).json({ error: "Failed to verify payment" });
   }
 });
 
@@ -171,7 +187,8 @@ router.get("/banks", authMiddleware, async (_req: Request, res: Response) => {
     const banks = await getSupportedBanks();
     res.json(banks);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("GET /api/payments/banks error:", err.message);
+    res.status(500).json({ error: "Failed to get banks" });
   }
 });
 
@@ -186,6 +203,12 @@ router.post(
     }
 
     const { accountNumber, bankCode } = req.body;
+
+    if (!accountNumber || !bankCode) {
+      res.status(400).json({ error: "accountNumber and bankCode are required" });
+      return;
+    }
+
     try {
       const result = await verifyBankAccount(accountNumber, bankCode);
       res.json({
@@ -211,6 +234,12 @@ router.post(
     }
 
     const { accountNumber, bankCode, bankName } = req.body;
+
+    if (!accountNumber || !bankCode || !bankName) {
+      res.status(400).json({ error: "accountNumber, bankCode, and bankName are required" });
+      return;
+    }
+
     const driver = req.user!.dbUser;
 
     try {
@@ -244,7 +273,8 @@ router.post(
 
       res.json({ message: "Banking details saved successfully" });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("POST /api/payments/driver/banking error:", err.message);
+      res.status(500).json({ error: "Failed to save banking details" });
     }
   }
 );
@@ -271,9 +301,15 @@ router.get(
 
 // ── WEBHOOK: Paystack events ───────────────────────────────────────────────
 router.post("/webhook", async (req: Request, res: Response) => {
+  const secret = process.env.PAYSTACK_SECRET_KEY;
+  if (!secret) {
+    res.status(500).json({ error: "Server configuration error" });
+    return;
+  }
+
   const hash = crypto
-    .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY!)
-    .update(JSON.stringify(req.body))
+    .createHmac("sha512", secret)
+    .update(req.body)
     .digest("hex");
 
   if (hash !== req.headers["x-paystack-signature"]) {
@@ -281,7 +317,7 @@ router.post("/webhook", async (req: Request, res: Response) => {
     return;
   }
 
-  const event = req.body;
+  const event = JSON.parse(req.body.toString());
 
   if (event.event === "charge.success") {
     const { reference, metadata } = event.data;
@@ -289,7 +325,9 @@ router.post("/webhook", async (req: Request, res: Response) => {
       await query(
         `UPDATE rides SET payment_status = 'paid', payment_reference = $1 WHERE id = $2`,
         [reference, metadata.rideId]
-      ).catch(console.error);
+      ).catch((err) => {
+        console.error("Webhook charge.success update failed:", err.message);
+      });
     }
   }
 
@@ -297,7 +335,9 @@ router.post("/webhook", async (req: Request, res: Response) => {
     await query(
       `UPDATE driver_payouts SET status = 'paid', paid_at = NOW() WHERE reference = $1`,
       [event.data.reference]
-    ).catch(console.error);
+    ).catch((err) => {
+      console.error("Webhook transfer.success update failed:", err.message);
+    });
   }
 
   if (event.event === "transfer.failed") {
@@ -307,7 +347,9 @@ router.post("/webhook", async (req: Request, res: Response) => {
         event.data.failures?.[0]?.reason || "Transfer failed",
         event.data.reference,
       ]
-    ).catch(console.error);
+    ).catch((err) => {
+      console.error("Webhook transfer.failed update failed:", err.message);
+    });
   }
 
   res.sendStatus(200);

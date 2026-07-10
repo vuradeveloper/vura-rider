@@ -1,6 +1,6 @@
 import { auth } from "./firebase";
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3001";
+const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
 
 export async function apiFetch<T = any>(
   path: string,

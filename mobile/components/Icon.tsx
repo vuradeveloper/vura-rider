@@ -62,7 +62,7 @@ const iconMap: Record<string, IoniconsName> = {
   "eye-off": "eye-off",
   plane: "airplane",
   bike: "bicycle",
-  truck: "truck",
+  truck: "bus",
   calendar: "calendar",
   "chevron-down": "chevron-down",
   "credit-card": "card",

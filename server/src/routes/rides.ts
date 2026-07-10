@@ -38,8 +38,10 @@ router.get("/me/active", authMiddleware, async (req: Request, res: Response) => 
 router.get("/history", authMiddleware, async (req: Request, res: Response) => {
   try {
     const u = req.user!.dbUser;
-    const page = parseInt((req.query.page as string) ?? "1");
-    const limit = Math.min(parseInt((req.query.limit as string) ?? "20"), 100);
+    const pageRaw = parseInt((req.query.page as string) ?? "1", 10);
+    const limitRaw = parseInt((req.query.limit as string) ?? "20", 10);
+    const page = isNaN(pageRaw) || pageRaw < 1 ? 1 : pageRaw;
+    const limit = Math.min(isNaN(limitRaw) || limitRaw < 1 ? 20 : limitRaw, 100);
     const offset = (page - 1) * limit;
 
     const rides = await query<RideWithDetails>(

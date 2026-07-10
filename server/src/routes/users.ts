@@ -61,8 +61,7 @@ router.post("/sync", async (req: Request, res: Response) => {
     res.json({ user });
   } catch (err: any) {
     console.error("POST /api/users/sync error:", err.message);
-    const status = err.code === "auth/id-token-expired" ? 401 : 500;
-    res.status(status).json({ error: err.message || "Sync failed" });
+    res.status(500).json({ error: "Sync failed" });
   }
 });
 

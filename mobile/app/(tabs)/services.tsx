@@ -10,7 +10,7 @@ const services = [
   { icon: "cube" as const, label: "Package", desc: "Send across town" },
   { icon: "airplane" as const, label: "Airport", desc: "Curbside pickup" },
   { icon: "bicycle" as const, label: "Bike", desc: "Cheaper short trips" },
-  { icon: "truck" as const, label: "Moving", desc: "Help with big loads" },
+  { icon: "bus" as const, label: "Moving", desc: "Help with big loads" },
   { icon: "briefcase" as const, label: "Business", desc: "For your team" },
 ];
 

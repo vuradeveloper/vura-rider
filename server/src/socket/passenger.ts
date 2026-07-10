@@ -134,7 +134,7 @@ export function registerPassengerHandlers(io: Server, socket: Socket, user: any)
       } catch (err: any) {
         await client.query("ROLLBACK");
         console.error("passenger:ride:request error:", err.message);
-        socket.emit("error", { message: "Failed to request ride", detail: err.message });
+        socket.emit("error", { message: "Failed to request ride" });
       } finally {
         client.release();
       }
@@ -180,7 +180,6 @@ export function registerPassengerHandlers(io: Server, socket: Socket, user: any)
       } catch (err: any) {
         socket.emit("error", {
           message: "Failed to cancel ride",
-          detail: err.message,
         });
       }
     }
@@ -214,7 +213,6 @@ export function registerPassengerHandlers(io: Server, socket: Socket, user: any)
       } catch (err: any) {
         socket.emit("error", {
           message: "Failed to send message",
-          detail: err.message,
         });
       }
     }

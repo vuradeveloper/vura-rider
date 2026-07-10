@@ -115,15 +115,20 @@ router.get("/stats", authMiddleware, async (req: Request, res: Response) => {
 // ── Nearby online drivers (REST fallback) ──
 router.get("/nearby", authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { lat, lng, radius = 10 } = req.query;
+    const { lat, lng, radius: radiusRaw = 10 } = req.query;
     if (!lat || !lng) {
       res.status(400).json({ error: "lat and lng are required" });
       return;
     }
 
-    const r = parseFloat(radius as string);
-    const latitude = parseFloat(lat as string);
-    const longitude = parseFloat(lng as string);
+    const r = parseFloat(String(radiusRaw));
+    const latitude = parseFloat(String(lat));
+    const longitude = parseFloat(String(lng));
+
+    if (isNaN(r) || isNaN(latitude) || isNaN(longitude)) {
+      res.status(400).json({ error: "lat, lng, and radius must be valid numbers" });
+      return;
+    }
 
     const drivers = await query(
       `SELECT u.id, u.full_name, dp.vehicle_make, dp.vehicle_model,

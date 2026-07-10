@@ -8,8 +8,16 @@ import { registerPassengerHandlers } from "./passenger";
 export function createSocketServer(httpServer: HttpServer): Server {
   const io = new Server(httpServer, {
     cors: {
-      origin: "*",
+      origin: (origin, callback) => {
+        const allowed = process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) ?? [];
+        if (!origin || allowed.length === 0 || allowed.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error(`Origin ${origin} not allowed by CORS`));
+        }
+      },
       methods: ["GET", "POST"],
+      credentials: true,
     },
     pingInterval: 10000,
     pingTimeout: 5000,

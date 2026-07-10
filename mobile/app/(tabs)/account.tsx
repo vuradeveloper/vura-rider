@@ -60,11 +60,13 @@ export default function Account() {
 
   useEffect(() => setReady(true), []);
 
-  if (!ready) return null;
-  if (!user) {
-    router.replace("/welcome");
-    return null;
-  }
+  useEffect(() => {
+    if (ready && !user) {
+      router.replace("/welcome");
+    }
+  }, [ready, user, router]);
+
+  if (!ready || !user) return null;
 
   const initials = user.name
     .split(" ")
