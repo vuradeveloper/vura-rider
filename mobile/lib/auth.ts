@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -7,8 +7,7 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import { auth } from "./firebase";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
+import { getApiUrl } from "./config";
 
 export type Role = "rider" | "driver";
 
@@ -24,6 +23,7 @@ export interface AuthUser {
 }
 
 const USER_KEY = "vura.auth.dbUser";
+let memoryUser: AuthUser | null = null;
 
 function mapMobileRole(backendRole: string): Role {
   return backendRole === "passenger" ? "rider" : "driver";
@@ -37,7 +37,7 @@ async function syncWithBackend(
   token: string,
   extra: { role: Role; phone?: string; full_name?: string }
 ) {
-  const res = await fetch(`${API_BASE}/api/users/sync`, {
+  const res = await fetch(getApiUrl("/api/users/sync"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -47,15 +47,47 @@ async function syncWithBackend(
       full_name: extra.full_name,
     }),
   });
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to sync user");
   }
+
   return res.json();
 }
 
+async function isSecureStoreAvailable() {
+  try {
+    return await SecureStore.isAvailableAsync();
+  } catch {
+    return false;
+  }
+}
+
+async function loadStoredUser(): Promise<AuthUser | null> {
+  if (!(await isSecureStoreAvailable())) return memoryUser;
+
+  const raw = await SecureStore.getItemAsync(USER_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as AuthUser;
+    memoryUser = parsed;
+    return parsed;
+  } catch {
+    await SecureStore.deleteItemAsync(USER_KEY);
+    return null;
+  }
+}
+
 async function storeUser(user: AuthUser) {
-  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
+  memoryUser = user;
+
+  if (await isSecureStoreAvailable()) {
+    await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user), {
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+    });
+  }
 }
 
 export async function setUser(u: AuthUser) {
@@ -63,7 +95,11 @@ export async function setUser(u: AuthUser) {
 }
 
 export async function clearUser() {
-  await AsyncStorage.removeItem(USER_KEY);
+  memoryUser = null;
+
+  if (await isSecureStoreAvailable()) {
+    await SecureStore.deleteItemAsync(USER_KEY);
+  }
 }
 
 export function useAuth() {
@@ -71,15 +107,17 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const cached = AsyncStorage.getItem(USER_KEY).then((raw) => {
-      if (raw) setUserState(JSON.parse(raw));
-    });
+    loadStoredUser()
+      .then((stored) => {
+        if (stored) setUserState(stored);
+      })
+      .catch(() => undefined);
 
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        const stored = await AsyncStorage.getItem(USER_KEY);
+        const stored = await loadStoredUser();
         if (stored) {
-          setUserState(JSON.parse(stored));
+          setUserState(stored);
         } else {
           try {
             const token = await firebaseUser.getIdToken();
@@ -106,9 +144,10 @@ export function useAuth() {
           }
         }
       } else {
-        await AsyncStorage.removeItem(USER_KEY);
+        await clearUser();
         setUserState(null);
       }
+
       setLoading(false);
     });
 
@@ -116,8 +155,8 @@ export function useAuth() {
   }, []);
 
   async function refresh() {
-    const stored = await AsyncStorage.getItem(USER_KEY);
-    if (stored) setUserState(JSON.parse(stored));
+    const stored = await loadStoredUser();
+    if (stored) setUserState(stored);
   }
 
   return { user, loading, refresh };
@@ -168,5 +207,5 @@ export async function register(
 
 export async function logout() {
   await signOut(auth);
-  await AsyncStorage.removeItem(USER_KEY);
+  await clearUser();
 }

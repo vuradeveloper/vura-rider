@@ -8,14 +8,14 @@ export const sendVerificationEmail = createServerFn({ method: "POST" })
   .validator((data: { email: string; code: string }) => data)
   .handler(async ({ data: { email, code } }) => {
     // Server environment variables
-    const apiKey = process.env.VITE_RESEND_API_KEY || "";
-    const fromEmail = process.env.VITE_RESEND_FROM_EMAIL || "onboarding@resend.dev";
+    const apiKey = process.env.RESEND_API_KEY || "";
+    const fromEmail = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
 
     if (!apiKey) {
-      console.error("VITE_RESEND_API_KEY is not set on the server.");
+      console.error("RESEND_API_KEY is not set on the server.");
       return {
         success: false,
-        error: "Server configuration missing: VITE_RESEND_API_KEY is not set.",
+        error: "Server configuration missing: RESEND_API_KEY is not set.",
       };
     }
 

@@ -1,7 +1,6 @@
 import { io, Socket } from "socket.io-client";
 import { auth } from "./firebase";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
+import { getApiBaseUrl } from "./config";
 
 let socket: Socket | null = null;
 
@@ -13,7 +12,7 @@ export async function getSocket(): Promise<Socket> {
     try {
       token = await auth.currentUser.getIdToken();
     } catch {
-      // continue without token; server will reject
+      throw new Error("Your session expired. Please sign in again.");
     }
   }
 
@@ -23,7 +22,7 @@ export async function getSocket(): Promise<Socket> {
     return socket;
   }
 
-  socket = io(API_BASE, {
+  socket = io(getApiBaseUrl(), {
     auth: { token },
     transports: ["websocket"],
     autoConnect: true,

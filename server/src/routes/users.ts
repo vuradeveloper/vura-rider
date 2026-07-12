@@ -3,13 +3,17 @@ import { authMiddleware } from "../middleware/auth";
 import { verifyToken } from "../config/firebase";
 import { query, queryOne } from "../config/database";
 import { User, UserWithDriver } from "../types";
+import { asTrimmedString } from "../utils/validation";
 
 const router = Router();
 
 // ── Sync user (after Firebase login) ──
 router.post("/sync", async (req: Request, res: Response) => {
   try {
-    const { token, role, phone } = req.body;
+    const token = asTrimmedString(req.body?.token);
+    const role = asTrimmedString(req.body?.role);
+    const phone = asTrimmedString(req.body?.phone, { maxLength: 32 });
+    const fullName = asTrimmedString(req.body?.full_name, { maxLength: 255 });
 
     if (!token || !role) {
       res.status(400).json({ error: "token and role are required" });
@@ -31,8 +35,18 @@ router.post("/sync", async (req: Request, res: Response) => {
     if (user) {
       if (phone && phone !== user.phone) {
         user = await queryOne<User>(
-          `UPDATE users SET phone = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-          [phone, user.id]
+          `UPDATE users
+           SET phone = $1,
+               full_name = COALESCE($2, full_name),
+               updated_at = NOW()
+           WHERE id = $3
+           RETURNING *`,
+          [phone, fullName, user.id]
+        );
+      } else if (fullName && fullName !== user.full_name) {
+        user = await queryOne<User>(
+          `UPDATE users SET full_name = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+          [fullName, user.id]
         );
       }
     } else {
@@ -44,7 +58,7 @@ router.post("/sync", async (req: Request, res: Response) => {
           decoded.uid,
           role,
           decoded.email ?? null,
-          decoded.name ?? null,
+          fullName ?? decoded.name ?? null,
           phone ?? null,
           decoded.picture ?? null,
         ]
@@ -93,7 +107,11 @@ router.get("/me", authMiddleware, async (req: Request, res: Response) => {
 router.patch("/me", authMiddleware, async (req: Request, res: Response) => {
   try {
     const u = req.user!.dbUser;
-    const { full_name, phone, profile_photo_url } = req.body;
+    const full_name = asTrimmedString(req.body?.full_name, { maxLength: 255 });
+    const phone = asTrimmedString(req.body?.phone, { maxLength: 32 });
+    const profile_photo_url = asTrimmedString(req.body?.profile_photo_url, {
+      maxLength: 2048,
+    });
 
     const updated = await queryOne<User>(
       `UPDATE users

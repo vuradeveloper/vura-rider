@@ -1,6 +1,7 @@
 import { Linking } from "react-native";
 import InAppBrowser from "react-native-inappbrowser-reborn";
 import { apiFetch } from "@/lib/api";
+import { getApiUrl } from "@/lib/config";
 
 export const payForRide = async (rideId: string) => {
   try {
@@ -16,7 +17,7 @@ export const payForRide = async (rideId: string) => {
       if (await InAppBrowser.isAvailable()) {
         const browserResult = await InAppBrowser.openAuth(
           result.authorizationUrl,
-          `${process.env.EXPO_PUBLIC_API_URL}/api/payments/verify`,
+          getApiUrl("/api/payments/verify"),
           {
             showTitle: false,
             enableUrlBarHiding: true,
@@ -27,6 +28,7 @@ export const payForRide = async (rideId: string) => {
         if (browserResult.type === "success") {
           const url = new URL(browserResult.url);
           const ref = url.searchParams.get("reference") || url.searchParams.get("trxref");
+          if (!ref) return { success: false, error: "Payment reference missing" };
           const verify = await apiFetch<any>(`/api/payments/verify?reference=${ref}`);
           return { success: verify.status === "success", method: "card" };
         }

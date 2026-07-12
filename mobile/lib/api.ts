@@ -1,12 +1,11 @@
 import { auth } from "./firebase";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
+import { getApiUrl } from "./config";
 
 export async function apiFetch<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE}${path}`;
+  const url = getApiUrl(path);
 
   let authHeader: Record<string, string> = {};
   if (auth.currentUser) {
@@ -14,7 +13,7 @@ export async function apiFetch<T = any>(
       const token = await auth.currentUser.getIdToken();
       authHeader = { Authorization: `Bearer ${token}` };
     } catch {
-      // token refresh failed, continue without token
+      throw new Error("Your session expired. Please sign in again.");
     }
   }
 

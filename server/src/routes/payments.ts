@@ -11,25 +11,48 @@ import {
   verifyBankAccount,
   createTransferRecipient,
 } from "../services/paystackService";
+import {
+  asTrimmedString,
+  isAccountNumber,
+  isBankCode,
+  isUuid,
+} from "../utils/validation";
 
 const router = Router();
+
+function signaturesMatch(expected: string, received: string): boolean {
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const receivedBuffer = Buffer.from(received, "hex");
+
+  return (
+    expectedBuffer.length === receivedBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+  );
+}
 
 // ── RIDER: Initialize payment ──────────────────────────────────────────────
 router.post(
   "/initialize",
   authMiddleware,
   async (req: Request, res: Response) => {
-    const { rideId, paymentMethod } = req.body;
+    const rideId = asTrimmedString(req.body?.rideId);
+    const requestedPaymentMethod = asTrimmedString(req.body?.paymentMethod);
+    const paymentMethod = requestedPaymentMethod ?? "card";
     const userId = req.user!.dbUser.id;
     const email = req.user!.dbUser.email;
 
-    if (!rideId) {
-      res.status(400).json({ error: "rideId is required" });
+    if (!isUuid(rideId)) {
+      res.status(400).json({ error: "rideId must be a valid UUID" });
       return;
     }
 
-    if (paymentMethod && !["card", "cash"].includes(paymentMethod)) {
+    if (!["card", "cash"].includes(paymentMethod)) {
       res.status(400).json({ error: "paymentMethod must be 'card' or 'cash'" });
+      return;
+    }
+
+    if (paymentMethod === "card" && !email) {
+      res.status(400).json({ error: "An email address is required for card payments" });
       return;
     }
 
@@ -108,7 +131,7 @@ router.post(
 
 // ── RIDER: Verify payment ──────────────────────────────────────────────────
 router.get("/verify", async (req: Request, res: Response) => {
-  const { reference } = req.query;
+  const reference = asTrimmedString(req.query.reference, { maxLength: 100 });
   if (!reference) {
     res.status(400).json({ error: "reference is required" });
     return;
@@ -173,6 +196,11 @@ router.delete(
   "/methods/:id",
   authMiddleware,
   async (req: Request, res: Response) => {
+    if (!isUuid(req.params.id)) {
+      res.status(400).json({ error: "id must be a valid UUID" });
+      return;
+    }
+
     await query("DELETE FROM payment_methods WHERE id = $1 AND user_id = $2", [
       req.params.id,
       req.user!.dbUser.id,
@@ -202,10 +230,16 @@ router.post(
       return;
     }
 
-    const { accountNumber, bankCode } = req.body;
+    const accountNumber = asTrimmedString(req.body?.accountNumber, { maxLength: 20 });
+    const bankCode = asTrimmedString(req.body?.bankCode, { maxLength: 20 });
 
-    if (!accountNumber || !bankCode) {
-      res.status(400).json({ error: "accountNumber and bankCode are required" });
+    if (
+      !accountNumber ||
+      !bankCode ||
+      !isAccountNumber(accountNumber) ||
+      !isBankCode(bankCode)
+    ) {
+      res.status(400).json({ error: "Valid accountNumber and bankCode are required" });
       return;
     }
 
@@ -233,10 +267,18 @@ router.post(
       return;
     }
 
-    const { accountNumber, bankCode, bankName } = req.body;
+    const accountNumber = asTrimmedString(req.body?.accountNumber, { maxLength: 20 });
+    const bankCode = asTrimmedString(req.body?.bankCode, { maxLength: 20 });
+    const bankName = asTrimmedString(req.body?.bankName, { maxLength: 100 });
 
-    if (!accountNumber || !bankCode || !bankName) {
-      res.status(400).json({ error: "accountNumber, bankCode, and bankName are required" });
+    if (
+      !accountNumber ||
+      !bankCode ||
+      !bankName ||
+      !isAccountNumber(accountNumber) ||
+      !isBankCode(bankCode)
+    ) {
+      res.status(400).json({ error: "Valid accountNumber, bankCode, and bankName are required" });
       return;
     }
 
@@ -301,58 +343,85 @@ router.get(
 
 // ── WEBHOOK: Paystack events ───────────────────────────────────────────────
 router.post("/webhook", async (req: Request, res: Response) => {
-  const secret = process.env.PAYSTACK_SECRET_KEY;
-  if (!secret) {
-    res.status(500).json({ error: "Server configuration error" });
-    return;
-  }
-
-  const hash = crypto
-    .createHmac("sha512", secret)
-    .update(req.body)
-    .digest("hex");
-
-  if (hash !== req.headers["x-paystack-signature"]) {
-    res.status(401).send("Invalid signature");
-    return;
-  }
-
-  const event = JSON.parse(req.body.toString());
-
-  if (event.event === "charge.success") {
-    const { reference, metadata } = event.data;
-    if (metadata?.rideId) {
-      await query(
-        `UPDATE rides SET payment_status = 'paid', payment_reference = $1 WHERE id = $2`,
-        [reference, metadata.rideId]
-      ).catch((err) => {
-        console.error("Webhook charge.success update failed:", err.message);
-      });
+  try {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret) {
+      console.error("Paystack webhook received without PAYSTACK_SECRET_KEY configured");
+      res.status(500).json({ error: "Server configuration error" });
+      return;
     }
-  }
 
-  if (event.event === "transfer.success") {
-    await query(
-      `UPDATE driver_payouts SET status = 'paid', paid_at = NOW() WHERE reference = $1`,
-      [event.data.reference]
-    ).catch((err) => {
-      console.error("Webhook transfer.success update failed:", err.message);
-    });
-  }
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).send("Expected raw request body");
+      return;
+    }
 
-  if (event.event === "transfer.failed") {
-    await query(
-      `UPDATE driver_payouts SET status = 'failed', failure_reason = $1 WHERE reference = $2`,
-      [
-        event.data.failures?.[0]?.reason || "Transfer failed",
-        event.data.reference,
-      ]
-    ).catch((err) => {
-      console.error("Webhook transfer.failed update failed:", err.message);
-    });
-  }
+    const signature = asTrimmedString(req.headers["x-paystack-signature"]);
+    if (!signature) {
+      res.status(401).send("Invalid signature");
+      return;
+    }
 
-  res.sendStatus(200);
+    const hash = crypto
+      .createHmac("sha512", secret)
+      .update(req.body)
+      .digest("hex");
+
+    if (!signaturesMatch(hash, signature)) {
+      res.status(401).send("Invalid signature");
+      return;
+    }
+
+    const event = JSON.parse(req.body.toString("utf8"));
+
+    if (event.event === "charge.success") {
+      const reference = asTrimmedString(event.data?.reference, { maxLength: 100 });
+      const rideId = asTrimmedString(event.data?.metadata?.rideId);
+
+      if (reference && isUuid(rideId)) {
+        await query(
+          `UPDATE rides
+           SET payment_status = 'paid', payment_reference = $1, payment_method = 'card'
+           WHERE id = $2`,
+          [reference, rideId]
+        );
+
+        await query(
+          `UPDATE payments SET status = 'success', paid_at = NOW() WHERE reference = $1`,
+          [reference]
+        );
+      }
+    }
+
+    if (event.event === "transfer.success") {
+      const reference = asTrimmedString(event.data?.reference, { maxLength: 100 });
+      if (reference) {
+        await query(
+          `UPDATE driver_payouts SET status = 'paid', paid_at = NOW() WHERE reference = $1`,
+          [reference]
+        );
+      }
+    }
+
+    if (event.event === "transfer.failed") {
+      const reference = asTrimmedString(event.data?.reference, { maxLength: 100 });
+      const reason =
+        asTrimmedString(event.data?.failures?.[0]?.reason, { maxLength: 500 }) ??
+        "Transfer failed";
+
+      if (reference) {
+        await query(
+          `UPDATE driver_payouts SET status = 'failed', failure_reason = $1 WHERE reference = $2`,
+          [reason, reference]
+        );
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (err: any) {
+    console.error("POST /api/payments/webhook error:", err.message);
+    res.status(500).json({ error: "Failed to process webhook" });
+  }
 });
 
 export default router;

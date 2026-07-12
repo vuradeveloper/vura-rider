@@ -1,6 +1,5 @@
 import { initializeApp } from "firebase/app";
 import { initializeAuth, inMemoryPersistence } from "firebase/auth";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -12,20 +11,6 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-
-// getReactNativePersistence is only exported in the React Native bundle (dist/rn/).
-// During SSR / web builds it is absent — fall back to in-memory persistence.
-let persistence = inMemoryPersistence;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const rnPersistence = require("firebase/auth").getReactNativePersistence;
-  if (typeof rnPersistence === "function") {
-    persistence = rnPersistence(AsyncStorage);
-  }
-} catch {
-  // Not available — use inMemoryPersistence
-}
-
-const auth = initializeAuth(app, { persistence });
+const auth = initializeAuth(app, { persistence: inMemoryPersistence });
 
 export { auth };

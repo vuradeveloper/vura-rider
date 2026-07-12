@@ -13,9 +13,28 @@ const app = express();
 
 app.set("trust proxy", 1);
 
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== "production" || process.env.ENFORCE_HTTPS === "false") {
+    next();
+    return;
+  }
+
+  const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "")
+    .split(",")[0]
+    .trim();
+
+  if (req.secure || forwardedProto === "https") {
+    next();
+    return;
+  }
+
+  res.status(426).json({ error: "HTTPS is required" });
+});
+
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
+    hsts: process.env.NODE_ENV === "production",
   })
 );
 

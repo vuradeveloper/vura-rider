@@ -2,6 +2,12 @@ import { Router, Request, Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { query, queryOne } from "../config/database";
 import { DriverProfile, DriverStats, UserWithDriver } from "../types";
+import {
+  asTrimmedString,
+  isLatitude,
+  isLongitude,
+  parseFiniteNumber,
+} from "../utils/validation";
 
 const router = Router();
 
@@ -23,6 +29,22 @@ router.patch("/profile", authMiddleware, async (req: Request, res: Response) => 
       license_plate,
     } = req.body;
 
+    const vehicleYear =
+      vehicle_year === undefined || vehicle_year === null
+        ? null
+        : parseFiniteNumber(vehicle_year);
+    const maxVehicleYear = new Date().getFullYear() + 1;
+
+    if (
+      vehicleYear !== null &&
+      (!Number.isInteger(vehicleYear) ||
+        vehicleYear < 1980 ||
+        vehicleYear > maxVehicleYear)
+    ) {
+      res.status(400).json({ error: "vehicle_year must be a valid year" });
+      return;
+    }
+
     const updated = await queryOne<DriverProfile>(
       `UPDATE driver_profiles
        SET license_number = COALESCE($1, license_number),
@@ -35,12 +57,12 @@ router.patch("/profile", authMiddleware, async (req: Request, res: Response) => 
        WHERE user_id = $7
        RETURNING *`,
       [
-        license_number ?? null,
-        vehicle_make ?? null,
-        vehicle_model ?? null,
-        vehicle_year ?? null,
-        vehicle_color ?? null,
-        license_plate ?? null,
+        asTrimmedString(license_number, { maxLength: 64 }),
+        asTrimmedString(vehicle_make, { maxLength: 64 }),
+        asTrimmedString(vehicle_model, { maxLength: 64 }),
+        vehicleYear,
+        asTrimmedString(vehicle_color, { maxLength: 32 }),
+        asTrimmedString(license_plate, { maxLength: 32 }),
         u.id,
       ]
     );
@@ -121,11 +143,19 @@ router.get("/nearby", authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
-    const r = parseFloat(String(radiusRaw));
-    const latitude = parseFloat(String(lat));
-    const longitude = parseFloat(String(lng));
+    const r = parseFiniteNumber(radiusRaw);
+    const latitude = parseFiniteNumber(lat);
+    const longitude = parseFiniteNumber(lng);
 
-    if (isNaN(r) || isNaN(latitude) || isNaN(longitude)) {
+    if (
+      r === null ||
+      latitude === null ||
+      longitude === null ||
+      r <= 0 ||
+      r > 50 ||
+      !isLatitude(latitude) ||
+      !isLongitude(longitude)
+    ) {
       res.status(400).json({ error: "lat, lng, and radius must be valid numbers" });
       return;
     }

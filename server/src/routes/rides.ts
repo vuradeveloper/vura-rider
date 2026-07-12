@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { query, queryOne } from "../config/database";
 import { RideWithDetails, User } from "../types";
+import { isUuid, parsePositiveInteger } from "../utils/validation";
 
 const router = Router();
 
@@ -38,10 +39,8 @@ router.get("/me/active", authMiddleware, async (req: Request, res: Response) => 
 router.get("/history", authMiddleware, async (req: Request, res: Response) => {
   try {
     const u = req.user!.dbUser;
-    const pageRaw = parseInt((req.query.page as string) ?? "1", 10);
-    const limitRaw = parseInt((req.query.limit as string) ?? "20", 10);
-    const page = isNaN(pageRaw) || pageRaw < 1 ? 1 : pageRaw;
-    const limit = Math.min(isNaN(limitRaw) || limitRaw < 1 ? 20 : limitRaw, 100);
+    const page = parsePositiveInteger(req.query.page, 1, 10_000);
+    const limit = parsePositiveInteger(req.query.limit, 20, 100);
     const offset = (page - 1) * limit;
 
     const rides = await query<RideWithDetails>(
@@ -88,6 +87,11 @@ router.get("/:id", authMiddleware, async (req: Request, res: Response) => {
   try {
     const u = req.user!.dbUser;
     const { id } = req.params;
+
+    if (!isUuid(id)) {
+      res.status(400).json({ error: "id must be a valid UUID" });
+      return;
+    }
 
     const ride = await queryOne<RideWithDetails>(
       `SELECT r.*,

@@ -12,10 +12,10 @@ export const analyzeCarImage = createServerFn({ method: "POST" })
     (data: { imageBase64: string; angle: string; label: string }) => data
   )
   .handler(async ({ data: { imageBase64, angle, label } }) => {
-    const apiKey = process.env.VITE_OPENAI_API_KEY || "";
+    const apiKey = process.env.OPENAI_API_KEY || "";
 
     if (!apiKey) {
-      console.warn("VITE_OPENAI_API_KEY is not set. Returning mock analysis.");
+      console.warn("OPENAI_API_KEY is not set. Returning mock analysis.");
       return mockAnalysis();
     }
 

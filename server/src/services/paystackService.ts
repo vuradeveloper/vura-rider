@@ -1,4 +1,3 @@
-const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY!;
 const PAYSTACK_BASE = 'https://api.paystack.co';
 
 interface PaystackResponse<T = any> {
@@ -12,16 +11,25 @@ async function paystackRequest<T = any>(
   endpoint: string,
   body: Record<string, any> | null = null
 ): Promise<T> {
+  const paystackSecret = process.env.PAYSTACK_SECRET_KEY;
+  if (!paystackSecret) {
+    throw new Error('PAYSTACK_SECRET_KEY is not configured');
+  }
+
   const res = await fetch(`${PAYSTACK_BASE}${endpoint}`, {
     method,
     headers: {
-      Authorization: `Bearer ${PAYSTACK_SECRET}`,
+      Authorization: `Bearer ${paystackSecret}`,
       'Content-Type': 'application/json',
     },
     body: body ? JSON.stringify(body) : null,
   });
-  const data = (await res.json()) as PaystackResponse<T>;
-  if (!data.status) throw new Error(data.message || 'Paystack request failed');
+
+  const data = (await res.json().catch(() => null)) as PaystackResponse<T> | null;
+  if (!res.ok || !data?.status) {
+    throw new Error(data?.message || 'Paystack request failed');
+  }
+
   return data.data;
 }
 
@@ -72,14 +80,19 @@ export const initializePayment = async ({
   rideId: string;
   userId: string;
 }): Promise<InitializePaymentResult> => {
-  return paystackRequest('POST', '/transaction/initialize', {
+  const payload: Record<string, any> = {
     email,
     amount: Math.round(amountRands * 100),
     currency: 'ZAR',
     reference: `vura_ride_${rideId}_${Date.now()}`,
     metadata: { rideId, userId },
-    callback_url: `${process.env.APP_URL}/api/payments/verify`,
-  });
+  };
+
+  if (process.env.APP_URL) {
+    payload.callback_url = `${process.env.APP_URL.replace(/\/+$/, '')}/api/payments/verify`;
+  }
+
+  return paystackRequest('POST', '/transaction/initialize', payload);
 };
 
 export const verifyPayment = async (reference: string): Promise<VerifyPaymentResult> => {
@@ -178,9 +191,14 @@ export const verifyBankAccount = async (
   accountNumber: string,
   bankCode: string
 ): Promise<{ account_name: string; account_number: string }> => {
+  const params = new URLSearchParams({
+    account_number: accountNumber,
+    bank_code: bankCode,
+  });
+
   return paystackRequest(
     'GET',
-    `/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`
+    `/bank/resolve?${params.toString()}`
   );
 };
 
