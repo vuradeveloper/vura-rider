@@ -21,6 +21,10 @@ import {
 } from "@/lib/utils";
 import type { SavedCard } from "@/lib/types";
 
+// ⚠️ Adjust these two imports to match where they actually live in your project.
+import MapView, { Marker } from "@/components/MapView";
+const CAR_LOCATOR_IMG = require("@/assets/images/CarLocator.png");
+
 const tiers = [
   {
     id: "go",
@@ -53,12 +57,17 @@ type PayChoice =
   | { type: "cash" }
   | { type: "card"; id: string; last4: string | null };
 
+type NearbyCar = { id: string; lat: number; lng: number; angle: number };
+
 export default function RideOptions() {
   const router = useRouter();
   const [selected, setSelected] = useState("x");
   const [showPayment, setShowPayment] = useState(false);
   const [payChoice, setPayChoice] = useState<PayChoice>({ type: "cash" });
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
+  const [pickupCoord, setPickupCoord] = useState<[number, number] | null>(null);
+  const [dropoffCoord, setDropoffCoord] = useState<[number, number] | null>(null);
+  const [nearbyCars, setNearbyCars] = useState<NearbyCar[]>([]);
 
   const cardsQuery = useQuery<SavedCard[]>({
     queryKey: ["saved-cards"],
@@ -76,12 +85,50 @@ export default function RideOptions() {
         );
         if (p?.length === 2 && d?.length === 2) {
           setDistanceKm(haversineKm(p[0], p[1], d[0], d[1]));
+          setPickupCoord(p);
+          setDropoffCoord(d);
         }
       } catch {
         // ignore
       }
     })();
   }, []);
+
+  // Simulate a few nearby drivers gently drifting around the pickup point,
+  // rendered with CarLocator.png, so the map doesn't feel static while the
+  // rider is choosing a ride tier. Swap this for a real "nearby drivers"
+  // feed if/when your backend exposes one.
+  useEffect(() => {
+    if (!pickupCoord) return;
+    const [baseLat, baseLng] = pickupCoord;
+
+    setNearbyCars(
+      [0, 1, 2].map((i) => ({
+        id: `car-${i}`,
+        lat: baseLat + (Math.random() - 0.5) * 0.01,
+        lng: baseLng + (Math.random() - 0.5) * 0.01,
+        angle: Math.random() * 360,
+      }))
+    );
+
+    const interval = setInterval(() => {
+      setNearbyCars((prev) =>
+        prev.map((c) => {
+          const angle = c.angle + (Math.random() - 0.5) * 40;
+          const rad = (angle * Math.PI) / 180;
+          const step = 0.0006;
+          return {
+            ...c,
+            lat: c.lat + Math.cos(rad) * step,
+            lng: c.lng + Math.sin(rad) * step,
+            angle,
+          };
+        })
+      );
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [pickupCoord]);
 
   const priced = useMemo(
     () =>
@@ -109,18 +156,60 @@ export default function RideOptions() {
 
   return (
     <SafeAreaView className="flex-1 bg-background">
-      {/* Map placeholder */}
-      <View className="relative h-[260px] bg-secondary items-center justify-center">
-        <Ionicons name="map" size={48} color="#80716b" />
-        <Text className="text-xs text-muted-foreground mt-2">
-          {distanceKm != null ? `${distanceKm.toFixed(1)} km trip` : "Route map"}
-        </Text>
+      {/* Map */}
+      <View className="relative h-[260px] bg-secondary">
+        <MapView
+          style={{ flex: 1 }}
+          initialRegion={
+            pickupCoord
+              ? {
+                latitude: pickupCoord[0],
+                longitude: pickupCoord[1],
+                latitudeDelta: 0.02,
+                longitudeDelta: 0.02,
+              }
+              : undefined
+          }
+        >
+          {pickupCoord && (
+            <Marker
+              coordinate={{ latitude: pickupCoord[0], longitude: pickupCoord[1] }}
+              pinColor="#22c55e"
+              title="Pickup"
+            />
+          )}
+          {dropoffCoord && (
+            <Marker
+              coordinate={{ latitude: dropoffCoord[0], longitude: dropoffCoord[1] }}
+              pinColor="#ef4444"
+              title="Dropoff"
+            />
+          )}
+          {nearbyCars.map((c) => (
+            <Marker
+              key={c.id}
+              coordinate={{ latitude: c.lat, longitude: c.lng }}
+              image={CAR_LOCATOR_IMG}
+              rotation={c.angle}
+              title="Nearby driver"
+            />
+          ))}
+        </MapView>
+
         <TouchableOpacity
           onPress={() => router.push("/search")}
           className="absolute top-3 left-4 w-9 h-9 rounded-full bg-surface border border-border items-center justify-center"
         >
           <Ionicons name="arrow-back" size={16} color="#2e1e1a" />
         </TouchableOpacity>
+
+        {distanceKm != null && (
+          <View className="absolute bottom-3 right-4 rounded-full bg-surface/90 border border-border px-3 py-1.5">
+            <Text className="text-xs font-semibold text-foreground">
+              {distanceKm.toFixed(1)} km trip
+            </Text>
+          </View>
+        )}
       </View>
 
       <View className="-mt-5 rounded-t-3xl bg-surface px-5 pt-5 pb-4 flex-1">

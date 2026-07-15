@@ -20,12 +20,18 @@ import { payForRide, payWithCash } from "@/services/PaymentService";
 import { formatCurrency } from "@/lib/utils";
 import type { RideStatus } from "@/lib/types";
 
+// ⚠️ Adjust these two imports to match where they actually live in your project.
+import MapView, { Marker } from "@/components/MapView";
+const CAR_LOCATOR_IMG = require("@/assets/images/CarLocator.png");
+
 type Driver = {
   name: string;
   vehicle: string | null;
   license_plate: string | null;
   rating: number | null;
 };
+
+type DriverLoc = { lat: number; lng: number; bearing: number };
 
 const STATUS_LABEL: Record<RideStatus, string> = {
   searching: "Finding your driver…",
@@ -48,6 +54,9 @@ export default function Track() {
   const [pickupAddr, setPickupAddr] = useState("Pickup");
   const [dropoffAddr, setDropoffAddr] = useState("Destination");
   const [error, setError] = useState<string | null>(null);
+  const [pickupCoord, setPickupCoord] = useState<[number, number] | null>(null);
+  const [dropoffCoord, setDropoffCoord] = useState<[number, number] | null>(null);
+  const [driverLoc, setDriverLoc] = useState<DriverLoc | null>(null);
 
   const [showCancel, setShowCancel] = useState(false);
   const [showRating, setShowRating] = useState(false);
@@ -56,7 +65,16 @@ export default function Track() {
   const [submitting, setSubmitting] = useState(false);
 
   const rideIdRef = useRef<string | null>(rideIdParam ?? null);
+  const statusRef = useRef<RideStatus>("searching");
+  const mapRef = useRef<any>(null);
   const isHistory = !!rideIdParam;
+
+  useEffect(() => {
+    statusRef.current = status;
+    if (status === "completed" || status === "cancelled") {
+      mapRef.current?.unfollow();
+    }
+  }, [status]);
 
   const cancelOptions = [
     "Driver is taking too long",
@@ -67,15 +85,25 @@ export default function Track() {
     "My pickup location is wrong",
   ];
 
-  // ── Load addresses (live request) or existing ride (history/resume) ──
+  // ── Load addresses + coordinates (live request) ──
   useEffect(() => {
     (async () => {
-      const [pa, da] = await Promise.all([
+      const [pa, da, p, d] = await Promise.all([
         AsyncStorage.getItem("vura.ride.pickup.address"),
         AsyncStorage.getItem("vura.ride.dropoff.address"),
+        AsyncStorage.getItem("vura.ride.pickup"),
+        AsyncStorage.getItem("vura.ride.dropoff"),
       ]);
       if (pa) setPickupAddr(pa);
       if (da) setDropoffAddr(da);
+      try {
+        const pc = JSON.parse(p || "null");
+        const dc = JSON.parse(d || "null");
+        if (pc?.length === 2) setPickupCoord(pc);
+        if (dc?.length === 2) setDropoffCoord(dc);
+      } catch {
+        // ignore
+      }
     })();
   }, []);
 
@@ -89,6 +117,14 @@ export default function Track() {
         setFare(ride.fare);
         setPickupAddr(ride.pickup_address);
         setDropoffAddr(ride.destination_address);
+        // ⚠️ Assumes your ride object carries lat/lng alongside the address
+        // fields — rename these if your API uses different keys.
+        if (ride.pickup_lat != null && ride.pickup_lng != null) {
+          setPickupCoord([ride.pickup_lat, ride.pickup_lng]);
+        }
+        if (ride.destination_lat != null && ride.destination_lng != null) {
+          setDropoffCoord([ride.destination_lat, ride.destination_lng]);
+        }
         if (ride.driver_name) {
           setDriver({
             name: ride.driver_name,
@@ -152,6 +188,22 @@ export default function Track() {
         socket.on("ride:driver:arrived", () => setStatus("driver_arrived"));
         socket.on("ride:started", () => setStatus("in_progress"));
 
+        // ⚠️ Assumed event name/shape for live driver location updates —
+        // rename to match whatever your driver app actually emits.
+        socket.on("ride:driver:location", (data: any) => {
+          if (data?.lat != null && data?.lng != null) {
+            const bearing = data.bearing ?? data.heading ?? 0;
+            setDriverLoc({ lat: data.lat, lng: data.lng, bearing });
+            if (
+              statusRef.current === "accepted" ||
+              statusRef.current === "driver_arrived" ||
+              statusRef.current === "in_progress"
+            ) {
+              mapRef.current?.followCar(data.lat, data.lng, bearing, 17);
+            }
+          }
+        });
+
         socket.on("ride:completed", (data: any) => {
           setStatus("completed");
           setFare(data.riderTotal ?? data.fare ?? null);
@@ -182,6 +234,12 @@ export default function Track() {
             setRideId(ride.id);
             rideIdRef.current = ride.id;
             setStatus(ride.status);
+            if (ride.pickup_lat != null && ride.pickup_lng != null) {
+              setPickupCoord([ride.pickup_lat, ride.pickup_lng]);
+            }
+            if (ride.destination_lat != null && ride.destination_lng != null) {
+              setDropoffCoord([ride.destination_lat, ride.destination_lng]);
+            }
             if (ride.driver_name) {
               setDriver({
                 name: ride.driver_name,
@@ -221,6 +279,7 @@ export default function Track() {
         socket.off("ride:accepted");
         socket.off("ride:driver:arrived");
         socket.off("ride:started");
+        socket.off("ride:driver:location");
         socket.off("ride:completed");
         socket.off("ride:cancelled");
         socket.off("connect_error");
@@ -285,19 +344,61 @@ export default function Track() {
   const canCancel = status === "searching" || status === "accepted";
   const driverInitials = driver?.name
     ? driver.name
-        .split(" ")
-        .map((p) => p[0])
-        .join("")
-        .slice(0, 2)
-        .toUpperCase()
+      .split(" ")
+      .map((p) => p[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase()
     : "";
 
   return (
     <SafeAreaView className="flex-1 bg-background">
-      {/* Map placeholder */}
-      <View className="relative h-[420px] bg-secondary items-center justify-center">
-        <Ionicons name="map" size={64} color="#80716b" />
-        <Text className="text-xs text-muted-foreground mt-2">Live tracking</Text>
+      {/* Map */}
+      <View className="relative h-[420px] bg-secondary">
+        <MapView
+          ref={mapRef}
+          style={{ flex: 1 }}
+          initialRegion={
+            pickupCoord
+              ? {
+                latitude: pickupCoord[0],
+                longitude: pickupCoord[1],
+                latitudeDelta: 0.02,
+                longitudeDelta: 0.02,
+              }
+              : dropoffCoord
+                ? {
+                  latitude: dropoffCoord[0],
+                  longitude: dropoffCoord[1],
+                  latitudeDelta: 0.02,
+                  longitudeDelta: 0.02,
+                }
+                : undefined
+          }
+        >
+          {pickupCoord && (
+            <Marker
+              coordinate={{ latitude: pickupCoord[0], longitude: pickupCoord[1] }}
+              pinColor="#22c55e"
+              title="Pickup"
+            />
+          )}
+          {dropoffCoord && (
+            <Marker
+              coordinate={{ latitude: dropoffCoord[0], longitude: dropoffCoord[1] }}
+              pinColor="#ef4444"
+              title="Dropoff"
+            />
+          )}
+          {driverLoc && (
+            <Marker
+              coordinate={{ latitude: driverLoc.lat, longitude: driverLoc.lng }}
+              image={CAR_LOCATOR_IMG}
+              rotation={driverLoc.bearing}
+              title="Driver"
+            />
+          )}
+        </MapView>
 
         <TouchableOpacity
           onPress={() => router.replace("/")}
@@ -315,13 +416,13 @@ export default function Track() {
         {(status === "accepted" ||
           status === "driver_arrived" ||
           status === "in_progress") && (
-          <View className="absolute top-14 left-1/2 -translate-x-1/2 rounded-full bg-green-100 border border-green-200 px-3 py-1 flex-row items-center gap-1">
-            <Ionicons name="shield-checkmark" size={12} color="#166534" />
-            <Text className="text-[10px] font-bold text-green-800">
-              Smart Safety Active
-            </Text>
-          </View>
-        )}
+            <View className="absolute top-14 left-1/2 -translate-x-1/2 rounded-full bg-green-100 border border-green-200 px-3 py-1 flex-row items-center gap-1">
+              <Ionicons name="shield-checkmark" size={12} color="#166534" />
+              <Text className="text-[10px] font-bold text-green-800">
+                Smart Safety Active
+              </Text>
+            </View>
+          )}
       </View>
 
       <View className="-mt-6 rounded-t-3xl bg-surface px-5 pt-5 pb-4 flex-1">
