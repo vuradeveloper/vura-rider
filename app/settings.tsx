@@ -1,5 +1,5 @@
 import { Link, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -23,6 +23,18 @@ export default function SettingsPage() {
   const [docName, setDocName] = useState(
     (user?.role === "driver" ? user?.licenseDocumentName : user?.idDocumentName) || ""
   );
+
+  useEffect(() => {
+    if (user) {
+      setName(user.name || "");
+      setEmail(user.email || "");
+      setPhone(user.phone || "");
+      setIdNumber(user.idNumber || "");
+      setDocName(
+        (user.role === "driver" ? user.licenseDocumentName : user.idDocumentName) || ""
+      );
+    }
+  }, [user]);
 
   if (!user) return null;
 

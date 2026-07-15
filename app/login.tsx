@@ -138,21 +138,7 @@ export default function Login() {
             </TouchableOpacity>
           </View>
 
-          <View className="mt-6 flex-row items-center gap-3">
-            <View className="h-px flex-1 bg-border" />
-            <Text className="text-xs text-muted-foreground">or continue with</Text>
-            <View className="h-px flex-1 bg-border" />
-          </View>
-          <View className="mt-4 flex-row gap-2">
-            {["Google", "Apple", "Phone"].map((p) => (
-              <TouchableOpacity
-                key={p}
-                className="flex-1 rounded-xl border border-border py-2.5 items-center"
-              >
-                <Text className="text-xs font-bold text-foreground">{p}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+
         </View>
 
         <View className="mt-8 flex-row justify-center">

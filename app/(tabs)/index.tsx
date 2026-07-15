@@ -1,28 +1,26 @@
+import MapView, { Marker } from "@/components/MapView";
+import { useAuth } from "@/lib/auth";
+import { estimateEtaMins, haversineKm } from "@/lib/utils";
+import { getNearbyDrivers } from "@/services/DriverService";
+import { Ionicons } from "@expo/vector-icons";
+import { useQuery } from "@tanstack/react-query";
+import * as Location from "expo-location";
 import { Link, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-  View,
+  ScrollView,
   Text,
   TouchableOpacity,
-  ScrollView,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
-import * as Location from "expo-location";
-import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "@/lib/auth";
-import { getNearbyDrivers } from "@/services/DriverService";
-import { haversineKm, estimateEtaMins } from "@/lib/utils";
 
 export default function Home() {
   const router = useRouter();
-  const { user } = useAuth();
-  const [ready, setReady] = useState(false);
+  const { user, loading } = useAuth();
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
     null
   );
-
-  useEffect(() => setReady(true), []);
 
   useEffect(() => {
     (async () => {
@@ -63,7 +61,7 @@ export default function Home() {
       ? `${nearestEta} min away`
       : "No drivers nearby";
 
-  if (!ready || !user) return null;
+  if (loading || !user) return null;
 
   return (
     <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
@@ -152,13 +150,48 @@ export default function Home() {
           </View>
         </View>
 
-        {/* Map preview placeholder */}
-        <View className="mx-5 mt-6 rounded-2xl overflow-hidden border border-border">
-          <View className="h-[180px] bg-secondary items-center justify-center">
-            <Ionicons name="map" size={48} color="#80716b" />
-            <Text className="text-xs text-muted-foreground mt-2">
-              Map preview
-            </Text>
+        {/* Map preview */}
+        <View className="mx-5 mt-6 rounded-2xl border border-border overflow-hidden">
+          {/* This inner View has NO overflow-hidden of its own — clipping a
+              WebView's direct ancestor with overflow+borderRadius is a known
+              cause of a blank/white WebView on Android. The outer card above
+              still clips the corners of the whole card (map + footer). */}
+          <View style={{ height: 180 }}>
+            {coords ? (
+              <MapView
+                style={{ flex: 1 }}
+                initialRegion={{
+                  latitude: coords.lat,
+                  longitude: coords.lng,
+                  latitudeDelta: 0.05,
+                  longitudeDelta: 0.05,
+                }}
+              >
+                <Marker
+                  coordinate={{ latitude: coords.lat, longitude: coords.lng }}
+                  title="Your Location"
+                />
+                {nearbyQuery.data?.drivers?.map((d: any) =>
+                  d.current_lat != null && d.current_lng != null ? (
+                    <Marker
+                      key={d.id}
+                      coordinate={{
+                        latitude: d.current_lat,
+                        longitude: d.current_lng,
+                      }}
+                      title="Nearby Driver"
+                    />
+                  ) : null
+                )}
+              </MapView>
+            ) : (
+              <View className="flex-1 bg-secondary items-center justify-center">
+                <Ionicons name="map" size={48} color="#80716b" />
+                <Text className="text-xs text-muted-foreground mt-2">
+                  Waiting for location…
+                </Text>
+              </View>
+            )}
           </View>
           <View className="flex-row items-center justify-between px-4 py-3 bg-surface">
             <View>

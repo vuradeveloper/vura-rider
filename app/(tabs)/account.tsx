@@ -1,5 +1,5 @@
 import { Link, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   View,
   Text,
@@ -39,7 +39,7 @@ const items = [
   },
   {
     icon: "settings" as const,
-    label: "Settings",
+    label: "Personal Details",
     sub: "Notifications, privacy",
     to: "/settings",
     wide: false,
@@ -54,19 +54,36 @@ const items = [
 ];
 
 export default function Account() {
-  const { user, refresh } = useAuth();
+  const { user, loading, refresh } = useAuth();
   const router = useRouter();
-  const [ready, setReady] = useState(false);
 
-  useEffect(() => setReady(true), []);
+  const isDriver = user?.role === "driver";
+
+  const driverStatsQuery = useQuery<DriverStats>({
+    queryKey: ["driver-stats"],
+    queryFn: getDriverStats,
+    enabled: isDriver && !!user,
+  });
+
+  const historyQuery = useQuery({
+    queryKey: ["ride-history"],
+    queryFn: () => getRideHistory(1, 1),
+    enabled: !isDriver && !!user,
+  });
+
+  const cardsQuery = useQuery<SavedCard[]>({
+    queryKey: ["saved-cards"],
+    queryFn: getSavedCards,
+    enabled: !!user,
+  });
 
   useEffect(() => {
-    if (ready && !user) {
+    if (!loading && !user) {
       router.replace("/welcome");
     }
-  }, [ready, user, router]);
+  }, [loading, user, router]);
 
-  if (!ready || !user) return null;
+  if (loading || !user) return null;
 
   const initials = user.name
     .split(" ")
@@ -92,25 +109,6 @@ export default function Account() {
     refresh();
     router.replace("/");
   }
-
-  const isDriver = user.role === "driver";
-
-  const driverStatsQuery = useQuery<DriverStats>({
-    queryKey: ["driver-stats"],
-    queryFn: getDriverStats,
-    enabled: isDriver,
-  });
-
-  const historyQuery = useQuery({
-    queryKey: ["ride-history"],
-    queryFn: () => getRideHistory(1, 1),
-    enabled: !isDriver,
-  });
-
-  const cardsQuery = useQuery<SavedCard[]>({
-    queryKey: ["saved-cards"],
-    queryFn: getSavedCards,
-  });
 
   const tripCount = isDriver
     ? driverStatsQuery.data?.allTime.rides
@@ -200,24 +198,6 @@ export default function Account() {
           </View>
 
           <View className="mt-5 gap-y-3">
-            <TouchableOpacity
-              onPress={switchRole}
-              className="flex-row items-center gap-3 rounded-xl bg-surface border border-border p-4"
-            >
-              <View className="w-10 h-10 rounded-full bg-accent items-center justify-center">
-                <Ionicons name="refresh" size={16} color="#e04e2f" />
-              </View>
-              <View className="flex-1">
-                <Text className="text-sm font-bold text-foreground">
-                  Switch to {user.role === "driver" ? "rider" : "driver"}
-                </Text>
-                <Text className="text-xs text-muted-foreground">
-                  Try the other side of Vura
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color="#80716b" />
-            </TouchableOpacity>
-
             <View className="flex-row flex-wrap gap-3">
               {items.map((it) => (
                 <Link key={it.label} href={it.to as any} asChild>
