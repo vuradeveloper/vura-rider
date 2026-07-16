@@ -1,24 +1,24 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  TextInput,
-  Modal,
-  Alert,
-  ActivityIndicator,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { disconnectSocket, getSocket } from "@/lib/socket";
+import type { RideStatus } from "@/lib/types";
+import { formatCurrency } from "@/lib/utils";
+import { payForRide, payWithCash } from "@/services/PaymentService";
+import { getActiveRide, getRide, submitRating } from "@/services/RideService";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
-import { getSocket, disconnectSocket } from "@/lib/socket";
-import { getActiveRide, getRide, submitRating } from "@/services/RideService";
-import { payForRide, payWithCash } from "@/services/PaymentService";
-import { formatCurrency } from "@/lib/utils";
-import type { RideStatus } from "@/lib/types";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 // ⚠️ Adjust these two imports to match where they actually live in your project.
 import MapView, { Marker } from "@/components/MapView";
@@ -41,6 +41,42 @@ const STATUS_LABEL: Record<RideStatus, string> = {
   completed: "Trip completed",
   cancelled: "Trip cancelled",
 };
+
+// Same OSRM lookup used elsewhere in the app (DriverHome.tsx, Home.tsx) —
+// used here only for the demo fallback below.
+async function fetchRoute(
+  start: [number, number],
+  end: [number, number]
+) {
+  try {
+    const res = await fetch(
+      `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?geometries=geojson&overview=full`
+    );
+    const data = await res.json();
+    if (data.routes?.[0]) {
+      return data.routes[0].geometry.coordinates.map((c: any) => ({
+        latitude: c[1],
+        longitude: c[0],
+      }));
+    }
+  } catch (e) { }
+  return [];
+}
+
+function computeBearing(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number }
+) {
+  const lat1 = (from.latitude * Math.PI) / 180;
+  const lat2 = (to.latitude * Math.PI) / 180;
+  const dLng = ((to.longitude - from.longitude) * Math.PI) / 180;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  const brng = (Math.atan2(y, x) * 180) / Math.PI;
+  return (brng + 360) % 360;
+}
 
 export default function Track() {
   const router = useRouter();
@@ -69,12 +105,61 @@ export default function Track() {
   const mapRef = useRef<any>(null);
   const isHistory = !!rideIdParam;
 
+  // Flips true the instant a *real* socket driver-location event arrives.
+  // The demo simulation below checks this every tick and stops itself the
+  // moment real data starts flowing — so this file needs zero changes when
+  // your backend actually goes live.
+  const hasRealDriverLocRef = useRef(false);
+
+  // Refs for smooth car animation
+  const carPosRef = useRef<DriverLoc | null>(null);
+  const carTargetRef = useRef<DriverLoc | null>(null);
+  const lastFollowRef = useRef(0);
+
   useEffect(() => {
     statusRef.current = status;
     if (status === "completed" || status === "cancelled") {
       mapRef.current?.unfollow();
     }
   }, [status]);
+
+  // Global animation loop: smoothly lerps driverLoc toward carTargetRef
+  // at ~20 fps. Skips frames when already at the target to avoid churn.
+  // Works for both demo simulation and real socket data.
+  useEffect(() => {
+    let id: ReturnType<typeof setInterval> | null = null;
+
+    id = setInterval(() => {
+      const tgt = carTargetRef.current;
+      const cur = carPosRef.current;
+      if (!tgt || !cur) return;
+
+      const latDiff = Math.abs(tgt.lat - cur.lat);
+      const lngDiff = Math.abs(tgt.lng - cur.lng);
+      if (latDiff < 0.0000001 && lngDiff < 0.0000001) return;
+
+      const speed = 0.25;
+      const lat = cur.lat + (tgt.lat - cur.lat) * speed;
+      const lng = cur.lng + (tgt.lng - cur.lng) * speed;
+      let bDiff = tgt.bearing - cur.bearing;
+      if (bDiff > 180) bDiff -= 360;
+      if (bDiff < -180) bDiff += 360;
+      const bearing = ((cur.bearing + bDiff * speed) % 360 + 360) % 360;
+      const next: DriverLoc = { lat, lng, bearing };
+      carPosRef.current = next;
+      setDriverLoc(next);
+
+      const now = Date.now();
+      if (now - lastFollowRef.current >= 300) {
+        lastFollowRef.current = now;
+        mapRef.current?.followCar(lat, lng, bearing, 17);
+      }
+    }, 50);
+
+    return () => {
+      if (id) clearInterval(id);
+    };
+  }, []);
 
   const cancelOptions = [
     "Driver is taking too long",
@@ -106,6 +191,57 @@ export default function Track() {
       }
     })();
   }, []);
+
+  // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
+  // Fetches an OSRM route and advances one waypoint every 3 s. The global
+  // animation loop above handles the fine-grained interpolation, so the car
+  // glides smoothly instead of teleporting. Stops itself the moment a real
+  // `ride:driver:location` event arrives via the socket effect below.
+  useEffect(() => {
+    if (isHistory || !pickupCoord) return;
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    (async () => {
+      const [baseLat, baseLng] = pickupCoord;
+      const [endLat, endLng] = dropoffCoord ?? [
+        baseLat + (Math.random() - 0.5) * 0.02,
+        baseLng + (Math.random() - 0.5) * 0.02,
+      ];
+      const route = await fetchRoute([baseLat, baseLng], [endLat, endLng]);
+      if (cancelled || hasRealDriverLocRef.current || route.length < 2) return;
+
+      // Seed the initial position so the car appears at the start of the route
+      const seedPos: DriverLoc = {
+        lat: route[0].latitude,
+        lng: route[0].longitude,
+        bearing: computeBearing(route[0], route[1]),
+      };
+      carPosRef.current = seedPos;
+      carTargetRef.current = seedPos;
+      setDriverLoc(seedPos);
+      lastFollowRef.current = Date.now();
+      mapRef.current?.followCar(seedPos.lat, seedPos.lng, seedPos.bearing, 17);
+
+      let segIdx = 0;
+      interval = setInterval(() => {
+        if (hasRealDriverLocRef.current || segIdx >= route.length - 1) {
+          if (interval) clearInterval(interval);
+          return;
+        }
+        segIdx++;
+        const from = route[segIdx];
+        const to = route[Math.min(segIdx + 1, route.length - 1)];
+        const bearing = computeBearing(from, to);
+        carTargetRef.current = { lat: to.latitude, lng: to.longitude, bearing };
+      }, 3000);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [isHistory, pickupCoord, dropoffCoord]);
 
   // ── History mode: just load the ride details, no socket ──
   useEffect(() => {
@@ -192,14 +328,13 @@ export default function Track() {
         // rename to match whatever your driver app actually emits.
         socket.on("ride:driver:location", (data: any) => {
           if (data?.lat != null && data?.lng != null) {
+            hasRealDriverLocRef.current = true;
             const bearing = data.bearing ?? data.heading ?? 0;
-            setDriverLoc({ lat: data.lat, lng: data.lng, bearing });
-            if (
-              statusRef.current === "accepted" ||
-              statusRef.current === "driver_arrived" ||
-              statusRef.current === "in_progress"
-            ) {
-              mapRef.current?.followCar(data.lat, data.lng, bearing, 17);
+            const incoming: DriverLoc = { lat: data.lat, lng: data.lng, bearing };
+            carTargetRef.current = incoming;
+            if (!carPosRef.current) {
+              carPosRef.current = { ...incoming };
+              setDriverLoc(incoming);
             }
           }
         });
@@ -394,7 +529,7 @@ export default function Track() {
             <Marker
               coordinate={{ latitude: driverLoc.lat, longitude: driverLoc.lng }}
               image={CAR_LOCATOR_IMG}
-              rotation={driverLoc.bearing}
+              rotation={(driverLoc.bearing + 90) % 360}
               title="Driver"
             />
           )}

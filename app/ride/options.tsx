@@ -190,7 +190,7 @@ export default function RideOptions() {
               key={c.id}
               coordinate={{ latitude: c.lat, longitude: c.lng }}
               image={CAR_LOCATOR_IMG}
-              rotation={c.angle}
+              rotation={(c.angle + 90) % 360}
               title="Nearby driver"
             />
           ))}
