@@ -11,7 +11,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Vura needs your location to find nearby drivers and set your pickup point.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSFaceIDUsageDescription": "Vura uses Face ID to sign you in quickly and securely."
       },
       "bundleIdentifier": "com.nhlanhlanb.vurarider"
     },
@@ -39,6 +40,7 @@
       "expo-router",
       "expo-location",
       "expo-document-picker",
+      "expo-local-authentication",
       [
         "expo-splash-screen",
         {

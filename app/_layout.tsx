@@ -19,7 +19,8 @@ function AuthGate() {
     const isAuthScreen =
       segments[0] === "welcome" ||
       segments[0] === "login" ||
-      segments[0] === "signup";
+      segments[0] === "signup" ||
+      segments[0] === "forgot-password";
 
     if (!user && !isAuthScreen) {
       router.replace("/welcome");
@@ -50,6 +51,7 @@ export default function RootLayout() {
         <Stack.Screen name="welcome" />
         <Stack.Screen name="login" />
         <Stack.Screen name="signup" />
+        <Stack.Screen name="forgot-password" />
         <Stack.Screen name="search" />
         <Stack.Screen name="ride/options" />
         <Stack.Screen name="ride/track" />

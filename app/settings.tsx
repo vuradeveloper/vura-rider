@@ -6,11 +6,13 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
-import { useAuth, setUser } from "@/lib/auth";
+import { useAuth, setUser, deleteAccount } from "@/lib/auth";
 
 export default function SettingsPage() {
   const { user, refresh } = useAuth();
@@ -23,6 +25,9 @@ export default function SettingsPage() {
   const [docName, setDocName] = useState(
     (user?.role === "driver" ? user?.licenseDocumentName : user?.idDocumentName) || ""
   );
+  const [deletePwd, setDeletePwd] = useState("");
+  const [showDeleteInput, setShowDeleteInput] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -185,13 +190,98 @@ export default function SettingsPage() {
 
         <TouchableOpacity
           onPress={handleSave}
-          className="mt-8 mb-6 w-full flex-row items-center justify-center gap-2 rounded-xl bg-primary py-4"
+          className="mt-8 w-full flex-row items-center justify-center gap-2 rounded-xl bg-primary py-4"
         >
           <Ionicons name="save" size={16} color="#fff" />
           <Text className="text-sm font-bold text-primary-foreground">
             Save Changes
           </Text>
         </TouchableOpacity>
+
+        <View className="mt-10 mb-8 border-t border-border pt-6">
+          <Text className="text-sm font-extrabold text-red-500 mb-1">Danger zone</Text>
+          <Text className="text-xs text-muted-foreground mb-4">
+            Permanently delete your account and all data.
+          </Text>
+
+          {!showDeleteInput ? (
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Delete account?",
+                  "This will permanently remove your account and all associated data. This cannot be undone.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Continue", style: "destructive", onPress: () => setShowDeleteInput(true) },
+                  ]
+                );
+              }}
+              className="flex-row items-center justify-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 py-4"
+            >
+              <Ionicons name="trash" size={16} color="#ef4444" />
+              <Text className="text-sm font-bold text-red-500">Delete account</Text>
+            </TouchableOpacity>
+          ) : (
+            <View className="gap-y-3">
+              <Text className="text-xs font-semibold text-red-500">
+                Enter your password to confirm deletion:
+              </Text>
+              <TextInput
+                value={deletePwd}
+                onChangeText={setDeletePwd}
+                placeholder="Enter password"
+                placeholderTextColor="#80716b"
+                secureTextEntry
+                className="w-full rounded-xl border border-red-500/30 bg-surface px-4 py-3.5 text-sm font-semibold text-foreground"
+              />
+              <View className="flex-row gap-3">
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowDeleteInput(false);
+                    setDeletePwd("");
+                  }}
+                  disabled={deleting}
+                  className="flex-1 items-center rounded-xl border border-border py-4"
+                >
+                  <Text className="text-sm font-bold text-foreground">Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={async () => {
+                    if (!deletePwd) return;
+                    setDeleting(true);
+                    try {
+                      await deleteAccount(deletePwd);
+                      Alert.alert("Account deleted", "Your account has been permanently removed.");
+                      refresh();
+                      router.replace("/welcome");
+                    } catch (err: any) {
+                      const code = err.code;
+                      if (code === "auth/wrong-password" || code === "auth/invalid-credential") {
+                        Alert.alert("Incorrect password", "Please try again.");
+                      } else if (code === "auth/too-many-requests") {
+                        Alert.alert("Too many attempts", "Please try again later.");
+                      } else {
+                        Alert.alert("Error", err.message || "Failed to delete account.");
+                      }
+                    }
+                    setDeleting(false);
+                  }}
+                  disabled={deleting || !deletePwd}
+                  className={`flex-1 flex-row items-center justify-center gap-2 rounded-xl bg-red-500 py-4 ${deleting || !deletePwd ? "opacity-50" : ""}`}
+                >
+                  {deleting ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="trash" size={16} color="#fff" />
+                      <Text className="text-sm font-bold text-white">Delete</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

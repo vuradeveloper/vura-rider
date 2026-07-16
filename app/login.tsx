@@ -1,5 +1,5 @@
 import { Link, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -8,10 +8,21 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { login, useAuth, type Role } from "@/lib/auth";
+import * as LocalAuthentication from "expo-local-authentication";
+import {
+  login,
+  useAuth,
+  type Role,
+  saveBiometricCredentials,
+  getBiometricCredentials,
+  hasBiometricCredentials,
+  setBiometricAsked,
+  wasBiometricAsked,
+} from "@/lib/auth";
 
 export default function Login() {
   const router = useRouter();
@@ -21,13 +32,37 @@ export default function Login() {
   const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricType, setBiometricType] = useState<string>("");
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
   const role: Role = "rider";
+
+  useEffect(() => {
+    (async () => {
+      const has = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      const creds = await hasBiometricCredentials();
+      setBiometricAvailable(has && enrolled);
+      setBiometricEnabled(creds);
+      if (has && enrolled) {
+        const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+        if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
+          setBiometricType("Fingerprint");
+        } else if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
+          setBiometricType("Face ID");
+        } else if (types.includes(LocalAuthentication.AuthenticationType.IRIS)) {
+          setBiometricType("Iris");
+        }
+      }
+    })();
+  }, []);
 
   async function submit() {
     setError("");
     setLoading(true);
     try {
       await login(email, pwd, role);
+      await onLoginSuccess(email, pwd);
       refresh();
       router.replace("/");
     } catch (err: any) {
@@ -38,6 +73,51 @@ export default function Login() {
         setError("Please enter a valid email address.");
       } else if (code === "auth/too-many-requests") {
         setError("Too many attempts. Please try again later.");
+      } else {
+        setError(err.message || "Login failed. Please try again.");
+      }
+    }
+    setLoading(false);
+  }
+
+  async function onLoginSuccess(e: string, p: string) {
+    if (biometricAvailable && !(await wasBiometricAsked())) {
+      Alert.alert(
+        "Enable biometric?",
+        `Use ${biometricType || "biometrics"} to sign in faster next time?`,
+        [
+          { text: "Not now", style: "cancel" },
+          {
+            text: "Enable",
+            onPress: async () => {
+              await saveBiometricCredentials(e, p);
+              setBiometricEnabled(true);
+            },
+          },
+        ]
+      );
+      await setBiometricAsked();
+    }
+  }
+
+  async function biometricLogin() {
+    setError("");
+    const creds = await getBiometricCredentials();
+    if (!creds) {
+      setBiometricEnabled(false);
+      return;
+    }
+    setLoading(true);
+    setEmail(creds.email);
+    setPwd(creds.password);
+    try {
+      await login(creds.email, creds.password, role);
+      refresh();
+      router.replace("/");
+    } catch (err: any) {
+      const code = err.code;
+      if (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password") {
+        setError("Biometric login failed. Sign in manually.");
       } else {
         setError(err.message || "Login failed. Please try again.");
       }
@@ -116,11 +196,13 @@ export default function Login() {
             ) : null}
 
             <View className="flex-row justify-end mt-1 mb-2">
-              <TouchableOpacity>
-                <Text className="text-xs font-semibold text-primary">
-                  Forgot password?
-                </Text>
-              </TouchableOpacity>
+              <Link href="/forgot-password" asChild>
+                <TouchableOpacity>
+                  <Text className="text-xs font-semibold text-primary">
+                    Forgot password?
+                  </Text>
+                </TouchableOpacity>
+              </Link>
             </View>
 
             <TouchableOpacity
@@ -136,9 +218,24 @@ export default function Login() {
                 </Text>
               )}
             </TouchableOpacity>
+
+            {biometricAvailable && biometricEnabled && (
+              <TouchableOpacity
+                onPress={biometricLogin}
+                disabled={loading}
+                className="flex-row items-center justify-center gap-2 rounded-2xl border border-border py-4"
+              >
+                <Ionicons
+                  name={biometricType === "Face ID" ? "scan" : "finger-print"}
+                  size={18}
+                  color="#e04e2f"
+                />
+                <Text className="text-sm font-bold text-primary">
+                  {biometricType || "Biometric"} login
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
-
-
         </View>
 
         <View className="mt-8 flex-row justify-center">

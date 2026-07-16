@@ -21,7 +21,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // ⚠️ Adjust these two imports to match where they actually live in your project.
-import MapView, { Marker } from "@/components/MapView";
+import MapView, { Marker, Polyline } from "@/components/MapView";
 const CAR_LOCATOR_IMG = require("@/assets/images/CarLocator.png");
 
 type Driver = {
@@ -78,6 +78,32 @@ function computeBearing(
   return (brng + 360) % 360;
 }
 
+function densifyRoute(route: { latitude: number; longitude: number }[], segM = 12) {
+  if (route.length < 2) return route;
+  const R = 6371e3, rad = Math.PI / 180;
+  const dist = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
+    const dLat = (b.latitude - a.latitude) * rad, dLon = (b.longitude - a.longitude) * rad;
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  };
+  const out = [route[0]];
+  for (let i = 0; i < route.length - 1; i++) {
+    const a = route[i], b = route[i + 1];
+    const steps = Math.max(1, Math.floor(dist(a, b) / segM));
+    for (let j = 1; j <= steps; j++) {
+      out.push({ latitude: a.latitude + (b.latitude - a.latitude) * (j / steps), longitude: a.longitude + (b.longitude - a.longitude) * (j / steps) });
+    }
+  }
+  return out;
+}
+
+function getSpeedForProgress(pct: number) {
+  if (pct < 0.25) return 35;
+  if (pct >= 0.25 && pct < 0.55) return 45;
+  if (pct >= 0.55 && pct < 0.8) return 60;
+  return 35;
+}
+
 export default function Track() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -94,6 +120,10 @@ export default function Track() {
   const [dropoffCoord, setDropoffCoord] = useState<[number, number] | null>(null);
   const [driverLoc, setDriverLoc] = useState<DriverLoc | null>(null);
 
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  const [denseRoute, setDenseRoute] = useState<{ latitude: number; longitude: number }[]>([]);
+  const [animStep, setAnimStep] = useState(0);
+  const [carBearing, setCarBearing] = useState(0);
   const [showCancel, setShowCancel] = useState(false);
   const [showRating, setShowRating] = useState(false);
   const [rating, setRating] = useState(0);
@@ -106,15 +136,9 @@ export default function Track() {
   const isHistory = !!rideIdParam;
 
   // Flips true the instant a *real* socket driver-location event arrives.
-  // The demo simulation below checks this every tick and stops itself the
-  // moment real data starts flowing — so this file needs zero changes when
-  // your backend actually goes live.
   const hasRealDriverLocRef = useRef(false);
-
-  // Refs for smooth car animation
-  const carPosRef = useRef<DriverLoc | null>(null);
-  const carTargetRef = useRef<DriverLoc | null>(null);
-  const lastFollowRef = useRef(0);
+  const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stepRef = useRef(0);
 
   useEffect(() => {
     statusRef.current = status;
@@ -123,43 +147,11 @@ export default function Track() {
     }
   }, [status]);
 
-  // Global animation loop: smoothly lerps driverLoc toward carTargetRef
-  // at ~20 fps. Skips frames when already at the target to avoid churn.
-  // Works for both demo simulation and real socket data.
   useEffect(() => {
-    let id: ReturnType<typeof setInterval> | null = null;
-
-    id = setInterval(() => {
-      const tgt = carTargetRef.current;
-      const cur = carPosRef.current;
-      if (!tgt || !cur) return;
-
-      const latDiff = Math.abs(tgt.lat - cur.lat);
-      const lngDiff = Math.abs(tgt.lng - cur.lng);
-      if (latDiff < 0.0000001 && lngDiff < 0.0000001) return;
-
-      const speed = 0.25;
-      const lat = cur.lat + (tgt.lat - cur.lat) * speed;
-      const lng = cur.lng + (tgt.lng - cur.lng) * speed;
-      let bDiff = tgt.bearing - cur.bearing;
-      if (bDiff > 180) bDiff -= 360;
-      if (bDiff < -180) bDiff += 360;
-      const bearing = ((cur.bearing + bDiff * speed) % 360 + 360) % 360;
-      const next: DriverLoc = { lat, lng, bearing };
-      carPosRef.current = next;
-      setDriverLoc(next);
-
-      const now = Date.now();
-      if (now - lastFollowRef.current >= 300) {
-        lastFollowRef.current = now;
-        mapRef.current?.followCar(lat, lng, bearing, 17);
-      }
-    }, 50);
-
-    return () => {
-      if (id) clearInterval(id);
-    };
-  }, []);
+    if (mapRef.current?.followCar && driverLoc) {
+      mapRef.current.followCar(driverLoc.lat, driverLoc.lng, carBearing, 17);
+    }
+  }, [driverLoc, carBearing]);
 
   const cancelOptions = [
     "Driver is taking too long",
@@ -193,14 +185,14 @@ export default function Track() {
   }, []);
 
   // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
-  // Fetches an OSRM route and advances one waypoint every 3 s. The global
-  // animation loop above handles the fine-grained interpolation, so the car
-  // glides smoothly instead of teleporting. Stops itself the moment a real
-  // `ride:driver:location` event arrives via the socket effect below.
+  // Same dense-route approach as the driver's trip screen:
+  //  - Fetches OSRM route, densifies it (~12m segments)
+  //  - Steps through one densified point every 120ms for silky movement
+  //  - Varies speed naturally (dense points = car moves per-frame based on speed)
+  //  - Stops itself the moment real socket data arrives
   useEffect(() => {
     if (isHistory || !pickupCoord) return;
     let cancelled = false;
-    let interval: ReturnType<typeof setInterval> | null = null;
 
     (async () => {
       const [baseLat, baseLng] = pickupCoord;
@@ -211,35 +203,36 @@ export default function Track() {
       const route = await fetchRoute([baseLat, baseLng], [endLat, endLng]);
       if (cancelled || hasRealDriverLocRef.current || route.length < 2) return;
 
-      // Seed the initial position so the car appears at the start of the route
-      const seedPos: DriverLoc = {
-        lat: route[0].latitude,
-        lng: route[0].longitude,
-        bearing: computeBearing(route[0], route[1]),
-      };
-      carPosRef.current = seedPos;
-      carTargetRef.current = seedPos;
-      setDriverLoc(seedPos);
-      lastFollowRef.current = Date.now();
-      mapRef.current?.followCar(seedPos.lat, seedPos.lng, seedPos.bearing, 17);
+      setRouteCoords(route);
+      const dense = densifyRoute(route, 12);
+      setDenseRoute(dense);
+      setAnimStep(0);
+      stepRef.current = 0;
 
-      let segIdx = 0;
-      interval = setInterval(() => {
-        if (hasRealDriverLocRef.current || segIdx >= route.length - 1) {
-          if (interval) clearInterval(interval);
+      const seedBearing = computeBearing(dense[0], dense[1]);
+      setCarBearing(seedBearing);
+      setDriverLoc({ lat: dense[0].latitude, lng: dense[0].longitude, bearing: seedBearing });
+
+      animRef.current = setInterval(() => {
+        if (hasRealDriverLocRef.current) {
+          if (animRef.current) clearInterval(animRef.current);
           return;
         }
-        segIdx++;
-        const from = route[segIdx];
-        const to = route[Math.min(segIdx + 1, route.length - 1)];
-        const bearing = computeBearing(from, to);
-        carTargetRef.current = { lat: to.latitude, lng: to.longitude, bearing };
-      }, 3000);
+        const s = stepRef.current;
+        if (s < dense.length - 1) {
+          const cur = dense[s], nxt = dense[s + 1];
+          const bearing = computeBearing(cur, nxt);
+          setCarBearing(bearing);
+          setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
+          setAnimStep(s + 1);
+          stepRef.current = s + 1;
+        }
+      }, 120);
     })();
 
     return () => {
       cancelled = true;
-      if (interval) clearInterval(interval);
+      if (animRef.current) clearInterval(animRef.current);
     };
   }, [isHistory, pickupCoord, dropoffCoord]);
 
@@ -330,12 +323,8 @@ export default function Track() {
           if (data?.lat != null && data?.lng != null) {
             hasRealDriverLocRef.current = true;
             const bearing = data.bearing ?? data.heading ?? 0;
-            const incoming: DriverLoc = { lat: data.lat, lng: data.lng, bearing };
-            carTargetRef.current = incoming;
-            if (!carPosRef.current) {
-              carPosRef.current = { ...incoming };
-              setDriverLoc(incoming);
-            }
+            setCarBearing(bearing);
+            setDriverLoc({ lat: data.lat, lng: data.lng, bearing });
           }
         });
 
@@ -532,6 +521,20 @@ export default function Track() {
               rotation={(driverLoc.bearing + 90) % 360}
               title="Driver"
             />
+          )}
+          {denseRoute.length > 1 && (
+            <>
+              <Polyline
+                coordinates={denseRoute}
+                strokeColor="#000000"
+                strokeWidth={7}
+              />
+              <Polyline
+                coordinates={denseRoute}
+                strokeColor="#22c55e"
+                strokeWidth={4}
+              />
+            </>
           )}
         </MapView>
 

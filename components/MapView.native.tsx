@@ -1,5 +1,5 @@
 import { forwardRef, useImperativeHandle, useRef } from "react";
-import RNMapView, { Marker as RNMarker, PROVIDER_GOOGLE } from "react-native-maps";
+import RNMapView, { Marker as RNMarker, Polyline as RNPolyline, PROVIDER_GOOGLE } from "react-native-maps";
 import type { Region } from "react-native-maps";
 
 type MapViewProps = {
@@ -45,4 +45,4 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
 
 MapView.displayName = "MapView";
 
-export { MapView as default, RNMarker as Marker };
+export { MapView as default, RNMarker as Marker, RNPolyline as Polyline };

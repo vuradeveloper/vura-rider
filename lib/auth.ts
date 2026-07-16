@@ -5,6 +5,11 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
+  sendPasswordResetEmail,
+  sendEmailVerification,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  deleteUser,
 } from "firebase/auth";
 import { auth } from "./firebase";
 import { getApiUrl } from "./config";
@@ -208,4 +213,82 @@ export async function register(
 export async function logout() {
   await signOut(auth);
   await clearUser();
+}
+
+export async function resetPassword(email: string) {
+  await sendPasswordResetEmail(auth, email);
+}
+
+export async function sendVerificationEmail() {
+  if (!auth.currentUser) throw new Error("No user signed in");
+  await sendEmailVerification(auth.currentUser);
+}
+
+const BIOMETRIC_CRED_KEY = "vura.auth.biometric";
+const BIOMETRIC_ASKED_KEY = "vura.auth.biometric_asked";
+
+export async function saveBiometricCredentials(email: string, password: string) {
+  await SecureStore.setItemAsync(BIOMETRIC_CRED_KEY, JSON.stringify({ email, password }), {
+    requireAuthentication: true,
+  });
+}
+
+export async function getBiometricCredentials(): Promise<{ email: string; password: string } | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(BIOMETRIC_CRED_KEY, {
+      requireAuthentication: true,
+    });
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function clearBiometricCredentials() {
+  await SecureStore.deleteItemAsync(BIOMETRIC_CRED_KEY);
+}
+
+export async function hasBiometricCredentials(): Promise<boolean> {
+  try {
+    const raw = await SecureStore.getItemAsync(BIOMETRIC_CRED_KEY);
+    return raw !== null;
+  } catch {
+    return false;
+  }
+}
+
+export async function setBiometricAsked() {
+  await SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "true");
+}
+
+export async function wasBiometricAsked(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(BIOMETRIC_ASKED_KEY)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteAccount(password: string) {
+  const user = auth.currentUser;
+  if (!user || !user.email) throw new Error("No user signed in");
+
+  const credential = EmailAuthProvider.credential(user.email, password);
+  await reauthenticateWithCredential(user, credential);
+
+  const token = await user.getIdToken();
+  const res = await fetch(getApiUrl("/api/users/delete"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to delete account data");
+  }
+
+  await deleteUser(user);
+  await clearUser();
+  await clearBiometricCredentials();
 }

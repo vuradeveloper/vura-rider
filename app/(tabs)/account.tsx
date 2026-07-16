@@ -1,15 +1,26 @@
 import { Link, useRouter } from "expo-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
-import { logout, setUser, useAuth } from "@/lib/auth";
+import * as LocalAuthentication from "expo-local-authentication";
+import {
+  logout,
+  setUser,
+  useAuth,
+  sendVerificationEmail,
+  saveBiometricCredentials,
+  clearBiometricCredentials,
+  hasBiometricCredentials,
+} from "@/lib/auth";
+import { auth } from "@/lib/firebase";
 import { getDriverStats } from "@/services/DriverService";
 import { getRideHistory } from "@/services/RideService";
 import { getSavedCards } from "@/services/PaymentService";
@@ -56,6 +67,15 @@ const items = [
 export default function Account() {
   const { user, loading, refresh } = useAuth();
   const router = useRouter();
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
+
+  useEffect(() => {
+    if (user) {
+      setEmailVerified(auth.currentUser?.emailVerified ?? false);
+      hasBiometricCredentials().then(setBiometricEnabled);
+    }
+  }, [user]);
 
   const isDriver = user?.role === "driver";
 
@@ -167,6 +187,27 @@ export default function Account() {
                 )}
               </View>
               <Text className="text-xs text-white/80 mt-0.5">{user.email}</Text>
+              {!emailVerified ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    sendVerificationEmail();
+                    Alert.alert("Verification sent", "Check your email to verify your account.");
+                  }}
+                  className="mt-1 flex-row items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 self-start"
+                >
+                  <Ionicons name="warning" size={12} color="#f59e0b" />
+                  <Text className="text-[10px] font-bold text-amber-500 uppercase">
+                    Verify email
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <View className="mt-1 flex-row items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 self-start">
+                  <Ionicons name="checkmark-circle" size={12} color="#10b981" />
+                  <Text className="text-[10px] font-bold text-emerald-500 uppercase">
+                    Email verified
+                  </Text>
+                </View>
+              )}
               <View className="mt-1 flex-row items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 self-start">
                 <Ionicons name="star" size={12} color="#fff" />
                 <Text className="text-xs font-semibold text-white capitalize">
@@ -233,6 +274,32 @@ export default function Account() {
                 </Link>
               ))}
             </View>
+
+            {biometricEnabled ? (
+              <TouchableOpacity
+                onPress={() => {
+                  clearBiometricCredentials();
+                  setBiometricEnabled(false);
+                  Alert.alert("Disabled", "Biometric login has been turned off.");
+                }}
+                className="flex-row items-center justify-between rounded-xl border border-border bg-surface p-4"
+              >
+                <View className="flex-row items-center gap-3">
+                  <View className="w-10 h-10 rounded-full bg-accent items-center justify-center">
+                    <Ionicons name="finger-print" size={16} color="#e04e2f" />
+                  </View>
+                  <View>
+                    <Text className="text-sm font-bold text-foreground">
+                      Biometric login
+                    </Text>
+                    <Text className="text-muted-foreground text-xs mt-0.5">
+                      Fingerprint / Face ID
+                    </Text>
+                  </View>
+                </View>
+                <Text className="text-xs font-semibold text-primary">Disable</Text>
+              </TouchableOpacity>
+            ) : null}
 
             <TouchableOpacity
               onPress={signOut}
