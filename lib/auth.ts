@@ -5,13 +5,12 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  sendPasswordResetEmail,
   sendEmailVerification,
   EmailAuthProvider,
   reauthenticateWithCredential,
   deleteUser,
 } from "firebase/auth";
-import { auth } from "./firebase";
+import { auth, FIREBASE_API_KEY } from "./firebase";
 import { getApiUrl } from "./config";
 
 export type Role = "rider" | "driver";
@@ -216,7 +215,24 @@ export async function logout() {
 }
 
 export async function resetPassword(email: string) {
-  await sendPasswordResetEmail(auth, email);
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${FIREBASE_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestType: "PASSWORD_RESET",
+        email,
+      }),
+    }
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const msg = data.error?.message;
+    if (msg === "EMAIL_NOT_FOUND") return;
+    if (msg === "INVALID_EMAIL") throw { code: "auth/invalid-email", message: "Invalid email address." };
+    throw new Error(msg || "Could not send reset email. Try again.");
+  }
 }
 
 export async function sendVerificationEmail() {

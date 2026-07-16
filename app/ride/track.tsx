@@ -1,5 +1,5 @@
 import { disconnectSocket, getSocket } from "@/lib/socket";
-import type { RideStatus } from "@/lib/types";
+import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { payForRide, payWithCash } from "@/services/PaymentService";
 import { getActiveRide, getRide, submitRating } from "@/services/RideService";
@@ -125,6 +125,7 @@ export default function Track() {
   const [animStep, setAnimStep] = useState(0);
   const [carBearing, setCarBearing] = useState(0);
   const [showCancel, setShowCancel] = useState(false);
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [showRating, setShowRating] = useState(false);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
@@ -165,19 +166,22 @@ export default function Track() {
   // ── Load addresses + coordinates (live request) ──
   useEffect(() => {
     (async () => {
-      const [pa, da, p, d] = await Promise.all([
+      const [pa, da, p, d, wp] = await Promise.all([
         AsyncStorage.getItem("vura.ride.pickup.address"),
         AsyncStorage.getItem("vura.ride.dropoff.address"),
         AsyncStorage.getItem("vura.ride.pickup"),
         AsyncStorage.getItem("vura.ride.dropoff"),
+        AsyncStorage.getItem("vura.ride.waypoints"),
       ]);
       if (pa) setPickupAddr(pa);
       if (da) setDropoffAddr(da);
       try {
         const pc = JSON.parse(p || "null");
         const dc = JSON.parse(d || "null");
+        const wps = JSON.parse(wp || "[]");
         if (pc?.length === 2) setPickupCoord(pc);
         if (dc?.length === 2) setDropoffCoord(dc);
+        if (Array.isArray(wps)) setWaypoints(wps);
       } catch {
         // ignore
       }
@@ -388,6 +392,11 @@ export default function Track() {
           destinationAddress: da || "Destination",
           destinationLat: dropoff[0],
           destinationLng: dropoff[1],
+          waypoints: waypoints.map((w) => ({
+            address: w.address,
+            lat: w.lat,
+            lng: w.lng,
+          })),
         });
       } catch (e: any) {
         setError(e.message || "Could not connect");
@@ -507,6 +516,14 @@ export default function Track() {
               title="Pickup"
             />
           )}
+          {waypoints.map((wp, i) => (
+            <Marker
+              key={`wp-${i}`}
+              coordinate={{ latitude: wp.lat, longitude: wp.lng }}
+              pinColor="#d97706"
+              title={`Stop ${i + 1}`}
+            />
+          ))}
           {dropoffCoord && (
             <Marker
               coordinate={{ latitude: dropoffCoord[0], longitude: dropoffCoord[1] }}
@@ -664,12 +681,18 @@ export default function Track() {
           {/* Trip details */}
           <View className="mt-4 rounded-xl border border-border p-3.5">
             <Text className="text-[11px] uppercase font-bold text-muted-foreground">
-              Trip
+              Trip{waypoints.length > 0 ? ` (${waypoints.length + 1} stops)` : ""}
             </Text>
             <View className="mt-2 flex-row items-start gap-3">
               <View className="items-center pt-1.5">
                 <View className="w-2.5 h-2.5 rounded-full bg-foreground" />
                 <View className="w-px h-6 border-l-2 border-dashed border-muted-foreground/40" />
+                {waypoints.map((_, i) => (
+                  <View key={i} className="items-center">
+                    <View className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                    <View className="w-px h-6 border-l-2 border-dashed border-muted-foreground/40" />
+                  </View>
+                ))}
                 <View className="w-2.5 h-2.5 rounded-md bg-primary" />
               </View>
               <View className="flex-1 gap-y-3">
@@ -679,6 +702,15 @@ export default function Track() {
                 >
                   {pickupAddr}
                 </Text>
+                {waypoints.map((wp, i) => (
+                  <Text
+                    key={i}
+                    className="font-medium text-amber-700 text-sm"
+                    numberOfLines={1}
+                  >
+                    {wp.address} (Stop {i + 1})
+                  </Text>
+                ))}
                 <Text
                   className="font-medium text-foreground text-sm"
                   numberOfLines={1}

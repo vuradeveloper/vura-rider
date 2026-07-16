@@ -2,6 +2,8 @@ import MapView, { Marker } from "@/components/MapView";
 import { useAuth } from "@/lib/auth";
 import { estimateEtaMins, haversineKm } from "@/lib/utils";
 import { getNearbyDrivers } from "@/services/DriverService";
+import { getRecentSearches } from "@/services/SearchService";
+import type { RecentSearch } from "@/lib/types";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import * as Location from "expo-location";
@@ -53,6 +55,11 @@ export default function Home() {
   );
   const [roamingCars, setRoamingCars] = useState<RoamingCar[]>([]);
   const roamingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
+
+  useEffect(() => {
+    getRecentSearches().then(setRecentSearches);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -210,34 +217,40 @@ export default function Home() {
           </View>
         </View>
 
-        {/* Saved places */}
-        <View className="px-5 mt-6">
-          <Text className="text-sm font-bold text-foreground mb-3">
-            Saved places
-          </Text>
-          <View className="gap-y-2">
-            {[
-              { icon: "home" as const, label: "Home", sub: "221B Baker St, London" },
-              { icon: "briefcase" as const, label: "Work", sub: "Canary Wharf, London" },
-            ].map((p) => (
-              <Link key={p.label} href="/search" asChild>
-                <TouchableOpacity className="flex-row items-center gap-3 rounded-xl bg-surface border border-border px-3.5 py-3">
-                  <View className="w-10 h-10 rounded-full bg-secondary items-center justify-center">
-                    <Ionicons name={p.icon} size={16} color="#2e1e1a" />
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-sm font-semibold text-foreground">
-                      {p.label}
-                    </Text>
-                    <Text className="text-xs text-muted-foreground" numberOfLines={1}>
-                      {p.sub}
-                    </Text>
-                  </View>
+        {/* Recent searches */}
+        {recentSearches.length > 0 && (
+          <View className="px-5 mt-6">
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-sm font-bold text-foreground">
+                Recent searches
+              </Text>
+              <Link href="/search" asChild>
+                <TouchableOpacity>
+                  <Text className="text-xs font-semibold text-primary">See all</Text>
                 </TouchableOpacity>
               </Link>
-            ))}
+            </View>
+            <View className="gap-y-2">
+              {recentSearches.slice(0, 3).map((s) => (
+                <Link key={s.id} href="/search" asChild>
+                  <TouchableOpacity className="flex-row items-center gap-3 rounded-xl bg-surface border border-border px-3.5 py-3">
+                    <View className="w-10 h-10 rounded-full bg-secondary items-center justify-center">
+                      <Ionicons name="time" size={16} color="#2e1e1a" />
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-sm font-semibold text-foreground" numberOfLines={1}>
+                        {s.name}
+                      </Text>
+                      <Text className="text-xs text-muted-foreground" numberOfLines={1}>
+                        {s.addr}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                </Link>
+              ))}
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Map preview */}
         <View className="mx-5 mt-6 rounded-2xl border border-border overflow-hidden">

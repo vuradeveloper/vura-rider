@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -31,17 +30,11 @@ export default function ForgotPassword() {
     try {
       await resetPassword(email);
       setSent(true);
-      Alert.alert("Email sent", "Check your inbox for the password reset link.", [
-        { text: "OK", onPress: () => router.back() },
-      ]);
     } catch (err: any) {
-      const code = err.code;
-      if (code === "auth/user-not-found") {
-        setError("No account found with this email.");
-      } else if (code === "auth/invalid-email") {
+      if (err.code === "auth/invalid-email") {
         setError("Please enter a valid email address.");
       } else {
-        setError(err.message || "Something went wrong. Try again.");
+        setError("Something went wrong. Check your connection and try again.");
       }
     }
     setLoading(false);
@@ -62,58 +55,87 @@ export default function ForgotPassword() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         className="flex-1 px-5 pt-4 justify-center"
       >
-        <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8">
-          <Text className="text-2xl font-extrabold text-foreground">
-            Forgot password?
-          </Text>
-          <Text className="text-sm text-muted-foreground mt-1 mb-5">
-            Enter your email and we'll send you a reset link.
-          </Text>
+        {!sent ? (
+          <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8">
+            <Text className="text-2xl font-extrabold text-foreground">
+              Forgot password?
+            </Text>
+            <Text className="text-sm text-muted-foreground mt-1 mb-5">
+              Enter your email and we'll send you a reset link.
+            </Text>
 
-          <View className="gap-y-4">
-            <View>
-              <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
-                Email
-              </Text>
-              <View className="mt-1 flex-row items-center gap-2 rounded-xl bg-secondary border border-transparent px-4 py-3">
-                <Ionicons name="mail" size={16} color="#80716b" />
-                <TextInput
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="you@email.com"
-                  placeholderTextColor="#80716b"
-                  className="flex-1 text-sm font-medium text-foreground"
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                />
-              </View>
-            </View>
-
-            {error ? (
-              <Text className="text-xs text-red-500 font-semibold">{error}</Text>
-            ) : null}
-
-            {sent ? (
-              <Text className="text-xs text-emerald-500 font-semibold">
-                Reset link sent! Check your email.
-              </Text>
-            ) : null}
-
-            <TouchableOpacity
-              onPress={submit}
-              disabled={loading || !email}
-              className={`w-full rounded-2xl py-4 items-center ${loading || !email ? "bg-primary/50" : "bg-primary"}`}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text className="text-sm font-bold text-primary-foreground">
-                  Send reset link
+            <View className="gap-y-4">
+              <View>
+                <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
+                  Email
                 </Text>
-              )}
+                <View className="mt-1 flex-row items-center gap-2 rounded-xl bg-secondary border border-transparent px-4 py-3">
+                  <Ionicons name="mail" size={16} color="#80716b" />
+                  <TextInput
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="you@email.com"
+                    placeholderTextColor="#80716b"
+                    className="flex-1 text-sm font-medium text-foreground"
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                  />
+                </View>
+              </View>
+
+              {error ? (
+                <Text className="text-xs text-red-500 font-semibold">{error}</Text>
+              ) : null}
+
+              <TouchableOpacity
+                onPress={submit}
+                disabled={loading || !email}
+                className={`w-full rounded-2xl py-4 items-center ${loading || !email ? "bg-primary/50" : "bg-primary"}`}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text className="text-sm font-bold text-primary-foreground">
+                    Send reset link
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8 items-center">
+            <View className="w-16 h-16 rounded-full bg-emerald-100 items-center justify-center mb-4">
+              <Ionicons name="checkmark-circle" size={32} color="#10b981" />
+            </View>
+            <Text className="text-xl font-extrabold text-foreground text-center">
+              Check your inbox
+            </Text>
+            <Text className="text-sm text-muted-foreground mt-2 text-center leading-5">
+              If an account exists with{"\n"}
+              <Text className="font-bold text-foreground">{email}</Text>
+              {", we've sent a password reset link."}
+            </Text>
+            <TouchableOpacity
+              onPress={() => router.back()}
+              className="mt-8 w-full rounded-2xl bg-primary py-4 items-center"
+            >
+              <Text className="text-sm font-bold text-primary-foreground">
+                Back to sign in
+              </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        )}
+
+        {!sent && (
+          <View className="mt-8 flex-row justify-center">
+            <Text className="text-sm text-foreground">Remember your password? </Text>
+            <Link href="/login" asChild>
+              <TouchableOpacity>
+                <Text className="text-sm font-bold text-primary">Sign in</Text>
+              </TouchableOpacity>
+            </Link>
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

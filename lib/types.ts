@@ -16,6 +16,7 @@ export interface Ride {
   destination_address: string;
   destination_lat: number;
   destination_lng: number;
+  waypoints: Waypoint[] | null;
   status: RideStatus;
   fare: number | null;
   ride_request_fee: number | null;
@@ -94,6 +95,21 @@ export interface SavedCard {
 export interface PendingEarnings {
   total_rides: number;
   total_earnings: number;
+}
+
+export interface Waypoint {
+  address: string;
+  lat: number;
+  lng: number;
+}
+
+export interface RecentSearch {
+  id: string;
+  name: string;
+  addr: string;
+  lat: number;
+  lng: number;
+  created_at: string;
 }
 
 export interface NearbyDriver {

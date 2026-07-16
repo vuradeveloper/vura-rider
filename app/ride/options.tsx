@@ -19,7 +19,7 @@ import {
   estimateFare,
   estimateEtaMins,
 } from "@/lib/utils";
-import type { SavedCard } from "@/lib/types";
+import type { SavedCard, Waypoint } from "@/lib/types";
 
 // ⚠️ Adjust these two imports to match where they actually live in your project.
 import MapView, { Marker } from "@/components/MapView";
@@ -68,6 +68,7 @@ export default function RideOptions() {
   const [pickupCoord, setPickupCoord] = useState<[number, number] | null>(null);
   const [dropoffCoord, setDropoffCoord] = useState<[number, number] | null>(null);
   const [nearbyCars, setNearbyCars] = useState<NearbyCar[]>([]);
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
 
   const cardsQuery = useQuery<SavedCard[]>({
     queryKey: ["saved-cards"],
@@ -83,6 +84,10 @@ export default function RideOptions() {
         const d = JSON.parse(
           (await AsyncStorage.getItem("vura.ride.dropoff")) || "null"
         );
+        const wp = JSON.parse(
+          (await AsyncStorage.getItem("vura.ride.waypoints")) || "[]"
+        );
+        setWaypoints(wp);
         if (p?.length === 2 && d?.length === 2) {
           setDistanceKm(haversineKm(p[0], p[1], d[0], d[1]));
           setPickupCoord(p);
@@ -130,15 +135,25 @@ export default function RideOptions() {
     return () => clearInterval(interval);
   }, [pickupCoord]);
 
+  const totalKm = useMemo(() => {
+    if (!pickupCoord || !dropoffCoord) return distanceKm;
+    const pts = [pickupCoord, ...waypoints.map((w) => [w.lat, w.lng] as [number, number]), dropoffCoord];
+    let total = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      total += haversineKm(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+    }
+    return total || distanceKm;
+  }, [pickupCoord, dropoffCoord, waypoints, distanceKm]);
+
   const priced = useMemo(
     () =>
       tiers.map((t) => {
-        const fare = distanceKm != null ? estimateFare(distanceKm, t.multiplier) : null;
+        const fare = totalKm != null ? estimateFare(totalKm, t.multiplier) : null;
         const eta =
-          distanceKm != null ? estimateEtaMins(distanceKm) + t.etaOffset : null;
+          totalKm != null ? estimateEtaMins(totalKm) + t.etaOffset : null;
         return { ...t, fare, eta };
       }),
-    [distanceKm]
+    [totalKm]
   );
 
   const cards = cardsQuery.data ?? [];
@@ -149,6 +164,7 @@ export default function RideOptions() {
       "vura.ride.payment",
       payChoice.type === "cash" ? "cash" : "card"
     );
+    await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(waypoints));
     router.push("/ride/track");
   };
 
@@ -178,6 +194,14 @@ export default function RideOptions() {
               title="Pickup"
             />
           )}
+          {waypoints.map((wp, i) => (
+            <Marker
+              key={`wp-${i}`}
+              coordinate={{ latitude: wp.lat, longitude: wp.lng }}
+              pinColor="#d97706"
+              title={`Stop ${i + 1}`}
+            />
+          ))}
           {dropoffCoord && (
             <Marker
               coordinate={{ latitude: dropoffCoord[0], longitude: dropoffCoord[1] }}
@@ -203,10 +227,10 @@ export default function RideOptions() {
           <Ionicons name="arrow-back" size={16} color="#2e1e1a" />
         </TouchableOpacity>
 
-        {distanceKm != null && (
+        {totalKm != null && (
           <View className="absolute bottom-3 right-4 rounded-full bg-surface/90 border border-border px-3 py-1.5">
             <Text className="text-xs font-semibold text-foreground">
-              {distanceKm.toFixed(1)} km trip
+              {totalKm.toFixed(1)} km{waypoints.length > 0 ? ` · ${waypoints.length} stop${waypoints.length > 1 ? "s" : ""}` : ""}
             </Text>
           </View>
         )}

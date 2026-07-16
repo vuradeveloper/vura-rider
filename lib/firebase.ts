@@ -19,3 +19,4 @@ isSupported().then((yes) => yes && getAnalytics(app));
 const auth = initializeAuth(app, { persistence: inMemoryPersistence });
 
 export { auth };
+export const FIREBASE_API_KEY = firebaseConfig.apiKey;
