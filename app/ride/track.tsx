@@ -1,6 +1,7 @@
 import { disconnectSocket, getSocket } from "@/lib/socket";
 import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
+import { apiFetch } from "@/lib/api";
 import { payForRide, payWithCash } from "@/services/PaymentService";
 import { getActiveRide, getRide, submitRating } from "@/services/RideService";
 import { shareTrip } from "@/services/SafetyService";
@@ -50,11 +51,19 @@ const STATUS_LABEL: Record<RideStatus, string> = {
 // used here only for the demo fallback below.
 async function fetchRoute(
   start: [number, number],
-  end: [number, number]
+  end: [number, number],
+  waypoints: Waypoint[] = []
 ) {
   try {
+    const validWaypoints = waypoints.filter((w) => w.lat && w.lng);
+    const coords = [
+      [start[1], start[0]],
+      ...validWaypoints.map((w) => [w.lng, w.lat]),
+      [end[1], end[0]],
+    ];
+    const coordString = coords.map((c) => `${c[0]},${c[1]}`).join(";");
     const res = await fetch(
-      `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?geometries=geojson&overview=full`
+      `https://router.project-osrm.org/route/v1/driving/${coordString}?geometries=geojson&overview=full`
     );
     const data = await res.json();
     if (data.routes?.[0]) {
@@ -63,7 +72,7 @@ async function fetchRoute(
         longitude: c[0],
       }));
     }
-  } catch (e) { }
+  } catch (e) {}
   return [];
 }
 
@@ -205,6 +214,20 @@ export default function Track() {
     let cancelled = false;
     let animInterval: ReturnType<typeof setInterval> | null = null;
 
+    const updateDbStatus = async (newStatus: RideStatus) => {
+      const id = rideIdRef.current;
+      if (id) {
+        try {
+          await apiFetch(`/api/rides/${id}/status`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: newStatus }),
+          });
+        } catch (e) {
+          console.error("Failed to update status in DB:", e);
+        }
+      }
+    };
+
     (async () => {
       // 1. Initial State: Searching for 4 seconds
       setStatus("searching");
@@ -218,6 +241,7 @@ export default function Track() {
 
       // 2. Driver Found: Status "accepted"
       setStatus("accepted");
+      await updateDbStatus("accepted");
       setDriver({
         name: "Sipho Khumalo",
         rating: 4.87,
@@ -235,7 +259,7 @@ export default function Track() {
       const startLat = baseLat + (Math.random() - 0.5) * 0.01;
       const startLng = baseLng + (Math.random() - 0.5) * 0.01;
 
-      // Fetch route from driver start to pickup
+      // Fetch route from driver start to pickup (no waypoints for pickup leg)
       const routeToPickup = await fetchRoute([startLat, startLng], [baseLat, baseLng]);
       if (cancelled) return;
 
@@ -279,13 +303,15 @@ export default function Track() {
 
       // 3. Arrived at pickup: Wait 2s, then start trip ("in_progress")
       setStatus("driver_arrived");
+      await updateDbStatus("driver_arrived");
       await new Promise((resolve) => setTimeout(resolve, 2000));
       if (cancelled) return;
 
       setStatus("in_progress");
+      await updateDbStatus("in_progress");
 
-      // Fetch route from pickup to destination
-      const routeToDest = await fetchRoute([baseLat, baseLng], [endLat, endLng]);
+      // Fetch route from pickup to destination, passing all stop waypoints
+      const routeToDest = await fetchRoute([baseLat, baseLng], [endLat, endLng], waypoints);
       if (cancelled) return;
 
       const denseDest = densifyRoute(
@@ -328,6 +354,7 @@ export default function Track() {
 
       // 4. Arrived at destination: Status "completed"
       setStatus("completed");
+      await updateDbStatus("completed");
       await new Promise((resolve) => setTimeout(resolve, 2000));
       if (cancelled) return;
 
@@ -339,7 +366,7 @@ export default function Track() {
       cancelled = true;
       if (animInterval) clearInterval(animInterval);
     };
-  }, [isHistory, pickupCoord, dropoffCoord]);
+  }, [isHistory, pickupCoord, dropoffCoord, waypoints]);
 
   // ── History mode: just load the ride details, no socket ──
   useEffect(() => {

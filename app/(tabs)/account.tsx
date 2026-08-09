@@ -40,7 +40,7 @@ const items = [
     label: "Scheduled Rides",
     sub: "Upcoming bookings",
     to: "/scheduled-rides",
-    wide: false,
+    wide: true,
   },
   {
     icon: "gift" as const,
@@ -52,7 +52,7 @@ const items = [
   {
     icon: "shield" as const,
     label: "Safety",
-    sub: "Trusted contacts, RideCheck",
+    sub: "Contacts & RideCheck",
     to: "/safety",
     wide: false,
   },
@@ -61,7 +61,7 @@ const items = [
     label: "Personal Details",
     sub: "Notifications, privacy",
     to: "/settings",
-    wide: false,
+    wide: true,
   },
   {
     icon: "pin" as const,
@@ -177,7 +177,11 @@ export default function Account() {
 
   return (
     <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
-      <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        className="flex-1" 
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 110 }}
+      >
         <View className="bg-primary px-5 pt-4 pb-12 rounded-b-[2rem] relative overflow-hidden">
           <View className="absolute -right-12 -bottom-10 h-44 w-44 rounded-full bg-white/10" />
           <Text className="text-xl font-bold text-white">Account</Text>
@@ -263,37 +267,37 @@ export default function Account() {
           <View className="mt-5 gap-y-3">
             <View className="flex-row flex-wrap gap-3">
               {items.map((it) => (
-                <Link key={it.label} href={it.to as any} asChild>
-                  <TouchableOpacity
-                    className={`rounded-xl bg-surface border border-border p-4 ${it.wide ? "w-full flex-row items-center justify-between" : "w-[47%]"}`}
+                <TouchableOpacity
+                  key={it.label}
+                  onPress={() => router.push(it.to as any)}
+                  className={`rounded-xl bg-surface border border-border p-4 ${it.wide ? "w-full flex-row items-center justify-between" : "w-[47.5%] min-h-[115px]"}`}
+                >
+                  <View
+                    className={it.wide ? "flex-row items-center gap-3 flex-1" : "flex-1 justify-between"}
                   >
-                    <View
-                      className={`flex-row items-center gap-3 ${it.wide ? "flex-1" : ""}`}
-                    >
-                      <View className="w-10 h-10 rounded-full bg-accent items-center justify-center">
-                        <Ionicons name={it.icon} size={16} color="#e04e2f" />
-                      </View>
-                      <View className={it.wide ? "flex-1" : ""}>
-                        <Text className="text-sm font-bold text-foreground">
-                          {it.label}
-                        </Text>
-                        <Text
-                          className="text-muted-foreground text-xs mt-0.5"
-                          numberOfLines={it.wide ? 1 : 2}
-                        >
-                          {it.sub}
-                        </Text>
-                      </View>
+                    <View className="w-10 h-10 rounded-full bg-accent items-center justify-center self-start">
+                      <Ionicons name={it.icon} size={16} color="#e04e2f" />
                     </View>
-                    {it.wide && (
-                      <Ionicons
-                        name="chevron-forward"
-                        size={16}
-                        color="#80716b"
-                      />
-                    )}
-                  </TouchableOpacity>
-                </Link>
+                    <View className={it.wide ? "flex-1" : "mt-2"}>
+                      <Text className="text-sm font-bold text-foreground">
+                        {it.label}
+                      </Text>
+                      <Text
+                        className="text-muted-foreground text-[10px] leading-tight mt-0.5"
+                        numberOfLines={2}
+                      >
+                        {it.sub}
+                      </Text>
+                    </View>
+                  </View>
+                  {it.wide && (
+                    <Ionicons
+                      name="chevron-forward"
+                      size={16}
+                      color="#80716b"
+                    />
+                  )}
+                </TouchableOpacity>
               ))}
             </View>
 
@@ -324,22 +328,24 @@ export default function Account() {
             ) : null}
 
             <View className="mt-4 flex-row gap-3">
-              <Link href="/terms" asChild>
-                <TouchableOpacity className="flex-1 items-center rounded-xl border border-border bg-surface py-3">
-                  <Ionicons name="document-text" size={16} color="#80716b" />
-                  <Text className="text-xs font-semibold text-muted-foreground mt-1">
-                    Terms
-                  </Text>
-                </TouchableOpacity>
-              </Link>
-              <Link href="/privacy" asChild>
-                <TouchableOpacity className="flex-1 items-center rounded-xl border border-border bg-surface py-3">
-                  <Ionicons name="shield" size={16} color="#80716b" />
-                  <Text className="text-xs font-semibold text-muted-foreground mt-1">
-                    Privacy
-                  </Text>
-                </TouchableOpacity>
-              </Link>
+              <TouchableOpacity
+                onPress={() => router.push("/terms")}
+                className="flex-1 items-center rounded-xl border border-border bg-surface py-3"
+              >
+                <Ionicons name="document-text" size={16} color="#80716b" />
+                <Text className="text-xs font-semibold text-muted-foreground mt-1">
+                  Terms
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => router.push("/privacy")}
+                className="flex-1 items-center rounded-xl border border-border bg-surface py-3"
+              >
+                <Ionicons name="shield" size={16} color="#80716b" />
+                <Text className="text-xs font-semibold text-muted-foreground mt-1">
+                  Privacy
+                </Text>
+              </TouchableOpacity>
             </View>
 
             <TouchableOpacity

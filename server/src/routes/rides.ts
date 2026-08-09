@@ -222,4 +222,30 @@ router.post("/scheduled/:id/cancel", requireAuth, async (req: AuthRequest, res: 
   }
 });
 
+// PATCH /api/rides/:id/status — Update ride status for simulation
+router.patch("/:id/status", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const updates: string[] = ["status = $1", "updated_at = NOW()"];
+    const params: any[] = [status, id];
+
+    if (status === "completed") {
+      updates.push("completed_at = NOW()");
+      updates.push("actual_fare = COALESCE(estimated_fare, 25.00)");
+    }
+
+    await execute(
+      `UPDATE rides SET ${updates.join(", ")} WHERE id = $${params.length}`,
+      params
+    );
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Update status error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

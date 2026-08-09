@@ -8,14 +8,12 @@ export default function TabLayout() {
 
   const riderTabs = [
     { name: "index", title: "Home", icon: "home" as const },
-    { name: "services", title: "Services", icon: "compass" as const },
     { name: "activity", title: "Activity", icon: "receipt" as const },
     { name: "account", title: "Account", icon: "person" as const },
   ];
 
   const driverTabs = [
     { name: "index", title: "Drive", icon: "car" as const },
-    { name: "services", title: "Earnings", icon: "wallet" as const },
     { name: "activity", title: "Trips", icon: "bar-chart" as const },
     { name: "account", title: "Account", icon: "person" as const },
   ];
@@ -43,6 +41,12 @@ export default function TabLayout() {
         },
       }}
     >
+      <Tabs.Screen
+        name="services"
+        options={{
+          href: null,
+        }}
+      />
       {tabs.map((tab) => (
         <Tabs.Screen
           key={tab.name}

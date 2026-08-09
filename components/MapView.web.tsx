@@ -242,8 +242,10 @@ const MapView = forwardRef<any, any>((props, ref) => {
 
       mapRef.current = map;
       setReady(true);
-      // fix sizing after mount (common issue when container was 0-size on first paint)
       setTimeout(() => map.invalidateSize(), 50);
+      setTimeout(() => map.invalidateSize(), 300);
+      setTimeout(() => map.invalidateSize(), 1000);
+      setTimeout(() => map.invalidateSize(), 2000);
     });
     return () => {
       cancelled = true;
