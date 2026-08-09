@@ -1,7 +1,6 @@
 import { getAnalytics, isSupported } from "firebase/analytics";
 import { initializeApp } from "firebase/app";
-import { initializeAuth, getAuth, browserLocalPersistence } from "firebase/auth";
-import { getReactNativePersistence } from "firebase/auth";
+import { initializeAuth, getAuth, browserLocalPersistence, Auth, getReactNativePersistence } from "firebase/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 
@@ -19,7 +18,7 @@ const app = initializeApp(firebaseConfig);
 
 isSupported().then((yes) => yes && getAnalytics(app));
 
-let auth;
+let auth: Auth;
 if (Platform.OS === "web") {
   auth = initializeAuth(app, {
     persistence: browserLocalPersistence,

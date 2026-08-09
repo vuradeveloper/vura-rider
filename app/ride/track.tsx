@@ -142,6 +142,7 @@ export default function Track() {
 
   const rideIdRef = useRef<string | null>(rideIdParam ?? null);
   const statusRef = useRef<RideStatus>("searching");
+  const [tierName, setTierName] = useState("VuraGo");
   const mapRef = useRef<any>(null);
   const isHistory = !!rideIdParam;
 
@@ -175,77 +176,168 @@ export default function Track() {
   // ── Load addresses + coordinates (live request) ──
   useEffect(() => {
     (async () => {
-      const [pa, da, p, d, wp] = await Promise.all([
+      const [pa, da, p, d, wp, tier] = await Promise.all([
         AsyncStorage.getItem("vura.ride.pickup.address"),
         AsyncStorage.getItem("vura.ride.dropoff.address"),
         AsyncStorage.getItem("vura.ride.pickup"),
         AsyncStorage.getItem("vura.ride.dropoff"),
         AsyncStorage.getItem("vura.ride.waypoints"),
+        AsyncStorage.getItem("vura.ride.tier"),
       ]);
       if (pa) setPickupAddr(pa);
       if (da) setDropoffAddr(da);
       try {
-        const pc = JSON.parse(p || "null");
-        const dc = JSON.parse(d || "null");
-        const wps = JSON.parse(wp || "[]");
-        if (pc?.length === 2) setPickupCoord(pc);
-        if (dc?.length === 2) setDropoffCoord(dc);
-        if (Array.isArray(wps)) setWaypoints(wps);
-      } catch {
-        // ignore
+        if (p) setPickupCoord(JSON.parse(p));
+        if (d) setDropoffCoord(JSON.parse(d));
+        if (wp) setWaypoints(JSON.parse(wp));
+      } catch {}
+      if (tier) {
+        if (tier === "go") setTierName("VuraGo");
+        else if (tier === "x") setTierName("VuraX");
+        else if (tier === "lux") setTierName("VuraLux");
       }
     })();
   }, []);
 
   // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
-  // Same dense-route approach as the driver's trip screen:
-  //  - Fetches OSRM route, densifies it (~12m segments)
-  //  - Steps through one densified point every 120ms for silky movement
-  //  - Varies speed naturally (dense points = car moves per-frame based on speed)
-  //  - Stops itself the moment real socket data arrives
   useEffect(() => {
     if (isHistory || !pickupCoord) return;
     let cancelled = false;
+    let animInterval: ReturnType<typeof setInterval> | null = null;
 
     (async () => {
+      // 1. Initial State: Searching for 4 seconds
+      setStatus("searching");
+      setDenseRoute([]);
+      setRouteCoords([]);
+      setDriver(null);
+      setDriverLoc(null);
+
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      if (cancelled) return;
+
+      // 2. Driver Found: Status "accepted"
+      setStatus("accepted");
+      setDriver({
+        name: "Sipho Khumalo",
+        rating: 4.87,
+        vehicle: "White Toyota Corolla",
+        license_plate: "VURA 123 GP",
+      });
+
       const [baseLat, baseLng] = pickupCoord;
       const [endLat, endLng] = dropoffCoord ?? [
         baseLat + (Math.random() - 0.5) * 0.02,
         baseLng + (Math.random() - 0.5) * 0.02,
       ];
-      const route = await fetchRoute([baseLat, baseLng], [endLat, endLng]);
-      if (cancelled || hasRealDriverLocRef.current || route.length < 2) return;
 
-      setRouteCoords(route);
-      const dense = densifyRoute(route, 12);
-      setDenseRoute(dense);
-      setAnimStep(0);
-      stepRef.current = 0;
+      // Simulate a starting position for the driver (~1km away)
+      const startLat = baseLat + (Math.random() - 0.5) * 0.01;
+      const startLng = baseLng + (Math.random() - 0.5) * 0.01;
 
-      const seedBearing = computeBearing(dense[0], dense[1]);
-      setCarBearing(seedBearing);
-      setDriverLoc({ lat: dense[0].latitude, lng: dense[0].longitude, bearing: seedBearing });
+      // Fetch route from driver start to pickup
+      const routeToPickup = await fetchRoute([startLat, startLng], [baseLat, baseLng]);
+      if (cancelled) return;
 
-      animRef.current = setInterval(() => {
-        if (hasRealDriverLocRef.current) {
-          if (animRef.current) clearInterval(animRef.current);
-          return;
-        }
-        const s = stepRef.current;
-        if (s < dense.length - 1) {
-          const cur = dense[s], nxt = dense[s + 1];
-          const bearing = computeBearing(cur, nxt);
-          setCarBearing(bearing);
-          setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
-          setAnimStep(s + 1);
-          stepRef.current = s + 1;
-        }
-      }, 120);
+      const densePickup = densifyRoute(
+        routeToPickup.length > 1
+          ? routeToPickup
+          : [[startLat, startLng], [baseLat, baseLng]].map((c) => ({
+              latitude: c[0],
+              longitude: c[1],
+            })),
+        35
+      );
+      setDenseRoute(densePickup);
+      setRouteCoords(densePickup);
+
+      let step = 0;
+      setDriverLoc({
+        lat: densePickup[0].latitude,
+        lng: densePickup[0].longitude,
+        bearing: computeBearing(densePickup[0], densePickup[1] || densePickup[0]),
+      });
+
+      // Run animation to pickup
+      await new Promise<void>((resolve) => {
+        animInterval = setInterval(() => {
+          if (step < densePickup.length - 1) {
+            const cur = densePickup[step];
+            const nxt = densePickup[step + 1];
+            const bearing = computeBearing(cur, nxt);
+            setCarBearing(bearing);
+            setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
+            step++;
+          } else {
+            if (animInterval) clearInterval(animInterval);
+            resolve();
+          }
+        }, 70);
+      });
+
+      if (cancelled) return;
+
+      // 3. Arrived at pickup: Wait 2s, then start trip ("in_progress")
+      setStatus("driver_arrived");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (cancelled) return;
+
+      setStatus("in_progress");
+
+      // Fetch route from pickup to destination
+      const routeToDest = await fetchRoute([baseLat, baseLng], [endLat, endLng]);
+      if (cancelled) return;
+
+      const denseDest = densifyRoute(
+        routeToDest.length > 1
+          ? routeToDest
+          : [[baseLat, baseLng], [endLat, endLng]].map((c) => ({
+              latitude: c[0],
+              longitude: c[1],
+            })),
+        35
+      );
+      setDenseRoute(denseDest);
+      setRouteCoords(denseDest);
+
+      step = 0;
+      setDriverLoc({
+        lat: denseDest[0].latitude,
+        lng: denseDest[0].longitude,
+        bearing: computeBearing(denseDest[0], denseDest[1] || denseDest[0]),
+      });
+
+      // Run animation to destination
+      await new Promise<void>((resolve) => {
+        animInterval = setInterval(() => {
+          if (step < denseDest.length - 1) {
+            const cur = denseDest[step];
+            const nxt = denseDest[step + 1];
+            const bearing = computeBearing(cur, nxt);
+            setCarBearing(bearing);
+            setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
+            step++;
+          } else {
+            if (animInterval) clearInterval(animInterval);
+            resolve();
+          }
+        }, 70);
+      });
+
+      if (cancelled) return;
+
+      // 4. Arrived at destination: Status "completed"
+      setStatus("completed");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (cancelled) return;
+
+      // Show rating/receipt modal
+      setShowRating(true);
     })();
 
     return () => {
       cancelled = true;
-      if (animRef.current) clearInterval(animRef.current);
+      if (animInterval) clearInterval(animInterval);
     };
   }, [isHistory, pickupCoord, dropoffCoord]);
 
@@ -303,8 +395,8 @@ export default function Track() {
 
         socket.on("ride:requested:ack", (data) => {
           if (data.success) {
-            setRideId(data.rideId);
-            rideIdRef.current = data.rideId;
+            setRideId(data.rideId ?? null);
+            rideIdRef.current = data.rideId ?? null;
           } else {
             setError(data.reason || "Could not request ride");
           }
@@ -324,7 +416,7 @@ export default function Track() {
             rideIdRef.current = data.id;
           }
           const driverData = {
-            name: data.driver_name || data.driver?.name || null,
+            name: data.driver_name || data.driver?.name || "Unknown Driver",
             vehicle:
               data.driver?.vehicle ||
               [data.vehicle_color, data.vehicle_make, data.vehicle_model]
@@ -341,7 +433,7 @@ export default function Track() {
             id: data.id || "",
             status: "accepted",
             driver_name: driverData.name,
-            driver_phone: data.driver?.phone || null,
+            driver_phone: null,
             vehicle_make: data.vehicle_make || null,
             vehicle_model: data.vehicle_model || null,
             vehicle_color: data.vehicle_color || null,
@@ -512,10 +604,12 @@ export default function Track() {
     setShowCancel(false);
     try {
       const socket = await getSocket();
-      socket.emit("passenger:ride:cancel", {
-        rideId: rideIdRef.current,
-        reason,
-      });
+      if (rideIdRef.current) {
+        socket.emit("passenger:ride:cancel", {
+          rideId: rideIdRef.current,
+          reason,
+        });
+      }
     } catch {
       // ignore
     }
@@ -549,9 +643,9 @@ export default function Track() {
     : "";
 
   return (
-    <SafeAreaView className="flex-1 bg-background">
-      {/* Map */}
-      <View className="relative h-[420px] bg-secondary">
+    <View className="flex-1 bg-background">
+      {/* Fullscreen Map */}
+      <View className="absolute inset-0">
         <MapView
           ref={mapRef}
           style={{ flex: 1 }}
@@ -604,48 +698,49 @@ export default function Track() {
             />
           )}
           {denseRoute.length > 1 && (
-            <>
-              <Polyline
-                coordinates={denseRoute}
-                strokeColor="#000000"
-                strokeWidth={7}
-              />
-              <Polyline
-                coordinates={denseRoute}
-                strokeColor="#22c55e"
-                strokeWidth={4}
-              />
-            </>
+            <Polyline
+              coordinates={denseRoute}
+              strokeColor="#000000"
+              strokeWidth={7}
+            />
+          )}
+          {denseRoute.length > 1 && (
+            <Polyline
+              coordinates={denseRoute}
+              strokeColor="#22c55e"
+              strokeWidth={4}
+            />
           )}
         </MapView>
-
-        <TouchableOpacity
-          onPress={() => router.replace("/")}
-          className="absolute top-3 right-4 w-9 h-9 rounded-full bg-surface border border-border items-center justify-center"
-        >
-          <Ionicons name="close" size={16} color="#2e1e1a" />
-        </TouchableOpacity>
-
-        <View className="absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-foreground px-4 py-1.5">
-          <Text className="text-xs font-bold text-background">
-            {error ? "…" : STATUS_LABEL[status]}
-          </Text>
-        </View>
-
-        {(status === "accepted" ||
-          status === "driver_arrived" ||
-          status === "in_progress") && (
-            <View className="absolute top-14 left-1/2 -translate-x-1/2 rounded-full bg-green-100 border border-green-200 px-3 py-1 flex-row items-center gap-1">
-              <Ionicons name="shield-checkmark" size={12} color="#166534" />
-              <Text className="text-[10px] font-bold text-green-800">
-                Smart Safety Active
-              </Text>
-            </View>
-          )}
       </View>
 
-      {isHistory || status !== "in_progress" ? (
-      <View className="-mt-6 rounded-t-3xl bg-surface px-5 pt-5 pb-4 flex-1">
+      {/* Floating Header Actions */}
+      <TouchableOpacity
+        onPress={() => router.replace("/")}
+        className="absolute top-12 right-5 w-9 h-9 rounded-full bg-surface border border-border items-center justify-center z-10 shadow-md"
+      >
+        <Ionicons name="close" size={16} color="#2e1e1a" />
+      </TouchableOpacity>
+
+      <View className="absolute top-12 left-1/2 -translate-x-1/2 rounded-full bg-foreground px-4 py-1.5 z-10 shadow-md">
+        <Text className="text-xs font-bold text-background text-center">
+          {error ? "…" : STATUS_LABEL[status]}
+        </Text>
+      </View>
+
+      {(status === "accepted" ||
+        status === "driver_arrived" ||
+        status === "in_progress") && (
+          <View className="absolute top-24 left-1/2 -translate-x-1/2 rounded-full bg-green-100 border border-green-200 px-3 py-1 flex-row items-center gap-1 z-10 shadow-sm">
+            <Ionicons name="shield-checkmark" size={12} color="#166534" />
+            <Text className="text-[10px] font-bold text-green-800">
+              Smart Safety Active
+            </Text>
+          </View>
+        )}
+
+      {/* Floating Bottom sheet (Driver details and active settings) */}
+      <View className="absolute bottom-0 left-0 right-0 max-h-[46%] bg-surface rounded-t-[2.5rem] shadow-2xl px-5 pt-5 pb-8 z-10 border-t border-border">
         <View className="mx-auto h-1.5 w-12 rounded-full bg-border mb-4" />
 
         <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
@@ -662,11 +757,20 @@ export default function Track() {
           )}
 
           {!error && status === "searching" && (
-            <View className="items-center py-6">
-              <ActivityIndicator size="large" color="#e04e2f" />
-              <Text className="text-sm text-muted-foreground mt-3">
-                Finding a nearby driver…
+            <View className="items-center py-8">
+              {/* Radar pulsing simulation */}
+              <View className="relative w-24 h-24 items-center justify-center bg-primary/10 rounded-full mb-6">
+                <View className="absolute w-20 h-20 bg-primary/20 rounded-full animate-ping" />
+                <View className="absolute w-16 h-16 bg-primary/30 rounded-full animate-pulse" />
+                <Ionicons name="car-sport" size={40} color="#e04e2f" />
+              </View>
+              <Text className="text-lg font-bold text-foreground text-center">
+                Contacting nearby drivers...
               </Text>
+              <Text className="text-sm text-muted-foreground text-center mt-2 px-6">
+                Requesting {tierName}. We are matching you with the closest driver.
+              </Text>
+              <ActivityIndicator size="small" color="#e04e2f" className="mt-5" />
             </View>
           )}
 
@@ -840,7 +944,6 @@ export default function Track() {
           )}
         </ScrollView>
       </View>
-) : null}
 
       {/* Cancel Modal */}
       <Modal
@@ -1088,6 +1191,6 @@ export default function Track() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }

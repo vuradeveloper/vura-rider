@@ -27,6 +27,7 @@ import notificationsRouter from "./routes/notifications";
 import { setupSocketHandlers } from "./socket/handlers";
 
 // ── Init Express ──
+// Trigger reload for ALLOWED_ORIGINS update
 const app = express();
 const server = http.createServer(app);
 

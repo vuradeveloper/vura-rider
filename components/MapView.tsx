@@ -57,8 +57,8 @@ function destinationPoint(
   return { latitude: (lat2 * 180) / Math.PI, longitude: (lng2 * 180) / Math.PI };
 }
 
-const MapView = forwardRef<MapViewHandle, MapViewProps>(
-  ({ children, style, initialRegion }, ref) => {
+const MapView = forwardRef<MapViewHandle, MapViewProps & Record<string, any>>(
+  ({ children, style, initialRegion, ...props }, ref) => {
     const mapRef = useRef<RNMapView>(null);
     const containerHeightRef = useRef<number>(Dimensions.get("window").height);
     const smoothBearingRef = useRef(0);
@@ -129,6 +129,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         onLayout={(e) => {
           containerHeightRef.current = e.nativeEvent.layout.height;
         }}
+        {...props}
       >
         {children}
       </RNMapView>

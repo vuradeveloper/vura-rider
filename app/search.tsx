@@ -15,10 +15,12 @@ import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getRecentSearches, saveSearch, clearRecentSearches } from "@/services/SearchService";
 import type { RecentSearch, Waypoint } from "@/lib/types";
+import { haversineKm } from "@/lib/utils";
 
 export default function Search() {
   const router = useRouter();
   const [activeInput, setActiveInput] = useState<"pickup" | "dropoff" | "stop">("dropoff");
+  const [activeStopIndex, setActiveStopIndex] = useState<number | null>(null);
   const [pickup, setPickup] = useState("Locating...");
   const [dropoff, setDropoff] = useState("");
   const [results, setResults] = useState<any[]>([]);
@@ -31,7 +33,8 @@ export default function Search() {
   const [fetchingEntrances, setFetchingEntrances] = useState(false);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-  const timerRef = useRef<NodeJS.Timeout>();
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     getRecentSearches().then(setRecentSearches);
@@ -46,6 +49,7 @@ export default function Search() {
       }
       try {
         const pos = await Location.getCurrentPositionAsync({});
+        setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         await AsyncStorage.setItem(
           "vura.ride.pickup",
           JSON.stringify([pos.coords.latitude, pos.coords.longitude])
@@ -68,8 +72,11 @@ export default function Search() {
   }, []);
 
   useEffect(() => {
-    const q = activeInput === "pickup" ? pickup : dropoff;
-    if (activeInput === "stop") { setResults([]); setLoading(false); return; }
+    let q = "";
+    if (activeInput === "pickup") q = pickup;
+    else if (activeInput === "dropoff") q = dropoff;
+    else if (activeInput === "stop" && activeStopIndex !== null) q = waypoints[activeStopIndex]?.address || "";
+
     if (q === "Locating..." || q === "Current location" || q.length < 3) {
       setResults([]);
       return;
@@ -83,35 +90,89 @@ export default function Search() {
           (await AsyncStorage.getItem("vura.ride.pickup")) || "null"
         );
         if (p && p.length === 2) locBias = `&lat=${p[0]}&lon=${p[1]}`;
-        const res = await fetch(
-          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6${locBias}`
-        );
-        const data = await res.json();
-        if (data.features) {
-          setResults(
-            data.features.map((f: any) => ({
-              name: f.properties.name || f.properties.street || f.properties.city,
-              addr: [
-                f.properties.street,
-                f.properties.district,
-                f.properties.city,
-                f.properties.state,
-                f.properties.country,
-              ]
-                .filter(Boolean)
-                .join(", "),
-              lat: f.geometry.coordinates[1],
-              lon: f.geometry.coordinates[0],
-            }))
-          );
+
+        // 1. Fetch from Photon (fast autocomplete)
+        const photonPromise = fetch(
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5${locBias}`
+        )
+          .then((r) => r.json())
+          .catch(() => ({ features: [] }));
+
+        // 2. Fetch from Nominatim (precise building & point-of-interest search)
+        const nominatimPromise = fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=3&addressdetails=1${
+            p && p.length === 2 ? `&viewbox=${p[1]-0.15},${p[0]+0.15},${p[1]+0.15},${p[0]-0.15}&bounded=0` : ""
+          }`,
+          {
+            headers: {
+              "User-Agent": "VuraRiderApp/1.0",
+            },
+          }
+        )
+          .then((r) => r.json())
+          .catch(() => []);
+
+        const [photonData, nominatimData] = await Promise.all([
+          photonPromise,
+          nominatimPromise,
+        ]);
+
+        const merged: any[] = [];
+        const seenCoords = new Set<string>();
+
+        // Process Nominatim results (priority for buildings/landmarks)
+        if (Array.isArray(nominatimData)) {
+          nominatimData.forEach((item: any) => {
+            const lat = parseFloat(item.lat);
+            const lon = parseFloat(item.lon);
+            const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+            
+            const parts = item.display_name.split(",");
+            const name = parts[0] || "Selected Place";
+            const addr = parts.slice(1, 4).join(",").trim();
+
+            seenCoords.add(coordKey);
+            merged.push({ name, addr, lat, lon });
+          });
         }
-      } catch {}
-      setLoading(false);
-    }, 600);
+
+        // Process Photon results
+        if (photonData?.features) {
+          photonData.features.forEach((f: any) => {
+            const lat = f.geometry.coordinates[1];
+            const lon = f.geometry.coordinates[0];
+            const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+
+            if (!seenCoords.has(coordKey)) {
+              seenCoords.add(coordKey);
+
+              const name = f.properties.name || f.properties.street || f.properties.city || "Selected Location";
+              const streetNum = f.properties.housenumber ? `${f.properties.housenumber} ` : "";
+              const street = f.properties.street ? `${streetNum}${f.properties.street}` : "";
+              const district = f.properties.district || "";
+              const city = f.properties.city || "";
+              const country = f.properties.country || "";
+
+              const addr = [street, district, city, country]
+                .filter(Boolean)
+                .join(", ");
+
+              merged.push({ name, addr, lat, lon });
+            }
+          });
+        }
+
+        setResults(merged.slice(0, 7));
+      } catch (err) {
+        console.error("Autocomplete fetch error:", err);
+      } finally {
+        setLoading(false);
+      }
+    }, 450);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [pickup, dropoff, activeInput]);
+  }, [pickup, dropoff, activeInput, waypoints, activeStopIndex]);
 
   const handleSelect = (s: any) => {
     if (activeInput === "pickup" || activeInput === "stop") {
@@ -121,39 +182,17 @@ export default function Search() {
     const isMall =
       /mall|shopping|centre|center|square|plaza/i.test(s.name) ||
       /mall|shopping/i.test(s.addr);
-    if (isMall) {
-      setEntranceModal({ s, type: activeInput });
-      setFetchingEntrances(true);
-      setRealEntrances([]);
-      const query = `[out:json];(node(around:200,${s.lat},${s.lon})["entrance"];node(around:200,${s.lat},${s.lon})["highway"="bus_stop"];node(around:200,${s.lat},${s.lon})["amenity"="parking_entrance"];);out;`;
-      fetch(
-        `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`
-      )
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.elements && data.elements.length > 0) {
-            const entrances = data.elements.map((e: any, i: number) => {
-              if (e.tags?.name) return e.tags.name;
-              if (e.tags?.ref) return `Entrance ${e.tags.ref}`;
-              if (e.tags?.entrance === "main") return "Main Entrance";
-              if (e.tags?.amenity === "parking_entrance") return "Parking Drop-off";
-              if (e.tags?.highway === "bus_stop") return "Transit Drop-off Zone";
-              return `Gate / Entrance ${i + 1}`;
-            });
-            const unique = Array.from(new Set(entrances)) as string[];
-            setRealEntrances(unique.slice(0, 6));
-          } else {
-            setRealEntrances([
-              "Main Entrance",
-              "Secondary Entrance",
-              "Parking Drop-off",
-            ]);
-          }
-        })
-        .catch(() => {
-          setRealEntrances(["Main Entrance", "Secondary Entrance", "Parking Drop-off"]);
-        })
-        .finally(() => setFetchingEntrances(false));
+    if (isMall && s.lat && s.lon) {
+      router.push({
+        pathname: "/ride/map-picker",
+        params: {
+          type: activeInput,
+          entranceSelect: "true",
+          lat: String(s.lat),
+          lon: String(s.lon),
+          name: s.name,
+        },
+      });
       return;
     }
     proceedWithSelection(s, s.name);
@@ -172,9 +211,17 @@ export default function Search() {
       return;
     }
     if (activeInput === "stop") {
-      setWaypoints((prev) => [...prev, { address: displayName, lat: s.lat, lng: s.lon }]);
+      if (activeStopIndex !== null) {
+        setWaypoints((prev) => {
+          const copy = [...prev];
+          copy[activeStopIndex] = { address: displayName, lat: s.lat, lng: s.lon };
+          return copy;
+        });
+        setActiveStopIndex(null);
+      } else {
+        setWaypoints((prev) => [...prev, { address: displayName, lat: s.lat, lng: s.lon }]);
+      }
       setActiveInput("dropoff");
-      setDropoff("");
       setEntranceModal(null);
       return;
     }
@@ -200,93 +247,143 @@ export default function Search() {
       ? recentSearches.slice(0, 2).map((s) => ({ name: s.name, addr: s.addr, lat: s.lat, lon: s.lng }))
       : defaultSuggestions;
 
-  return (
-    <SafeAreaView className="flex-1 bg-background">
-      <View className="px-5 pt-3 pb-4 bg-surface border-b border-border">
-        <View className="flex-row items-center gap-3 mb-4">
-          <Link href="/" asChild>
-            <TouchableOpacity className="w-9 h-9 rounded-full bg-secondary items-center justify-center">
-              <Ionicons name="arrow-back" size={16} color="#2e1e1a" />
-            </TouchableOpacity>
-          </Link>
-          <Text className="text-base font-bold text-foreground">
-            Plan your ride
-          </Text>
-        </View>
+  const addStopField = () => {
+    if (waypoints.length < 5) {
+      const newIndex = waypoints.length;
+      setWaypoints((prev) => [...prev, { address: "", lat: 0, lng: 0 }]);
+      setActiveInput("stop");
+      setActiveStopIndex(newIndex);
+    }
+  };
 
+  return (
+    <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
+      {/* Header */}
+      <View className="flex-row items-center gap-4 py-3 px-5 bg-surface border-b border-border">
+        <TouchableOpacity onPress={() => router.replace("/")} className="w-8 h-8 items-center justify-center">
+          <Ionicons name="close" size={24} color="#2e1e1a" />
+        </TouchableOpacity>
+        <Text className="text-xl font-bold text-foreground">
+          Route
+        </Text>
+      </View>
+
+      {/* Input container wrapper */}
+      <View className="px-5 pt-4 pb-4 bg-surface border-b border-border">
         <View className="flex-row gap-3">
-          <View className="items-center pt-4">
-            <Ionicons name="ellipse" size={12} color="#2e1e1a" />
-            <View className="w-px flex-1 my-1 border-l-2 border-dashed border-muted-foreground/40" />
+          {/* Left vertical decorator line */}
+          <View className="items-center py-3 justify-between">
+            <View className="w-4 h-4 rounded-full bg-blue-100 items-center justify-center">
+              <View className="w-2 h-2 rounded-full bg-blue-600" />
+            </View>
+            <View className="w-0.5 flex-1 my-1 border-l-2 border-dashed border-[#80716b]/40" />
             {waypoints.map((_, i) => (
-              <View key={i} className="items-center">
-                <View className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-                <View className="w-px flex-1 my-1 border-l-2 border-dashed border-muted-foreground/40" />
+              <View key={i} className="items-center my-0.5">
+                <View className="w-2 h-2 rounded-full bg-amber-500" />
+                <View className="w-0.5 h-6 border-l-2 border-dashed border-[#80716b]/40" />
               </View>
             ))}
-            <Ionicons name="location" size={16} color="#e04e2f" />
+            <View className="w-4 h-4 bg-[#166534]/15 rounded-md items-center justify-center border border-[#166534]/30">
+              <View className="w-2 h-2 bg-[#166534] rounded-sm" />
+            </View>
           </View>
-          <View className="flex-1 gap-y-2">
-            <TextInput
-              value={pickup}
-              onFocus={() => setActiveInput("pickup")}
-              onChangeText={setPickup}
-              className={`w-full rounded-xl px-3 py-3 text-sm font-medium ${activeInput === "pickup" ? "bg-accent border border-primary/30" : "bg-secondary border border-transparent"}`}
-            />
+
+          {/* Fields area */}
+          <View className="flex-1 gap-y-2.5">
+            {/* Pickup Input + Add Stop button */}
+            <View className="flex-row items-center gap-2">
+              <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "pickup" ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border border-transparent"}`}>
+                <TextInput
+                  value={pickup}
+                  onFocus={() => setActiveInput("pickup")}
+                  onChangeText={setPickup}
+                  className="flex-1 py-2.5 text-sm font-medium text-foreground bg-transparent"
+                />
+              </View>
+              {/* small + button aligned next to pickup field */}
+              <TouchableOpacity
+                onPress={addStopField}
+                className="w-10 h-10 rounded-full bg-[#f2f1ef] items-center justify-center shadow-sm"
+              >
+                <Ionicons name="add" size={20} color="#2e1e1a" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Waypoints/Stops */}
             {waypoints.map((wp, i) => (
-              <View key={i} className="flex-row items-center gap-1">
-                <View className="flex-1 rounded-xl px-3 py-3 bg-amber-50 border border-amber-300">
-                  <Text className="text-sm font-medium text-amber-900" numberOfLines={1}>
-                    {wp.address}
-                  </Text>
+              <View key={i} className="flex-row items-center gap-2">
+                <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "stop" && activeStopIndex === i ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border border-transparent"}`}>
+                  <TextInput
+                    placeholder={`Stop ${i + 1}`}
+                    placeholderTextColor="#80716b"
+                    value={wp.address}
+                    onFocus={() => {
+                      setActiveInput("stop");
+                      setActiveStopIndex(i);
+                    }}
+                    onChangeText={(t) => {
+                      setWaypoints((prev) => {
+                        const copy = [...prev];
+                        copy[i] = { ...copy[i], address: t };
+                        return copy;
+                      });
+                    }}
+                    className="flex-1 py-2.5 text-sm font-medium text-foreground bg-transparent"
+                  />
                 </View>
+                {/* Delete Stop button */}
                 <TouchableOpacity
-                  onPress={() => setWaypoints((prev) => prev.filter((_, j) => j !== i))}
-                  className="w-8 h-8 rounded-full bg-red-100 items-center justify-center"
+                  onPress={() => {
+                    setWaypoints((prev) => prev.filter((_, j) => j !== i));
+                    if (activeStopIndex === i) {
+                      setActiveStopIndex(null);
+                      setActiveInput("dropoff");
+                    }
+                  }}
+                  className="w-10 h-10 rounded-full bg-red-50 border border-red-100 items-center justify-center"
                 >
-                  <Ionicons name="close" size={14} color="#dc2626" />
+                  <Ionicons name="close" size={18} color="#dc2626" />
                 </TouchableOpacity>
               </View>
             ))}
-            <TextInput
-              autoFocus
-              placeholder={activeInput === "stop" ? "Search for a stop..." : waypoints.length > 0 ? "Next stop or final destination?" : "Where to?"}
-              placeholderTextColor="#80716b"
-              value={dropoff}
-              onFocus={() => { if (activeInput !== "stop") setActiveInput("dropoff"); }}
-              onChangeText={(t) => {
-                setDropoff(t);
-                if (t.length > 0 && activeInput === "stop") setActiveInput("dropoff");
-              }}
-              className={`w-full rounded-xl px-3 py-3 text-sm font-medium ${activeInput === "dropoff" || activeInput === "stop" ? "bg-accent border border-primary/30" : "bg-secondary border border-transparent"}`}
-            />
-            {activeInput === "stop" ? (
-              <View className="flex-row items-center gap-2">
-                <View className="flex-1 h-px bg-primary/30" />
-                <Text className="text-xs font-bold text-primary">Choose a stop location</Text>
-                <View className="flex-1 h-px bg-primary/30" />
-              </View>
-            ) : (
-              dropoff.length === 0 && waypoints.length < 5 && (
+
+            {/* Dropoff Input + Swap button */}
+            <View className="flex-row items-center gap-2">
+              <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "dropoff" ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border border-transparent"}`}>
+                <Ionicons name="search" size={18} color="#2e1e1a" className="mr-2" />
+                <TextInput
+                  placeholder={waypoints.length > 0 ? "Final destination?" : "Where to?"}
+                  placeholderTextColor="#80716b"
+                  value={dropoff}
+                  onFocus={() => setActiveInput("dropoff")}
+                  onChangeText={setDropoff}
+                  className="flex-1 py-2 text-sm font-medium text-foreground bg-transparent"
+                />
+                {dropoff.length > 0 && (
+                  <TouchableOpacity onPress={() => setDropoff("")} className="p-1">
+                    <Ionicons name="close-circle" size={16} color="#80716b" />
+                  </TouchableOpacity>
+                )}
+                {/* Small Map Pin Icon inside the input */}
                 <TouchableOpacity
-                  onPress={() => setActiveInput("stop")}
-                  className="flex-row items-center justify-center gap-2 rounded-xl border border-dashed border-primary/20 bg-primary/5 py-3"
+                  onPress={() => router.push({ pathname: "/ride/map-picker", params: { type: activeInput } })}
+                  className="ml-1 p-1 bg-secondary rounded-md"
                 >
-                  <Ionicons name="add-circle" size={16} color="#e04e2f" />
-                  <Text className="text-sm font-bold text-primary">Add stop</Text>
+                  <Ionicons name="map" size={16} color="#166534" />
                 </TouchableOpacity>
-              )
-            )}
-            {waypoints.length > 0 && dropoff.length === 0 && activeInput !== "stop" && (
+              </View>
+              {/* Swap Icon */}
               <TouchableOpacity
-                onPress={() => setWaypoints([])}
-                className="self-end"
+                onPress={() => {
+                  const temp = pickup;
+                  setPickup(dropoff);
+                  setDropoff(temp);
+                }}
+                className="w-10 h-10 rounded-full bg-[#f2f1ef] items-center justify-center shadow-sm"
               >
-                <Text className="text-xs font-semibold text-muted-foreground">
-                  Clear stops
-                </Text>
+                <Ionicons name="swap-vertical" size={18} color="#2e1e1a" />
               </TouchableOpacity>
-            )}
+            </View>
           </View>
         </View>
       </View>
@@ -302,32 +399,90 @@ export default function Search() {
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Set Location on Map Option */}
+        <TouchableOpacity
+          onPress={() => router.push({ pathname: "/ride/map-picker", params: { type: activeInput } })}
+          className="flex-row items-center gap-3 py-3.5 border-b border-border"
+        >
+          <View className="w-10 h-10 rounded-full bg-primary/10 items-center justify-center">
+            <Ionicons name="map" size={18} color="#e04e2f" />
+          </View>
+          <View className="flex-1">
+            <Text className="text-sm font-bold text-foreground">
+              Set location on map
+            </Text>
+            <Text className="text-xs text-muted-foreground">
+              Drag the map to position a pin precisely
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color="#80716b" />
+        </TouchableOpacity>
+
         {loading && (
           <ActivityIndicator size="small" color="#e04e2f" style={{ marginVertical: 16 }} />
         )}
-        {displayResults.map((s, i) => (
-          <TouchableOpacity
-            key={i}
-            onPress={() => handleSelect(s)}
-            className="flex-row items-center gap-3 py-3 border-b border-border"
-          >
-            <View className="w-10 h-10 rounded-full bg-secondary items-center justify-center">
-              <Ionicons
-                name={results.length > 0 ? "location" : "time"}
-                size={16}
-                color={results.length > 0 ? "#e04e2f" : "#80716b"}
-              />
-            </View>
-            <View className="flex-1">
-              <Text className="text-sm font-semibold text-foreground" numberOfLines={1}>
-                {s.name}
-              </Text>
-              <Text className="text-xs text-muted-foreground" numberOfLines={1}>
-                {s.addr}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+
+        {displayResults.map((s, i) => {
+          // Categorize icon
+          let iconName: "airplane-outline" | "briefcase-outline" | "train-outline" | "school-outline" | "location-outline" | "time-outline" = "location-outline";
+          const queryResultsActive = results.length > 0;
+          if (!queryResultsActive) {
+            iconName = "time-outline";
+          } else {
+            const nameLower = s.name.toLowerCase();
+            if (nameLower.includes("airport")) {
+              iconName = "airplane-outline";
+            } else if (nameLower.includes("mall") || nameLower.includes("shopping") || nameLower.includes("centre") || nameLower.includes("center") || nameLower.includes("plaza")) {
+              iconName = "briefcase-outline";
+            } else if (nameLower.includes("station") || nameLower.includes("train") || nameLower.includes("metro") || nameLower.includes("gautrain")) {
+              iconName = "train-outline";
+            } else if (nameLower.includes("college") || nameLower.includes("school") || nameLower.includes("university")) {
+              iconName = "school-outline";
+            }
+          }
+
+          // Calculate distance
+          let distText = "";
+          if (gpsCoords && s.lat && s.lon) {
+            const km = haversineKm(gpsCoords.lat, gpsCoords.lng, s.lat, s.lon);
+            distText = `${km.toFixed(1)} km`;
+          }
+
+          return (
+            <TouchableOpacity
+              key={i}
+              onPress={() => handleSelect(s)}
+              className="flex-row items-center gap-4 py-3.5 border-b border-border bg-surface"
+            >
+              <View className="w-10 h-10 rounded-full bg-secondary items-center justify-center">
+                <Ionicons
+                  name={iconName}
+                  size={20}
+                  color="#80716b"
+                />
+              </View>
+              <View className="flex-1">
+                <Text className="text-sm font-semibold text-foreground" numberOfLines={1}>
+                  {s.name}
+                </Text>
+                <Text className="text-xs text-muted-foreground mt-0.5" numberOfLines={1}>
+                  {s.addr || "Johannesburg"}
+                </Text>
+              </View>
+              {distText ? (
+                <Text className="text-xs font-medium text-muted-foreground mr-1">
+                  {distText}
+                </Text>
+              ) : null}
+            </TouchableOpacity>
+          );
+        })}
+
+        {/* Footer */}
+        <Text className="text-[10px] text-center text-muted-foreground/60 mt-8 mb-6">
+          © OpenStreetMap, GeoNames • Who's On First, OpenAddresses
+        </Text>
       </ScrollView>
 
       {/* Entrance Modal */}

@@ -15,7 +15,7 @@ export function Text(props: TextProps) {
 
   return (
     <RNText
-      style={[{ color: Colors[colorScheme].text }, style]}
+      style={[{ color: Colors[colorScheme as keyof typeof Colors].text }, style]}
       {...otherProps}
     />
   );
@@ -27,7 +27,7 @@ export function View(props: ViewProps) {
 
   return (
     <RNView
-      style={[{ backgroundColor: Colors[colorScheme].background }, style]}
+      style={[{ backgroundColor: Colors[colorScheme as keyof typeof Colors].background }, style]}
       {...otherProps}
     />
   );

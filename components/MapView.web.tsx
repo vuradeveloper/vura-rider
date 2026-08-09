@@ -56,7 +56,12 @@ function injectStylesOnce() {
 .pin-m>div{width:28px;height:28px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.2);font-size:12px;font-weight:bold;color:#fff}
 .usr-m{background:transparent;border:0}
 .usr-m>div{width:14px;height:14px;background:#3b82f6;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 4px rgba(59,130,246,.25)}
+.ent-m{background:transparent;border:0}
+.ent-m>div{width:14px;height:14px;background:#1a1a1a;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.ent-sel-m{background:transparent;border:0}
+.ent-sel-m>div{width:16px;height:16px;background:#22c55e;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.4)}
 .leaflet-container{background:#f8f9fa}
+
 `;
   document.head.appendChild(style);
 }
@@ -91,6 +96,20 @@ function buildIcon(L: any, p: any) {
       iconSize: [28, 28],
       iconAnchor: [14, 14],
     });
+  } else if (p.icon === "entrance") {
+    return L.divIcon({
+      html: "<div></div>",
+      className: "ent-m",
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+    });
+  } else if (p.icon === "entrance-sel") {
+    return L.divIcon({
+      html: "<div></div>",
+      className: "ent-sel-m",
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+    });
   }
   return L.divIcon({ html: "<div></div>", className: "usr-m", iconSize: [14, 14], iconAnchor: [7, 7] });
 }
@@ -106,7 +125,7 @@ const MapView = forwardRef<any, any>((props, ref) => {
   const markers = useMemo(() => {
     const r: any[] = [];
     React.Children.forEach(children, (child: any) => {
-      if (React.isValidElement(child) && child.type === Marker && (child.props as any).coordinate) {
+      if (React.isValidElement(child) && (child.props as any).coordinate) {
         const cp = child.props as any;
         const t = cp.title || "";
         let imgUrl = "";
@@ -131,9 +150,13 @@ const MapView = forwardRef<any, any>((props, ref) => {
               ? "pickup"
               : cp.pinColor === "#ef4444"
                 ? "dropoff"
-                : t.toLowerCase() === "your location" || t.toLowerCase() === "nearby driver"
-                  ? "car"
-                  : "",
+                : cp.pinColor === "#1a1a1a"
+                  ? "entrance"
+                  : cp.pinColor === "#059669"
+                    ? "entrance-sel"
+                    : t.toLowerCase() === "your location" || t.toLowerCase() === "nearby driver"
+                      ? "car"
+                      : "",
           angle: cp.rotation || 0,
           imgUrl,
         });
@@ -145,7 +168,7 @@ const MapView = forwardRef<any, any>((props, ref) => {
   const polylines = useMemo(() => {
     const r: any[] = [];
     React.Children.forEach(children, (child: any) => {
-      if (React.isValidElement(child) && child.type === Polyline && (child.props as any).coordinates) {
+      if (React.isValidElement(child) && (child.props as any).coordinates) {
         const cp = child.props as any;
         r.push({
           coords: cp.coordinates.map((c: any) => [c.latitude, c.longitude]),
@@ -167,6 +190,12 @@ const MapView = forwardRef<any, any>((props, ref) => {
     : { lat: 0, lng: 0, latD: 0.05, lngD: 0.05 };
 
   // Init map once
+  const propsRef = useRef<any>(props);
+  useEffect(() => {
+    propsRef.current = props;
+  });
+
+  // Init map once
   useEffect(() => {
     let cancelled = false;
     injectStylesOnce();
@@ -178,12 +207,39 @@ const MapView = forwardRef<any, any>((props, ref) => {
         Math.min(18, Math.round(Math.log2(360 / Math.max(center.latD, center.lngD))))
       );
       const map = L.map(containerRef.current, {
-        zoomControl: false,
+        zoomControl: true,
         attributionControl: false,
       }).setView([center.lat, center.lng], zoom);
       L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
       ).addTo(map);
+
+      map.on("move", () => {
+        if (propsRef.current.onRegionChange) {
+          const centerLatLng = map.getCenter();
+          const bounds = map.getBounds();
+          propsRef.current.onRegionChange({
+            latitude: centerLatLng.lat,
+            longitude: centerLatLng.lng,
+            latitudeDelta: Math.abs(bounds.getNorth() - bounds.getSouth()),
+            longitudeDelta: Math.abs(bounds.getEast() - bounds.getWest()),
+          });
+        }
+      });
+
+      map.on("moveend", () => {
+        if (propsRef.current.onRegionChangeComplete) {
+          const centerLatLng = map.getCenter();
+          const bounds = map.getBounds();
+          propsRef.current.onRegionChangeComplete({
+            latitude: centerLatLng.lat,
+            longitude: centerLatLng.lng,
+            latitudeDelta: Math.abs(bounds.getNorth() - bounds.getSouth()),
+            longitudeDelta: Math.abs(bounds.getEast() - bounds.getWest()),
+          });
+        }
+      });
+
       mapRef.current = map;
       setReady(true);
       // fix sizing after mount (common issue when container was 0-size on first paint)
@@ -208,6 +264,13 @@ const MapView = forwardRef<any, any>((props, ref) => {
     ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, []);
+
+  // Update view when initialRegion changes dynamically (e.g. when coords finish loading asynchronously)
+  useEffect(() => {
+    if (ready && mapRef.current && initialRegion) {
+      mapRef.current.setView([initialRegion.latitude, initialRegion.longitude], mapRef.current.getZoom() || 15);
+    }
+  }, [ready, initialRegion?.latitude, initialRegion?.longitude]);
 
   // Update markers + polylines whenever they change
   useEffect(() => {
@@ -277,16 +340,22 @@ const MapView = forwardRef<any, any>((props, ref) => {
       if (diff > 180) diff -= 360;
       if (diff < -180) diff += 360;
       smoothBearingRef.current = smoothBearingRef.current + diff;
-      const offsetY = size.y * (0.7111 - 0.5);
-      const carPoint = map.project([lat, lng], zoom);
+      
+      // Use user's current zoom level if they zoomed manually
+      const currentZoom = map.getZoom() || zoom;
+
+      // Position the car at 30% from the top of screen to keep it visible above bottom sheet (which occupies bottom 46%)
+      const offsetY = size.y * (0.30 - 0.5);
+      const carPoint = map.project([lat, lng], currentZoom);
       const targetPoint = carPoint.subtract([0, offsetY]);
-      const mapCenter = map.unproject(targetPoint, zoom);
-      map.setView(mapCenter, zoom, { animate: true, duration: 0.3, easeLinearity: 1.0 });
+      const mapCenter = map.unproject(targetPoint, currentZoom);
+      map.setView(mapCenter, currentZoom, { animate: true, duration: 0.3, easeLinearity: 1.0 });
+      
       const container = map.getContainer();
       if (container) {
-        container.style.transformOrigin = "50% 71.11%";
-        container.style.transition = "transform 0.3s linear";
-        container.style.transform = `rotate(${-smoothBearingRef.current}deg)`;
+        container.style.transformOrigin = "";
+        container.style.transition = "";
+        container.style.transform = "";
       }
     },
     unfollow: () => {

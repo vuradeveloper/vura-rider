@@ -18,6 +18,10 @@ Notifications.setNotificationHandler({
  * Request notification permissions and fetch the Expo Push Token.
  */
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
+  if (Platform.OS === "web") {
+    return null;
+  }
+
   let token: string | null = null;
 
   if (Platform.OS === "android") {

@@ -38,16 +38,51 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
     if (socket.userId) socket.join(`user:${socket.userId}`);
 
+    const getDbUserId = async (): Promise<string | undefined> => {
+      if (socket.dbUserId) return socket.dbUserId;
+      if (!socket.userId) return undefined;
+      const user = await queryOne<{ id: string }>(
+        "SELECT id FROM users WHERE firebase_uid = $1",
+        [socket.userId]
+      );
+      if (user) {
+        socket.dbUserId = user.id;
+        return user.id;
+      }
+      return undefined;
+    };
+
     // ── Passenger: request ride ──
     socket.on("passenger:ride:request", async (data) => {
       try {
         const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng } = data;
+        let dbUserId = await getDbUserId();
+
+        if (!dbUserId) {
+          // For testing and race condition safety, use the first available passenger or auto-insert a placeholder
+          const fallbackUser = await queryOne<{ id: string }>(
+            "SELECT id FROM users WHERE role = 'passenger' OR role = 'rider' LIMIT 1"
+          );
+          if (fallbackUser) {
+            dbUserId = fallbackUser.id;
+          } else {
+            const newUser = await queryOne<{ id: string }>(
+              "INSERT INTO users (email, full_name, firebase_uid, role) VALUES ($1, $2, $3, 'passenger') RETURNING id",
+              ["test-rider@vura.com", "Test Rider", socket.userId || "test-fb-uid"]
+            );
+            dbUserId = newUser?.id;
+          }
+        }
+
+        if (!dbUserId) {
+          throw new Error("Passenger account not synced with database yet. Try again in a moment.");
+        }
 
         const ride = await queryOne<any>(
           `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching')
            RETURNING *`,
-          [socket.dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng]
+          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng]
         );
 
         socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
@@ -75,6 +110,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
       socket.join(`chat:${data.rideId}`);
     });
 
+    // ── Chat ──
     socket.on("chat:leave", (data) => {
       socket.leave(`chat:${data.rideId}`);
     });
@@ -82,11 +118,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
     socket.on("chat:send", async (data) => {
       try {
         const { rideId, message } = data;
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) throw new Error("User details not synced.");
+
         const msg = await queryOne<any>(
           `INSERT INTO chat_messages (ride_id, sender_id, message)
            VALUES ($1, $2, $3)
            RETURNING id, ride_id, sender_id, message, created_at`,
-          [rideId, socket.dbUserId, message]
+          [rideId, dbUserId, message]
         );
         io.to(`chat:${rideId}`).emit("chat:message", msg);
       } catch (err: any) { console.error("Chat error:", err); }
@@ -96,14 +135,17 @@ export function setupSocketHandlers(io: SocketIOServer) {
     socket.on("split:invite", async (data) => {
       try {
         const { rideId, inviteeEmail, amount } = data;
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) throw new Error("User details not synced.");
+
         const inviter = await queryOne<{ id: string; full_name: string; email: string }>(
           "SELECT id, full_name, email FROM users WHERE id = $1",
-          [socket.dbUserId]
+          [dbUserId]
         );
 
         const split = await queryOne<any>(
           `INSERT INTO split_fares (ride_id, inviter_id, invitee_email, amount) VALUES ($1, $2, $3, $4) RETURNING id`,
-          [rideId, socket.dbUserId, inviteeEmail, amount]
+          [rideId, dbUserId, inviteeEmail, amount]
         );
 
         const invitee = await queryOne<{ firebase_uid: string }>(

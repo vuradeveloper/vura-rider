@@ -85,7 +85,7 @@ const iconMap: Record<string, IoniconsName> = {
   bookmark: "bookmark",
   cloud: "cloud",
   wifi: "wifi",
-  "wifi-off": "wifi-off",
+  "wifi-off": "wifi-off" as IoniconsName,
   infinity: "infinite",
   link: "link",
   smile: "happy",
@@ -99,7 +99,7 @@ interface IconProps {
 }
 
 export function Icon({ name, size = 20, color, className }: IconProps) {
-  const ionName = iconMap[name];
+  const ionName = iconMap[name] as IoniconsName;
   if (!ionName) {
     return null;
   }

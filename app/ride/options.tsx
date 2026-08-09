@@ -214,7 +214,7 @@ export default function RideOptions() {
             <Marker
               key={`stop-${i}`}
               coordinate={{ latitude: wp.lat, longitude: wp.lng }}
-              image={CAR_ICON}
+              image={CAR_LOCATOR_IMG}
               pinColor="#e04e2f"
               title={`Stop ${i + 1}`}
             />
@@ -390,7 +390,7 @@ export default function RideOptions() {
                     key={c.id}
                     onPress={() => {
                       setPayChoice({ type: "card", id: c.id, last4: c.last4 });
-                      hideShowPayment();
+                      handleHidePayment();
                     }}
                     className={`w-full flex-row items-center gap-3 p-3 rounded-xl border ${active ? "border-primary bg-primary/5" : "border-border bg-surface"}`}
                   >
@@ -429,7 +429,7 @@ export default function RideOptions() {
               <TouchableOpacity
                 onPress={() => {
                   setPayChoice({ type: "cash" });
-                  hideShowPayment();
+                  handleHidePayment();
                 }}
                 className={`w-full flex-row items-center gap-3 p-3 rounded-xl border ${payChoice.type === "cash" ? "border-primary bg-primary/5" : "border-border bg-surface"}`}
               >

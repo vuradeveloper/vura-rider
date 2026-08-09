@@ -56,7 +56,7 @@ export default function AddPaymentMethod() {
         "Success",
         "Card added successfully! You can now select it as your payment method."
       );
-      router.pop(); // Go back to previous screen
+      router.back(); // Go back to previous screen
     } catch (error) {
       Alert.alert("Error", "Failed to add card. Please try again.");
     } finally {
@@ -70,7 +70,7 @@ export default function AddPaymentMethod() {
       <View className="px-5 pt-4 pb-2 bg-surface border-b border-border">
         <View className="flex-row items-center justify-between">
           <TouchableOpacity
-            onPress={() => router.pop()}
+            onPress={() => router.back()}
             className="w-9 h-9 rounded-full bg-secondary items-center justify-center"
           >
             <Ionicons name="arrow-back" size={16} color="#2e1e1a" />
