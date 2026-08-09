@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -35,6 +36,13 @@ const items = [
     wide: true,
   },
   {
+    icon: "calendar" as const,
+    label: "Scheduled Rides",
+    sub: "Upcoming bookings",
+    to: "/scheduled-rides",
+    wide: false,
+  },
+  {
     icon: "gift" as const,
     label: "Promotions",
     sub: "2 active offers",
@@ -53,6 +61,13 @@ const items = [
     label: "Personal Details",
     sub: "Notifications, privacy",
     to: "/settings",
+    wide: false,
+  },
+  {
+    icon: "pin" as const,
+    label: "Saved Places",
+    sub: "Home, Work, favorites",
+    to: "/saved-places",
     wide: false,
   },
   {
@@ -167,11 +182,18 @@ export default function Account() {
           <View className="absolute -right-12 -bottom-10 h-44 w-44 rounded-full bg-white/10" />
           <Text className="text-xl font-bold text-white">Account</Text>
           <View className="mt-4 flex-row items-center gap-3">
-            <View className="h-16 w-16 rounded-full bg-surface items-center justify-center border border-border">
-              <Text className="text-xl font-extrabold text-primary">
-                {initials || "U"}
-              </Text>
-            </View>
+            {user.photoURL ? (
+              <Image
+                source={{ uri: user.photoURL }}
+                className="h-16 w-16 rounded-full border border-border"
+              />
+            ) : (
+              <View className="h-16 w-16 rounded-full bg-surface items-center justify-center border border-border">
+                <Text className="text-xl font-extrabold text-primary">
+                  {initials || "U"}
+                </Text>
+              </View>
+            )}
             <View>
               <View className="flex-row items-center gap-2">
                 <Text className="text-lg font-bold text-white">
@@ -300,6 +322,25 @@ export default function Account() {
                 <Text className="text-xs font-semibold text-primary">Disable</Text>
               </TouchableOpacity>
             ) : null}
+
+            <View className="mt-4 flex-row gap-3">
+              <Link href="/terms" asChild>
+                <TouchableOpacity className="flex-1 items-center rounded-xl border border-border bg-surface py-3">
+                  <Ionicons name="document-text" size={16} color="#80716b" />
+                  <Text className="text-xs font-semibold text-muted-foreground mt-1">
+                    Terms
+                  </Text>
+                </TouchableOpacity>
+              </Link>
+              <Link href="/privacy" asChild>
+                <TouchableOpacity className="flex-1 items-center rounded-xl border border-border bg-surface py-3">
+                  <Ionicons name="shield" size={16} color="#80716b" />
+                  <Text className="text-xs font-semibold text-muted-foreground mt-1">
+                    Privacy
+                  </Text>
+                </TouchableOpacity>
+              </Link>
+            </View>
 
             <TouchableOpacity
               onPress={signOut}

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Vura Rider",
-    "slug": "vurarider",
+    "slug": "vurarider-new",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -27,9 +27,12 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ],
-      "package": "com.nhlanhlanb.vurarider"
+      "package": "com.nhlanhlanb.vurarider",
+      "enableProguardInReleaseBuilds": true
     },
     "web": {
       "bundler": "metro",
@@ -48,7 +51,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true
@@ -56,9 +60,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "240a2b06-15df-4ff9-b21a-ceace1aa6c7a"
+        "projectId": "236090a1-468b-4937-9dd1-b15105e39580"
       }
     },
-    "owner": "nhlanhlanb"
+    "owner": "makhavhuboy"
   }
 }

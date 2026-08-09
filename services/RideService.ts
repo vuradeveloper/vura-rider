@@ -2,6 +2,7 @@ import { apiFetch } from "@/lib/api";
 import type {
   RideHistoryResponse,
   RideWithDetails,
+  RideReceipt,
 } from "@/lib/types";
 
 export const getActiveRide = async () =>
@@ -14,6 +15,9 @@ export const getRideHistory = async (page = 1, limit = 20) =>
 
 export const getRide = async (id: string) =>
   apiFetch<{ ride: RideWithDetails }>(`/api/rides/${id}`);
+
+export const getRideReceipt = async (rideId: string) =>
+  apiFetch<{ receipt: RideReceipt }>(`/api/rides/${rideId}/receipt`);
 
 export const submitRating = async (
   rideId: string,

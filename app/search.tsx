@@ -197,7 +197,7 @@ export default function Search() {
   const displayResults = results.length > 0
     ? results
     : recentSearches.length > 0
-      ? recentSearches.map((s) => ({ name: s.name, addr: s.addr, lat: s.lat, lon: s.lng }))
+      ? recentSearches.slice(0, 2).map((s) => ({ name: s.name, addr: s.addr, lat: s.lat, lon: s.lng }))
       : defaultSuggestions;
 
   return (
@@ -262,18 +262,18 @@ export default function Search() {
             />
             {activeInput === "stop" ? (
               <View className="flex-row items-center gap-2">
-                <View className="flex-1 h-px bg-amber-300" />
-                <Text className="text-xs font-bold text-amber-600">Choose a stop location</Text>
-                <View className="flex-1 h-px bg-amber-300" />
+                <View className="flex-1 h-px bg-primary/30" />
+                <Text className="text-xs font-bold text-primary">Choose a stop location</Text>
+                <View className="flex-1 h-px bg-primary/30" />
               </View>
             ) : (
               dropoff.length === 0 && waypoints.length < 5 && (
                 <TouchableOpacity
                   onPress={() => setActiveInput("stop")}
-                  className="flex-row items-center justify-center gap-2 rounded-xl border border-dashed border-amber-400 bg-amber-50 py-3"
+                  className="flex-row items-center justify-center gap-2 rounded-xl border border-dashed border-primary/20 bg-primary/5 py-3"
                 >
-                  <Ionicons name="add-circle" size={16} color="#d97706" />
-                  <Text className="text-sm font-bold text-amber-700">Add stop</Text>
+                  <Ionicons name="add-circle" size={16} color="#e04e2f" />
+                  <Text className="text-sm font-bold text-primary">Add stop</Text>
                 </TouchableOpacity>
               )
             )}

@@ -3,16 +3,20 @@ import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { payForRide, payWithCash } from "@/services/PaymentService";
 import { getActiveRide, getRide, submitRating } from "@/services/RideService";
+import { shareTrip } from "@/services/SafetyService";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
+import { useAppStore } from "@/lib/store";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   ScrollView,
+  Share,
   Text,
   TextInput,
   TouchableOpacity,
@@ -130,6 +134,11 @@ export default function Track() {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [showCallModal, setShowCallModal] = useState(false);
+  const [showEtaShareModal, setShowEtaShareModal] = useState(false);
+  const [sharingEta, setSharingEta] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [splitFareActive, setSplitFareActive] = useState(false);
 
   const rideIdRef = useRef<string | null>(rideIdParam ?? null);
   const statusRef = useRef<RideStatus>("searching");
@@ -266,7 +275,7 @@ export default function Track() {
                 .filter(Boolean)
                 .join(" ") || null,
             license_plate: ride.driver_license_plate,
-            rating: null,
+            rating: ride.rating_score ?? null,
           });
         }
       } catch (e: any) {
@@ -286,13 +295,13 @@ export default function Track() {
         socket = await getSocket();
         if (!active || !socket) return;
 
-        socket.on("connect_error", (err: Error) =>
+        socket.on("connect_error", (err) =>
           setError(err.message || "Connection failed")
         );
 
         socket.emit("passenger:connect");
 
-        socket.on("ride:requested:ack", (data: any) => {
+        socket.on("ride:requested:ack", (data) => {
           if (data.success) {
             setRideId(data.rideId);
             rideIdRef.current = data.rideId;
@@ -308,39 +317,94 @@ export default function Track() {
           setError("No drivers accepted your request. Please try again.")
         );
 
-        socket.on("ride:accepted", (data: any) => {
+        socket.on("ride:accepted", (data) => {
           setStatus("accepted");
-          setDriver({
-            name: data.driver?.name ?? "Driver",
-            vehicle: data.driver?.vehicle ?? null,
-            license_plate: data.driver?.license_plate ?? null,
+          if (data.id) {
+            setRideId(data.id);
+            rideIdRef.current = data.id;
+          }
+          const driverData = {
+            name: data.driver_name || data.driver?.name || null,
+            vehicle:
+              data.driver?.vehicle ||
+              [data.vehicle_color, data.vehicle_make, data.vehicle_model]
+                .filter(Boolean)
+                .join(" ") ||
+              null,
+            license_plate: data.driver_license_plate || data.driver?.license_plate || null,
             rating: data.driver?.rating ?? null,
-          });
+          };
+          setDriver(driverData);
+
+          // Update Zustand store
+          useAppStore.getState().setActiveRide({
+            id: data.id || "",
+            status: "accepted",
+            driver_name: driverData.name,
+            driver_phone: data.driver?.phone || null,
+            vehicle_make: data.vehicle_make || null,
+            vehicle_model: data.vehicle_model || null,
+            vehicle_color: data.vehicle_color || null,
+            driver_license_plate: driverData.license_plate,
+            driver_lat: null,
+            driver_lng: null,
+            driver_heading: null,
+          } as any);
         });
 
-        socket.on("ride:driver:arrived", () => setStatus("driver_arrived"));
-        socket.on("ride:started", () => setStatus("in_progress"));
+        socket.on("ride:driver:arrived", () => {
+          setStatus("driver_arrived");
+          const active = useAppStore.getState().activeRide;
+          if (active) {
+            useAppStore.getState().setActiveRide({ ...active, status: "driver_arrived" });
+          }
+        });
+
+        socket.on("ride:started", () => {
+          setStatus("in_progress");
+          const active = useAppStore.getState().activeRide;
+          if (active) {
+            useAppStore.getState().setActiveRide({ ...active, status: "in_progress" });
+          }
+        });
 
         // ⚠️ Assumed event name/shape for live driver location updates —
         // rename to match whatever your driver app actually emits.
-        socket.on("ride:driver:location", (data: any) => {
+        socket.on("ride:driver:location", (data) => {
           if (data?.lat != null && data?.lng != null) {
             hasRealDriverLocRef.current = true;
             const bearing = data.bearing ?? data.heading ?? 0;
             setCarBearing(bearing);
             setDriverLoc({ lat: data.lat, lng: data.lng, bearing });
+
+            // Sync location to Zustand store
+            const active = useAppStore.getState().activeRide;
+            if (active) {
+              useAppStore.getState().setActiveRide({
+                ...active,
+                driver_lat: data.lat,
+                driver_lng: data.lng,
+                driver_heading: bearing,
+              });
+            }
           }
         });
 
-        socket.on("ride:completed", (data: any) => {
+        socket.on("ride:completed", (data) => {
           setStatus("completed");
           setFare(data.riderTotal ?? data.fare ?? null);
           handleCompleted(data.riderTotal ?? data.fare ?? null);
+
+          // Clear active ride in Zustand store
+          useAppStore.getState().setActiveRide(null);
         });
 
-        socket.on("ride:cancelled", (data: any) => {
+        socket.on("ride:cancelled", (data) => {
           setStatus("cancelled");
           setError(data.reason || "Ride cancelled");
+
+          // Clear active ride in Zustand store
+          useAppStore.getState().setActiveRide(null);
         });
 
         // Fire the request
@@ -376,7 +440,7 @@ export default function Track() {
                     .filter(Boolean)
                     .join(" ") || null,
                 license_plate: ride.driver_license_plate,
-                rating: null,
+                rating: ride.rating_score ?? null,
               });
             }
           } else {
@@ -518,9 +582,9 @@ export default function Track() {
           )}
           {waypoints.map((wp, i) => (
             <Marker
-              key={`wp-${i}`}
+              key={`stop-${i}`}
               coordinate={{ latitude: wp.lat, longitude: wp.lng }}
-              pinColor="#d97706"
+              pinColor="#e04e2f"
               title={`Stop ${i + 1}`}
             />
           ))}
@@ -580,6 +644,7 @@ export default function Track() {
           )}
       </View>
 
+      {isHistory || status !== "in_progress" ? (
       <View className="-mt-6 rounded-t-3xl bg-surface px-5 pt-5 pb-4 flex-1">
         <View className="mx-auto h-1.5 w-12 rounded-full bg-border mb-4" />
 
@@ -644,22 +709,36 @@ export default function Track() {
           )}
 
           {driver && (
-            <View className="mt-4 flex-row gap-2">
-              <TouchableOpacity className="flex-1 items-center gap-1 rounded-full bg-secondary py-3">
+            <View className="mt-4 flex-row flex-wrap gap-2">
+              <TouchableOpacity
+                className="flex-1 items-center gap-1 rounded-full bg-secondary py-3 min-w-[70px]"
+                onPress={() => setShowCallModal(true)}
+              >
                 <Ionicons name="call" size={16} color="#e04e2f" />
                 <Text className="text-xs font-semibold text-foreground">
                   Call
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity className="flex-1 items-center gap-1 rounded-full bg-secondary py-3">
+              <TouchableOpacity
+                className="flex-1 items-center gap-1 rounded-full bg-secondary py-3 min-w-[70px]"
+                onPress={() => {
+                  if (rideId) {
+                    router.push(`/ride/chat?rideId=${rideId}&driverName=${encodeURIComponent(driver?.name || "")}&driverVehicle=${encodeURIComponent(driver?.vehicle || "")}&driverPlate=${encodeURIComponent(driver?.license_plate || "")}`);
+                  }
+                }}
+              >
                 <Ionicons name="chatbubble" size={16} color="#e04e2f" />
                 <Text className="text-xs font-semibold text-foreground">
                   Chat
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                className="flex-1 items-center gap-1 rounded-full bg-secondary py-3"
-                onPress={() => Alert.alert("Ride link copied!")}
+                className="flex-1 items-center gap-1 rounded-full bg-secondary py-3 min-w-[70px]"
+                onPress={() => {
+                  const id = rideIdRef.current;
+                  if (!id) return;
+                  setShowEtaShareModal(true);
+                }}
               >
                 <Ionicons name="share" size={16} color="#e04e2f" />
                 <Text className="text-xs font-semibold text-foreground">
@@ -667,10 +746,21 @@ export default function Track() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                className="flex-1 items-center gap-1 rounded-xl bg-red-50 border border-red-200 py-3"
-                onPress={() =>
-                  Alert.alert("SOS", "Dispatching emergency services.")
-                }
+                className="flex-1 items-center gap-1 rounded-full bg-secondary py-3 min-w-[70px]"
+                onPress={() => {
+                  const id = rideIdRef.current;
+                  if (!id) return;
+                  router.push(`/ride/fare-split?rideId=${id}&fare=${fare || 0}`);
+                }}
+              >
+                <Ionicons name="people" size={16} color="#e04e2f" />
+                <Text className="text-xs font-semibold text-foreground">
+                  Split
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="flex-1 items-center gap-1 rounded-xl bg-red-50 border border-red-200 py-3 min-w-[70px]"
+                onPress={() => Alert.alert("SOS", "Dispatching emergency services.")}
               >
                 <Ionicons name="warning" size={16} color="#dc2626" />
                 <Text className="text-xs font-bold text-red-700">SOS</Text>
@@ -705,7 +795,7 @@ export default function Track() {
                 {waypoints.map((wp, i) => (
                   <Text
                     key={i}
-                    className="font-medium text-amber-700 text-sm"
+                    className="font-medium text-primary text-sm"
                     numberOfLines={1}
                   >
                     {wp.address} (Stop {i + 1})
@@ -726,21 +816,31 @@ export default function Track() {
             </View>
           </View>
 
-          {!isHistory && (
+          {!isHistory && canCancel && (
             <TouchableOpacity
-              onPress={() => canCancel && setShowCancel(true)}
-              disabled={!canCancel}
-              className={`mt-6 rounded-xl py-3.5 items-center w-full ${canCancel ? "bg-secondary" : "bg-muted"}`}
+              onPress={() => setShowCancel(true)}
+              className="mt-6 rounded-xl py-3.5 items-center w-full bg-secondary"
             >
-              <Text
-                className={`text-sm font-bold ${canCancel ? "text-foreground" : "text-muted-foreground"}`}
-              >
-                {canCancel ? "Cancel trip" : STATUS_LABEL[status]}
+              <Text className="text-sm font-bold text-foreground">
+                Cancel trip
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {(status === "completed" || status === "cancelled") && rideIdRef.current && (
+            <TouchableOpacity
+              onPress={() => router.push(`/ride/receipt?rideId=${rideIdRef.current}`)}
+              className="mt-3 w-full flex-row items-center justify-center gap-2 rounded-xl border border-border bg-surface py-3.5"
+            >
+              <Ionicons name="receipt" size={16} color="#e04e2f" />
+              <Text className="text-sm font-bold text-foreground">
+                View Receipt
               </Text>
             </TouchableOpacity>
           )}
         </ScrollView>
       </View>
+) : null}
 
       {/* Cancel Modal */}
       <Modal
@@ -779,6 +879,156 @@ export default function Track() {
                 </TouchableOpacity>
               ))}
             </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* VoIP Call Modal */}
+      <Modal
+        visible={showCallModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowCallModal(false)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/50 justify-end"
+          activeOpacity={1}
+          onPress={() => setShowCallModal(false)}
+        >
+          <TouchableOpacity activeOpacity={1} className="bg-surface rounded-t-[2rem] p-5">
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-lg font-bold text-foreground">
+                Call {driver?.name || "Driver"}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setShowCallModal(false)}
+                className="w-8 h-8 rounded-full bg-secondary items-center justify-center"
+              >
+                <Ionicons name="close" size={16} color="#2e1e1a" />
+              </TouchableOpacity>
+            </View>
+            <Text className="text-xs text-muted-foreground mb-4">
+              Your real phone number is masked. The driver will see a temporary number.
+            </Text>
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowCallModal(false);
+                  Alert.alert("Starting call", "Connecting via VoIP...");
+                }}
+                className="flex-1 items-center gap-2 rounded-xl bg-primary py-4"
+              >
+                <Ionicons name="call" size={20} color="#fff" />
+                <Text className="text-sm font-bold text-primary-foreground">
+                  Call via App
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowCallModal(false);
+                  Alert.alert(
+                    "Driver Contact",
+                    "For emergency calls, the driver's masked number will be used."
+                  );
+                }}
+                className="flex-1 items-center gap-2 rounded-xl bg-secondary border border-border py-4"
+              >
+                <Ionicons name="shield" size={20} color="#2e1e1a" />
+                <Text className="text-sm font-bold text-foreground">
+                  Masked Call
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ETA Share Modal */}
+      <Modal
+        visible={showEtaShareModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowEtaShareModal(false)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/50 justify-end"
+          activeOpacity={1}
+          onPress={() => setShowEtaShareModal(false)}
+        >
+          <TouchableOpacity activeOpacity={1} className="bg-surface rounded-t-[2rem] p-5">
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-lg font-bold text-foreground">
+                Share Trip Status
+              </Text>
+              <TouchableOpacity
+                onPress={() => setShowEtaShareModal(false)}
+                className="w-8 h-8 rounded-full bg-secondary items-center justify-center"
+              >
+                <Ionicons name="close" size={16} color="#2e1e1a" />
+              </TouchableOpacity>
+            </View>
+
+            {!shareUrl ? (
+              <>
+                <Text className="text-xs text-muted-foreground mb-4">
+                  Share your live location and ETA with trusted contacts so they
+                  can follow your trip in real time.
+                </Text>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const id = rideIdRef.current;
+                    if (!id) return;
+                    setSharingEta(true);
+                    try {
+                      const result = await shareTrip(id);
+                      setShareUrl(result.shareUrl);
+                      useAppStore.getState().setTripSharing(true, result.shareToken);
+                      await Share.share({
+                        message: `I'm on a Vura ride! Track my trip live: ${result.shareUrl}`,
+                      });
+                    } catch (err: any) {
+                      Alert.alert("Error", err.message || "Could not share trip");
+                    } finally {
+                      setSharingEta(false);
+                    }
+                  }}
+                  disabled={sharingEta}
+                  className="w-full rounded-xl bg-primary py-4 items-center mb-3"
+                >
+                  {sharingEta ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-sm font-bold text-primary-foreground">
+                      Generate Share Link
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 mb-4">
+                  <View className="flex-row items-center gap-2 mb-1">
+                    <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
+                    <Text className="text-sm font-bold text-emerald-700">
+                      Sharing Active
+                    </Text>
+                  </View>
+                  <Text className="text-xs text-emerald-600">
+                    Your trusted contacts can now follow your trip live.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    await Share.share({ message: `Track my Vura ride: ${shareUrl}` });
+                  }}
+                  className="w-full rounded-xl bg-secondary py-4 items-center mb-3"
+                >
+                  <Text className="text-sm font-bold text-foreground">
+                    Share Link Again
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>

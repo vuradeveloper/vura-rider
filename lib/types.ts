@@ -112,6 +112,122 @@ export interface RecentSearch {
   created_at: string;
 }
 
+export interface RideReceipt {
+  id: string;
+  ride_id: string;
+  receipt_number: string;
+  driver_name: string;
+  driver_phone: string | null;
+  vehicle_make: string | null;
+  vehicle_model: string | null;
+  license_plate: string | null;
+  pickup_address: string;
+  destination_address: string;
+  distance_km: number;
+  duration_mins: number;
+  fare: number;
+  ride_request_fee: number;
+  payment_method: string | null;
+  payment_status: string;
+  created_at: string;
+  completed_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  ride_id: string;
+  sender_id: string;
+  sender_role: "rider" | "driver";
+  message: string;
+  created_at: string;
+}
+
+export interface TipOption {
+  amount: number;
+  label: string;
+}
+
+export interface TipData {
+  ride_id: string;
+  tip_amount: number;
+  payment_method_id?: string;
+}
+
+export interface SplitFare {
+  id: string;
+  ride_id: string;
+  inviter_id: string;
+  invitee_id: string;
+  invitee_email: string;
+  amount: number;
+  status: "pending" | "accepted" | "declined" | "paid";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SplitFareInvite {
+  ride_id: string;
+  inviter_name: string;
+  inviter_email: string;
+  amount: number;
+  split_id: string;
+}
+
+export interface ScheduledRide {
+  id: string;
+  passenger_id: string;
+  pickup_address: string;
+  pickup_lat: number;
+  pickup_lng: number;
+  destination_address: string;
+  destination_lat: number;
+  destination_lng: number;
+  waypoints: Waypoint[] | null;
+  scheduled_at: string;
+  status: "pending" | "accepted" | "in_progress" | "completed" | "cancelled";
+  tier: string;
+  driver_id: string | null;
+  driver_name: string | null;
+  created_at: string;
+}
+
+export interface EmergencyContact {
+  id: string;
+  name: string;
+  phone: string;
+  relationship: string;
+}
+
+export interface SafetyEvent {
+  id: string;
+  ride_id: string;
+  type: "sos" | "ridecheck" | "share_started" | "share_ended";
+  data: any;
+  created_at: string;
+}
+
+export interface Dispute {
+  id: string;
+  ride_id: string;
+  type: "cancellation_fee" | "lost_item" | "refund" | "rating" | "other";
+  reason: string;
+  description: string;
+  status: "open" | "investigating" | "resolved" | "rejected";
+  resolution: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LostItemReport {
+  id: string;
+  ride_id: string;
+  item_name: string;
+  item_description: string;
+  driver_contacted: boolean;
+  status: "reported" | "found" | "closed";
+  created_at: string;
+}
+
 export interface NearbyDriver {
   id: string;
   full_name: string | null;

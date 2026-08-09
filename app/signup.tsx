@@ -137,6 +137,29 @@ export default function Signup() {
                 </Text>
 
                 <View className="gap-y-4">
+                  <View className="flex-row flex-wrap justify-center mb-2 px-2">
+                    <Text className="text-[10px] text-muted-foreground leading-4">
+                      By creating an account, you agree to{" "}
+                    </Text>
+                    <Link href="/terms" asChild>
+                      <TouchableOpacity>
+                        <Text className="text-[10px] font-bold text-primary underline">
+                          Terms of Service
+                        </Text>
+                      </TouchableOpacity>
+                    </Link>
+                    <Text className="text-[10px] text-muted-foreground leading-4">
+                      {" "}and{" "}
+                    </Text>
+                    <Link href="/privacy" asChild>
+                      <TouchableOpacity>
+                        <Text className="text-[10px] font-bold text-primary underline">
+                          Privacy Policy
+                        </Text>
+                      </TouchableOpacity>
+                    </Link>
+                    <Text className="text-[10px] text-muted-foreground leading-4">.</Text>
+                  </View>
                   <View>
                     <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
                       Full name

@@ -146,7 +146,20 @@ export default function Activity() {
                   <Text className="text-sm font-extrabold text-foreground">
                     {amount(t)}
                   </Text>
-                  <Ionicons name="chevron-forward" size={16} color="#80716b" />
+                  <View className="flex-row items-center gap-1 mt-1">
+                    {(t.status === "completed" || t.status === "cancelled") && (
+                      <TouchableOpacity
+                        onPress={() => router.push(`/ride/receipt?rideId=${t.id}`)}
+                        className="flex-row items-center gap-1 rounded-full bg-secondary px-2.5 py-1"
+                      >
+                        <Ionicons name="receipt" size={11} color="#e04e2f" />
+                        <Text className="text-[10px] font-bold text-primary">
+                          Receipt
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <Ionicons name="chevron-forward" size={16} color="#80716b" />
+                  </View>
                 </View>
               </TouchableOpacity>
             ))}

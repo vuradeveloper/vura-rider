@@ -8,11 +8,14 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useAuth, setUser, deleteAccount } from "@/lib/auth";
+import { updateProfile, uploadProfilePhoto } from "@/services/UserService";
 
 export default function SettingsPage() {
   const { user, refresh } = useAuth();
@@ -25,6 +28,8 @@ export default function SettingsPage() {
   const [docName, setDocName] = useState(
     (user?.role === "driver" ? user?.licenseDocumentName : user?.idDocumentName) || ""
   );
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [deletePwd, setDeletePwd] = useState("");
   const [showDeleteInput, setShowDeleteInput] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -50,16 +55,56 @@ export default function SettingsPage() {
   const isVerified = progress === 100;
 
   async function handleSave() {
-    await setUser({
-      ...user!,
-      name,
-      email,
-      phone,
-      idNumber,
-      ...(isDriver ? { licenseDocumentName: docName } : { idDocumentName: docName }),
-    });
-    refresh();
-    router.back();
+    setSaving(true);
+    try {
+      let photoURL = user?.photoURL;
+      if (photoUri) {
+        const result = await uploadProfilePhoto(photoUri);
+        photoURL = result.photoURL;
+      }
+
+      await updateProfile({
+        full_name: name,
+        email,
+        phone,
+        id_number: idNumber,
+      });
+
+      await setUser({
+        ...user!,
+        name,
+        email,
+        phone,
+        photoURL,
+        idNumber,
+        ...(isDriver ? { licenseDocumentName: docName } : { idDocumentName: docName }),
+      });
+      refresh();
+      router.push("/account");
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to save changes.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handlePickPhoto() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Permission needed", "Allow access to your photo library to set a profile picture.");
+      return;
+    }
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets.length > 0) {
+        setPhotoUri(result.assets[0].uri);
+      }
+    } catch {}
   }
 
   async function handleFilePick() {
@@ -114,6 +159,31 @@ export default function SettingsPage() {
         </View>
 
         <View className="gap-y-4">
+          {/* Profile Picture */}
+          <TouchableOpacity
+            onPress={handlePickPhoto}
+            className="items-center py-2"
+          >
+            <View className="relative">
+              {photoUri || user?.photoURL ? (
+                <Image
+                  source={{ uri: photoUri || user?.photoURL || "" }}
+                  className="h-20 w-20 rounded-full"
+                />
+              ) : (
+                <View className="h-20 w-20 rounded-full bg-secondary items-center justify-center border border-border">
+                  <Ionicons name="person" size={32} color="#80716b" />
+                </View>
+              )}
+              <View className="absolute -bottom-1 -right-1 h-7 w-7 rounded-full bg-primary items-center justify-center border-2 border-surface">
+                <Ionicons name="camera" size={12} color="#fff" />
+              </View>
+            </View>
+            <Text className="text-xs font-semibold text-primary mt-2">
+              Change Profile Photo
+            </Text>
+          </TouchableOpacity>
+
           <View className="gap-y-1">
             <Text className="text-xs font-bold text-muted-foreground ml-1">
               Full Name
@@ -190,11 +260,28 @@ export default function SettingsPage() {
 
         <TouchableOpacity
           onPress={handleSave}
-          className="mt-8 w-full flex-row items-center justify-center gap-2 rounded-xl bg-primary py-4"
+          disabled={saving}
+          className={`mt-8 w-full flex-row items-center justify-center gap-2 rounded-xl bg-primary py-4 ${saving ? "opacity-60" : ""}`}
         >
-          <Ionicons name="save" size={16} color="#fff" />
-          <Text className="text-sm font-bold text-primary-foreground">
-            Save Changes
+          {saving ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Ionicons name="save" size={16} color="#fff" />
+              <Text className="text-sm font-bold text-primary-foreground">
+                Save Changes
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => router.push("/change-password")}
+          className="mt-4 w-full flex-row items-center justify-center gap-2 rounded-xl border border-border bg-surface py-4"
+        >
+          <Ionicons name="lock-closed" size={16} color="#e04e2f" />
+          <Text className="text-sm font-bold text-foreground">
+            Change Password
           </Text>
         </TouchableOpacity>
 
@@ -251,8 +338,9 @@ export default function SettingsPage() {
                     setDeleting(true);
                     try {
                       await deleteAccount(deletePwd);
+                      setShowDeleteInput(false);
+                      setDeletePwd("");
                       Alert.alert("Account deleted", "Your account has been permanently removed.");
-                      refresh();
                       router.replace("/welcome");
                     } catch (err: any) {
                       const code = err.code;
@@ -263,8 +351,8 @@ export default function SettingsPage() {
                       } else {
                         Alert.alert("Error", err.message || "Failed to delete account.");
                       }
+                      setDeleting(false);
                     }
-                    setDeleting(false);
                   }}
                   disabled={deleting || !deletePwd}
                   className={`flex-1 flex-row items-center justify-center gap-2 rounded-xl bg-red-500 py-4 ${deleting || !deletePwd ? "opacity-50" : ""}`}

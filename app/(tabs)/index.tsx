@@ -231,7 +231,7 @@ export default function Home() {
               </Link>
             </View>
             <View className="gap-y-2">
-              {recentSearches.slice(0, 3).map((s) => (
+              {recentSearches.slice(0, 2).map((s) => (
                 <Link key={s.id} href="/search" asChild>
                   <TouchableOpacity className="flex-row items-center gap-3 rounded-xl bg-surface border border-border px-3.5 py-3">
                     <View className="w-10 h-10 rounded-full bg-secondary items-center justify-center">
@@ -299,13 +299,22 @@ export default function Home() {
                 {nearestLabel}
               </Text>
             </View>
-            <Link href="/search" asChild>
-              <TouchableOpacity className="rounded-full bg-primary px-4 py-2">
-                <Text className="text-xs font-bold text-primary-foreground">
-                  Book now
-                </Text>
-              </TouchableOpacity>
-            </Link>
+            <View className="flex-row gap-2">
+              <Link href="/search" asChild>
+                <TouchableOpacity className="rounded-full bg-primary px-4 py-2">
+                  <Text className="text-xs font-bold text-primary-foreground">
+                    Book now
+                  </Text>
+                </TouchableOpacity>
+              </Link>
+              <Link href="/scheduled-rides" asChild>
+                <TouchableOpacity className="rounded-full bg-secondary border border-border px-4 py-2">
+                  <Text className="text-xs font-bold text-foreground">
+                    Scheduled
+                  </Text>
+                </TouchableOpacity>
+              </Link>
+            </View>
           </View>
         </View>
 

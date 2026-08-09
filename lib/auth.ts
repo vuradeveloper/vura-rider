@@ -9,6 +9,7 @@ import {
   EmailAuthProvider,
   reauthenticateWithCredential,
   deleteUser,
+  updatePassword as fbUpdatePassword,
 } from "firebase/auth";
 import { auth, FIREBASE_API_KEY } from "./firebase";
 import { getApiUrl } from "./config";
@@ -20,6 +21,7 @@ export interface AuthUser {
   name: string;
   email: string | null;
   phone?: string;
+  photoURL?: string | null;
   role: Role;
   idNumber?: string;
   idDocumentName?: string;
@@ -119,24 +121,49 @@ export function useAuth() {
 
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        const stored = await loadStoredUser();
-        if (stored) {
-          setUserState(stored);
-        } else {
-          try {
-            const token = await firebaseUser.getIdToken();
-            const { user: dbUser } = await syncWithBackend(token, {
-              role: "rider",
-            });
-            const authUser: AuthUser = {
+        try {
+          const token = await firebaseUser.getIdToken();
+          const { user: dbUser } = await syncWithBackend(token, {
+            role: mapMobileRole(firebaseUser.displayName || "").includes("driver") ? "driver" : "rider",
+          });
+
+          const authUser: AuthUser = {
+            uid: firebaseUser.uid,
+            name: dbUser.full_name || firebaseUser.displayName || "Rider",
+            email: firebaseUser.email,
+            phone: dbUser.phone || undefined,
+            photoURL: dbUser.profile_photo_url || firebaseUser.photoURL,
+            role: mapMobileRole(dbUser.role),
+            idNumber: dbUser.id_number || undefined,
+            idDocumentName: dbUser.id_document_name || undefined,
+            licenseDocumentName: dbUser.license_document_name || undefined,
+          };
+          await storeUser(authUser);
+          setUserState(authUser);
+
+          // Sync with Zustand store
+          const { useAppStore } = require("./store");
+          useAppStore.getState().setUser({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            displayName: authUser.name,
+            phoneNumber: authUser.phone || firebaseUser.phoneNumber || null,
+            photoURL: authUser.photoURL || null,
+          });
+        } catch {
+          // Backend sync failed — fall back to stored user if available
+          const stored = await loadStoredUser();
+          if (stored) {
+            setUserState(stored);
+            const { useAppStore } = require("./store");
+            useAppStore.getState().setUser({
               uid: firebaseUser.uid,
-              name: dbUser.full_name || firebaseUser.displayName || "Rider",
               email: firebaseUser.email,
-              role: mapMobileRole(dbUser.role),
-            };
-            await storeUser(authUser);
-            setUserState(authUser);
-          } catch {
+              displayName: stored.name,
+              phoneNumber: stored.phone || firebaseUser.phoneNumber || null,
+              photoURL: firebaseUser.photoURL || null,
+            });
+          } else {
             const fallback: AuthUser = {
               uid: firebaseUser.uid,
               name: firebaseUser.displayName || "Rider",
@@ -145,11 +172,22 @@ export function useAuth() {
             };
             await storeUser(fallback);
             setUserState(fallback);
+            const { useAppStore } = require("./store");
+            useAppStore.getState().setUser({
+              uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              displayName: fallback.name,
+              phoneNumber: firebaseUser.phoneNumber || null,
+              photoURL: firebaseUser.photoURL || null,
+            });
           }
         }
       } else {
         await clearUser();
         setUserState(null);
+        // Clear Zustand store
+        const { useAppStore } = require("./store");
+        useAppStore.getState().setUser(null);
       }
 
       setLoading(false);
@@ -177,9 +215,26 @@ export async function login(email: string, password: string, role: Role) {
     name: dbUser.full_name || cred.user.displayName || email.split("@")[0],
     email: cred.user.email,
     phone: dbUser.phone,
+    photoURL: dbUser.profile_photo_url || cred.user.photoURL,
     role: mapMobileRole(dbUser.role),
+    idNumber: dbUser.id_number || undefined,
+    idDocumentName: dbUser.id_document_name || undefined,
+    licenseDocumentName: dbUser.license_document_name || undefined,
   };
   await storeUser(authUser);
+
+  // Register for push notifications asynchronously
+  try {
+    const { registerForPushNotificationsAsync, registerDeviceToken } = require("./notifications");
+    registerForPushNotificationsAsync().then((pushToken: string | null) => {
+      if (pushToken) {
+        registerDeviceToken(pushToken);
+      }
+    });
+  } catch (error) {
+    console.error("Error registering push token on login:", error);
+  }
+
   return authUser;
 }
 
@@ -202,16 +257,39 @@ export async function register(
     uid: cred.user.uid,
     name: dbUser.full_name || extra.full_name,
     email: cred.user.email,
-    phone: extra.phone,
+    phone: dbUser.phone || extra.phone,
+    photoURL: dbUser.profile_photo_url || cred.user.photoURL,
     role: mapMobileRole(dbUser.role),
+    idNumber: dbUser.id_number || undefined,
+    idDocumentName: dbUser.id_document_name || undefined,
+    licenseDocumentName: dbUser.license_document_name || undefined,
   };
   await storeUser(authUser);
+
+  // Register for push notifications asynchronously
+  try {
+    const { registerForPushNotificationsAsync, registerDeviceToken } = require("./notifications");
+    registerForPushNotificationsAsync().then((pushToken: string | null) => {
+      if (pushToken) {
+        registerDeviceToken(pushToken);
+      }
+    });
+  } catch (error) {
+    console.error("Error registering push token on registration:", error);
+  }
+
   return authUser;
 }
 
 export async function logout() {
   await signOut(auth);
   await clearUser();
+  try {
+    const { disconnectSocket } = require("./socket");
+    disconnectSocket();
+  } catch (e) {
+    console.error("Failed to disconnect socket on logout:", e);
+  }
 }
 
 export async function resetPassword(email: string) {
@@ -233,6 +311,16 @@ export async function resetPassword(email: string) {
     if (msg === "INVALID_EMAIL") throw { code: "auth/invalid-email", message: "Invalid email address." };
     throw new Error(msg || "Could not send reset email. Try again.");
   }
+}
+
+export async function changePassword(currentPassword: string, newPassword: string) {
+  const user = auth.currentUser;
+  if (!user || !user.email) throw new Error("No user signed in");
+
+  const credential = EmailAuthProvider.credential(user.email, currentPassword);
+  const cred = await reauthenticateWithCredential(user, credential);
+  const currentUser = cred.user ?? auth.currentUser ?? user;
+  await fbUpdatePassword(currentUser, newPassword);
 }
 
 export async function sendVerificationEmail() {
@@ -291,9 +379,10 @@ export async function deleteAccount(password: string) {
   if (!user || !user.email) throw new Error("No user signed in");
 
   const credential = EmailAuthProvider.credential(user.email, password);
-  await reauthenticateWithCredential(user, credential);
+  const cred = await reauthenticateWithCredential(user, credential);
+  const currentUser = cred.user ?? auth.currentUser ?? user;
 
-  const token = await user.getIdToken();
+  const token = await currentUser.getIdToken();
   const res = await fetch(getApiUrl("/api/users/delete"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -304,7 +393,7 @@ export async function deleteAccount(password: string) {
     throw new Error(err.error || "Failed to delete account data");
   }
 
-  await deleteUser(user);
+  await deleteUser(currentUser);
   await clearUser();
   await clearBiometricCredentials();
 }

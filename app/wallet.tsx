@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { Link } from "expo-router";
+import { Link, useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
@@ -30,6 +30,7 @@ export default function WalletPage() {
   const { user } = useAuth();
   const isDriver = user?.role === "driver";
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const cardsQuery = useQuery<SavedCard[]>({
     queryKey: ["saved-cards"],
@@ -52,6 +53,7 @@ export default function WalletPage() {
   });
 
   const [isCashingOut, setIsCashingOut] = useState(false);
+  const [addingCard, setAddingCard] = useState(false);
   const [bankQuery, setBankQuery] = useState("");
   const [selectedBank, setSelectedBank] = useState<Bank | null>(null);
   const [accountNumber, setAccountNumber] = useState("");
@@ -101,7 +103,9 @@ export default function WalletPage() {
 
   const cards = cardsQuery.data ?? [];
   const pending = pendingQuery.data;
-  const availableAmount = pending ? Number(pending.total_earnings) : 0;
+  const availableAmount = pending && typeof pending.total_earnings === 'number'
+  ? pending.total_earnings
+  : 0;
 
   const filteredBanks = (banksQuery.data ?? []).filter((b) =>
     b.name.toLowerCase().includes(bankQuery.toLowerCase())
@@ -228,10 +232,22 @@ export default function WalletPage() {
             </View>
           </View>
           {!isDriver && (
-            <Text className="text-xs text-muted-foreground mt-3 px-1">
-              Cards are securely saved automatically the first time you pay for a
-              ride by card.
-            </Text>
+            <TouchableOpacity
+              onPress={() => router.push("/add-payment-method")}
+              disabled={addingCard}
+              className="mt-3 flex-row items-center justify-center gap-2 rounded-xl border border-dashed border-border py-3"
+            >
+              {addingCard ? (
+                <ActivityIndicator size="small" color="#e04e2f" />
+              ) : (
+                <>
+                  <Ionicons name="add-circle" size={18} color="#e04e2f" />
+                  <Text className="text-sm font-bold text-primary">
+                    Add Payment Method
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
           )}
         </View>
         <View className="h-6" />

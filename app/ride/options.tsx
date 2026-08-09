@@ -7,6 +7,7 @@ import {
   ScrollView,
   Modal,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -70,10 +71,21 @@ export default function RideOptions() {
   const [nearbyCars, setNearbyCars] = useState<NearbyCar[]>([]);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
 
+  const [scheduleMode, setScheduleMode] = useState(false);
+
   const cardsQuery = useQuery<SavedCard[]>({
     queryKey: ["saved-cards"],
     queryFn: getSavedCards,
   });
+
+  // Extract event handlers to prevent potential closure issues
+  const handleShowPayment = () => {
+    setShowPayment(true);
+  };
+
+  const handleHidePayment = () => {
+    setShowPayment(false);
+  };
 
   useEffect(() => {
     (async () => {
@@ -165,7 +177,11 @@ export default function RideOptions() {
       payChoice.type === "cash" ? "cash" : "card"
     );
     await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(waypoints));
-    router.push("/ride/track");
+    if (scheduleMode) {
+      router.push("/ride/schedule");
+    } else {
+      router.push("/ride/track");
+    }
   };
 
   const selectedTierName = tiers.find((t) => t.id === selected)?.name;
@@ -196,9 +212,10 @@ export default function RideOptions() {
           )}
           {waypoints.map((wp, i) => (
             <Marker
-              key={`wp-${i}`}
+              key={`stop-${i}`}
               coordinate={{ latitude: wp.lat, longitude: wp.lng }}
-              pinColor="#d97706"
+              image={CAR_ICON}
+              pinColor="#e04e2f"
               title={`Stop ${i + 1}`}
             />
           ))}
@@ -289,9 +306,9 @@ export default function RideOptions() {
           })}
         </ScrollView>
 
-        <View className="mt-4 flex-row gap-2">
+        <View className="mt-3 flex-row gap-2">
           <TouchableOpacity
-            onPress={() => setShowPayment(true)}
+            onPress={handleShowPayment}
             className="flex-1 flex-row items-center justify-center gap-2 rounded-full bg-secondary px-3 py-2.5"
           >
             <Ionicons
@@ -312,6 +329,22 @@ export default function RideOptions() {
         </View>
 
         <TouchableOpacity
+          onPress={() => setScheduleMode(!scheduleMode)}
+          className={`mt-2 flex-row items-center justify-center gap-2 rounded-xl py-3 px-3 ${scheduleMode ? "bg-primary/10 border border-primary" : "bg-secondary border border-border"}`}
+        >
+          <Ionicons
+            name="calendar"
+            size={16}
+            color={scheduleMode ? "#e04e2f" : "#80716b"}
+          />
+          <Text
+            className={`text-xs font-bold ${scheduleMode ? "text-primary" : "text-foreground"}`}
+          >
+            {scheduleMode ? "Schedule Later" : "Ride Now"}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           onPress={confirm}
           className="mt-3 rounded-xl bg-primary py-4 items-center"
         >
@@ -326,12 +359,12 @@ export default function RideOptions() {
         visible={showPayment}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowPayment(false)}
+        onRequestClose={handleHidePayment}
       >
         <TouchableOpacity
           className="flex-1 bg-black/50 justify-end"
           activeOpacity={1}
-          onPress={() => setShowPayment(false)}
+          onPress={handleHidePayment}
         >
           <TouchableOpacity activeOpacity={1} className="bg-surface rounded-t-[2rem] p-5">
             <View className="flex-row justify-between items-center mb-4">
@@ -339,7 +372,7 @@ export default function RideOptions() {
                 Select Payment
               </Text>
               <TouchableOpacity
-                onPress={() => setShowPayment(false)}
+                onPress={handleHidePayment}
                 className="w-8 h-8 rounded-full bg-secondary items-center justify-center"
               >
                 <Ionicons name="close" size={16} color="#2e1e1a" />
@@ -357,7 +390,7 @@ export default function RideOptions() {
                     key={c.id}
                     onPress={() => {
                       setPayChoice({ type: "card", id: c.id, last4: c.last4 });
-                      setShowPayment(false);
+                      hideShowPayment();
                     }}
                     className={`w-full flex-row items-center gap-3 p-3 rounded-xl border ${active ? "border-primary bg-primary/5" : "border-border bg-surface"}`}
                   >
@@ -380,9 +413,23 @@ export default function RideOptions() {
               })}
 
               <TouchableOpacity
+                  onPress={() => {
+                    handleHidePayment();
+                    router.push("/add-payment-method");
+                  }}
+                  className="w-full flex-row items-center gap-3 p-3 rounded-xl border border-border bg-surface"
+                >
+                  <View className="w-10 h-10 rounded-full items-center justify-center bg-primary/10">
+                    <Ionicons name="add-circle" size={20} color="#e04e2f" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-bold text-foreground">Add new card</Text>
+                  </View>
+                </TouchableOpacity>
+              <TouchableOpacity
                 onPress={() => {
                   setPayChoice({ type: "cash" });
-                  setShowPayment(false);
+                  hideShowPayment();
                 }}
                 className={`w-full flex-row items-center gap-3 p-3 rounded-xl border ${payChoice.type === "cash" ? "border-primary bg-primary/5" : "border-border bg-surface"}`}
               >

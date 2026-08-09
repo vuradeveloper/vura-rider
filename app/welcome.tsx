@@ -41,9 +41,27 @@ export default function Welcome() {
             </Text>
           </TouchableOpacity>
         </Link>
-        <Text className="text-[11px] text-center text-muted-foreground mt-3 px-4">
-          By continuing, you agree to Vura Ride's Terms of Service and Privacy Policy.
-        </Text>
+        <View className="flex-row flex-wrap justify-center mt-3 px-4">
+          <Text className="text-[11px] text-muted-foreground">
+            By continuing, you agree to Vura Ride's{" "}
+          </Text>
+          <Link href="/terms" asChild>
+            <TouchableOpacity>
+              <Text className="text-[11px] font-bold text-primary underline">
+                Terms of Service
+              </Text>
+            </TouchableOpacity>
+          </Link>
+          <Text className="text-[11px] text-muted-foreground"> and </Text>
+          <Link href="/privacy" asChild>
+            <TouchableOpacity>
+              <Text className="text-[11px] font-bold text-primary underline">
+                Privacy Policy
+              </Text>
+            </TouchableOpacity>
+          </Link>
+          <Text className="text-[11px] text-muted-foreground">.</Text>
+        </View>
       </View>
     </SafeAreaView>
   );
