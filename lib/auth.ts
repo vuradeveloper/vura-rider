@@ -45,7 +45,10 @@ async function syncWithBackend(
 ) {
   const res = await fetch(getApiUrl("/api/users/sync"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify({
       token,
       role: mapBackendRole(extra.role),

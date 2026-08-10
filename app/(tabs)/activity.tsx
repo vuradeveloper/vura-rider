@@ -52,6 +52,12 @@ function ActivityMap({
   return (
     <View className="h-44 w-full bg-gray-100 rounded-t-2xl overflow-hidden">
       <MapView
+        initialRegion={{
+          latitude: pickup[0],
+          longitude: pickup[1],
+          latitudeDelta: Math.abs(pickup[0] - dropoff[0]) * 1.5 || 0.02,
+          longitudeDelta: Math.abs(pickup[1] - dropoff[1]) * 1.5 || 0.02,
+        }}
         pickupCoord={pickup}
         dropoffCoord={dropoff}
         followCar={false}
@@ -93,8 +99,8 @@ export default function Activity() {
 
   rides.forEach((r) => {
     const isCancelled = r.status === "cancelled";
-    const fare = r.fare ?? 0;
-    const total = isDriver ? fare : fare + (r.ride_request_fee ?? 0);
+    const fare = Number(r.fare ?? 0);
+    const total = isDriver ? fare : fare + Number(r.ride_request_fee ?? 0);
     const dateText = formatRideDate(r.created_at);
 
     activityItems.push({

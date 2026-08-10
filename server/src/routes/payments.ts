@@ -31,10 +31,19 @@ router.get("/methods", requireAuth, async (req: AuthRequest, res: Response) => {
 router.post("/methods", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string }>(
+    let user = await queryOne<{ id: string }>(
       "SELECT id FROM users WHERE firebase_uid = $1",
       [firebaseUid]
     );
+    if (!user) {
+      user = await queryOne<{ id: string }>(
+        `INSERT INTO users (firebase_uid, full_name, email, role)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (firebase_uid) DO UPDATE SET updated_at = NOW()
+         RETURNING id`,
+        [firebaseUid, req.user?.name || "Rider", req.user?.email || null, "passenger"]
+      );
+    }
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     // Create saved_cards table if needed
@@ -54,12 +63,29 @@ router.post("/methods", requireAuth, async (req: AuthRequest, res: Response) => 
       `);
     } catch { /* already exists */ }
 
-    const { card_type, last4 } = req.body;
+    const { card_type, last4, bank, exp_month, exp_year } = req.body;
+
+    // Check if the user has any saved cards to determine if this should be the default
+    const existingCards = await query(
+      "SELECT id FROM saved_cards WHERE user_id = $1 LIMIT 1",
+      [user.id]
+    ).catch(() => []); // Fallback if table query fails
+    
+    const isDefault = existingCards.length === 0;
+
     const card = await queryOne(
-      `INSERT INTO saved_cards (user_id, card_type, last4)
-       VALUES ($1, $2, $3)
-       RETURNING id, card_type, last4, is_default`,
-      [user.id, card_type || "card", last4 || "0000"]
+      `INSERT INTO saved_cards (user_id, card_type, last4, bank, exp_month, exp_year, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, card_type, last4, bank, is_default`,
+      [
+        user.id,
+        card_type || "card",
+        last4 || "0000",
+        bank || null,
+        exp_month ? parseInt(exp_month, 10) : null,
+        exp_year ? parseInt(exp_year, 10) : null,
+        isDefault
+      ]
     );
     res.status(201).json(card);
   } catch (err: any) {

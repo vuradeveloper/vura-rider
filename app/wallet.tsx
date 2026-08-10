@@ -46,8 +46,12 @@ export default function WalletPage() {
 
   const removeCardMutation = useMutation({
     mutationFn: (id: string) => removeCard(id),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["saved-cards"] }),
+    onSuccess: (_, cardId) => {
+      queryClient.setQueryData(["saved-cards"], (old: SavedCard[] | undefined) => {
+        return old ? old.filter((c) => c.id !== cardId) : [];
+      });
+      queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
+    },
     onError: (e: any) =>
       Alert.alert("Error", e.message || "Failed to remove card"),
   });
@@ -203,16 +207,25 @@ export default function WalletPage() {
                   </Text>
                 </View>
                 <TouchableOpacity
-                  onPress={() =>
-                    Alert.alert("Remove card", "Remove this saved card?", [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "Remove",
-                        style: "destructive",
-                        onPress: () => removeCardMutation.mutate(m.id),
-                      },
-                    ])
-                  }
+                  onPress={() => {
+                    const handleRemove = () => {
+                      removeCardMutation.mutate(m.id);
+                    };
+                    if (typeof window !== "undefined" && window.confirm) {
+                      if (window.confirm("Remove this saved card?")) {
+                        handleRemove();
+                      }
+                    } else {
+                      Alert.alert("Remove card", "Remove this saved card?", [
+                        { text: "Cancel", style: "cancel" },
+                        {
+                          text: "Remove",
+                          style: "destructive",
+                          onPress: handleRemove,
+                        },
+                      ]);
+                    }
+                  }}
                   className="w-8 h-8 rounded-full bg-red-50 items-center justify-center"
                 >
                   <Ionicons name="trash" size={16} color="#dc2626" />

@@ -261,11 +261,17 @@ const MapView = forwardRef<any, any>((props, ref) => {
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver(() => {
-      mapRef.current?.invalidateSize();
+      if (mapRef.current) {
+        mapRef.current.invalidateSize();
+        // Recenter on active center point after layout sizing update
+        if (initialRegion) {
+          mapRef.current.setView([initialRegion.latitude, initialRegion.longitude], mapRef.current.getZoom() || 15);
+        }
+      }
     });
     ro.observe(containerRef.current);
     return () => ro.disconnect();
-  }, []);
+  }, [ready, initialRegion?.latitude, initialRegion?.longitude]);
 
   // Update view when initialRegion changes dynamically (e.g. when coords finish loading asynchronously)
   useEffect(() => {
