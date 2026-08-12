@@ -87,6 +87,17 @@ export const payWithCash = async (rideId: string) => {
   });
 };
 
+// Pay for a completed ride using affiliate credit (balance must cover the fare).
+export const payWithAffiliate = async (rideId: string) => {
+  return apiFetch<{ success: boolean; balance?: number; error?: string }>(
+    "/api/affiliates/use",
+    {
+      method: "POST",
+      body: JSON.stringify({ rideId }),
+    }
+  );
+};
+
 export const getSavedCards = async () => {
   try {
     const cards = await apiFetch("/api/payments/methods");

@@ -29,6 +29,13 @@ import type { DriverStats, SavedCard } from "@/lib/types";
 
 const items = [
   {
+    icon: "gift" as const,
+    label: "Invite & earn",
+    sub: "Refer friends, earn R5 per ride",
+    to: "/affiliate",
+    wide: true,
+  },
+  {
     icon: "wallet" as const,
     label: "Wallet",
     sub: "Payment methods & cash",

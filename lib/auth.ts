@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -41,7 +42,7 @@ function mapBackendRole(role: Role): string {
 
 async function syncWithBackend(
   token: string,
-  extra: { role: Role; phone?: string; full_name?: string }
+  extra: { role: Role; phone?: string; full_name?: string; referralCode?: string }
 ) {
   const res = await fetch(getApiUrl("/api/users/sync"), {
     method: "POST",
@@ -54,6 +55,7 @@ async function syncWithBackend(
       role: mapBackendRole(extra.role),
       phone: extra.phone,
       full_name: extra.full_name,
+      referralCode: extra.referralCode,
     }),
   });
 
@@ -245,16 +247,32 @@ export async function register(
   email: string,
   password: string,
   role: Role,
-  extra: { full_name: string; phone?: string }
+  extra: { full_name: string; phone?: string; referralCode?: string }
 ) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   const token = await cred.user.getIdToken();
+
+  let referralCode = extra.referralCode;
+  if (!referralCode) {
+    try {
+      referralCode = (await AsyncStorage.getItem("vura.referral.code")) || undefined;
+    } catch {
+      referralCode = undefined;
+    }
+  }
 
   const { user: dbUser } = await syncWithBackend(token, {
     role,
     full_name: extra.full_name,
     phone: extra.phone,
+    referralCode,
   });
+
+  if (referralCode) {
+    try {
+      await AsyncStorage.removeItem("vura.referral.code");
+    } catch {}
+  }
 
   const authUser: AuthUser = {
     uid: cred.user.uid,

@@ -7,6 +7,8 @@ import { View, Text, ActivityIndicator } from "react-native";
 import { useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import * as Notifications from "expo-notifications";
+import * as Linking from "expo-linking";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { registerForPushNotificationsAsync, registerDeviceToken } from "@/lib/notifications";
 
 const queryClient = new QueryClient();
@@ -55,7 +57,19 @@ function AuthGate() {
   return null;
 }
 
-export default function RootLayout() {
+function RootLayout() {
+  const url = Linking.useURL();
+
+  // Capture referral/affiliate codes from deep links like vura-rider://r/VURA-CODE
+  useEffect(() => {
+    if (!url) return;
+    const match = /[?:/#]r\/([A-Za-z0-9-]+)|\bref=([A-Za-z0-9-]+)/.exec(url);
+    const code = match?.[1] || match?.[2];
+    if (code) {
+      AsyncStorage.setItem("vura.referral.code", code.toUpperCase()).catch(() => undefined);
+    }
+  }, [url]);
+
   useEffect(() => {
     // Listen for notifications received while the app is in the foreground
     const notificationListener = Notifications.addNotificationReceivedListener((notification) => {
@@ -126,9 +140,15 @@ export default function RootLayout() {
             name="lost-item"
             options={{ presentation: "card" }}
           />
+          <Stack.Screen
+            name="affiliate"
+            options={{ presentation: "card" }}
+          />
           <Stack.Screen name="+not-found" />
         </Stack>
       </QueryClientProvider>
     </ErrorBoundary>
   );
 }
+
+export default RootLayout;

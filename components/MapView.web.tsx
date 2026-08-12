@@ -56,6 +56,8 @@ function injectStylesOnce() {
 .pin-m>div{width:28px;height:28px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.2);font-size:12px;font-weight:bold;color:#fff}
 .usr-m{background:transparent;border:0}
 .usr-m>div{width:14px;height:14px;background:#3b82f6;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 4px rgba(59,130,246,.25)}
+.you-m{background:transparent;border:0}
+.you-m>div{width:16px;height:16px;background:#22c55e;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 4px rgba(34,197,94,.3),0 0 0 8px rgba(34,197,94,.12)}
 .ent-m{background:transparent;border:0}
 .ent-m>div{width:14px;height:14px;background:#1a1a1a;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .ent-sel-m{background:transparent;border:0}
@@ -110,6 +112,13 @@ function buildIcon(L: any, p: any) {
       iconSize: [16, 16],
       iconAnchor: [8, 8],
     });
+  } else if (p.icon === "you") {
+    return L.divIcon({
+      html: "<div></div>",
+      className: "you-m",
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+    });
   }
   return L.divIcon({ html: "<div></div>", className: "usr-m", iconSize: [14, 14], iconAnchor: [7, 7] });
 }
@@ -154,9 +163,11 @@ const MapView = forwardRef<any, any>((props, ref) => {
                   ? "entrance"
                   : cp.pinColor === "#059669"
                     ? "entrance-sel"
-                    : t.toLowerCase() === "your location" || t.toLowerCase() === "nearby driver"
-                      ? "car"
-                      : "",
+                    : t.toLowerCase() === "your location"
+                      ? "you"
+                      : t.toLowerCase() === "nearby driver"
+                        ? "car"
+                        : "",
           angle: cp.rotation || 0,
           imgUrl,
         });
@@ -257,28 +268,33 @@ const MapView = forwardRef<any, any>((props, ref) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Resize observer to keep map sized correctly in flex/responsive layouts
+  // Resize observer to keep map sized correctly in flex/responsive layouts.
+  // Important: NEVER recenter to initialRegion on resize — that was causing the
+  // picker map to "snap back to the start" while the address resolved. We only
+  // recenter when the initialRegion center actually changes.
+  const lastInitialRegionRef = useRef<string>("");
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver(() => {
-      if (mapRef.current) {
-        mapRef.current.invalidateSize();
-        // Recenter on active center point after layout sizing update
-        if (initialRegion) {
-          mapRef.current.setView([initialRegion.latitude, initialRegion.longitude], mapRef.current.getZoom() || 15);
-        }
-      }
+      if (!mapRef.current) return;
+      mapRef.current.invalidateSize();
     });
     ro.observe(containerRef.current);
     return () => ro.disconnect();
-  }, [ready, initialRegion?.latitude, initialRegion?.longitude]);
+  }, [ready]);
 
   // Update view when initialRegion changes dynamically (e.g. when coords finish loading asynchronously)
+  const initialKey =
+    initialRegion ? `${initialRegion.latitude},${initialRegion.longitude}` : "";
   useEffect(() => {
-    if (ready && mapRef.current && initialRegion) {
-      mapRef.current.setView([initialRegion.latitude, initialRegion.longitude], mapRef.current.getZoom() || 15);
-    }
-  }, [ready, initialRegion?.latitude, initialRegion?.longitude]);
+    if (!ready || !mapRef.current || !initialRegion) return;
+    if (lastInitialRegionRef.current === initialKey) return;
+    lastInitialRegionRef.current = initialKey;
+    mapRef.current.setView(
+      [initialRegion.latitude, initialRegion.longitude],
+      mapRef.current.getZoom() || 15
+    );
+  }, [ready, initialKey]);
 
   // Update markers + polylines whenever they change
   useEffect(() => {

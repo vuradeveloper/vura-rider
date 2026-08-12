@@ -22,6 +22,7 @@ import disputesRouter from "./routes/disputes";
 import splitFareRouter from "./routes/splitFare";
 import tipsRouter from "./routes/tips";
 import notificationsRouter from "./routes/notifications";
+import affiliatesRouter from "./routes/affiliates";
 
 // ── Socket handlers ──
 import { setupSocketHandlers } from "./socket/handlers";
@@ -79,6 +80,7 @@ app.use("/api/disputes", disputesRouter);
 app.use("/api/split", splitFareRouter);
 app.use("/api/tips", tipsRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 
 // ── Socket.IO ──

@@ -37,6 +37,12 @@ export interface ServerToClientEvents {
   }) => void;
   "ride:completed": (data: { riderTotal?: number; fare?: number }) => void;
   "ride:cancelled": (data: { reason?: string }) => void;
+  "ride:pickup:updated": (data: {
+    address: string;
+    lat: number;
+    lng: number;
+  }) => void;
+  "ride:pickup:updated:ack": (data: { success: boolean; error?: string }) => void;
   "chat:message": (msg: ChatMessage) => void;
   "chat:history": (history: ChatMessage[]) => void;
   "split:invite": (data: {
@@ -73,6 +79,12 @@ export interface ClientToServerEvents {
     scheduledAt?: string;
   }) => void;
   "passenger:ride:cancel": (data: { rideId: string; reason: string }) => void;
+  "passenger:ride:update_pickup": (data: {
+    rideId: string;
+    address: string;
+    lat: number;
+    lng: number;
+  }) => void;
   "chat:join": (data: { rideId: string }) => void;
   "chat:leave": (data: { rideId: string }) => void;
   "chat:send": (data: { rideId: string; message: string }) => void;

@@ -1,5 +1,6 @@
 import { forwardRef, useImperativeHandle, useRef } from "react";
-import { Dimensions, Platform } from "react-native";
+import { Children, isValidElement } from "react";
+import { Dimensions, Platform, View } from "react-native";
 import type { Camera, Region } from "react-native-maps";
 import RNMapView, {
   PROVIDER_GOOGLE,
@@ -114,6 +115,33 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
       },
     }));
 
+    // Intercept "Your location" markers so the user's position renders as a
+    // custom green dot (with a soft pulse ring) instead of a default pin.
+    const renderChildren = Children.map(children, (child) => {
+      if (!isValidElement(child)) return child;
+      const props = child.props as { title?: string; coordinate?: { latitude: number; longitude: number } };
+      if (
+        child?.type === RNMarker &&
+        props?.title === "Your location" &&
+        props?.coordinate
+      ) {
+        return (
+          <RNMarker
+            coordinate={props.coordinate}
+            title="Your location"
+            stopPropagation
+          >
+            <View className="flex items-center justify-center">
+              <View className="absolute w-7 h-7 rounded-full bg-[#22c55e]/20" />
+              <View className="absolute w-4 h-4 rounded-full border-2 border-white bg-[#22c55e] shadow-md" />
+              <View className="w-[6px] h-[6px] rounded-full bg-white" />
+            </View>
+          </RNMarker>
+        );
+      }
+      return child;
+    });
+
     return (
       <RNMapView
         ref={mapRef}
@@ -124,7 +152,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
           containerHeightRef.current = e.nativeEvent.layout.height;
         }}
       >
-        {children}
+        {renderChildren}
       </RNMapView>
     );
   }

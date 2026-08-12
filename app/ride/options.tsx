@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQuery } from "@tanstack/react-query";
 import { getSavedCards } from "@/services/PaymentService";
+import { getAffiliateSummary } from "@/services/AffiliateService";
 import {
   formatCurrency,
   haversineKm,
@@ -56,7 +57,8 @@ const tiers = [
 
 type PayChoice =
   | { type: "cash" }
-  | { type: "card"; id: string; last4: string | null };
+  | { type: "card"; id: string; last4: string | null }
+  | { type: "affiliate" };
 
 type NearbyCar = { id: string; lat: number; lng: number; angle: number };
 
@@ -76,6 +78,11 @@ export default function RideOptions() {
   const cardsQuery = useQuery<SavedCard[]>({
     queryKey: ["saved-cards"],
     queryFn: getSavedCards,
+  });
+
+  const affQuery = useQuery({
+    queryKey: ["affiliate-me"],
+    queryFn: getAffiliateSummary,
   });
 
   // Extract event handlers to prevent potential closure issues
@@ -170,11 +177,16 @@ export default function RideOptions() {
 
   const cards = cardsQuery.data ?? [];
 
+  // Affiliate credit — can only be used when the balance covers the whole fare.
+  const affBalance = affQuery.data?.affiliate?.balance ?? 0;
+  const selectedFare = priced.find((r) => r.id === selected)?.fare ?? 0;
+  const canUseAffiliate = affBalance >= selectedFare && selectedFare > 0;
+
   const confirm = async () => {
     await AsyncStorage.setItem("vura.ride.tier", selected);
     await AsyncStorage.setItem(
       "vura.ride.payment",
-      payChoice.type === "cash" ? "cash" : "card"
+      payChoice.type === "cash" ? "cash" : payChoice.type === "affiliate" ? "affiliate" : "card"
     );
     await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(waypoints));
     if (scheduleMode) {
@@ -312,12 +324,16 @@ export default function RideOptions() {
             className="flex-1 flex-row items-center justify-center gap-2 rounded-full bg-secondary px-3 py-2.5"
           >
             <Ionicons
-              name={payChoice.type === "card" ? "card" : "cash"}
+              name={payChoice.type === "card" ? "card" : payChoice.type === "affiliate" ? "gift" : "cash"}
               size={16}
               color="#2e1e1a"
             />
             <Text className="text-xs font-semibold text-foreground">
-              {payChoice.type === "card" ? `•••• ${payChoice.last4}` : "Cash"}
+              {payChoice.type === "card"
+                ? `•••• ${payChoice.last4}`
+                : payChoice.type === "affiliate"
+                  ? "Affiliate credit"
+                  : "Cash"}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity className="flex-1 flex-row items-center justify-center gap-2 rounded-full bg-secondary px-3 py-2.5">
@@ -426,6 +442,40 @@ export default function RideOptions() {
                     <Text className="text-sm font-bold text-foreground">Add new card</Text>
                   </View>
                 </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  if (!canUseAffiliate) return;
+                  setPayChoice({ type: "affiliate" });
+                  handleHidePayment();
+                }}
+                disabled={!canUseAffiliate}
+                className={`w-full flex-row items-center gap-3 p-3 rounded-xl border ${
+                  payChoice.type === "affiliate"
+                    ? "border-primary bg-primary/5"
+                    : "border-border bg-surface"
+                }`}
+              >
+                <View className="w-10 h-10 rounded-full items-center justify-center bg-primary/10">
+                  <Ionicons name="gift" size={20} color="#e04e2f" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-sm font-bold text-foreground">Affiliate credit</Text>
+                  <Text className="text-xs text-muted-foreground">
+                    {affQuery.data?.affiliate
+                      ? `${formatCurrency(affBalance)} available`
+                      : "Earn credit by inviting friends"}
+                  </Text>
+                  {affQuery.data?.affiliate && !canUseAffiliate && (
+                    <Text className="text-[10px] font-semibold text-red-500 mt-0.5">
+                      Balance must be at least {formatCurrency(selectedFare)} to use credit
+                    </Text>
+                  )}
+                </View>
+                {payChoice.type === "affiliate" && (
+                  <View className="w-2.5 h-2.5 rounded-md bg-primary" />
+                )}
+              </TouchableOpacity>
+
               <TouchableOpacity
                 onPress={() => {
                   setPayChoice({ type: "cash" });

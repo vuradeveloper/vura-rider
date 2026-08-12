@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
+import { settleFirstRide } from "../services/AffiliateService";
 
 const router = Router();
 
@@ -222,6 +223,50 @@ router.post("/scheduled/:id/cancel", requireAuth, async (req: AuthRequest, res: 
   }
 });
 
+// PATCH /api/rides/:id/pickup — Update the pickup location of an active ride
+router.patch("/:id/pickup", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const firebaseUid = req.userId!;
+    const { id } = req.params;
+    const { address, lat, lng } = req.body;
+
+    if (!address || lat == null || lng == null) {
+      res.status(400).json({ error: "address, lat and lng are required" });
+      return;
+    }
+
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [firebaseUid]
+    );
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    const ride = await queryOne<any>(
+      "SELECT id, status FROM rides WHERE id = $1 AND passenger_id = $2",
+      [id, user.id]
+    );
+    if (!ride) { res.status(404).json({ error: "Ride not found" }); return; }
+
+    if (!["searching", "accepted", "driver_arrived", "in_progress"].includes(ride.status)) {
+      res.status(400).json({ error: "Pickup can no longer be updated on this ride" });
+      return;
+    }
+
+    const updated = await queryOne<any>(
+      `UPDATE rides
+       SET pickup_address = $1, pickup_lat = $2, pickup_lng = $3, updated_at = NOW()
+       WHERE id = $4 AND passenger_id = $5
+       RETURNING *`,
+      [address, lat, lng, id, user.id]
+    );
+
+    res.json({ success: true, ride: mapRide(updated) });
+  } catch (err: any) {
+    console.error("Update pickup error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PATCH /api/rides/:id/status — Update ride status for simulation
 router.patch("/:id/status", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -240,6 +285,10 @@ router.patch("/:id/status", requireAuth, async (req: AuthRequest, res: Response)
       `UPDATE rides SET ${updates.join(", ")} WHERE id = $${params.length}`,
       params
     );
+
+    if (status === "completed") {
+      await settleFirstRide(String(id));
+    }
 
     res.json({ success: true });
   } catch (err: any) {

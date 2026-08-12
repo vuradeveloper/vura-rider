@@ -105,6 +105,49 @@ export function setupSocketHandlers(io: SocketIOServer) {
       } catch (err: any) { console.error("Cancel error:", err); }
     });
 
+    // ── Passenger: update pickup location ──
+    socket.on("passenger:ride:update_pickup", async (data) => {
+      try {
+        const { rideId, address, lat, lng } = data;
+        if (!rideId || !address || lat == null || lng == null) {
+          socket.emit("ride:pickup:updated:ack", { success: false, error: "Missing pickup details" });
+          return;
+        }
+
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) {
+          socket.emit("ride:pickup:updated:ack", { success: false, error: "User not synced" });
+          return;
+        }
+
+        const ride = await queryOne<any>(
+          "SELECT id, status FROM rides WHERE id = $1 AND passenger_id = $2",
+          [rideId, dbUserId]
+        );
+        if (!ride) {
+          socket.emit("ride:pickup:updated:ack", { success: false, error: "Ride not found" });
+          return;
+        }
+        if (!["searching", "accepted", "driver_arrived", "in_progress"].includes(ride.status)) {
+          socket.emit("ride:pickup:updated:ack", { success: false, error: "Pickup can no longer be updated on this ride" });
+          return;
+        }
+
+        await execute(
+          `UPDATE rides
+           SET pickup_address = $1, pickup_lat = $2, pickup_lng = $3, updated_at = NOW()
+           WHERE id = $4 AND passenger_id = $5`,
+          [address, lat, lng, rideId, dbUserId]
+        );
+
+        socket.emit("ride:pickup:updated:ack", { success: true });
+        io.to(`ride:${rideId}`).emit("ride:pickup:updated", { address, lat, lng });
+      } catch (err: any) {
+        console.error("Update pickup socket error:", err);
+        socket.emit("ride:pickup:updated:ack", { success: false, error: err.message });
+      }
+    });
+
     // ── Chat ──
     socket.on("chat:join", (data) => {
       socket.join(`chat:${data.rideId}`);

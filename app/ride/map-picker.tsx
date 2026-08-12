@@ -4,7 +4,6 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  Animated,
   ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,6 +12,8 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MapView, { Marker } from "@/components/MapView";
 import * as Location from "expo-location";
+import { updateRidePickup } from "@/services/RideService";
+import { getSocket } from "@/lib/socket";
 
 interface Entrance {
   name: string;
@@ -23,7 +24,9 @@ interface Entrance {
 export default function MapPicker() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const type = (params.type as "pickup" | "dropoff" | "stop") || "dropoff";
+  const isUpdate = params.update === "1";
+  const rideId = (params.rideId as string) || "";
+  const type = (params.type as "pickup" | "dropoff" | "stop") || "pickup";
   const entranceSelect = params.entranceSelect === "true";
   const mallLat = params.lat ? parseFloat(params.lat as string) : null;
   const mallLon = params.lon ? parseFloat(params.lon as string) : null;
@@ -32,17 +35,17 @@ export default function MapPicker() {
   const [region, setRegion] = useState<any>(null);
   const [address, setAddress] = useState("Loading address...");
   const [name, setName] = useState("Selecting location...");
-  const [loading, setLoading] = useState(false);
+  const [locating, setLocating] = useState(false);
   const [initialCoords, setInitialCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   // Entrance selector state
   const [entrances, setEntrances] = useState<Entrance[]>([]);
   const [selectedEntIndex, setSelectedEntIndex] = useState<number>(-1);
   const [fetchingEntrances, setFetchingEntrances] = useState(false);
 
-  const pinScale = useRef(new Animated.Value(1)).current;
-  const pinTranslateY = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<any>(null);
+  const geocodeTimerRef = useRef<any>(null);
 
   // 1. Get initial location to center the map
   useEffect(() => {
@@ -61,6 +64,12 @@ export default function MapPicker() {
           const parsed = JSON.parse(stored);
           if (parsed && parsed.length === 2) {
             setInitialCoords({ lat: parsed[0], lng: parsed[1] });
+            setRegion({
+              latitude: parsed[0],
+              longitude: parsed[1],
+              latitudeDelta: 0.015,
+              longitudeDelta: 0.015,
+            });
             return;
           }
         }
@@ -68,7 +77,14 @@ export default function MapPicker() {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted") {
           const pos = await Location.getCurrentPositionAsync({});
+          setMyLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
           setInitialCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          setRegion({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            latitudeDelta: 0.015,
+            longitudeDelta: 0.015,
+          });
         } else {
           setInitialCoords({ lat: -26.2041, lng: 28.0473 }); // Joburg
         }
@@ -209,72 +225,50 @@ export default function MapPicker() {
     }
   };
 
-  // Pin Lift & Drop Animations
-  const animatePinLift = () => {
-    Animated.parallel([
-      Animated.timing(pinTranslateY, {
-        toValue: -15,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-      Animated.timing(pinScale, {
-        toValue: 1.1,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
-
-  const animatePinDrop = () => {
-    Animated.parallel([
-      Animated.spring(pinTranslateY, {
-        toValue: 0,
-        friction: 5,
-        useNativeDriver: true,
-      }),
-      Animated.spring(pinScale, {
-        toValue: 1.0,
-        friction: 5,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
-
   // Handlers for free map dragging
-  const handleRegionChange = () => {
-    if (!entranceSelect) animatePinLift();
-  };
-
   const handleRegionChangeComplete = async (newRegion: any) => {
     if (entranceSelect) return; // Disallow manual center shifts if in visual entrance picking mode
 
-    animatePinDrop();
     setRegion(newRegion);
-    setLoading(true);
+    // Debounce + never blank the shown address — keeps the panel height stable
+    // (a changing height is what made the map "jump back" while resolving).
+    if (geocodeTimerRef.current) clearTimeout(geocodeTimerRef.current);
+    setLocating(true);
+    geocodeTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${newRegion.latitude}&lon=${newRegion.longitude}&zoom=18&addressdetails=1`
+        );
+        const data = await res.json();
+        if (data) {
+          const displayName = data.display_name || "";
+          const parts = displayName.split(",");
+          const placeName = data.name || parts[0] || "Selected Pin Location";
+          const detailAddr = parts.slice(1, 4).join(",").trim() || parts.slice(1).join(",").trim();
 
-    try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${newRegion.latitude}&lon=${newRegion.longitude}&zoom=18&addressdetails=1`
-      );
-      const data = await res.json();
-      if (data) {
-        const displayName = data.display_name || "";
-        const parts = displayName.split(",");
-        const placeName = data.name || parts[0] || "Selected Pin Location";
-        const detailAddr = parts.slice(1, 4).join(",").trim() || parts.slice(1).join(",").trim();
-
-        setName(placeName);
-        setAddress(detailAddr);
-      } else {
-        setName("Custom Coordinate");
+          setName(placeName);
+          setAddress(detailAddr);
+        } else {
+          setName("Custom Coordinate");
+          setAddress(`${newRegion.latitude.toFixed(5)}, ${newRegion.longitude.toFixed(5)}`);
+        }
+      } catch {
+        setName("Dropped Pin");
         setAddress(`${newRegion.latitude.toFixed(5)}, ${newRegion.longitude.toFixed(5)}`);
+      } finally {
+        setLocating(false);
       }
-    } catch {
-      setName("Dropped Pin");
-      setAddress(`${newRegion.latitude.toFixed(5)}, ${newRegion.longitude.toFixed(5)}`);
-    } finally {
-      setLoading(false);
-    }
+    }, 350);
+  };
+
+  const recenterToMe = () => {
+    if (!myLocation) return;
+    mapRef.current?.animateToRegion({
+      latitude: myLocation.lat,
+      longitude: myLocation.lng,
+      latitudeDelta: 0.015,
+      longitudeDelta: 0.015,
+    }, 300);
   };
 
   // Confirms selection and saves to async storage
@@ -289,11 +283,55 @@ export default function MapPicker() {
       ? `${mallName} (${entrances[selectedEntIndex]?.name || "Main Entrance"})`
       : name;
 
+    // Stop mode: append/edit a waypoint, keep the trip going.
+    if (type === "stop") {
+      const raw = await AsyncStorage.getItem("vura.ride.waypoints");
+      const existing: any[] = raw ? JSON.parse(raw) : [];
+      const stopId = (params.stopId as string) || String(Date.now());
+      const stop = { id: stopId, address: finalName, lat, lng: lon };
+      const idx = existing.findIndex((wp: any) => wp.id === stopId);
+      if (idx >= 0) existing[idx] = stop;
+      else existing.push(stop);
+      await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(existing));
+      if (isUpdate) {
+        router.back();
+        return;
+      }
+      router.dismissAll();
+      router.replace("/ride/options");
+      return;
+    }
+
     const coordKey = type === "pickup" ? "vura.ride.pickup" : "vura.ride.dropoff";
     const addrKey = type === "pickup" ? "vura.ride.pickup.address" : "vura.ride.dropoff.address";
 
     await AsyncStorage.setItem(coordKey, JSON.stringify([lat, lon]));
     await AsyncStorage.setItem(addrKey, finalName);
+
+    // Update mode: sync the new pickup to the active ride, notify the driver,
+    // then return to the tracking screen.
+    if (isUpdate) {
+      try {
+        if (rideId) {
+          await updateRidePickup(rideId, finalName, lat, lon);
+        }
+      } catch (e: any) {
+        console.error("Failed to sync pickup update:", e);
+      }
+      if (rideId) {
+        try {
+          const socket = await getSocket();
+          socket?.emit("passenger:ride:update_pickup", {
+            rideId,
+            address: finalName,
+            lat,
+            lng: lon,
+          });
+        } catch {}
+      }
+      router.back();
+      return;
+    }
 
     // Save recent search format
     try {
@@ -334,7 +372,13 @@ export default function MapPicker() {
         </TouchableOpacity>
         <View className="flex-1 bg-surface px-4 py-2.5 rounded-full shadow-md border border-border">
           <Text className="text-sm font-bold text-foreground">
-            {entranceSelect ? "Choose Drop-off Zone" : `Set ${type === "pickup" ? "pickup" : "destination"}`}
+            {entranceSelect
+              ? "Choose Drop-off Zone"
+              : isUpdate
+                ? type === "stop"
+                  ? "Add a stop"
+                  : "Update pickup location"
+                : `Set ${type === "pickup" ? "pickup" : type === "stop" ? "stop" : "destination"}`}
           </Text>
         </View>
       </View>
@@ -348,10 +392,20 @@ export default function MapPicker() {
           latitudeDelta: entranceSelect ? 0.004 : 0.015,
           longitudeDelta: entranceSelect ? 0.004 : 0.015,
         }}
-        onRegionChange={handleRegionChange}
         onRegionChangeComplete={handleRegionChangeComplete}
         style={{ flex: 1 }}
       >
+        {/* Green dot: your current location */}
+        {myLocation && (
+          <Marker
+            coordinate={{
+              latitude: myLocation.lat,
+              longitude: myLocation.lng,
+            }}
+            title="Your location"
+            pinColor="#10b981"
+          />
+        )}
         {/* Draw Entrance Markers on the map if in entranceSelect mode */}
         {entranceSelect &&
           entrances.map((ent, idx) => (
@@ -365,7 +419,7 @@ export default function MapPicker() {
           ))}
       </MapView>
 
-      {/* Center Pin Indicator */}
+      {/* Center Pin Indicator (fixed — the map moves under it, like Bolt/Uber) */}
       <View
         style={{
           position: "absolute",
@@ -380,19 +434,23 @@ export default function MapPicker() {
         }}
         pointerEvents="none"
       >
-        <Animated.View
-          style={{
-            transform: [{ translateY: pinTranslateY }, { scale: pinScale }],
-          }}
-        >
-          <Ionicons
-            name="location"
-            size={40}
-            color={entranceSelect ? "#059669" : type === "pickup" ? "#22c55e" : "#e04e2f"}
-          />
-        </Animated.View>
+        <Ionicons
+          name={type === "stop" ? "ellipsis-horizontal" : "location"}
+          size={40}
+          color={entranceSelect ? "#059669" : type === "pickup" ? "#22c55e" : type === "stop" ? "#d97706" : "#e04e2f"}
+        />
         <View className="w-2.5 h-1 bg-black/35 rounded-full -mt-0.5 opacity-60" />
       </View>
+
+      {/* Recenter on my location */}
+      {myLocation && !entranceSelect && (
+        <TouchableOpacity
+          onPress={recenterToMe}
+          className="absolute bottom-56 right-4 w-11 h-11 rounded-full bg-surface border border-border items-center justify-center shadow-md z-10"
+        >
+          <Ionicons name="locate" size={20} color="#16a34a" />
+        </TouchableOpacity>
+      )}
 
       {/* Bottom Panel */}
       <View className="bg-surface border-t border-border px-5 pt-5 pb-8 rounded-t-[2.5rem] shadow-2xl">
@@ -451,46 +509,44 @@ export default function MapPicker() {
           <View className="flex-row items-center gap-3 mb-3">
             <View
               className={`w-8 h-8 rounded-full items-center justify-center ${
-                type === "pickup" ? "bg-emerald-50" : "bg-red-50"
+                type === "pickup" ? "bg-emerald-50" : type === "stop" ? "bg-amber-50" : "bg-red-50"
               }`}
             >
               <Ionicons
-                name={type === "pickup" ? "ellipse" : "location"}
+                name={type === "stop" ? "ellipsis-horizontal" : "location"}
                 size={16}
-                color={type === "pickup" ? "#22c55e" : "#e04e2f"}
+                color={type === "pickup" ? "#22c55e" : type === "stop" ? "#d97706" : "#e04e2f"}
               />
             </View>
             <View className="flex-1">
-              {loading ? (
-                <View className="flex-row items-center gap-2">
-                  <ActivityIndicator size="small" color="#e04e2f" style={{ marginRight: 6 }} />
-                  <Text className="text-xs font-semibold text-muted-foreground">
-                    Resolving coordinates...
-                  </Text>
-                </View>
-              ) : (
-                <>
-                  <Text className="text-base font-bold text-foreground" numberOfLines={1}>
-                    {name}
-                  </Text>
-                  <Text className="text-xs text-muted-foreground mt-0.5" numberOfLines={1}>
-                    {address}
-                  </Text>
-                </>
-              )}
+              <View className="flex-row items-center gap-2">
+                <Text className="text-base font-bold text-foreground flex-1" numberOfLines={1}>
+                  {name}
+                </Text>
+                {locating && (
+                  <ActivityIndicator size="small" color="#e04e2f" />
+                )}
+              </View>
+              <Text className="text-xs text-muted-foreground mt-0.5" numberOfLines={1}>
+                {address}
+              </Text>
             </View>
           </View>
         )}
 
         <TouchableOpacity
           onPress={handleConfirm}
-          disabled={loading || fetchingEntrances}
+          disabled={locating || fetchingEntrances}
           className={`w-full py-4 rounded-2xl items-center justify-center ${
-            loading || fetchingEntrances ? "bg-muted" : "bg-primary"
+            locating || fetchingEntrances ? "bg-muted" : "bg-primary"
           }`}
         >
           <Text className="text-sm font-bold text-primary-foreground">
-            {entranceSelect ? "Confirm Destination" : `Confirm ${type === "pickup" ? "Pickup" : "Destination"}`}
+            {entranceSelect
+              ? "Confirm Destination"
+              : isUpdate
+                ? "Update pickup location"
+                : `Confirm ${type === "pickup" ? "Pickup" : "Destination"}`}
           </Text>
         </TouchableOpacity>
       </View>

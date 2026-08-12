@@ -240,3 +240,41 @@ export interface NearbyDriver {
   current_heading: number | null;
   average_rating: number;
 }
+
+export type ReferralStatus = "pending" | "settled" | "disqualified" | "lapsed";
+
+export interface AffiliateSummary {
+  id: string;
+  user_id: string;
+  referral_code: string;
+  balance: number;
+  status: string;
+  total_earned: number;
+  total_referrals: number;
+  pending_referrals: number;
+  settled_referrals: number;
+  created_at: string;
+}
+
+export interface Referral {
+  id: string;
+  referred_name: string | null;
+  referred_email: string | null;
+  code_used: string;
+  status: ReferralStatus;
+  rewarded_amount: string;
+  created_at: string;
+  settled_at: string | null;
+}
+
+export type AffiliateTransactionType = "signup_bonus" | "credit_used" | "withdrawal" | "adjustment";
+
+export interface AffiliateTransaction {
+  id: string;
+  type: AffiliateTransactionType;
+  amount: string;
+  ride_id: string | null;
+  reference: string | null;
+  status: string;
+  created_at: string;
+}

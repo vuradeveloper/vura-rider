@@ -1,13 +1,14 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
+import { claimReferral, ensureAffiliateTables } from "../services/AffiliateService";
 
 const router = Router();
 
 // POST /api/users/sync — Create or update user from Firebase auth
 router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { role, phone, full_name } = req.body;
+    const { role, phone, full_name, referralCode } = req.body;
     const firebaseUid = req.userId!;
 
     // Ensure columns exist on users table
@@ -56,6 +57,16 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
          RETURNING id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name, created_at`,
         [firebaseUid, full_name || req.user?.name || "Rider", req.user?.email || null, phone || null, role || "passenger", req.user?.picture || null]
       );
+
+      if (user?.id && referralCode) {
+        try {
+          await ensureAffiliateTables();
+          await claimReferral(user.id, String(referralCode));
+        } catch (err: any) {
+          console.warn("Referral claim skipped:", err.message);
+        }
+      }
+
       res.status(201).json({ user });
     }
   } catch (err: any) {

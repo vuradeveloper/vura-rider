@@ -28,3 +28,14 @@ export const submitRating = async (
     method: "POST",
     body: JSON.stringify({ rideId, score, comment }),
   });
+
+export const updateRidePickup = async (
+  rideId: string,
+  address: string,
+  lat: number,
+  lng: number
+) =>
+  apiFetch<{ success: boolean }>(`/api/rides/${rideId}/pickup`, {
+    method: "PATCH",
+    body: JSON.stringify({ address, lat, lng }),
+  });

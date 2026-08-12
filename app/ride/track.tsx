@@ -2,14 +2,19 @@ import { disconnectSocket, getSocket } from "@/lib/socket";
 import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
-import { payForRide, payWithCash } from "@/services/PaymentService";
+import { payForRide, payWithCash, payWithAffiliate } from "@/services/PaymentService";
 import { getActiveRide, getRide, submitRating } from "@/services/RideService";
+import { submitTip, getTipSuggestions } from "@/services/TipService";
 import { shareTrip } from "@/services/SafetyService";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import {
+  useFocusEffect,
+  useLocalSearchParams,
+  useRouter,
+} from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import {
   ActivityIndicator,
@@ -148,12 +153,36 @@ export default function Track() {
   const [sharingEta, setSharingEta] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [splitFareActive, setSplitFareActive] = useState(false);
+  const [tipAmount, setTipAmount] = useState<number | null>(null);
+  const [customTip, setCustomTip] = useState("");
+  const [showTipModal, setShowTipModal] = useState(false);
+  const [rideTip, setRideTip] = useState<number | null>(null);
+  const [rideCustomTip, setRideCustomTip] = useState("");
+  const [submittingTip, setSubmittingTip] = useState(false);
 
   const rideIdRef = useRef<string | null>(rideIdParam ?? null);
   const statusRef = useRef<RideStatus>("searching");
   const [tierName, setTierName] = useState("VuraGo");
   const mapRef = useRef<any>(null);
   const isHistory = !!rideIdParam;
+  const demoRanRef = useRef(false);
+  const prevPickupRef = useRef<[number, number] | null>(null);
+
+  // Cancellation for the demo simulation. Deliberately refs (not locals) and
+  // set by a dedicated unmount-only effect so that re-renders caused by
+  // pickup/dropoff/waypoint state updates — which re-run the demo effect and
+  // fire its cleanup — do NOT cancel an in-flight simulation.
+  const demoCancelledRef = useRef(false);
+  const demoAnimIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Live state for the demo simulation, stored in refs so a pickup update can
+  // re-route the car mid-leg without restarting the whole simulation.
+  const pickupCoordRef = useRef<[number, number] | null>(pickupCoord);
+  const driverLocRef = useRef<DriverLoc | null>(null);
+  const demoPhaseRef = useRef<"searching" | "to_pickup" | "arrived" | "to_dest">("searching");
+  const demoRouteRef = useRef<{ latitude: number; longitude: number }[]>([]);
+  const demoStepRef = useRef(0);
+  const demoOnDoneRef = useRef<(() => void) | null>(null);
 
   // Flips true the instant a *real* socket driver-location event arrives.
   const hasRealDriverLocRef = useRef(false);
@@ -208,11 +237,109 @@ export default function Track() {
     })();
   }, []);
 
+  // Re-read pickup from storage when returning to the screen (e.g. after the
+  // rider updates the pickup location on the map picker).
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const [pa, p, wp] = await Promise.all([
+          AsyncStorage.getItem("vura.ride.pickup.address"),
+          AsyncStorage.getItem("vura.ride.pickup"),
+          AsyncStorage.getItem("vura.ride.waypoints"),
+        ]);
+        if (pa) setPickupAddr(pa);
+        try {
+          const parsed = p ? JSON.parse(p) : null;
+          if (parsed && Array.isArray(parsed) && parsed.length === 2) {
+            setPickupCoord([Number(parsed[0]), Number(parsed[1])]);
+          }
+        } catch {}
+        try {
+          if (wp) setWaypoints(JSON.parse(wp));
+        } catch {}
+      })();
+    }, [])
+  );
+
+  // Re-center the map on the pickup whenever it changes (before the trip starts).
+  useEffect(() => {
+    if (isHistory) return;
+    const prev = prevPickupRef.current;
+    prevPickupRef.current = pickupCoord;
+    if (
+      prev &&
+      pickupCoord &&
+      (prev[0] !== pickupCoord[0] || prev[1] !== pickupCoord[1]) &&
+      !driverLoc
+    ) {
+      mapRef.current?.animateToRegion({
+        latitude: pickupCoord[0],
+        longitude: pickupCoord[1],
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      }, 400);
+    }
+  }, [pickupCoord, driverLoc, isHistory]);
+
+  // Keep a live ref of the car's position so pickup updates can re-route it
+  // mid-leg using its current location (not a stale captured one).
+  useEffect(() => {
+    driverLocRef.current = driverLoc;
+  }, [driverLoc]);
+
+  // Keep a live ref of the pickup so the demo uses the latest one even if it
+  // changes during the 45s "searching" phase.
+  useEffect(() => {
+    pickupCoordRef.current = pickupCoord;
+  }, [pickupCoord]);
+
+  // Starts (or re-starts) the car glide along the given points. Safe to call
+  // repeatedly — it clears the previous interval, so a pickup update can
+  // re-target the car without stopping the simulation.
+  const startDemoAnimation = (points: { latitude: number; longitude: number }[]) => {
+    if (points.length < 2) return;
+    demoRouteRef.current = points;
+    demoStepRef.current = 0;
+    const startBearing = computeBearing(points[0], points[1] || points[0]);
+    setDenseRoute(points);
+    setRouteCoords(points);
+    setDriverLoc({
+      lat: points[0].latitude,
+      lng: points[0].longitude,
+      bearing: startBearing,
+    });
+    driverLocRef.current = { lat: points[0].latitude, lng: points[0].longitude, bearing: startBearing };
+    if (demoAnimIntervalRef.current) clearInterval(demoAnimIntervalRef.current);
+    demoAnimIntervalRef.current = setInterval(() => {
+      const route = demoRouteRef.current;
+      const step = demoStepRef.current;
+      if (step < route.length - 1) {
+        const cur = route[step];
+        const nxt = route[step + 1];
+        const bearing = computeBearing(cur, nxt);
+        setCarBearing(bearing);
+        setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
+        driverLocRef.current = { lat: nxt.latitude, lng: nxt.longitude, bearing };
+        demoStepRef.current++;
+      } else {
+        if (demoAnimIntervalRef.current) {
+          clearInterval(demoAnimIntervalRef.current);
+          demoAnimIntervalRef.current = null;
+        }
+        const done = demoOnDoneRef.current;
+        demoOnDoneRef.current = null;
+        if (done) done();
+      }
+    }, 1200);
+  };
+
   // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
   useEffect(() => {
     if (isHistory || !pickupCoord) return;
-    let cancelled = false;
-    let animInterval: ReturnType<typeof setInterval> | null = null;
+    // Never re-run once started — pickup updates should re-route the car, not
+    // restart the whole simulation.
+    if (demoRanRef.current) return;
+    demoRanRef.current = true;
 
     const updateDbStatus = async (newStatus: RideStatus) => {
       const id = rideIdRef.current;
@@ -229,15 +356,17 @@ export default function Track() {
     };
 
     (async () => {
-      // 1. Initial State: Searching for 4 seconds
+      // 1. Initial State: Searching (~45s so the rider can edit/pickup/stops)
       setStatus("searching");
       setDenseRoute([]);
       setRouteCoords([]);
       setDriver(null);
       setDriverLoc(null);
+      driverLocRef.current = null;
+      demoPhaseRef.current = "searching";
 
-      await new Promise((resolve) => setTimeout(resolve, 4000));
-      if (cancelled) return;
+      await new Promise((resolve) => setTimeout(resolve, 45000));
+      if (demoCancelledRef.current) return;
 
       // 2. Driver Found: Status "accepted"
       setStatus("accepted");
@@ -249,19 +378,19 @@ export default function Track() {
         license_plate: "VURA 123 GP",
       });
 
-      const [baseLat, baseLng] = pickupCoord;
+      const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
       const [endLat, endLng] = dropoffCoord ?? [
-        baseLat + (Math.random() - 0.5) * 0.02,
-        baseLng + (Math.random() - 0.5) * 0.02,
+        baseLat + (Math.random() - 0.5) * 0.04,
+        baseLng + (Math.random() - 0.5) * 0.04,
       ];
 
-      // Simulate a starting position for the driver (~1km away)
-      const startLat = baseLat + (Math.random() - 0.5) * 0.01;
-      const startLng = baseLng + (Math.random() - 0.5) * 0.01;
+      // Simulate a starting position for the driver (~2-3km away)
+      const startLat = baseLat + (Math.random() - 0.5) * 0.04;
+      const startLng = baseLng + (Math.random() - 0.5) * 0.04;
 
       // Fetch route from driver start to pickup (no waypoints for pickup leg)
       const routeToPickup = await fetchRoute([startLat, startLng], [baseLat, baseLng]);
-      if (cancelled) return;
+      if (demoCancelledRef.current) return;
 
       const densePickup = densifyRoute(
         routeToPickup.length > 1
@@ -270,49 +399,31 @@ export default function Track() {
               latitude: c[0],
               longitude: c[1],
             })),
-        35
+        60
       );
-      setDenseRoute(densePickup);
-      setRouteCoords(densePickup);
 
-      let step = 0;
-      setDriverLoc({
-        lat: densePickup[0].latitude,
-        lng: densePickup[0].longitude,
-        bearing: computeBearing(densePickup[0], densePickup[1] || densePickup[0]),
-      });
-
-      // Run animation to pickup
+      // 3. Glide to pickup — this leg is re-routable when the rider changes
+      // the pickup mid-trip (see the pickup-change effect below).
+      demoPhaseRef.current = "to_pickup";
       await new Promise<void>((resolve) => {
-        animInterval = setInterval(() => {
-          if (step < densePickup.length - 1) {
-            const cur = densePickup[step];
-            const nxt = densePickup[step + 1];
-            const bearing = computeBearing(cur, nxt);
-            setCarBearing(bearing);
-            setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
-            step++;
-          } else {
-            if (animInterval) clearInterval(animInterval);
-            resolve();
-          }
-        }, 70);
+        demoOnDoneRef.current = resolve;
+        startDemoAnimation(densePickup);
       });
+      if (demoCancelledRef.current) return;
 
-      if (cancelled) return;
-
-      // 3. Arrived at pickup: Wait 2s, then start trip ("in_progress")
+      // 4. Arrived at pickup: Wait 20s, then start trip ("in_progress")
+      demoPhaseRef.current = "arrived";
       setStatus("driver_arrived");
       await updateDbStatus("driver_arrived");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      if (cancelled) return;
+      await new Promise((resolve) => setTimeout(resolve, 20000));
+      if (demoCancelledRef.current) return;
 
       setStatus("in_progress");
       await updateDbStatus("in_progress");
 
       // Fetch route from pickup to destination, passing all stop waypoints
       const routeToDest = await fetchRoute([baseLat, baseLng], [endLat, endLng], waypoints);
-      if (cancelled) return;
+      if (demoCancelledRef.current) return;
 
       const denseDest = densifyRoute(
         routeToDest.length > 1
@@ -321,52 +432,67 @@ export default function Track() {
               latitude: c[0],
               longitude: c[1],
             })),
-        35
+        60
       );
-      setDenseRoute(denseDest);
-      setRouteCoords(denseDest);
 
-      step = 0;
-      setDriverLoc({
-        lat: denseDest[0].latitude,
-        lng: denseDest[0].longitude,
-        bearing: computeBearing(denseDest[0], denseDest[1] || denseDest[0]),
-      });
-
-      // Run animation to destination
+      // 5. Glide to destination
+      demoPhaseRef.current = "to_dest";
       await new Promise<void>((resolve) => {
-        animInterval = setInterval(() => {
-          if (step < denseDest.length - 1) {
-            const cur = denseDest[step];
-            const nxt = denseDest[step + 1];
-            const bearing = computeBearing(cur, nxt);
-            setCarBearing(bearing);
-            setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
-            step++;
-          } else {
-            if (animInterval) clearInterval(animInterval);
-            resolve();
-          }
-        }, 70);
+        demoOnDoneRef.current = resolve;
+        startDemoAnimation(denseDest);
       });
+      if (demoCancelledRef.current) return;
 
-      if (cancelled) return;
-
-      // 4. Arrived at destination: Status "completed"
+      // 6. Arrived at destination: Status "completed"
       setStatus("completed");
       await updateDbStatus("completed");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      if (cancelled) return;
+      await new Promise((resolve) => setTimeout(resolve, 8000));
+      if (demoCancelledRef.current) return;
 
       // Show rating/receipt modal
       setShowRating(true);
     })();
-
-    return () => {
-      cancelled = true;
-      if (animInterval) clearInterval(animInterval);
-    };
   }, [isHistory, pickupCoord, dropoffCoord, waypoints]);
+
+  // When the rider updates the pickup while the car is still en route to it,
+  // re-route the car from its current position to the NEW pickup so it keeps
+  // moving and the green line + pickup marker reflect the new location.
+  useEffect(() => {
+    if (isHistory) return;
+    if (demoPhaseRef.current !== "to_pickup") return;
+    if (!pickupCoord) return;
+    const cur = driverLocRef.current;
+    if (!cur) return;
+    (async () => {
+      if (demoCancelledRef.current) return;
+      const route = await fetchRoute([cur.lat, cur.lng], [pickupCoord[0], pickupCoord[1]]);
+      if (demoCancelledRef.current || demoPhaseRef.current !== "to_pickup") return;
+      const dense = densifyRoute(
+        route.length > 1
+          ? route
+          : [[cur.lat, cur.lng], [pickupCoord[0], pickupCoord[1]]].map((c) => ({
+              latitude: c[0],
+              longitude: c[1],
+            })),
+        60
+      );
+      startDemoAnimation(dense);
+    })();
+  }, [isHistory, pickupCoord]);
+
+  // Cancels the demo simulation ONLY on unmount. Kept separate from the demo
+  // effect so its cleanup doesn't fire on every pickup/dropoff/waypoint re-set
+  // (which was cancelling the simulation and leaving the screen stuck on
+  // "Contacting nearby drivers..." forever).
+  useEffect(() => {
+    return () => {
+      demoCancelledRef.current = true;
+      if (demoAnimIntervalRef.current) {
+        clearInterval(demoAnimIntervalRef.current);
+        demoAnimIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   // ── History mode: just load the ride details, no socket ──
   useEffect(() => {
@@ -526,6 +652,13 @@ export default function Track() {
           useAppStore.getState().setActiveRide(null);
         });
 
+        socket.on("ride:pickup:updated", (data) => {
+          setPickupAddr(data.address);
+          if (data.lat != null && data.lng != null) {
+            setPickupCoord([data.lat, data.lng]);
+          }
+        });
+
         // Fire the request
         const [p, d] = await Promise.all([
           AsyncStorage.getItem("vura.ride.pickup"),
@@ -598,6 +731,7 @@ export default function Track() {
         socket.off("ride:driver:location");
         socket.off("ride:completed");
         socket.off("ride:cancelled");
+        socket.off("ride:pickup:updated");
         socket.off("connect_error");
       }
     };
@@ -617,6 +751,17 @@ export default function Track() {
               res.error || "Card payment could not be completed."
             );
           }
+        } else if (method === "affiliate") {
+          const res = await payWithAffiliate(id);
+          if (!res.success) {
+            Alert.alert(
+              "Payment",
+              res.error || "Affiliate credit could not be applied."
+            );
+          } else {
+            queryClient.invalidateQueries({ queryKey: ["affiliate-me"] });
+            queryClient.invalidateQueries({ queryKey: ["affiliate-transactions"] });
+          }
         } else {
           await payWithCash(id);
         }
@@ -625,6 +770,32 @@ export default function Track() {
       }
     }
     setShowRating(true);
+  }
+
+  async function handleSendRideTip() {
+    const id = rideIdRef.current;
+    if (!id || !rideTip || rideTip <= 0) return;
+    setSubmittingTip(true);
+    try {
+      await submitTip(id, rideTip);
+      Alert.alert(
+        "Tip sent!",
+        `${formatCurrency(rideTip)} tip sent to ${driver?.name || "your driver"}. Thank you!`
+      );
+      setShowTipModal(false);
+      setRideTip(null);
+      setRideCustomTip("");
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Could not send tip");
+    } finally {
+      setSubmittingTip(false);
+    }
+  }
+
+  async function removeStop(i: number) {
+    const next = waypoints.filter((_, idx) => idx !== i);
+    setWaypoints(next);
+    await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(next));
   }
 
   async function doCancel(reason: string) {
@@ -649,17 +820,28 @@ export default function Track() {
     if (!id || rating === 0) return;
     setSubmitting(true);
     try {
+      if (tipAmount != null && tipAmount > 0) {
+        try {
+          await submitTip(id, tipAmount);
+        } catch {
+          // tip is best-effort
+        }
+      }
       await submitRating(id, rating, comment || undefined);
     } catch {
       // rating is best-effort
     } finally {
       setSubmitting(false);
       disconnectSocket();
-      router.replace("/");
+      router.replace(`/ride/receipt?rideId=${id}`);
     }
   }
 
   const canCancel = status === "searching" || status === "accepted";
+  const canEditPickup =
+    !isHistory &&
+    ["searching", "accepted", "driver_arrived", "in_progress"].includes(status);
+  const tipSuggestions = getTipSuggestions(fare && fare > 0 ? fare : 50);
   const driverInitials = driver?.name
     ? driver.name
       .split(" ")
@@ -890,6 +1072,15 @@ export default function Track() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
+                className="flex-1 items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 py-3 min-w-[70px]"
+                onPress={() => setShowTipModal(true)}
+              >
+                <Ionicons name="heart" size={16} color="#16a34a" />
+                <Text className="text-xs font-bold text-emerald-700">
+                  Tip
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
                 className="flex-1 items-center gap-1 rounded-xl bg-red-50 border border-red-200 py-3 min-w-[70px]"
                 onPress={() => Alert.alert("SOS", "Dispatching emergency services.")}
               >
@@ -917,20 +1108,49 @@ export default function Track() {
                 <View className="w-2.5 h-2.5 rounded-md bg-primary" />
               </View>
               <View className="flex-1 gap-y-3">
-                <Text
-                  className="font-medium text-foreground text-sm"
-                  numberOfLines={1}
+                <TouchableOpacity
+                  onPress={() => {
+                    if (!canEditPickup) return;
+                    router.push({
+                      pathname: "/ride/map-picker",
+                      params: {
+                        type: "pickup",
+                        update: "1",
+                        rideId: rideIdRef.current || "",
+                      },
+                    });
+                  }}
+                  className="flex-row items-center gap-1.5"
                 >
-                  {pickupAddr}
-                </Text>
-                {waypoints.map((wp, i) => (
                   <Text
-                    key={i}
-                    className="font-medium text-primary text-sm"
+                    className={`font-medium text-sm ${
+                      canEditPickup ? "text-emerald-700" : "text-foreground"
+                    }`}
                     numberOfLines={1}
                   >
-                    {wp.address} (Stop {i + 1})
+                    {pickupAddr}
                   </Text>
+                  {canEditPickup && (
+                    <Ionicons name="pencil" size={12} color="#16a34a" />
+                  )}
+                </TouchableOpacity>
+                {waypoints.map((wp, i) => (
+                  <View key={i} className="flex-row items-center gap-1.5">
+                    <Text
+                      className="font-medium text-primary text-sm flex-1"
+                      numberOfLines={1}
+                    >
+                      {wp.address} (Stop {i + 1})
+                    </Text>
+                    {canEditPickup && (
+                      <TouchableOpacity
+                        onPress={() => removeStop(i)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="close-circle" size={16} color="#dc2626" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 ))}
                 <Text
                   className="font-medium text-foreground text-sm"
@@ -946,6 +1166,47 @@ export default function Track() {
               )}
             </View>
           </View>
+
+          {canEditPickup && (
+              <View className="mt-4 flex-row gap-2">
+                <TouchableOpacity
+                  onPress={() =>
+                    router.push({
+                      pathname: "/ride/map-picker",
+                      params: {
+                        type: "pickup",
+                        update: "1",
+                        rideId: rideIdRef.current || "",
+                      },
+                    })
+                  }
+                  className="flex-1 flex-row items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 py-3.5"
+                >
+                  <Ionicons name="location" size={16} color="#16a34a" />
+                  <Text className="text-xs font-bold text-emerald-700">
+                    Update pickup
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() =>
+                    router.push({
+                      pathname: "/ride/map-picker",
+                      params: {
+                        type: "stop",
+                        update: "1",
+                        rideId: rideIdRef.current || "",
+                      },
+                    })
+                  }
+                  className="flex-1 flex-row items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 py-3.5"
+                >
+                  <Ionicons name="add" size={16} color="#d97706" />
+                  <Text className="text-xs font-bold text-amber-700">
+                    Add a stop
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
           {!isHistory && canCancel && (
             <TouchableOpacity
@@ -1163,6 +1424,107 @@ export default function Track() {
         </TouchableOpacity>
       </Modal>
 
+      {/* Tip Modal (Bolt-style — available during the ride) */}
+      <Modal
+        visible={showTipModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowTipModal(false)}
+      >
+        <TouchableOpacity
+          className="flex-1 bg-black/50 justify-end"
+          activeOpacity={1}
+          onPress={() => setShowTipModal(false)}
+        >
+          <TouchableOpacity activeOpacity={1} className="bg-surface rounded-t-[2rem] p-6">
+            <View className="flex-row justify-between items-center mb-3">
+              <Text className="text-xl font-extrabold text-foreground">
+                Tip your driver
+              </Text>
+              <TouchableOpacity
+                onPress={() => setShowTipModal(false)}
+                className="w-8 h-8 rounded-full bg-secondary items-center justify-center"
+              >
+                <Ionicons name="close" size={16} color="#2e1e1a" />
+              </TouchableOpacity>
+            </View>
+            <Text className="text-xs text-muted-foreground mb-4">
+              {driver
+                ? `Thank ${driver.name} — 100% of your tip goes directly to them.`
+                : "Thank your driver — 100% of your tip goes directly to them."}
+            </Text>
+
+            <View className="flex-row flex-wrap gap-2">
+              {tipSuggestions.map((opt) => {
+                const selected = rideTip === opt.amount;
+                return (
+                  <TouchableOpacity
+                    key={`ride-tip-${opt.label}-${opt.amount}`}
+                    onPress={() => setRideTip(selected ? null : opt.amount)}
+                    className={`flex-1 items-center rounded-xl border py-2.5 min-w-[70px] ${
+                      selected
+                        ? "bg-emerald-50 border-emerald-500"
+                        : "bg-secondary border-border"
+                    }`}
+                  >
+                    <Text
+                      className={`text-[10px] font-bold ${
+                        selected ? "text-emerald-700" : "text-muted-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </Text>
+                    <Text
+                      className={`text-sm font-extrabold ${
+                        selected ? "text-emerald-700" : "text-foreground"
+                      }`}
+                    >
+                      {formatCurrency(opt.amount)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View className="flex-row gap-2 mt-3">
+              <View className="flex-1 rounded-xl bg-secondary px-5 py-0">
+                <Text className="text-base font-bold text-foreground self-center py-2.5">
+                  R
+                </Text>
+              </View>
+              <TextInput
+                placeholder="Custom amount"
+                placeholderTextColor="#80716b"
+                value={rideCustomTip}
+                onChangeText={(t) => {
+                  setRideCustomTip(t);
+                  const amt = parseFloat(t);
+                  setRideTip(amt > 0 ? amt : null);
+                }}
+                keyboardType="numeric"
+                className="flex-1 rounded-xl border border-border bg-secondary px-4 py-2.5 text-sm font-semibold text-foreground"
+              />
+            </View>
+
+            <TouchableOpacity
+              disabled={!rideTip || rideTip <= 0 || submittingTip}
+              onPress={handleSendRideTip}
+              className={`mt-4 w-full rounded-xl py-4 items-center ${
+                !rideTip || rideTip <= 0 ? "bg-primary/50" : "bg-primary"
+              }`}
+            >
+              {submittingTip ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text className="text-sm font-bold text-primary-foreground">
+                  Send tip
+                </Text>
+              )}
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Rating Modal */}
       <Modal
         visible={showRating}
@@ -1189,6 +1551,65 @@ export default function Track() {
                   />
                 </TouchableOpacity>
               ))}
+            </View>
+
+            <View className="mb-6">
+              <Text className="text-sm font-bold text-foreground mb-1">
+                Add a tip (optional)
+              </Text>
+              <Text className="text-xs text-muted-foreground mb-3">
+                Thank your driver — this goes directly to them.
+              </Text>
+              <View className="flex-row flex-wrap gap-2">
+                {tipSuggestions.map((opt) => {
+                  const selected = tipAmount === opt.amount;
+                  return (
+                    <TouchableOpacity
+                      key={`${opt.label}-${opt.amount}`}
+                      onPress={() => setTipAmount(selected ? null : opt.amount)}
+                      className={`flex-1 items-center rounded-xl border py-2.5 min-w-[70px] ${
+                        selected
+                          ? "bg-emerald-50 border-emerald-500"
+                          : "bg-secondary border-border"
+                      }`}
+                    >
+                      <Text
+                        className={`text-[10px] font-bold ${
+                          selected ? "text-emerald-700" : "text-muted-foreground"
+                        }`}
+                      >
+                        {opt.label}
+                      </Text>
+                      <Text
+                        className={`text-sm font-extrabold ${
+                          selected ? "text-emerald-700" : "text-foreground"
+                        }`}
+                      >
+                        {formatCurrency(opt.amount)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View className="flex-row gap-2 mt-3">
+                <View className="flex-1 rounded-xl bg-secondary px-5 py-0">
+                  <Text className="text-base font-bold text-foreground self-center py-2.5">
+                    R
+                  </Text>
+                </View>
+                <TextInput
+                  placeholder="Custom amount"
+                  placeholderTextColor="#80716b"
+                  value={customTip}
+                  onChangeText={(t) => {
+                    setCustomTip(t);
+                    const amt = parseFloat(t);
+                    setTipAmount(amt > 0 ? amt : null);
+                  }}
+                  keyboardType="numeric"
+                  className="flex-1 rounded-xl border border-border bg-secondary px-4 py-2.5 text-sm font-semibold text-foreground"
+                />
+              </View>
             </View>
 
             <TextInput

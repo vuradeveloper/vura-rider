@@ -1,5 +1,5 @@
 import { Link, useRouter } from "expo-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,10 +9,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { register, useAuth, type Role } from "@/lib/auth";
 import { countries } from "@/lib/countries";
 
@@ -34,6 +36,15 @@ export default function Signup() {
   const [lastName, setLastName] = useState("");
   const [dob, setDob] = useState("");
   const [idNumber, setIdNumber] = useState("");
+  const [refCode, setRefCode] = useState("");
+
+  useEffect(() => {
+    AsyncStorage.getItem("vura.referral.code")
+      .then((code) => {
+        if (code) setRefCode(code);
+      })
+      .catch(() => undefined);
+  }, []);
 
   async function submitStep1() {
     setError("");
@@ -50,9 +61,18 @@ export default function Signup() {
       await register(email, pwd, role, {
         full_name: name,
         phone: phone ? `${countryCode} ${phone}` : undefined,
+        referralCode: refCode.trim() || undefined,
       });
       refresh();
-      router.replace("/");
+      const openAffiliate = await AsyncStorage.getItem("vura.affiliate.open")
+        .then((v) => v === "1")
+        .catch(() => false);
+      if (openAffiliate) {
+        await AsyncStorage.removeItem("vura.affiliate.open").catch(() => undefined);
+        router.replace("/affiliate" as any);
+      } else {
+        router.replace("/");
+      }
     } catch (err: any) {
       const code = err.code;
       if (code === "auth/email-already-in-use") {
@@ -66,6 +86,18 @@ export default function Signup() {
       }
     }
     setLoading(false);
+  }
+
+  async function showReferralInfo() {
+    await AsyncStorage.setItem("vura.affiliate.open", "1").catch(() => undefined);
+    Alert.alert(
+      "Invite friends, earn ride credit",
+      "Vura's referral program rewards you with R5 in ride credit every time a friend signs up " +
+        "with your code and completes their first ride. After you create your account, we'll " +
+        "take you to the Invite & earn page so you can get your own referral code and share it.\n\n" +
+        "Your earnings are ride credit — select 'Affiliate credit' when booking a ride to use them.",
+      [{ text: "Got it" }]
+    );
   }
 
   async function submitPersonalInfo() {
@@ -230,6 +262,27 @@ export default function Signup() {
                       secureTextEntry
                       className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
                     />
+                  </View>
+                  <View>
+                    <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
+                      Referral code (optional)
+                    </Text>
+                    <TextInput
+                      value={refCode}
+                      onChangeText={setRefCode}
+                      placeholder="VURA-ABCD-1234"
+                      placeholderTextColor="#80716b"
+                      autoCapitalize="characters"
+                      className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
+                    />
+                    <Text className="text-[10px] text-muted-foreground mt-1 ml-1">
+                      Have an invite? Add the code so your friend earns R5 on your first ride.
+                    </Text>
+                    <TouchableOpacity onPress={showReferralInfo} className="mt-2 ml-1 self-start">
+                      <Text className="text-[11px] font-bold text-primary underline">
+                        How referrals & affiliate credit work
+                      </Text>
+                    </TouchableOpacity>
                   </View>
 
                   {error ? (
