@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Modal, View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
+import { Modal, View, Text, TouchableOpacity, ActivityIndicator, ScrollView } from "react-native";
 import { WebView } from "react-native-webview";
 
 type Props = {
@@ -8,29 +8,46 @@ type Props = {
   gatewayUrl: string;
   onDone: (result: { success: boolean; result?: string }) => void;
   onClose: () => void;
-  // When a saved card (iVeri TransactionIndex) is being used, the hosted form
-  // is pre-filled and auto-submits. Show a lightweight "processing" overlay so
-  // the rider never sees the card-entry form again.
   savedCard?: boolean;
 };
 
-// Opens the iVeri (Nedbank) hosted payment page inside a WebView and
-// auto-submits the signed form returned by POST /api/payments/initiate.
+const API_BASE_URL =
+  (typeof process !== "undefined" && (process as any).env?.EXPO_PUBLIC_API_URL) ||
+  "http://92.4.135.243";
+
+/**
+ * Opens the iVeri (Nedbank) hosted payment page inside a WebView and
+ * auto-submits the signed form returned by POST /api/payments/initiate.
+ *
+ * The gateway is told to redirect to a fake HTTPS URL
+ * (https://vura-payments.local/return) that the WebView intercepts in
+ * onShouldStartLoadWithRequest BEFORE any navigation attempt — the app then
+ * forwards the payment result to the real server via native fetch(), which
+ * works over HTTP without Android's mixed-content block.
+ */
 export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, onClose, savedCard }: Props) {
   const [showForm, setShowForm] = useState(false);
-  // Fire onDone exactly once per payment attempt. The return is detected from
-  // the redirect URL (below), which can surface both as a navigation callback
-  // and as the gateway's own redirect — without this guard onDone would be
-  // called twice and book a ride twice.
+  // Incremented on retry to force-mount a fresh WebView.
+  const [webViewKey, setWebViewKey] = useState(0);
+  // ── Error diagnostic state ─────────────────────────────────────────────
+  const [errorUrl, setErrorUrl] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [errorDesc, setErrorDesc] = useState<string | null>(null);
+
+  // Fire onDone exactly once per payment attempt.
   const reportedRef = useRef(false);
 
-  // Reset the overlay + the "reported" guard each time the modal is (re)opened.
+  // Reset state each time the modal is (re)opened.
   useEffect(() => {
     if (visible) {
       setShowForm(false);
       reportedRef.current = false;
+      setErrorUrl(null);
+      setErrorCode(null);
+      setErrorDesc(null);
     }
   }, [visible]);
+
   const formHtml = useMemo(() => {
     if (!gatewayUrl) return "<html><body></body></html>";
     const inputs = Object.entries(fields)
@@ -50,12 +67,101 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
       const m = url.match(/[?&](result|status)=([^&]+)/i);
       if (!m) return null;
       const v = m[2].toLowerCase();
-      // iVeri Lite returns result=0 for approved transactions.
       return v === "0" || v === "success" ? "success" : v;
     } catch {
       return null;
     }
   };
+
+  /** Forward the payment result query params to the real server. */
+  const forwardReturnToServer = (url: string) => {
+    const qIndex = url.indexOf("?");
+    if (qIndex < 0) return;
+    const query = url.substring(qIndex);
+    fetch(`${API_BASE_URL}/api/payments/return${query}`).catch((e: Error) =>
+      console.warn("[PaymentWebView] return forward failed", e.message)
+    );
+  };
+
+  /** True when the url is the gateway's redirect back to us. */
+  const isReturnUrl = (url: string) =>
+    url.includes("/api/payments/return") || url.includes("vura-payments.local");
+
+  /** Parse and report a return navigation (interceptor + fallback share this). */
+  const handleReturn = (url: string) => {
+    if (!isReturnUrl(url)) return false;
+    forwardReturnToServer(url);
+    const result = parseReturn(url);
+    if (result !== null && !reportedRef.current) {
+      reportedRef.current = true;
+      onDone({ success: result === "success", result });
+    }
+    return true; // true = "was a return URL, we handled it"
+  };
+
+  const CustomErrorView = () => (
+    <View style={{ flex: 1, backgroundColor: "#fff", padding: 24, justifyContent: "center" }}>
+      <Text style={{ fontSize: 20, fontWeight: "700", color: "#c0392b", marginBottom: 12 }}>
+        Payment page error
+      </Text>
+      <ScrollView style={{ marginBottom: 20 }}>
+        {errorCode ? (
+          <Text style={{ fontSize: 14, color: "#333", marginBottom: 6 }}>
+            <Text style={{ fontWeight: "600" }}>Code: </Text>
+            {errorCode}
+          </Text>
+        ) : null}
+        {errorDesc ? (
+          <Text style={{ fontSize: 14, color: "#333", marginBottom: 6 }}>
+            <Text style={{ fontWeight: "600" }}>Description: </Text>
+            {errorDesc}
+          </Text>
+        ) : null}
+        {errorUrl ? (
+          <View style={{ marginTop: 8 }}>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 4 }}>
+              Failed URL:
+            </Text>
+            <Text
+              style={{
+                fontSize: 11,
+                color: "#666",
+                backgroundColor: "#f5f5f5",
+                padding: 10,
+                borderRadius: 6,
+                fontFamily: "monospace",
+                lineHeight: 16,
+              }}
+              selectable
+            >
+              {errorUrl}
+            </Text>
+          </View>
+        ) : null}
+      </ScrollView>
+      <TouchableOpacity
+        onPress={() => {
+          setErrorUrl(null);
+          setErrorCode(null);
+          setErrorDesc(null);
+          reportedRef.current = false;
+          setWebViewKey((k) => k + 1);
+        }}
+        style={{
+          backgroundColor: "#e04e2f",
+          paddingVertical: 14,
+          borderRadius: 10,
+          alignItems: "center",
+          marginBottom: 10,
+        }}
+      >
+        <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>Retry</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onClose} style={{ paddingVertical: 10, alignItems: "center" }}>
+        <Text style={{ color: "#80716b", fontSize: 14 }}>Cancel</Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -106,6 +212,7 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
           </View>
         </View>
         <WebView
+          key={webViewKey}
           source={{ html: formHtml }}
           originWhitelist={["*"]}
           mixedContentMode="always"
@@ -120,35 +227,16 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
               </Text>
             </View>
           )}
+          renderError={() => <CustomErrorView />}
           onShouldStartLoadWithRequest={(request) => {
             const url = request.url || "";
-            // Detect the gateway's redirect back to our server's return URL.
-            // The token (Lite_TransactionIndex) which saves the card for auto-pay
-            // comes ONLY in this redirect URL. We MUST forward it to the server
-            // via the app's native network layer (which works over HTTP) BEFORE
-            // blocking the WebView navigation that otherwise ERR_CONNECTION_REFUSED.
-            if (url.includes("/api/payments/return")) {
-              // 1) Forward the full URL to the server so it records the payment
-              //    and the token. Fire-and-forget — the server already handles
-              //    the idempotent upsert.
-              fetch(url).catch((e: Error) =>
-                console.warn("[PaymentWebView] return forward failed", e.message)
-              );
-              // 2) Parse the outcome from the URL so the app responds.
-              const result = parseReturn(url);
-              if (result !== null && !reportedRef.current) {
-                reportedRef.current = true;
-                onDone({ success: result === "success", result });
-              }
-              // 3) Block the WebView from trying to render the HTTP page.
-              return false;
-            }
+            if (handleReturn(url)) return false;
             return true;
           }}
           onNavigationStateChange={(nav) => {
             const url = nav.url || "";
-            // Fallback if onShouldStartLoadWithRequest was not triggered.
-            if (url.includes("/api/payments/return")) {
+            if (isReturnUrl(url)) {
+              forwardReturnToServer(url);
               const result = parseReturn(url);
               if (result !== null && !reportedRef.current) {
                 reportedRef.current = true;
@@ -157,15 +245,16 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
             }
           }}
           onHttpError={(syntheticEvent) => {
-            // Surface the exact failing URL/status instead of Android's opaque
-            // "Domain: undefined / ERR_CONNECTION_REFUSED" so support calls are
-            // based on facts, not guesses.
             const { url, statusCode } = syntheticEvent.nativeEvent;
             console.warn("[PaymentWebView] HTTP error", statusCode, url);
           }}
           onError={(syntheticEvent) => {
             const { code, description, url } = syntheticEvent.nativeEvent;
             console.warn("[PaymentWebView] load error", code, description, url);
+            // Store diagnostic info so the custom renderError can show it.
+            setErrorUrl(url);
+            setErrorCode(code != null ? String(code) : null);
+            setErrorDesc(description || null);
           }}
           style={{ flex: 1 }}
         />

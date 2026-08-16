@@ -105,11 +105,13 @@ export function buildIveriFormFields(input: IveriFormInput): {
     Ecom_TransactionComplete: "FALSE",
     // Order total (cents)
     Lite_Order_Amount: String(amountCents),
-    // Redirect-back URLs
-    Lite_Website_Successful_Url: cfg.returnUrl,
-    Lite_Website_Fail_Url: cfg.returnUrl,
-    Lite_Website_TryLater_Url: cfg.returnUrl,
-    Lite_Website_Error_Url: cfg.returnUrl,
+    // Redirect-back URLs — use a fake HTTPS URL that the mobile WebView
+    // intercepts in onShouldStartLoadWithRequest BEFORE any navigation
+    // attempt, bypassing Android's HTTPS->HTTP mixed-content block.
+    Lite_Website_Successful_Url: "https://vura-payments.local/return",
+    Lite_Website_Fail_Url: "https://vura-payments.local/return",
+    Lite_Website_TryLater_Url: "https://vura-payments.local/return",
+    Lite_Website_Error_Url: "https://vura-payments.local/return",
     // Billing / customer details
     Ecom_BillTo_Postal_Name_First: input.userFirstName || "",
     Ecom_BillTo_Postal_Name_Last: input.userLastName || "",
