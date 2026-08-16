@@ -12,8 +12,8 @@ export function Marker(_props: any) { return null; }
 export function Polyline(_props: any) { return null; }
 export const PROVIDER_GOOGLE = "google"; // kept for API parity only
 
-const LEAFLET_CSS_ID = "leaflet-css-cdn";
-const LEAFLET_JS_ID = "leaflet-js-cdn";
+const LEAFLET_CSS_ID = "leaflet-css-local";
+const LEAFLET_JS_ID = "leaflet-js-local";
 
 function ensureLeafletLoaded(onReady: () => void) {
   const w = window as any;
@@ -25,7 +25,7 @@ function ensureLeafletLoaded(onReady: () => void) {
     const link = document.createElement("link");
     link.id = LEAFLET_CSS_ID;
     link.rel = "stylesheet";
-    link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    link.href = "/leaflet/leaflet.css";
     document.head.appendChild(link);
   }
   const existingScript = document.getElementById(LEAFLET_JS_ID) as HTMLScriptElement | null;
@@ -35,10 +35,125 @@ function ensureLeafletLoaded(onReady: () => void) {
   }
   const script = document.createElement("script");
   script.id = LEAFLET_JS_ID;
-  script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+  script.src = "/leaflet/leaflet.js";
   script.async = true;
   script.onload = onReady;
   document.head.appendChild(script);
+}
+
+// Kick off the Leaflet CDN download as soon as this module loads (it is
+// imported early by the home/tab screens), so the first map screen never has
+// to wait on the CDN and every screen after reuses the cached copy.
+if (typeof window !== "undefined") {
+  ensureLeafletLoaded(() => {});
+}
+
+// Tiles are cached in localStorage (as data URLs) so repeat maps load
+// instantly and use far less mobile data. The cache is capped so it can never
+// fill storage and break other data (e.g. recent searches).
+function storeTile(url: string, dataUrl: string) {
+  try {
+    let n = 0;
+    const del: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf("vura:tile:") === 0) {
+        n++;
+        if (n > 250) del.push(k);
+      }
+    }
+    del.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch (e) {}
+    });
+    localStorage.setItem("vura:tile:" + url, dataUrl);
+  } catch (e) {}
+}
+
+function createCachedTileLayer(L: any, tpl: string) {
+  const CacheLayer = L.TileLayer.extend({
+    createTile: function (coords: any, done: any) {
+      const url = this.getTileUrl(coords);
+      let cached: string | null = null;
+      try {
+        cached = localStorage.getItem("vura:tile:" + url);
+      } catch (e) {}
+      const img = document.createElement("img");
+      img.style.width = img.style.height = "256px";
+      const finish = () => done(null, img);
+      const fail = () => done("error");
+      if (cached) {
+        img.onload = finish;
+        img.onerror = fail;
+        img.src = cached;
+        return img;
+      }
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", url, true);
+      xhr.responseType = "blob";
+      xhr.onload = () => {
+        if (xhr.status !== 200) {
+          fail();
+          return;
+        }
+        const fr = new FileReader();
+        fr.onload = () => {
+          const dataUrl = fr.result as string;
+          storeTile(url, dataUrl);
+          img.onload = finish;
+          img.onerror = fail;
+          img.src = dataUrl;
+        };
+        fr.readAsDataURL(xhr.response);
+      };
+      xhr.onerror = fail;
+      xhr.send();
+      return img;
+    },
+  });
+  return new CacheLayer(tpl, {
+    maxZoom: 19,
+    subdomains: "abc",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  });
+}
+
+function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const la1 = (lat1 * Math.PI) / 180;
+  const la2 = (lat2 * Math.PI) / 180;
+  const y = Math.sin(dLng) * Math.cos(la2);
+  const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLng);
+  return (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360;
+}
+
+// Smoothly animate a marker from its current position to a new one instead
+// of teleporting, so moving cars glide like Uber/Bolt.
+function animToWeb(key: string, layer: any, toLat: number, toLng: number, deg: number | null, duration = 1500) {
+  const anims = (window as any).__vuraAnims as Record<string, number> | undefined;
+  const prev = layer.getLatLng();
+  const fromLat = prev.lat, fromLng = prev.lng;
+  const start = performance.now();
+  if (anims && anims[key]) cancelAnimationFrame(anims[key]);
+  const rotate = (l: any, d: number | null) => {
+    if (d === null || d === undefined) return;
+    const el = l.getElement();
+    if (el && el.firstElementChild) (el.firstElementChild as HTMLElement).style.transform = `rotate(${d}deg)`;
+  };
+  const step = (ts: number) => {
+    const t = Math.min(1, (ts - start) / duration);
+    layer.setLatLng([fromLat + (toLat - fromLat) * t, fromLng + (toLng - fromLng) * t]);
+    rotate(layer, deg);
+    if (t < 1) {
+      const store = (window as any).__vuraAnims as Record<string, number>;
+      store[key] = requestAnimationFrame(step);
+    } else if ((window as any).__vuraAnims) {
+      delete (window as any).__vuraAnims[key];
+    }
+  };
+  const store = ((window as any).__vuraAnims = (window as any).__vuraAnims || {});
+  store[key] = requestAnimationFrame(step);
 }
 
 function injectStylesOnce() {
@@ -128,6 +243,8 @@ const MapView = forwardRef<any, any>((props, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const markerLayersRef = useRef<Record<string, any>>({});
+  const polylineLayersRef = useRef<Record<string, any>>({});
+  const lastInitialRegionRef = useRef<string>("");
   const smoothBearingRef = useRef(0);
   const [ready, setReady] = useState(false);
 
@@ -200,29 +317,49 @@ const MapView = forwardRef<any, any>((props, ref) => {
     }
     : { lat: 0, lng: 0, latD: 0.05, lngD: 0.05 };
 
+  // Stable key for the initial view — used to (a) defer map creation until a
+  // real region exists and (b) recenter only when it actually changes.
+  const initialKey = initialRegion
+    ? `${initialRegion.latitude},${initialRegion.longitude}`
+    : "";
+
   // Init map once
   const propsRef = useRef<any>(props);
   useEffect(() => {
     propsRef.current = props;
   });
 
-  // Init map once
+  // Create the map only once a real initial region is available. Deferring
+  // avoids initializing at (0,0) — which loaded a wasteful sea of tiles and
+  // caused a visible flash/jump on screens where coords arrive asynchronously
+  // (options, track). The ResizeObserver below keeps it sized after layout.
+  //
+  // IMPORTANT: this effect must NEVER tear the map down. It re-runs when
+  // `initialKey` changes (screens like Home recompute a "fit all points"
+  // region as roaming cars move every 2s). Recreating Leaflet here destroyed
+  // the map every tick while markerLayersRef still pointed at the old map's
+  // layers, so car markers were "animated" on detached layers and vanished.
+  // Region changes are handled separately by the recenter effect below.
   useEffect(() => {
+    if (!initialRegion || mapRef.current) return;
     let cancelled = false;
     injectStylesOnce();
     ensureLeafletLoaded(() => {
       if (cancelled || !containerRef.current || mapRef.current) return;
       const L = (window as any).L;
+      const latD = initialRegion.latitudeDelta || 0.05;
+      const lngD = initialRegion.longitudeDelta || 0.05;
       const zoom = Math.max(
         10,
-        Math.min(18, Math.round(Math.log2(360 / Math.max(center.latD, center.lngD))))
+        Math.min(18, Math.round(Math.log2(360 / Math.max(latD, lngD))))
       );
       const map = L.map(containerRef.current, {
         zoomControl: true,
-        attributionControl: false,
-      }).setView([center.lat, center.lng], zoom);
-      L.tileLayer(
-        "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+        attributionControl: true,
+      }).setView([initialRegion.latitude, initialRegion.longitude], zoom);
+      createCachedTileLayer(
+        L,
+        "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
       ).addTo(map);
 
       map.on("move", () => {
@@ -252,27 +389,34 @@ const MapView = forwardRef<any, any>((props, ref) => {
       });
 
       mapRef.current = map;
+      lastInitialRegionRef.current = initialKey;
       setReady(true);
+      // Container may still be laying out — size it once layout settles.
       setTimeout(() => map.invalidateSize(), 50);
-      setTimeout(() => map.invalidateSize(), 300);
-      setTimeout(() => map.invalidateSize(), 1000);
-      setTimeout(() => map.invalidateSize(), 2000);
     });
+    // No map removal here — the map is torn down only on true unmount.
     return () => {
       cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialKey]);
+
+  // Tear down Leaflet only when the component actually unmounts.
+  useEffect(() => {
+    return () => {
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
+      markerLayersRef.current = {};
+      polylineLayersRef.current = {};
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Resize observer to keep map sized correctly in flex/responsive layouts.
   // Important: NEVER recenter to initialRegion on resize — that was causing the
   // picker map to "snap back to the start" while the address resolved. We only
   // recenter when the initialRegion center actually changes.
-  const lastInitialRegionRef = useRef<string>("");
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver(() => {
@@ -284,8 +428,6 @@ const MapView = forwardRef<any, any>((props, ref) => {
   }, [ready]);
 
   // Update view when initialRegion changes dynamically (e.g. when coords finish loading asynchronously)
-  const initialKey =
-    initialRegion ? `${initialRegion.latitude},${initialRegion.longitude}` : "";
   useEffect(() => {
     if (!ready || !mapRef.current || !initialRegion) return;
     if (lastInitialRegionRef.current === initialKey) return;
@@ -308,10 +450,10 @@ const MapView = forwardRef<any, any>((props, ref) => {
       seen[key] = true;
       const existing = markerLayersRef.current[key];
       if (existing && existing.iconType === p.icon && existing.hasImg === !!p.imgUrl) {
-        existing.layer.setLatLng([p.lat, p.lng]);
-        const el = existing.layer.getElement();
-        if (el && el.firstElementChild) {
-          (el.firstElementChild as HTMLElement).style.transform = `rotate(${p.angle || 0}deg)`;
+        const prev = existing.layer.getLatLng();
+        if (Math.abs(prev.lat - p.lat) > 1e-7 || Math.abs(prev.lng - p.lng) > 1e-7) {
+          const deg = p.icon === "car" ? (bearingDeg(prev.lat, prev.lng, p.lat, p.lng) + 90) % 360 : null;
+          animToWeb(key, existing.layer, p.lat, p.lng, deg);
         }
       } else {
         if (existing) map.removeLayer(existing.layer);
@@ -333,17 +475,37 @@ const MapView = forwardRef<any, any>((props, ref) => {
       }
     });
 
-    map.eachLayer((l: any) => {
-      if (l instanceof L.Polyline) map.removeLayer(l);
-    });
-    polylines.forEach((p) => {
-      L.polyline(p.coords, {
+    // Polylines are diffed by a lightweight signature instead of being torn
+    // down and re-created on every update. Without this, the options/track
+    // screens rebuild their (hundreds of point) route lines every animation
+    // tick — a major source of map jank.
+    const seenP: Record<string, boolean> = {};
+    polylines.forEach((p, idx) => {
+      const key = "p" + idx;
+      seenP[key] = true;
+      const first = p.coords[0];
+      const last = p.coords[p.coords.length - 1];
+      const sig =
+        `${p.color}|${p.weight}|${p.coords.length}|` +
+        `${first ? first[0] + "," + first[1] : ""}|` +
+        `${last ? last[0] + "," + last[1] : ""}`;
+      const existing = polylineLayersRef.current[key];
+      if (existing && existing.sig === sig) return;
+      if (existing) map.removeLayer(existing.layer);
+      const layer = L.polyline(p.coords, {
         color: p.color || "#3b82f6",
         weight: p.weight || 4,
         opacity: 0.8,
         lineCap: "round",
         lineJoin: "round",
       }).addTo(map);
+      polylineLayersRef.current[key] = { layer, sig };
+    });
+    Object.keys(polylineLayersRef.current).forEach((key) => {
+      if (!seenP[key]) {
+        map.removeLayer(polylineLayersRef.current[key].layer);
+        delete polylineLayersRef.current[key];
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, markers, polylines]);

@@ -43,6 +43,13 @@ const items = [
     wide: true,
   },
   {
+    icon: "time" as const,
+    label: "Pay Later",
+    sub: "Ride now, pay at month-end",
+    to: "/pay-later",
+    wide: true,
+  },
+  {
     icon: "calendar" as const,
     label: "Scheduled Rides",
     sub: "Upcoming bookings",

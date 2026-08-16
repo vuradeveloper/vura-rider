@@ -15,7 +15,8 @@ import { Link, useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
-import { getSavedCards, removeCard } from "@/services/PaymentService";
+import { getSavedCards, removeCard, initiateIveriPayment } from "@/services/PaymentService";
+import PaymentWebView from "@/components/PaymentWebView";
 import {
   getBanks,
   verifyBankAccount,
@@ -58,6 +59,32 @@ export default function WalletPage() {
 
   const [isCashingOut, setIsCashingOut] = useState(false);
   const [addingCard, setAddingCard] = useState(false);
+  const [iveriVisible, setIveriVisible] = useState(false);
+  const [iveriFields, setIveriFields] = useState<Record<string, string>>({});
+  const [iveriGateway, setIveriGateway] = useState("");
+  const [startingIveri, setStartingIveri] = useState(false);
+
+  const startTestPayment = async () => {
+    setStartingIveri(true);
+    try {
+      const result = await initiateIveriPayment(0.2);
+      if (result.mock) {
+        Alert.alert(
+          "Payments are in mock mode",
+          "Your server is not configured for live iVeri payments yet (PAYMENTS_MODE=mock). Fill in the IVERI_* values in server/.env to go live.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+      setIveriFields(result.fields);
+      setIveriGateway(result.gatewayUrl);
+      setIveriVisible(true);
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Could not start payment");
+    } finally {
+      setStartingIveri(false);
+    }
+  };
   const [bankQuery, setBankQuery] = useState("");
   const [selectedBank, setSelectedBank] = useState<Bank | null>(null);
   const [accountNumber, setAccountNumber] = useState("");
@@ -262,6 +289,24 @@ export default function WalletPage() {
               )}
             </TouchableOpacity>
           )}
+          {!isDriver && (
+            <TouchableOpacity
+              onPress={startTestPayment}
+              disabled={startingIveri}
+              className="mt-2 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3"
+            >
+              {startingIveri ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="card" size={18} color="#fff" />
+                  <Text className="text-sm font-bold text-primary-foreground">
+                    Test card payment
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
         <View className="h-6" />
       </ScrollView>
@@ -397,6 +442,25 @@ export default function WalletPage() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* iVeri (Nedbank) hosted payment */}
+      <PaymentWebView
+        visible={iveriVisible}
+        fields={iveriFields}
+        gatewayUrl={iveriGateway}
+        onDone={(res) => {
+          setIveriVisible(false);
+          Alert.alert(
+            res.success ? "Payment successful" : "Payment not completed",
+            res.success
+              ? "Your card was charged."
+              : res.result === "failed"
+                ? "The payment was declined."
+                : "The payment did not complete."
+          );
+        }}
+        onClose={() => setIveriVisible(false)}
+      />
     </SafeAreaView>
   );
 }

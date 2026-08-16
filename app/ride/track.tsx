@@ -1,8 +1,10 @@
 import { disconnectSocket, getSocket } from "@/lib/socket";
+import { fetchRoute } from "@/lib/route";
 import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
-import { payForRide, payWithCash, payWithAffiliate } from "@/services/PaymentService";
+import { payWithCash, payWithAffiliate, initiateIveriPayment } from "@/services/PaymentService";
+import PaymentWebView from "@/components/PaymentWebView";
 import { getActiveRide, getRide, submitRating } from "@/services/RideService";
 import { submitTip, getTipSuggestions } from "@/services/TipService";
 import { shareTrip } from "@/services/SafetyService";
@@ -32,7 +34,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 // ⚠️ Adjust these two imports to match where they actually live in your project.
 import MapView, { Marker, Polyline } from "@/components/MapView";
-const CAR_LOCATOR_IMG = require("@/assets/images/CarLocator.png");
+import { CAR_LOCATOR_DATA_URL } from "@/lib/carIcon";
+const CAR_LOCATOR_IMG = CAR_LOCATOR_DATA_URL;
 
 type Driver = {
   name: string;
@@ -43,6 +46,8 @@ type Driver = {
 
 type DriverLoc = { lat: number; lng: number; bearing: number };
 
+type NearbyCar = { id: string; lat: number; lng: number; angle: number };
+
 const STATUS_LABEL: Record<RideStatus, string> = {
   searching: "Finding your driver…",
   accepted: "Driver is on the way",
@@ -51,35 +56,6 @@ const STATUS_LABEL: Record<RideStatus, string> = {
   completed: "Trip completed",
   cancelled: "Trip cancelled",
 };
-
-// Same OSRM lookup used elsewhere in the app (DriverHome.tsx, Home.tsx) —
-// used here only for the demo fallback below.
-async function fetchRoute(
-  start: [number, number],
-  end: [number, number],
-  waypoints: Waypoint[] = []
-) {
-  try {
-    const validWaypoints = waypoints.filter((w) => w.lat && w.lng);
-    const coords = [
-      [start[1], start[0]],
-      ...validWaypoints.map((w) => [w.lng, w.lat]),
-      [end[1], end[0]],
-    ];
-    const coordString = coords.map((c) => `${c[0]},${c[1]}`).join(";");
-    const res = await fetch(
-      `https://router.project-osrm.org/route/v1/driving/${coordString}?geometries=geojson&overview=full`
-    );
-    const data = await res.json();
-    if (data.routes?.[0]) {
-      return data.routes[0].geometry.coordinates.map((c: any) => ({
-        latitude: c[1],
-        longitude: c[0],
-      }));
-    }
-  } catch (e) {}
-  return [];
-}
 
 function computeBearing(
   from: { latitude: number; longitude: number },
@@ -137,10 +113,11 @@ export default function Track() {
   const [pickupCoord, setPickupCoord] = useState<[number, number] | null>(null);
   const [dropoffCoord, setDropoffCoord] = useState<[number, number] | null>(null);
   const [driverLoc, setDriverLoc] = useState<DriverLoc | null>(null);
+  const [nearbyCars, setNearbyCars] = useState<NearbyCar[]>([]);
 
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
   const [denseRoute, setDenseRoute] = useState<{ latitude: number; longitude: number }[]>([]);
-  const [animStep, setAnimStep] = useState(0);
+  const [staticRoute, setStaticRoute] = useState<{ latitude: number; longitude: number }[]>([]);
   const [carBearing, setCarBearing] = useState(0);
   const [showCancel, setShowCancel] = useState(false);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
@@ -152,13 +129,8 @@ export default function Track() {
   const [showEtaShareModal, setShowEtaShareModal] = useState(false);
   const [sharingEta, setSharingEta] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [splitFareActive, setSplitFareActive] = useState(false);
   const [tipAmount, setTipAmount] = useState<number | null>(null);
   const [customTip, setCustomTip] = useState("");
-  const [showTipModal, setShowTipModal] = useState(false);
-  const [rideTip, setRideTip] = useState<number | null>(null);
-  const [rideCustomTip, setRideCustomTip] = useState("");
-  const [submittingTip, setSubmittingTip] = useState(false);
 
   const rideIdRef = useRef<string | null>(rideIdParam ?? null);
   const statusRef = useRef<RideStatus>("searching");
@@ -167,6 +139,14 @@ export default function Track() {
   const isHistory = !!rideIdParam;
   const demoRanRef = useRef(false);
   const prevPickupRef = useRef<[number, number] | null>(null);
+
+  // iVeri (Nedbank) pre-auth payment before the ride is booked.
+  const [iveriVisible, setIveriVisible] = useState(false);
+  const [iveriFields, setIveriFields] = useState<Record<string, string>>({});
+  const [iveriGateway, setIveriGateway] = useState("");
+  const [iveriSavedCard, setIveriSavedCard] = useState(false);
+  const iveriRef = useRef<string | null>(null);
+  const pendingRequestRef = useRef<any>(null);
 
   // Cancellation for the demo simulation. Deliberately refs (not locals) and
   // set by a dedicated unmount-only effect so that re-renders caused by
@@ -237,6 +217,21 @@ export default function Track() {
     })();
   }, []);
 
+  // Draw the green route line (pickup → stops → destination) straight away so
+  // the path is visible while the app is still searching for a driver — same
+  // line as shown on the options screen.
+  useEffect(() => {
+    if (!pickupCoord || !dropoffCoord) return;
+    let active = true;
+    (async () => {
+      const route = await fetchRoute(pickupCoord, dropoffCoord, waypoints);
+      if (active) setStaticRoute(route);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [pickupCoord, dropoffCoord, waypoints]);
+
   // Re-read pickup from storage when returning to the screen (e.g. after the
   // rider updates the pickup location on the map picker).
   useFocusEffect(
@@ -260,6 +255,37 @@ export default function Track() {
       })();
     }, [])
   );
+
+  // While waiting for a driver, gently drift a few nearby cars around the
+  // pickup so the map doesn't look dead during the "searching" phase.
+  useEffect(() => {
+    if (isHistory || !pickupCoord) return;
+    const [baseLat, baseLng] = pickupCoord;
+    setNearbyCars(
+      [0, 1, 2].map((i) => ({
+        id: `car-${i}`,
+        lat: baseLat + (Math.random() - 0.5) * 0.01,
+        lng: baseLng + (Math.random() - 0.5) * 0.01,
+        angle: Math.random() * 360,
+      }))
+    );
+    const interval = setInterval(() => {
+      setNearbyCars((prev) =>
+        prev.map((c) => {
+          const angle = (c.angle + (Math.random() - 0.5) * 4 + 360) % 360;
+          const rad = (angle * Math.PI) / 180;
+          const step = 0.00004;
+          return {
+            ...c,
+            lat: c.lat + Math.cos(rad) * step,
+            lng: c.lng + Math.sin(rad) * step,
+            angle,
+          };
+        })
+      );
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isHistory, pickupCoord]);
 
   // Re-center the map on the pickup whenever it changes (before the trip starts).
   useEffect(() => {
@@ -540,9 +566,11 @@ export default function Track() {
         socket = await getSocket();
         if (!active || !socket) return;
 
-        socket.on("connect_error", (err) =>
-          setError(err.message || "Connection failed")
-        );
+        socket.on("connect_error", () => {
+          // Transport hiccup (e.g. websocket upgrade blocked) — socket.io keeps
+          // retrying with the polling fallback, so don't flash a scary banner.
+          console.warn("[Track] Socket connect_error (retrying)");
+        });
 
         socket.emit("passenger:connect");
 
@@ -652,6 +680,15 @@ export default function Track() {
           useAppStore.getState().setActiveRide(null);
         });
 
+        socket.on("ride:refunded", (data) => {
+          // Rider cancelled before pickup — the card pre-auth was refunded.
+          Alert.alert(
+            "Payment refunded",
+            data?.note || "Your card payment has been refunded.",
+            [{ text: "OK" }]
+          );
+        });
+
         socket.on("ride:pickup:updated", (data) => {
           setPickupAddr(data.address);
           if (data.lat != null && data.lng != null) {
@@ -701,19 +738,51 @@ export default function Track() {
           return;
         }
 
-        socket.emit("passenger:ride:request", {
-          pickupAddress: pa || "Pickup",
-          pickupLat: pickup[0],
-          pickupLng: pickup[1],
-          destinationAddress: da || "Destination",
-          destinationLat: dropoff[0],
-          destinationLng: dropoff[1],
-          waypoints: waypoints.map((w) => ({
-            address: w.address,
-            lat: w.lat,
-            lng: w.lng,
-          })),
-        });
+        // ── Card pre-auth: charge the card BEFORE booking the ride ──
+        // If the card is declined or has insufficient funds, we never emit the
+        // ride request, so the ride is never booked.
+        const paymentMethodRef = await AsyncStorage.getItem("vura.ride.payment");
+        const fareStr = await AsyncStorage.getItem("vura.ride.fare");
+        const fare = parseFloat(fareStr || "0.2") || 0.2;
+
+        const fireRequest = (paymentReference?: string) => {
+          socket!.emit("passenger:ride:request", {
+            pickupAddress: pa || "Pickup",
+            pickupLat: pickup[0],
+            pickupLng: pickup[1],
+            destinationAddress: da || "Destination",
+            destinationLat: dropoff[0],
+            destinationLng: dropoff[1],
+            waypoints: waypoints.map((w) => ({
+              address: w.address,
+              lat: w.lat,
+              lng: w.lng,
+            })),
+            paymentMethod: paymentReference ? "card" : paymentMethodRef || undefined,
+            paymentReference,
+          });
+        };
+
+        if (paymentMethodRef === "card") {
+          try {
+            const init = await initiateIveriPayment(fare);
+            if (init.mock) {
+              // Mock mode: the server marks the payment completed for us.
+              fireRequest(init.reference);
+            } else {
+              iveriRef.current = init.reference;
+              setIveriFields(init.fields || {});
+              setIveriGateway(init.gatewayUrl || "");
+              setIveriSavedCard(Boolean((init as any).usesSavedCard));
+              pendingRequestRef.current = fireRequest;
+              setIveriVisible(true);
+            }
+          } catch (e: any) {
+            setError(e.message || "Could not start card payment");
+          }
+        } else {
+          fireRequest();
+        }
       } catch (e: any) {
         setError(e.message || "Could not connect");
       }
@@ -731,6 +800,7 @@ export default function Track() {
         socket.off("ride:driver:location");
         socket.off("ride:completed");
         socket.off("ride:cancelled");
+        socket.off("ride:refunded");
         socket.off("ride:pickup:updated");
         socket.off("connect_error");
       }
@@ -744,13 +814,7 @@ export default function Track() {
     if (id) {
       try {
         if (method === "card") {
-          const res = await payForRide(id);
-          if (!res.success) {
-            Alert.alert(
-              "Payment",
-              res.error || "Card payment could not be completed."
-            );
-          }
+          // Card was already charged (pre-auth) at booking — nothing more to do.
         } else if (method === "affiliate") {
           const res = await payWithAffiliate(id);
           if (!res.success) {
@@ -770,26 +834,6 @@ export default function Track() {
       }
     }
     setShowRating(true);
-  }
-
-  async function handleSendRideTip() {
-    const id = rideIdRef.current;
-    if (!id || !rideTip || rideTip <= 0) return;
-    setSubmittingTip(true);
-    try {
-      await submitTip(id, rideTip);
-      Alert.alert(
-        "Tip sent!",
-        `${formatCurrency(rideTip)} tip sent to ${driver?.name || "your driver"}. Thank you!`
-      );
-      setShowTipModal(false);
-      setRideTip(null);
-      setRideCustomTip("");
-    } catch (e: any) {
-      Alert.alert("Error", e.message || "Could not send tip");
-    } finally {
-      setSubmittingTip(false);
-    }
   }
 
   async function removeStop(i: number) {
@@ -818,23 +862,19 @@ export default function Track() {
   async function doSubmitRating() {
     const id = rideIdRef.current;
     if (!id || rating === 0) return;
-    setSubmitting(true);
-    try {
-      if (tipAmount != null && tipAmount > 0) {
-        try {
-          await submitTip(id, tipAmount);
-        } catch {
-          // tip is best-effort
-        }
-      }
-      await submitRating(id, rating, comment || undefined);
-    } catch {
-      // rating is best-effort
-    } finally {
-      setSubmitting(false);
-      disconnectSocket();
-      router.replace(`/ride/receipt?rideId=${id}`);
-    }
+
+    // Navigate immediately — rating/tip are best-effort and must never block
+    // the user from leaving the screen (slow DB round-trips used to keep this
+    // modal spinning for ages).
+    const score = rating;
+    const commentText = comment.trim() || undefined;
+    const tip = tipAmount;
+    setSubmitting(false);
+    disconnectSocket();
+    router.replace(`/ride/receipt?rideId=${id}`);
+
+    if (tip != null && tip > 0) submitTip(id, tip).catch(() => {});
+    submitRating(id, score, commentText).catch(() => {});
   }
 
   const canCancel = status === "searching" || status === "accepted";
@@ -855,6 +895,7 @@ export default function Track() {
     <View className="flex-1 bg-background">
       {/* Fullscreen Map */}
       <View className="absolute inset-0">
+        {pickupCoord || dropoffCoord ? (
         <MapView
           ref={mapRef}
           style={{ flex: 1 }}
@@ -883,6 +924,15 @@ export default function Track() {
               title="Pickup"
             />
           )}
+          {status === "searching" && nearbyCars.map((car) => (
+            <Marker
+              key={car.id}
+              coordinate={{ latitude: car.lat, longitude: car.lng }}
+              image={CAR_LOCATOR_IMG}
+              rotation={(car.angle + 90) % 360}
+              title="Nearby driver"
+            />
+          ))}
           {waypoints.map((wp, i) => (
             <Marker
               key={`stop-${i}`}
@@ -906,6 +956,20 @@ export default function Track() {
               title="Driver"
             />
           )}
+          {staticRoute.length > 1 && (
+            <>
+              <Polyline
+                coordinates={staticRoute}
+                strokeColor="#000000"
+                strokeWidth={7}
+              />
+              <Polyline
+                coordinates={staticRoute}
+                strokeColor="#22c55e"
+                strokeWidth={4}
+              />
+            </>
+          )}
           {denseRoute.length > 1 && (
             <Polyline
               coordinates={denseRoute}
@@ -921,6 +985,11 @@ export default function Track() {
             />
           )}
         </MapView>
+        ) : (
+          <View className="flex-1 items-center justify-center bg-background">
+            <ActivityIndicator size="small" color="#e04e2f" />
+          </View>
+        )}
       </View>
 
       {/* Floating Header Actions */}
@@ -1059,28 +1128,6 @@ export default function Track() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                className="flex-1 items-center gap-1 rounded-full bg-secondary py-3 min-w-[70px]"
-                onPress={() => {
-                  const id = rideIdRef.current;
-                  if (!id) return;
-                  router.push(`/ride/fare-split?rideId=${id}&fare=${fare || 0}`);
-                }}
-              >
-                <Ionicons name="people" size={16} color="#e04e2f" />
-                <Text className="text-xs font-semibold text-foreground">
-                  Split
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                className="flex-1 items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 py-3 min-w-[70px]"
-                onPress={() => setShowTipModal(true)}
-              >
-                <Ionicons name="heart" size={16} color="#16a34a" />
-                <Text className="text-xs font-bold text-emerald-700">
-                  Tip
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
                 className="flex-1 items-center gap-1 rounded-xl bg-red-50 border border-red-200 py-3 min-w-[70px]"
                 onPress={() => Alert.alert("SOS", "Dispatching emergency services.")}
               >
@@ -1180,10 +1227,10 @@ export default function Track() {
                       },
                     })
                   }
-                  className="flex-1 flex-row items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 py-3.5"
+                  className="flex-1 flex-row items-center justify-center gap-2 rounded-xl border border-border bg-surface py-3.5"
                 >
-                  <Ionicons name="location" size={16} color="#16a34a" />
-                  <Text className="text-xs font-bold text-emerald-700">
+                  <Ionicons name="location" size={16} color="#2e1e1a" />
+                  <Text className="text-xs font-bold text-foreground">
                     Update pickup
                   </Text>
                 </TouchableOpacity>
@@ -1198,10 +1245,10 @@ export default function Track() {
                       },
                     })
                   }
-                  className="flex-1 flex-row items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 py-3.5"
+                  className="flex-1 flex-row items-center justify-center gap-2 rounded-xl border border-border bg-surface py-3.5"
                 >
-                  <Ionicons name="add" size={16} color="#d97706" />
-                  <Text className="text-xs font-bold text-amber-700">
+                  <Ionicons name="add" size={16} color="#2e1e1a" />
+                  <Text className="text-xs font-bold text-foreground">
                     Add a stop
                   </Text>
                 </TouchableOpacity>
@@ -1424,107 +1471,6 @@ export default function Track() {
         </TouchableOpacity>
       </Modal>
 
-      {/* Tip Modal (Bolt-style — available during the ride) */}
-      <Modal
-        visible={showTipModal}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowTipModal(false)}
-      >
-        <TouchableOpacity
-          className="flex-1 bg-black/50 justify-end"
-          activeOpacity={1}
-          onPress={() => setShowTipModal(false)}
-        >
-          <TouchableOpacity activeOpacity={1} className="bg-surface rounded-t-[2rem] p-6">
-            <View className="flex-row justify-between items-center mb-3">
-              <Text className="text-xl font-extrabold text-foreground">
-                Tip your driver
-              </Text>
-              <TouchableOpacity
-                onPress={() => setShowTipModal(false)}
-                className="w-8 h-8 rounded-full bg-secondary items-center justify-center"
-              >
-                <Ionicons name="close" size={16} color="#2e1e1a" />
-              </TouchableOpacity>
-            </View>
-            <Text className="text-xs text-muted-foreground mb-4">
-              {driver
-                ? `Thank ${driver.name} — 100% of your tip goes directly to them.`
-                : "Thank your driver — 100% of your tip goes directly to them."}
-            </Text>
-
-            <View className="flex-row flex-wrap gap-2">
-              {tipSuggestions.map((opt) => {
-                const selected = rideTip === opt.amount;
-                return (
-                  <TouchableOpacity
-                    key={`ride-tip-${opt.label}-${opt.amount}`}
-                    onPress={() => setRideTip(selected ? null : opt.amount)}
-                    className={`flex-1 items-center rounded-xl border py-2.5 min-w-[70px] ${
-                      selected
-                        ? "bg-emerald-50 border-emerald-500"
-                        : "bg-secondary border-border"
-                    }`}
-                  >
-                    <Text
-                      className={`text-[10px] font-bold ${
-                        selected ? "text-emerald-700" : "text-muted-foreground"
-                      }`}
-                    >
-                      {opt.label}
-                    </Text>
-                    <Text
-                      className={`text-sm font-extrabold ${
-                        selected ? "text-emerald-700" : "text-foreground"
-                      }`}
-                    >
-                      {formatCurrency(opt.amount)}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <View className="flex-row gap-2 mt-3">
-              <View className="flex-1 rounded-xl bg-secondary px-5 py-0">
-                <Text className="text-base font-bold text-foreground self-center py-2.5">
-                  R
-                </Text>
-              </View>
-              <TextInput
-                placeholder="Custom amount"
-                placeholderTextColor="#80716b"
-                value={rideCustomTip}
-                onChangeText={(t) => {
-                  setRideCustomTip(t);
-                  const amt = parseFloat(t);
-                  setRideTip(amt > 0 ? amt : null);
-                }}
-                keyboardType="numeric"
-                className="flex-1 rounded-xl border border-border bg-secondary px-4 py-2.5 text-sm font-semibold text-foreground"
-              />
-            </View>
-
-            <TouchableOpacity
-              disabled={!rideTip || rideTip <= 0 || submittingTip}
-              onPress={handleSendRideTip}
-              className={`mt-4 w-full rounded-xl py-4 items-center ${
-                !rideTip || rideTip <= 0 ? "bg-primary/50" : "bg-primary"
-              }`}
-            >
-              {submittingTip ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text className="text-sm font-bold text-primary-foreground">
-                  Send tip
-                </Text>
-              )}
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
       {/* Rating Modal */}
       <Modal
         visible={showRating}
@@ -1639,6 +1585,32 @@ export default function Track() {
           </View>
         </View>
       </Modal>
+
+      {/* iVeri (Nedbank) hosted card payment — pre-auth before booking */}
+      <PaymentWebView
+        visible={iveriVisible}
+        fields={iveriFields}
+        gatewayUrl={iveriGateway}
+        savedCard={iveriSavedCard}
+        onClose={() => {
+          setIveriVisible(false);
+          pendingRequestRef.current = null;
+          setError("Card payment cancelled. Ride was not booked.");
+        }}
+        onDone={({ success }) => {
+          setIveriVisible(false);
+          const fire = pendingRequestRef.current;
+          const ref = iveriRef.current;
+          pendingRequestRef.current = null;
+          if (success && fire && ref) {
+            fire(ref);
+          } else {
+            setError(
+              "Card payment was declined or insufficient funds. Ride was not booked."
+            );
+          }
+        }}
+      />
     </View>
   );
 }

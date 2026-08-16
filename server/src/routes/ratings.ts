@@ -28,7 +28,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
     await execute(
       `INSERT INTO ratings (ride_id, passenger_id, driver_id, score, comment)
        VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (ride_id, passenger_id) DO UPDATE SET score = $4, comment = $5`,
+       ON CONFLICT (ride_id) DO UPDATE SET score = $4, comment = $5`,
       [rideId, passengerId, driverId, score, comment || null]
     );
 

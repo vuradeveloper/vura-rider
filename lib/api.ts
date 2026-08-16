@@ -32,6 +32,7 @@ export async function apiFetch<T = any>(
       ...authHeader,
       ...(options.headers as Record<string, string> | undefined),
     },
+    signal: AbortSignal.timeout(20000),
   });
 
   if (!res.ok) {

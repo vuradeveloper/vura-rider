@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   Alert,
@@ -12,6 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Picker } from "@react-native-picker/picker";
 import { formatCurrency, estimateFare } from "@/lib/utils";
 import { scheduleRide } from "@/services/SchedulingService";
 import { useAppStore } from "@/lib/store";
@@ -22,21 +22,59 @@ const tiers = [
   { id: "lux", name: "VuraLux", multiplier: 2 },
 ];
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function pad(n: number) {
+  return n.toString().padStart(2, "0");
+}
+
+function dateKey(d: Date) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Now + 1h, rounded up to the nearest 15-minute slot.
+function defaultTime() {
+  const t = new Date(Date.now() + 3600000);
+  let m = Math.ceil(t.getMinutes() / 15) * 15;
+  let h = t.getHours();
+  if (m >= 60) {
+    m = 0;
+    h += 1;
+  }
+  return `${pad(h % 24)}:${pad(m)}`;
+}
+
 export default function ScheduleRideScreen() {
   const router = useRouter();
   const [selectedTier, setSelectedTier] = useState("x");
-  const [dateStr, setDateStr] = useState(() => {
-    const d = new Date(Date.now() + 3600000);
-    return d.toISOString().split("T")[0];
-  });
-  const [timeStr, setTimeStr] = useState(() => {
-    const d = new Date(Date.now() + 3600000);
-    return d.toTimeString().slice(0, 5);
-  });
   const [scheduling, setScheduling] = useState(false);
+  const [timeStr, setTimeStr] = useState(defaultTime);
 
   const pickupAddress = useAppStore((s) => s.pickupAddress);
   const destinationAddress = useAppStore((s) => s.destinationAddress);
+
+  const dateOptions = useMemo(() => {
+    const out: Date[] = [];
+    const now = new Date();
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      out.push(d);
+    }
+    return out;
+  }, []);
+  const [dateIndex, setDateIndex] = useState(0);
+
+  const timeOptions = useMemo(() => {
+    const out: string[] = [];
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m += 15) out.push(`${pad(h)}:${pad(m)}`);
+    }
+    return out;
+  }, []);
+
+  const selectedDate = dateOptions[dateIndex];
 
   async function handleSchedule() {
     const pickup = JSON.parse((await AsyncStorage.getItem("vura.ride.pickup")) || "null");
@@ -47,11 +85,12 @@ export default function ScheduleRideScreen() {
       return;
     }
 
-    const scheduledAt = new Date(`${dateStr}T${timeStr}:00`).toISOString();
-    if (new Date(scheduledAt) <= new Date()) {
-      Alert.alert("Error", "Please select a future date and time.");
+    const chosen = new Date(`${dateKey(selectedDate)}T${timeStr}:00`);
+    if (chosen.getTime() <= Date.now()) {
+      Alert.alert("Error", "Please choose a future date and time.");
       return;
     }
+    const scheduledAt = chosen.toISOString();
 
     setScheduling(true);
     try {
@@ -65,8 +104,8 @@ export default function ScheduleRideScreen() {
         scheduledAt,
         tier: selectedTier,
       });
-      Alert.alert("Scheduled!", "Your ride has been booked.", [
-        { text: "OK", onPress: () => router.replace("/") },
+      Alert.alert("Ride scheduled!", "We'll book your driver closer to pickup time.", [
+        { text: "View schedule", onPress: () => router.replace("/scheduled-rides") },
       ]);
     } catch (err: any) {
       Alert.alert("Error", err.message || "Could not schedule ride");
@@ -76,6 +115,10 @@ export default function ScheduleRideScreen() {
   }
 
   const distance = 5;
+  const chosen = (() => {
+    const d = new Date(`${dateKey(selectedDate)}T${timeStr}:00`);
+    return d.getTime() > Date.now() ? d : null;
+  })();
 
   return (
     <SafeAreaView className="flex-1 bg-background">
@@ -115,34 +158,79 @@ export default function ScheduleRideScreen() {
 
         <View className="rounded-xl bg-surface border border-border p-4 mb-4">
           <Text className="text-xs font-bold text-muted-foreground uppercase mb-3">
-            Schedule for
+            Pickup date
           </Text>
-          <View className="flex-row gap-3">
-            <View className="flex-1 gap-y-1">
-              <Text className="text-xs font-bold text-muted-foreground ml-1">
-                Date (YYYY-MM-DD)
-              </Text>
-              <TextInput
-                placeholder="2026-07-25"
-                placeholderTextColor="#80716b"
-                value={dateStr}
-                onChangeText={setDateStr}
-                className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold text-foreground"
-              />
-            </View>
-            <View className="flex-1 gap-y-1">
-              <Text className="text-xs font-bold text-muted-foreground ml-1">
-                Time (HH:MM)
-              </Text>
-              <TextInput
-                placeholder="14:30"
-                placeholderTextColor="#80716b"
-                value={timeStr}
-                onChangeText={setTimeStr}
-                className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold text-foreground"
-              />
-            </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 8 }}
+          >
+            {dateOptions.map((d, i) => {
+              const active = i === dateIndex;
+              const label =
+                i === 0 ? "Today" : i === 1 ? "Tomorrow" : WEEKDAYS[d.getDay()];
+              return (
+                <TouchableOpacity
+                  key={dateKey(d)}
+                  onPress={() => setDateIndex(i)}
+                  className={`w-20 rounded-xl px-2 py-3 items-center border ${
+                    active ? "bg-primary border-primary" : "bg-secondary border-border"
+                  }`}
+                >
+                  <Text
+                    className={`text-[11px] font-bold uppercase ${
+                      active ? "text-white" : "text-muted-foreground"
+                    }`}
+                  >
+                    {label}
+                  </Text>
+                  <Text
+                    className={`text-lg font-extrabold mt-1 ${
+                      active ? "text-white" : "text-foreground"
+                    }`}
+                  >
+                    {d.getDate()}
+                  </Text>
+                  <Text
+                    className={`text-[10px] font-semibold ${
+                      active ? "text-white/80" : "text-muted-foreground"
+                    }`}
+                  >
+                    {MONTHS[d.getMonth()]}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        <View className="rounded-xl bg-surface border border-border p-4 mb-4">
+          <Text className="text-xs font-bold text-muted-foreground uppercase mb-3">
+            Pickup time
+          </Text>
+          <View className="rounded-xl bg-secondary overflow-hidden">
+            <Picker
+              selectedValue={timeStr}
+              onValueChange={(v) => setTimeStr(String(v))}
+              style={{ height: 120 }}
+              itemStyle={{ fontSize: 16, fontWeight: "600" }}
+            >
+              {timeOptions.map((t) => (
+                <Picker.Item key={t} label={t} value={t} />
+              ))}
+            </Picker>
           </View>
+          {chosen && (
+            <Text className="text-xs text-muted-foreground mt-2">
+              {chosen.toLocaleDateString("en-ZA", {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </Text>
+          )}
         </View>
 
         <View className="rounded-xl bg-surface border border-border p-4 mb-6">

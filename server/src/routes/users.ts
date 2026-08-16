@@ -11,16 +11,6 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
     const { role, phone, full_name, referralCode } = req.body;
     const firebaseUid = req.userId!;
 
-    // Ensure columns exist on users table
-    try {
-      await execute(`
-        ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS id_number VARCHAR(50),
-        ADD COLUMN IF NOT EXISTS id_document_name VARCHAR(255),
-        ADD COLUMN IF NOT EXISTS license_document_name VARCHAR(255)
-      `);
-    } catch { /* columns already exist or alter ignored */ }
-
     const existing = await queryOne<{ id: string }>(
       "SELECT id FROM users WHERE firebase_uid = $1",
       [firebaseUid]

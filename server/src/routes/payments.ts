@@ -1,8 +1,34 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
+import {
+  buildIveriFormFields,
+} from "../services/iveriPayment";
 
 const router = Router();
+
+// Ensure the payments table exists (one-time, per server)
+async function ensurePaymentsTable() {
+  try {
+    await execute(`
+      CREATE TABLE IF NOT EXISTS payments (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id UUID REFERENCES users(id),
+        ride_id UUID REFERENCES rides(id),
+        reference VARCHAR(100),
+        amount NUMERIC(10,2),
+        currency VARCHAR(3) DEFAULT 'ZAR',
+        status VARCHAR(20),
+        provider VARCHAR(20),
+        raw_response JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch {
+    /* already exists */
+  }
+}
 
 // GET /api/payments/methods — List saved payment methods
 router.get("/methods", requireAuth, async (req: AuthRequest, res: Response) => {
@@ -57,10 +83,15 @@ router.post("/methods", requireAuth, async (req: AuthRequest, res: Response) => 
           bank VARCHAR(100),
           exp_month INTEGER,
           exp_year INTEGER,
+          card_number_masked VARCHAR(30),
+          transaction_index VARCHAR(100),
           is_default BOOLEAN DEFAULT false,
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Add tokenisation columns for databases created before this change.
+      await execute(`ALTER TABLE saved_cards ADD COLUMN IF NOT EXISTS card_number_masked VARCHAR(30)`);
+      await execute(`ALTER TABLE saved_cards ADD COLUMN IF NOT EXISTS transaction_index VARCHAR(100)`);
     } catch { /* already exists */ }
 
     const { card_type, last4, bank, exp_month, exp_year } = req.body;
@@ -112,6 +143,187 @@ router.delete("/methods/:id", requireAuth, async (req: AuthRequest, res: Respons
   }
 });
 
+// POST /api/payments/initiate — Start an iVeri (Nedbank) hosted payment.
+// Server-side only: builds the signed form fields; the secret never leaves the
+// server. Adapted from the partner's snippet to Express + Firebase + Postgres.
+router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { amountRands, rideId } = req.body;
+    const amount = Number(amountRands);
+    // TEMPORARY: minimum is R0.20 for testing. Raise before production.
+    if (!amount || amount < 0.2 || amount > 5000) {
+      res.status(400).json({ error: "Amount must be between R0.20 and R5 000" });
+      return;
+    }
+
+    const firebaseUid = req.userId!;
+    const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
+      "SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1",
+      [firebaseUid]
+    );
+    if (!user) { res.status(401).json({ error: "User not found" }); return; }
+
+    // Saved card (iVeri transaction index) — lets the rider pay without
+    // re-entering card details if they've paid before.
+    const savedCard = await queryOne<{
+      transaction_index: string;
+      last4: string;
+      card_number_masked: string | null;
+      exp_month: number | null;
+      exp_year: number | null;
+    }>(
+      `SELECT transaction_index, last4, card_number_masked, exp_month, exp_year
+       FROM saved_cards
+       WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC LIMIT 1`,
+      [user.id]
+    ).catch(() => null);
+
+    const reference =
+      `VURA${Date.now().toString(36).toUpperCase()}` +
+      `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+    try {
+      await ensurePaymentsTable();
+      await execute(
+        `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+         VALUES ($1, $2, $3, $4, 'ZAR', 'initiated', 'iveri')`,
+        [user.id, rideId || null, reference, amount]
+      );
+    } catch (e) { /* logging/table issues shouldn't block the payment */ }
+
+    const result = buildIveriFormFields({
+      amountRands: amount,
+      merchantReference: reference,
+      userEmail: user.email,
+      userFirstName: user.full_name,
+      userPhone: user.phone,
+      // Card-on-file token from a previous successful payment, so the rider
+      // doesn't re-enter card details on the hosted page.
+      transactionIndex: savedCard?.transaction_index || null,
+      cardNumberMasked: savedCard?.card_number_masked || null,
+      cardExpMonth: savedCard?.exp_month || null,
+      cardExpYear: savedCard?.exp_year || null,
+    });
+
+    if (result === null) {
+      res.json({ reference, live: false, fields: {}, gatewayUrl: "" });
+      return;
+    }
+
+    // In mock mode there is no real gateway redirect, so simulate an approved
+    // charge straight away — this is what lets the ride booking pre-auth check
+    // pass and the refund flow work end-to-end during testing.
+    if (!result.live) {
+      await execute(
+        `UPDATE payments SET status = 'completed', updated_at = NOW() WHERE reference = $1`,
+        [reference]
+      ).catch(() => {});
+    }
+
+    res.json({ reference, ...result });
+  } catch (err: any) {
+    console.error("Payment initiate error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET/POST /api/payments/return — iVeri Lite redirects the customer here after
+// paying. The gateway POSTs the result (LITE_PAYMENT_CARD_STATUS etc.); we
+// record it, then bounce to a GET with ?result=... so the app's WebView can
+// detect the outcome from the URL.
+router.all("/return", async (req: AuthRequest, res: Response) => {
+  try {
+    const q =
+      req.method === "POST"
+        ? (req.body as Record<string, any>)
+        : (req.query as Record<string, string>);
+
+    const reference =
+      String(q.ECOM_CONSUMERORDERID || q.merchant_reference || q.reference || "");
+    const statusCode = String(q.LITE_PAYMENT_CARD_STATUS ?? "").trim();
+    const resultCode = String(q.result || q.status || "").toLowerCase().trim();
+
+    // Success = iVeri result code "0", or our own "success" bounce.
+    const success =
+      statusCode === "0" || resultCode === "0" || resultCode === "success";
+
+    if (reference) {
+      await execute(
+        `UPDATE payments SET status = $1, raw_response = $2, updated_at = NOW()
+         WHERE reference = $3`,
+        [success ? "completed" : "failed", JSON.stringify(q), reference]
+      ).catch(() => {});
+
+      // Card-on-file: on a successful payment the gateway returns the
+      // TransactionIndex token + masked PAN + expiry. Store these on the user's
+      // saved card so the NEXT ride uses them and never asks for card details.
+      if (success) {
+        const token = String(q.Lite_TransactionIndex || q.transaction_index || "").trim();
+        const masked = String(q.Ecom_Payment_Card_Number || q.pan_masked || "").trim();
+        if (token) {
+          try {
+            const payment = await queryOne<{ user_id: string }>(
+              "SELECT user_id FROM payments WHERE reference = $1",
+              [reference]
+            );
+            if (payment) {
+              const expMonth = q.Ecom_Payment_Card_ExpDate_Month
+                ? parseInt(String(q.Ecom_Payment_Card_ExpDate_Month), 10)
+                : null;
+              const expYear = q.Ecom_Payment_Card_ExpDate_Year
+                ? parseInt(String(q.Ecom_Payment_Card_ExpDate_Year), 10)
+                : null;
+              await execute(
+                `UPDATE saved_cards
+                 SET transaction_index = $1,
+                     card_number_masked = $2,
+                     exp_month = COALESCE($3, exp_month),
+                     exp_year = COALESCE($4, exp_year)
+                 WHERE user_id = $5 AND is_default = true`,
+                [token, masked || null, expMonth, expYear, payment.user_id]
+              ).catch(() => {});
+              // If no default saved card row exists, insert one.
+              const updated = await queryOne<{ id: string }>(
+                `SELECT id FROM saved_cards
+                 WHERE user_id = $1 AND transaction_index = $2 LIMIT 1`,
+                [payment.user_id, token]
+              );
+              if (!updated) {
+                await execute(
+                  `INSERT INTO saved_cards (user_id, card_type, last4, card_number_masked, transaction_index, exp_month, exp_year, is_default)
+                   VALUES ($1, 'card', $2, $3, $4, $5, $6, true)`,
+                  [
+                    payment.user_id,
+                    String(masked).replace(/\D/g, "").slice(-4) || "0000",
+                    masked || null,
+                    token,
+                    expMonth,
+                    expYear,
+                  ]
+                ).catch(() => {});
+              }
+            }
+          } catch (e) { /* token storage must never break the return flow */ }
+        }
+      }
+    }
+
+    // iVeri POSTs the result — bounce to a readable GET for the app.
+    if (req.method === "POST") {
+      const qs = `?result=${success ? "success" : "failed"}${
+        reference ? `&reference=${encodeURIComponent(reference)}` : ""
+      }`;
+      res.redirect(302, `/api/payments/return${qs}`);
+      return;
+    }
+
+    res.json({ reference, result: success ? "success" : "failed", success });
+  } catch (err: any) {
+    console.error("Payment return error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/payments/initialize — Initialize ride payment
 router.post("/initialize", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -131,6 +343,46 @@ router.post("/initialize", requireAuth, async (req: AuthRequest, res: Response) 
 // GET /api/payments/verify — Verify payment reference
 router.get("/verify", requireAuth, async (req: AuthRequest, res: Response) => {
   res.json({ status: "success", reference: req.query.reference });
+});
+
+// POST /api/payments/refund — Mark a payment refunded (rider cancelled before pickup).
+// iVeri Lite has no server-side reversal call, so this records the refund so it can
+// be completed in the Nedbank portal. In mock mode it returns instantly.
+router.post("/refund", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { rideId, reference } = req.body;
+    const firebaseUid = req.userId!;
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [firebaseUid]
+    );
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    let payment: any = null;
+    if (reference) {
+      payment = await queryOne(
+        "SELECT * FROM payments WHERE reference = $1 AND user_id = $2",
+        [reference, user.id]
+      ).catch(() => null);
+    } else if (rideId) {
+      payment = await queryOne(
+        "SELECT * FROM payments WHERE ride_id = $1 AND user_id = $2",
+        [rideId, user.id]
+      ).catch(() => null);
+    }
+
+    if (!payment) { res.json({ success: true, note: "No payment to refund" }); return; }
+    if (payment.status === "refunded") { res.json({ success: true, amount: Number(payment.amount), note: "Already refunded" }); return; }
+
+    await execute(
+      "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
+      [payment.id]
+    );
+    res.json({ success: true, amount: Number(payment.amount) });
+  } catch (err: any) {
+    console.error("Refund error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/payments/banks — List supported banks

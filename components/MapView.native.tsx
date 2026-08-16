@@ -1,17 +1,40 @@
-import { forwardRef, useImperativeHandle, useRef } from "react";
-import { Children, isValidElement } from "react";
-import { Dimensions, Platform, View } from "react-native";
-import type { Camera, Region } from "react-native-maps";
-import RNMapView, {
-  PROVIDER_GOOGLE,
-  Marker as RNMarker,
-  Polyline as RNPolyline,
-} from "react-native-maps";
+﻿import { Asset } from "expo-asset";
+import { File } from "expo-file-system";
+import {
+  Children,
+  forwardRef,
+  isValidElement,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import { View } from "react-native";
+import { WebView } from "react-native-webview";
+import { getMapHtml } from "@/lib/mapHtml";
 
-type MapViewProps = {
-  children?: React.ReactNode;
-  style?: any;
-  initialRegion?: Region;
+export function Marker(_props: any) {
+  return null;
+}
+
+export function Polyline(_props: any) {
+  return null;
+}
+
+export const PROVIDER_GOOGLE = "google"; // kept for API parity only
+
+type Region = {
+  latitude: number;
+  longitude: number;
+  latitudeDelta?: number;
+  longitudeDelta?: number;
+};
+
+type Camera = {
+  center?: { latitude: number; longitude: number };
+  zoom?: number;
 };
 
 export type MapViewHandle = {
@@ -25,139 +48,270 @@ export type MapViewHandle = {
   ) => Promise<{ latitude: number; longitude: number }>;
 };
 
-// Standard web-mercator meters-per-pixel formula (256px tiles), same math
-// the Leaflet version relies on implicitly — keeps the "look ahead" distance
-// consistent in real-world meters regardless of zoom level.
-function metersPerPixel(lat: number, zoom: number) {
-  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
-}
+type MapViewProps = {
+  children?: React.ReactNode;
+  style?: any;
+  initialRegion?: Region;
+  onRegionChange?: (region: Region) => void;
+  onRegionChangeComplete?: (region: Region) => void;
+};
 
-// Great-circle destination point given a start coord, bearing, and distance.
-function destinationPoint(
-  lat: number,
-  lng: number,
-  bearingDeg: number,
-  distanceMeters: number
-) {
-  const R = 6371000;
-  const brng = (bearingDeg * Math.PI) / 180;
-  const lat1 = (lat * Math.PI) / 180;
-  const lng1 = (lng * Math.PI) / 180;
-  const dR = distanceMeters / R;
 
-  const lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(dR) + Math.cos(lat1) * Math.sin(dR) * Math.cos(brng)
-  );
-  const lng2 =
-    lng1 +
-    Math.atan2(
-      Math.sin(brng) * Math.sin(dR) * Math.cos(lat1),
-      Math.cos(dR) - Math.sin(lat1) * Math.sin(lat2)
-    );
-
-  return { latitude: (lat2 * 180) / Math.PI, longitude: (lng2 * 180) / Math.PI };
+async function resolveImageUri(image: any): Promise<string> {
+  if (typeof image === "string") return image;
+  if (image && typeof image === "object" && image.uri) return image.uri;
+  if (typeof image === "number") {
+    try {
+      const asset = Asset.fromModule(image);
+      await asset.downloadAsync();
+      const uri = asset.localUri || asset.uri;
+      if (uri) {
+        const file = new File(uri);
+        const b64 = await file.base64();
+        const ext = (file.extension || "png").toLowerCase().replace(".", "");
+        const mime =
+          ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+        return `data:${mime};base64,${b64}`;
+      }
+    } catch (e) {
+      // fall through to empty string
+    }
+  }
+  return "";
 }
 
 const MapView = forwardRef<MapViewHandle, MapViewProps>(
-  ({ children, style, initialRegion }, ref) => {
-    const mapRef = useRef<RNMapView>(null);
-    const containerHeightRef = useRef<number>(Dimensions.get("window").height);
-    const smoothBearingRef = useRef(0);
+  ({ children, style, initialRegion, onRegionChange, onRegionChangeComplete }, ref) => {
+    const webRef = useRef<WebView>(null);
+    const readyRef = useRef(false);
+    const pendingRef = useRef<Map<number, (value: any) => void>>(new Map());
+    const reqCounterRef = useRef(0);
+    const markersRef = useRef<any[]>([]);
+    const initialKeyRef = useRef<string>("");
+    const [html, setHtml] = useState<string | null>(null);
+
+    // Leaflet is bundled inside the APK and inlined here — no unpkg CDN
+    // dependency at runtime, so maps start instantly offline.
+    useEffect(() => {
+      setHtml(getMapHtml());
+    }, []);
+
+    // Convert children <Marker>/<Polyline> into plain JSON for the page.
+    const { markers, polylines } = useMemo(() => {
+      const m: any[] = [];
+      const p: any[] = [];
+      Children.forEach(children, (child) => {
+        if (!isValidElement(child)) return;
+        const cp = child.props as any;
+        if (cp && cp.coordinate) {
+          const img = cp.image;
+          const t = cp.title || "";
+          const icon = img
+            ? "car"
+            : cp.pinColor === "#22c55e"
+              ? "pickup"
+              : cp.pinColor === "#ef4444"
+                ? "dropoff"
+                : cp.pinColor === "#1a1a1a"
+                  ? "entrance"
+                  : cp.pinColor === "#059669"
+                    ? "entrance-sel"
+                    : t.toLowerCase() === "your location"
+                      ? "you"
+                      : t.toLowerCase() === "nearby driver"
+                        ? "car"
+                        : "";
+          m.push({
+            lat: cp.coordinate.latitude,
+            lng: cp.coordinate.longitude,
+            title: t,
+            icon,
+            angle: cp.rotation || 0,
+            img: img || "",
+            onPress: cp.onPress || null,
+          });
+        } else if (cp && cp.coordinates) {
+          p.push({
+            coords: cp.coordinates.map((c: any) => [c.latitude, c.longitude]),
+            color: cp.strokeColor || "#3b82f6",
+            weight: cp.strokeWidth || 4,
+          });
+        }
+      });
+      return { markers: m, polylines: p };
+    }, [children]);
+
+    // Send data to the page whenever markers/polylines change. Marker images
+    // are resolved ONCE per unique asset and sent as a separate `images` map —
+    // embedding the full base64 on every marker could overflow Android's
+    // injectJavaScript limit (which is why CarLocator.png never showed).
+    useEffect(() => {
+      if (!readyRef.current) return;
+      let cancelled = false;
+      (async () => {
+        const uniqueImgs = Array.from(
+          new Set(markers.map((mk) => mk.img).filter(Boolean))
+        ) as any[];
+        // Resolve each unique image ONCE and reference it by a short id, so the
+        // injected payload stays small (a full base64 data URL repeated per
+        // marker would overflow Android's injectJavaScript limit and the icon
+        // would silently fall back to the plain SVG).
+        const images: Record<string, string> = {};
+        const imgToId: Record<string, string> = {};
+        let counter = 0;
+        for (const img of uniqueImgs) {
+          const id = "img" + counter++;
+          imgToId[String(img)] = id;
+          try {
+            images[id] = await resolveImageUri(img);
+          } catch {
+            images[id] = "";
+          }
+        }
+        if (cancelled) return;
+        const resolved = markers.map((mk) => ({
+          lat: mk.lat,
+          lng: mk.lng,
+          title: mk.title,
+          icon: mk.icon,
+          angle: mk.angle || 0,
+          onPress: mk.onPress || null,
+          imgKey: mk.img ? imgToId[String(mk.img)] || "" : "",
+        }));
+        markersRef.current = resolved;
+        webRef.current?.injectJavaScript(
+          `window.__vuraMap.setData(${JSON.stringify({ markers: resolved, polylines, images })}); true;`
+        );
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [markers, polylines]);
+
+    // Bootstrap the map once the page is mounted.
+    const initialKey = initialRegion
+      ? `${initialRegion.latitude},${initialRegion.longitude}`
+      : "";
+
+    // Recenter when the initial region center changes after mount (e.g. when
+    // coordinates finish loading asynchronously) â€” same behavior as the web
+    // version's setView effect.
+    useEffect(() => {
+      if (!readyRef.current || !initialRegion) return;
+      if (initialKeyRef.current === initialKey) return;
+      initialKeyRef.current = initialKey;
+      webRef.current?.injectJavaScript(
+        `window.__vuraMap.animateToRegion(${JSON.stringify(initialRegion)}, 400); true;`
+      );
+    }, [initialKey, initialRegion]);
+
+    const onMessage = useCallback(
+      (e: any) => {
+        let data: any;
+        try {
+          data = JSON.parse(e.nativeEvent.data);
+        } catch {
+          return;
+        }
+        switch (data.type) {
+          case "log":
+            // Diagnostics from the map page (leaflet load failures, JS errors)
+            console.log("[MapWebView]", data.message);
+            break;
+          case "mounted":
+            if (initialRegion) {
+              initialKeyRef.current = initialKey;
+              webRef.current?.injectJavaScript(
+                `window.__vuraMap.init(${JSON.stringify(initialRegion)}); true;`
+              );
+            }
+            break;
+          case "ready":
+            readyRef.current = true;
+            break;
+          case "regionChange":
+            onRegionChange?.(data);
+            break;
+          case "regionChangeComplete":
+            onRegionChangeComplete?.(data);
+            break;
+          case "markerPress":
+            markersRef.current[data.index]?.onPress?.();
+            break;
+          case "getCamera":
+            pendingRef.current.get(data.requestId)?.(data.camera);
+            pendingRef.current.delete(data.requestId);
+            break;
+          case "coordinateForPoint":
+            pendingRef.current.get(data.requestId)?.(data.coordinate);
+            pendingRef.current.delete(data.requestId);
+            break;
+        }
+      },
+      [initialRegion, onRegionChange, onRegionChangeComplete]
+    );
 
     useImperativeHandle(ref, () => ({
       animateToRegion(region: Region, duration = 300) {
-        mapRef.current?.animateToRegion(region, duration);
+        webRef.current?.injectJavaScript(
+          `window.__vuraMap.animateToRegion(${JSON.stringify(region)}, ${duration}); true;`
+        );
       },
-
       followCar(lat: number, lng: number, bearing = 0, zoom = 17) {
-        // Same framing as the web/Leaflet version: the car sits lower on
-        // screen (~71% down) so more road ahead is visible, and the whole
-        // map rotates so the direction of travel points "up" — turn-by-turn
-        // nav style. Unlike the Leaflet/CSS-rotation trick, react-native-maps
-        // rotates the camera itself via `heading`, and that rotation pivots
-        // around the screen's true center — so we shift the *geographic*
-        // center ahead of the car (in the direction of travel) by the same
-        // fractional distance, which leaves the car sitting below center.
-        let diff = bearing - smoothBearingRef.current;
-        if (diff > 180) diff -= 360;
-        if (diff < -180) diff += 360;
-        smoothBearingRef.current += diff;
-
-        const offsetFraction = 0.7111 - 0.5; // 0.2111, matches the web version's constant
-        const mpp = metersPerPixel(lat, zoom);
-        const offsetMeters = containerHeightRef.current * offsetFraction * mpp;
-        const center = destinationPoint(lat, lng, bearing, offsetMeters);
-
-        mapRef.current?.animateCamera(
-          { center, heading: bearing, zoom },
-          { duration: 300 }
+        webRef.current?.injectJavaScript(
+          `window.__vuraMap.followCar(${lat}, ${lng}, ${bearing}, ${zoom}); true;`
         );
       },
-
       unfollow() {
-        smoothBearingRef.current = 0;
-        mapRef.current?.animateCamera({ heading: 0 }, { duration: 300 });
+        webRef.current?.injectJavaScript(`window.__vuraMap.unfollow(); true;`);
       },
-
-      getCamera() {
-        return mapRef.current?.getCamera() ?? Promise.reject(new Error("Map not ready"));
+      getCamera(): Promise<Camera> {
+        return new Promise((resolve) => {
+          const id = ++reqCounterRef.current;
+          pendingRef.current.set(id, resolve);
+          webRef.current?.injectJavaScript(
+            `window.__vuraMap.getCamera(${id}); true;`
+          );
+        });
       },
-
       setCamera(camera: Partial<Camera>) {
-        mapRef.current?.setCamera(camera as Camera);
-      },
-
-      coordinateForPoint(point: { x: number; y: number }) {
-        return (
-          mapRef.current?.coordinateForPoint(point) ??
-          Promise.reject(new Error("Map not ready"))
+        webRef.current?.injectJavaScript(
+          `window.__vuraMap.setCamera(${JSON.stringify(camera)}); true;`
         );
+      },
+      coordinateForPoint(point: { x: number; y: number }) {
+        return new Promise((resolve) => {
+          const id = ++reqCounterRef.current;
+          pendingRef.current.set(id, resolve);
+          webRef.current?.injectJavaScript(
+            `window.__vuraMap.coordinateForPoint(${id}, ${point.x}, ${point.y}); true;`
+          );
+        });
       },
     }));
 
-    // Intercept "Your location" markers so the user's position renders as a
-    // custom green dot (with a soft pulse ring) instead of a default pin.
-    const renderChildren = Children.map(children, (child) => {
-      if (!isValidElement(child)) return child;
-      const props = child.props as { title?: string; coordinate?: { latitude: number; longitude: number } };
-      if (
-        child?.type === RNMarker &&
-        props?.title === "Your location" &&
-        props?.coordinate
-      ) {
-        return (
-          <RNMarker
-            coordinate={props.coordinate}
-            title="Your location"
-            stopPropagation
-          >
-            <View className="flex items-center justify-center">
-              <View className="absolute w-7 h-7 rounded-full bg-[#22c55e]/20" />
-              <View className="absolute w-4 h-4 rounded-full border-2 border-white bg-[#22c55e] shadow-md" />
-              <View className="w-[6px] h-[6px] rounded-full bg-white" />
-            </View>
-          </RNMarker>
-        );
-      }
-      return child;
-    });
-
     return (
-      <RNMapView
-        ref={mapRef}
-        style={style}
-        initialRegion={initialRegion}
-        provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
-        onLayout={(e) => {
-          containerHeightRef.current = e.nativeEvent.layout.height;
-        }}
-      >
-        {renderChildren}
-      </RNMapView>
+      <View style={[{ flex: 1 }, style]}>
+        {html ? (
+          <WebView
+            ref={webRef}
+            originWhitelist={["*"]}
+            source={{ html }}
+            javaScriptEnabled
+            domStorageEnabled
+            onMessage={onMessage}
+            style={{ flex: 1 }}
+            setSupportMultipleWindows={false}
+            overScrollMode="never"
+          />
+        ) : (
+          <View style={{ flex: 1, backgroundColor: "#f8f9fa" }} />
+        )}
+      </View>
     );
   }
 );
 
 MapView.displayName = "MapView";
 
-export { MapView as default, RNMarker as Marker, RNPolyline as Polyline };
+export default MapView;

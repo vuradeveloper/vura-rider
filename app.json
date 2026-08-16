@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Vura Rider",
-    "slug": "vurarider-new",
+    "slug": "makhavhu",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -52,7 +52,14 @@
           "backgroundColor": "#ffffff"
         }
       ],
-      "expo-sharing"
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -60,9 +67,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "236090a1-468b-4937-9dd1-b15105e39580"
+        "projectId": "77ac5a8c-51b8-4f62-9698-bdbe117f9f83"
       }
     },
-    "owner": "makhavhuboy"
+    "owner": "makhavhu7s-team"
   }
 }

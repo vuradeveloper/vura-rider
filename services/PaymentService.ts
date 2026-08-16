@@ -41,6 +41,36 @@ const parsePaymentReference = (urlStr: string): string | null => {
   }
 };
 
+/**
+ * Starts an iVeri (Nedbank) hosted card payment. Returns the signed form fields
+ * + gateway URL. The app then submits those fields (see PaymentWebView) and
+ * the gateway redirects back to GET /api/payments/return.
+ */
+export const initiateIveriPayment = async (amountRands: number, rideId?: string) => {
+  const result = await apiFetch<{
+    reference: string;
+    live: boolean;
+    fields: Record<string, string>;
+    gatewayUrl: string;
+    usesSavedCard?: boolean;
+    error?: string;
+  }>("/api/payments/initiate", {
+    method: "POST",
+    body: JSON.stringify({ amountRands, rideId }),
+  });
+
+  if (result.error) throw new Error(result.error);
+  if (!result.live) {
+    return {
+      ...result,
+      mock: true,
+      fields: result.fields || {},
+      gatewayUrl: result.gatewayUrl || "",
+    };
+  }
+  return { ...result, mock: false };
+};
+
 export const payForRide = async (rideId: string) => {
   try {
     const result = await apiFetch<any>("/api/payments/initialize", {

@@ -56,7 +56,7 @@ export default function ScheduledRidesScreen() {
     ]);
   }
 
-  const activeRides = rides.filter((r) => r.status === "pending" || r.status === "accepted");
+  const activeRides = rides.filter((r) => r.status === "scheduled" || r.status === "searching" || r.status === "pending" || r.status === "accepted");
 
   return (
     <SafeAreaView className="flex-1 bg-background">
@@ -107,7 +107,13 @@ export default function ScheduledRidesScreen() {
                 <View className="flex-row items-center gap-1.5">
                   <View
                     className={`w-2 h-2 rounded-full ${
-                      r.status === "pending" ? "bg-amber-500" : "bg-emerald-500"
+                      r.status === "scheduled"
+                        ? "bg-amber-500"
+                        : r.status === "searching"
+                          ? "bg-blue-500"
+                          : r.status === "accepted"
+                            ? "bg-emerald-500"
+                            : "bg-amber-500"
                     }`}
                   />
                   <Text className="text-xs font-bold text-foreground capitalize">

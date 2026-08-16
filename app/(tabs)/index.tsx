@@ -1,5 +1,6 @@
 import MapView, { Marker } from "@/components/MapView";
 import { useAuth } from "@/lib/auth";
+import { fetchRoute } from "@/lib/route";
 import { estimateEtaMins, haversineKm } from "@/lib/utils";
 import { getNearbyDrivers } from "@/services/DriverService";
 import { getRecentSearches } from "@/services/SearchService";
@@ -17,9 +18,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-// This file lives at app/(tabs)/index.tsx, and the asset lives at
-// assets/images/CarLocator.png (project root) — two levels up.
-const CAR_ICON = require("../../assets/images/CarLocator.png");
+// CarLocator is baked into the bundle as a data URL at build time so the map
+// always shows it in release builds (runtime asset → base64 resolution can
+// silently fail in production APKs).
+import { CAR_LOCATOR_DATA_URL } from "@/lib/carIcon";
+const CAR_ICON = CAR_LOCATOR_DATA_URL;
 
 type RoamingCar = {
   id: number;
@@ -28,24 +31,6 @@ type RoamingCar = {
   route: { latitude: number; longitude: number }[];
   step: number;
 };
-
-// Same OSRM lookup used in DriverHome.tsx — makes each roaming car wander
-// along an actual road path instead of teleporting or jittering randomly.
-async function fetchRoute(start: [number, number], end: [number, number]) {
-  try {
-    const res = await fetch(
-      `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?geometries=geojson&overview=full`
-    );
-    const data = await res.json();
-    if (data.routes?.[0]) {
-      return data.routes[0].geometry.coordinates.map((c: any) => ({
-        latitude: c[1],
-        longitude: c[0],
-      }));
-    }
-  } catch (e) { }
-  return [];
-}
 
 export default function Home() {
   const router = useRouter();
@@ -98,19 +83,27 @@ export default function Home() {
     if (!coords) return;
     let mounted = true;
     (async () => {
-      const cars: RoamingCar[] = [];
-      for (let i = 0; i < 5; i++) {
-        const startLat = coords.lat + (Math.random() - 0.5) * 0.02;
-        const startLng = coords.lng + (Math.random() - 0.5) * 0.02;
-        const endLat = startLat + (Math.random() - 0.5) * 0.025;
-        const endLng = startLng + (Math.random() - 0.5) * 0.025;
-        const route = await fetchRoute([startLat, startLng], [endLat, endLng]);
-        if (mounted && route.length > 0) {
-          cars.push({ id: i, lat: startLat, lng: startLng, route, step: 0 });
-        }
-      }
-      if (mounted && cars.length > 0) {
-        setRoamingCars(cars);
+      const routes = await Promise.all(
+        [0, 1, 2, 3, 4].map(async (i) => {
+          const startLat = coords.lat + (Math.random() - 0.5) * 0.02;
+          const startLng = coords.lng + (Math.random() - 0.5) * 0.02;
+          const endLat = startLat + (Math.random() - 0.5) * 0.025;
+          const endLng = startLng + (Math.random() - 0.5) * 0.025;
+          const route = await fetchRoute([startLat, startLng], [endLat, endLng]);
+          // Always render the car even if OSRM failed — fall back to a short
+          // straight "drive" so the map never looks empty.
+          const finalRoute =
+            route.length > 0
+              ? route
+              : [
+                  { latitude: startLat, longitude: startLng },
+                  { latitude: endLat, longitude: endLng },
+                ];
+          return { id: i, lat: startLat, lng: startLng, route: finalRoute, step: 0 };
+        })
+      );
+      if (mounted) {
+        setRoamingCars(routes);
       }
     })();
     return () => {
@@ -157,6 +150,31 @@ export default function Home() {
       ? `${nearestEta} min away`
       : "No drivers nearby";
 
+  // Fit the map nicely around the rider + all roaming cars, like the
+  // Activities page which zooms to fit the whole trip route.
+  const mapRegion = (() => {
+    if (!coords) return null;
+    const pts = [
+      { lat: coords.lat, lng: coords.lng },
+      ...roamingCars.map((c) => ({ lat: c.lat, lng: c.lng })),
+    ];
+    let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+    for (const p of pts) {
+      minLat = Math.min(minLat, p.lat);
+      maxLat = Math.max(maxLat, p.lat);
+      minLng = Math.min(minLng, p.lng);
+      maxLng = Math.max(maxLng, p.lng);
+    }
+    return {
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: Math.max((maxLat - minLat) * 1.5, 0.03),
+      longitudeDelta: Math.max((maxLng - minLng) * 1.5, 0.03),
+    };
+  })();
+
+  const driverCount = nearbyQuery.data?.drivers?.length ?? 0;
+
   if (loading || !user) return null;
 
   return (
@@ -194,26 +212,25 @@ export default function Home() {
           </Link>
         </View>
 
-        {/* Quick services */}
+        {/* Upcoming trips card */}
         <View className="px-5 -mt-4">
-          <View className="flex-row justify-between rounded-2xl bg-surface border border-border p-4">
-            {[
-              { icon: "car" as const, label: "Ride", to: "/search" },
-              { icon: "restaurant" as const, label: "Eats", to: "/services" },
-              { icon: "cube" as const, label: "Package", to: "/services" },
-              { icon: "briefcase" as const, label: "Business", to: "/services" },
-            ].map(({ icon, label, to }) => (
-              <Link key={label} href={to as any} asChild>
-                <TouchableOpacity className="items-center gap-2">
-                  <View className="w-12 h-12 rounded-xl bg-accent items-center justify-center">
-                    <Ionicons name={icon} size={20} color="#e04e2f" />
-                  </View>
-                  <Text className="text-[11px] font-semibold text-foreground">
-                    {label}
+          <View className="bg-white border border-gray-100/80 rounded-2xl p-4.5 flex-row items-center justify-between shadow-sm">
+            <View className="flex-1">
+              <Text className="text-base font-extrabold text-foreground">
+                You have no upcoming trips
+              </Text>
+              <Link href="/search" asChild>
+                <TouchableOpacity className="flex-row items-center mt-1">
+                  <Text className="text-xs font-bold text-muted-foreground">
+                    Reserve your trip
                   </Text>
+                  <Ionicons name="arrow-forward" size={13} color="#80716b" className="ml-1" />
                 </TouchableOpacity>
               </Link>
-            ))}
+            </View>
+            <View className="w-12 h-12 bg-gray-50 rounded-xl items-center justify-center border border-gray-100">
+              <Ionicons name="calendar-outline" size={24} color="#dc2626" />
+            </View>
           </View>
         </View>
 
@@ -252,26 +269,20 @@ export default function Home() {
           </View>
         )}
 
-        {/* Map preview */}
-        <View className="mx-5 mt-6 rounded-2xl border border-border overflow-hidden">
+        {/* Map preview — styled like the Activities page's featured card */}
+        <View className="mx-5 mt-6 bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
           {/* This inner View has NO overflow-hidden of its own — clipping a
               WebView's direct ancestor with overflow+borderRadius is a known
               cause of a blank/white WebView on Android. The outer card above
               still clips the corners of the whole card (map + footer). */}
-          <View style={{ height: 180 }}>
-            {coords ? (
+          <View style={{ height: 230 }}>
+            {coords && mapRegion ? (
               <MapView
                 style={{ flex: 1 }}
-                initialRegion={{
-                  latitude: coords.lat,
-                  longitude: coords.lng,
-                  latitudeDelta: 0.05,
-                  longitudeDelta: 0.05,
-                }}
+                initialRegion={mapRegion}
               >
                 <Marker
                   coordinate={{ latitude: coords.lat, longitude: coords.lng }}
-                  image={CAR_ICON}
                   title="Your Location"
                 />
                 {roamingCars.map((car) => (
@@ -292,26 +303,26 @@ export default function Home() {
               </View>
             )}
           </View>
-          <View className="flex-row items-center justify-between px-4 py-3 bg-surface">
-            <View>
-              <Text className="text-xs text-muted-foreground">Nearest driver</Text>
-              <Text className="text-sm font-bold text-foreground">
-                {nearestLabel}
-              </Text>
-            </View>
-            <View className="flex-row gap-2">
+          <View className="p-4">
+            <Text className="text-lg font-bold text-foreground">
+              Nearby drivers
+            </Text>
+            <Text className="text-xs text-muted-foreground mt-0.5">
+              {driverCount > 0
+                ? `${driverCount} drivers around you • ${nearestLabel}`
+                : nearestLabel}
+            </Text>
+            <View className="flex-row gap-2 mt-4">
               <Link href="/search" asChild>
-                <TouchableOpacity className="rounded-full bg-primary px-4 py-2">
-                  <Text className="text-xs font-bold text-primary-foreground">
-                    Book now
-                  </Text>
+                <TouchableOpacity className="flex-row items-center gap-1.5 rounded-full bg-secondary px-4 py-2">
+                  <Ionicons name="search" size={15} color="#2e1e1a" />
+                  <Text className="text-xs font-bold text-foreground">Book now</Text>
                 </TouchableOpacity>
               </Link>
               <Link href="/scheduled-rides" asChild>
-                <TouchableOpacity className="rounded-full bg-secondary border border-border px-4 py-2">
-                  <Text className="text-xs font-bold text-foreground">
-                    Scheduled
-                  </Text>
+                <TouchableOpacity className="flex-row items-center gap-1.5 rounded-full bg-secondary px-4 py-2">
+                  <Ionicons name="calendar-outline" size={15} color="#2e1e1a" />
+                  <Text className="text-xs font-bold text-foreground">Scheduled</Text>
                 </TouchableOpacity>
               </Link>
             </View>

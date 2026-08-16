@@ -118,11 +118,21 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
+    // Render the cached session immediately instead of blocking on the
+    // backend. This is what makes cold starts feel fast — the Firebase auth
+    // state + backend sync below run in the background and refresh the user
+    // when they finish.
     loadStoredUser()
       .then((stored) => {
+        if (!mounted) return;
         if (stored) setUserState(stored);
+        setLoading(false);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (mounted) setLoading(false);
+      });
 
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -144,7 +154,7 @@ export function useAuth() {
             licenseDocumentName: dbUser.license_document_name || undefined,
           };
           await storeUser(authUser);
-          setUserState(authUser);
+          if (mounted) setUserState(authUser);
 
           // Sync with Zustand store
           const { useAppStore } = require("./store");
@@ -158,6 +168,7 @@ export function useAuth() {
         } catch {
           // Backend sync failed — fall back to stored user if available
           const stored = await loadStoredUser();
+          if (!mounted) return;
           if (stored) {
             setUserState(stored);
             const { useAppStore } = require("./store");
@@ -189,16 +200,18 @@ export function useAuth() {
         }
       } else {
         await clearUser();
+        if (!mounted) return;
         setUserState(null);
         // Clear Zustand store
         const { useAppStore } = require("./store");
         useAppStore.getState().setUser(null);
       }
-
-      setLoading(false);
     });
 
-    return () => unsub();
+    return () => {
+      mounted = false;
+      unsub();
+    };
   }, []);
 
   async function refresh() {

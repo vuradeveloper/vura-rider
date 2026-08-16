@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQuery } from "@tanstack/react-query";
+import { fetchRoute } from "@/lib/route";
 import { getSavedCards } from "@/services/PaymentService";
 import { getAffiliateSummary } from "@/services/AffiliateService";
 import {
@@ -24,8 +25,9 @@ import {
 import type { SavedCard, Waypoint } from "@/lib/types";
 
 // ⚠️ Adjust these two imports to match where they actually live in your project.
-import MapView, { Marker } from "@/components/MapView";
-const CAR_LOCATOR_IMG = require("@/assets/images/CarLocator.png");
+import MapView, { Marker, Polyline } from "@/components/MapView";
+import { CAR_LOCATOR_DATA_URL } from "@/lib/carIcon";
+const CAR_LOCATOR_IMG = CAR_LOCATOR_DATA_URL;
 
 const tiers = [
   {
@@ -72,6 +74,7 @@ export default function RideOptions() {
   const [dropoffCoord, setDropoffCoord] = useState<[number, number] | null>(null);
   const [nearbyCars, setNearbyCars] = useState<NearbyCar[]>([]);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
 
   const [scheduleMode, setScheduleMode] = useState(false);
 
@@ -118,6 +121,20 @@ export default function RideOptions() {
     })();
   }, []);
 
+  // Fetch the driving route so the green line (same as on track) shows from
+  // pickup → stops → destination.
+  useEffect(() => {
+    if (!pickupCoord || !dropoffCoord) return;
+    let active = true;
+    (async () => {
+      const route = await fetchRoute(pickupCoord, dropoffCoord, waypoints);
+      if (active) setRouteCoords(route);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [pickupCoord, dropoffCoord, waypoints]);
+
   // Simulate a few nearby drivers gently drifting around the pickup point,
   // rendered with CarLocator.png, so the map doesn't feel static while the
   // rider is choosing a ride tier. Swap this for a real "nearby drivers"
@@ -138,9 +155,12 @@ export default function RideOptions() {
     const interval = setInterval(() => {
       setNearbyCars((prev) =>
         prev.map((c) => {
-          const angle = c.angle + (Math.random() - 0.5) * 40;
+          // Nudge the heading gently each tick instead of re-rolling a random
+          // direction, and keep each move small + frequent so cars glide
+          // smoothly instead of jumping.
+          const angle = (c.angle + (Math.random() - 0.5) * 4 + 360) % 360;
           const rad = (angle * Math.PI) / 180;
-          const step = 0.0006;
+          const step = 0.00004;
           return {
             ...c,
             lat: c.lat + Math.cos(rad) * step,
@@ -149,7 +169,7 @@ export default function RideOptions() {
           };
         })
       );
-    }, 1500);
+    }, 100);
 
     return () => clearInterval(interval);
   }, [pickupCoord]);
@@ -188,6 +208,7 @@ export default function RideOptions() {
       "vura.ride.payment",
       payChoice.type === "cash" ? "cash" : payChoice.type === "affiliate" ? "affiliate" : "card"
     );
+    await AsyncStorage.setItem("vura.ride.fare", String(selectedFare || 0.2));
     await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(waypoints));
     if (scheduleMode) {
       router.push("/ride/schedule");
@@ -202,52 +223,57 @@ export default function RideOptions() {
     <SafeAreaView className="flex-1 bg-background">
       {/* Map */}
       <View className="relative h-[260px] bg-secondary">
-        <MapView
-          style={{ flex: 1 }}
-          initialRegion={
-            pickupCoord
-              ? {
-                latitude: pickupCoord[0],
-                longitude: pickupCoord[1],
-                latitudeDelta: 0.02,
-                longitudeDelta: 0.02,
-              }
-              : undefined
-          }
-        >
-          {pickupCoord && (
+        {pickupCoord && dropoffCoord ? (
+          <MapView
+            style={{ flex: 1 }}
+            initialRegion={{
+              latitude: pickupCoord[0],
+              longitude: pickupCoord[1],
+              latitudeDelta: 0.02,
+              longitudeDelta: 0.02,
+            }}
+          >
             <Marker
               coordinate={{ latitude: pickupCoord[0], longitude: pickupCoord[1] }}
               pinColor="#22c55e"
               title="Pickup"
             />
-          )}
-          {waypoints.map((wp, i) => (
-            <Marker
-              key={`stop-${i}`}
-              coordinate={{ latitude: wp.lat, longitude: wp.lng }}
-              image={CAR_LOCATOR_IMG}
-              pinColor="#e04e2f"
-              title={`Stop ${i + 1}`}
-            />
-          ))}
-          {dropoffCoord && (
+            {waypoints.map((wp, i) => (
+              <Marker
+                key={`stop-${i}`}
+                coordinate={{ latitude: wp.lat, longitude: wp.lng }}
+                image={CAR_LOCATOR_IMG}
+                pinColor="#e04e2f"
+                title={`Stop ${i + 1}`}
+              />
+            ))}
             <Marker
               coordinate={{ latitude: dropoffCoord[0], longitude: dropoffCoord[1] }}
               pinColor="#ef4444"
               title="Dropoff"
             />
-          )}
-          {nearbyCars.map((c) => (
-            <Marker
-              key={c.id}
-              coordinate={{ latitude: c.lat, longitude: c.lng }}
-              image={CAR_LOCATOR_IMG}
-              rotation={(c.angle + 90) % 360}
-              title="Nearby driver"
-            />
-          ))}
-        </MapView>
+            {routeCoords.length > 1 && (
+              <Polyline
+                coordinates={routeCoords}
+                strokeColor="#22c55e"
+                strokeWidth={4}
+              />
+            )}
+            {nearbyCars.map((c) => (
+              <Marker
+                key={c.id}
+                coordinate={{ latitude: c.lat, longitude: c.lng }}
+                image={CAR_LOCATOR_IMG}
+                rotation={(c.angle + 90) % 360}
+                title="Nearby driver"
+              />
+            ))}
+          </MapView>
+        ) : (
+          <View className="flex-1 items-center justify-center">
+            <ActivityIndicator size="small" color="#e04e2f" />
+          </View>
+        )}
 
         <TouchableOpacity
           onPress={() => router.push("/search")}

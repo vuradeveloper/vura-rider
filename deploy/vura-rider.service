@@ -1,0 +1,19 @@
+[Unit]
+Description=Vura Rider Backend (Express + Socket.IO)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/vura-rider/server
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/node /opt/vura-rider/server/dist/index.js
+Restart=always
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

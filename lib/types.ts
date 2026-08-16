@@ -137,7 +137,7 @@ export interface ChatMessage {
   id: string;
   ride_id: string;
   sender_id: string;
-  sender_role: "rider" | "driver";
+  sender_role: "rider" | "passenger" | "driver";
   message: string;
   created_at: string;
 }
@@ -184,7 +184,7 @@ export interface ScheduledRide {
   destination_lng: number;
   waypoints: Waypoint[] | null;
   scheduled_at: string;
-  status: "pending" | "accepted" | "in_progress" | "completed" | "cancelled";
+  status: "scheduled" | "searching" | "pending" | "accepted" | "in_progress" | "completed" | "cancelled";
   tier: string;
   driver_id: string | null;
   driver_name: string | null;

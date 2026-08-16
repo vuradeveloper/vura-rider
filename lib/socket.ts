@@ -37,6 +37,7 @@ export interface ServerToClientEvents {
   }) => void;
   "ride:completed": (data: { riderTotal?: number; fare?: number }) => void;
   "ride:cancelled": (data: { reason?: string }) => void;
+  "ride:refunded": (data: { amount?: number | null; note?: string }) => void;
   "ride:pickup:updated": (data: {
     address: string;
     lat: number;
@@ -77,6 +78,8 @@ export interface ClientToServerEvents {
     waypoints: Array<{ address: string; lat: number; lng: number }>;
     tier?: string;
     scheduledAt?: string;
+    paymentMethod?: string;
+    paymentReference?: string;
   }) => void;
   "passenger:ride:cancel": (data: { rideId: string; reason: string }) => void;
   "passenger:ride:update_pickup": (data: {
@@ -140,7 +143,10 @@ export async function getSocket(): Promise<TypedSocket> {
 
   socket = io(getApiBaseUrl(), {
     auth: { token },
-    transports: ["websocket"],
+    // Prefer websocket, but fall back to HTTP polling when the websocket
+    // upgrade is blocked (some mobile networks / reverse proxies) so the
+    // connection is reliable on web and mobile.
+    transports: ["websocket", "polling"],
     autoConnect: true,
     reconnection: true,
     reconnectionAttempts: 10,

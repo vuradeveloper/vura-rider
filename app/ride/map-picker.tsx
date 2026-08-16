@@ -21,6 +21,42 @@ interface Entrance {
   lon: number;
 }
 
+// Public Overpass instances — try each until one answers, so mobile (which is
+// often blocked from the primary mirror) still gets real pickup points.
+const OVERPASS_MIRRORS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+];
+
+async function queryOverpass(data: string): Promise<any> {
+  for (const base of OVERPASS_MIRRORS) {
+    try {
+      const res = await fetch(`${base}?data=${encodeURIComponent(data)}`, {
+        signal: AbortSignal.timeout(12000),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json?.elements?.length) return json;
+      }
+    } catch {
+      // try the next mirror
+    }
+  }
+  return null;
+}
+
+// Used ONLY when live map data can't be reached. Generic directional zones —
+// never fake brand names, so every shopping centre doesn't show the same
+// three shops.
+const genericDropoffs = (lat: number, lon: number): Entrance[] => [
+  { name: "Main Entrance / Drop-off", lat, lon },
+  { name: "North Drop-off", lat: lat + 0.0012, lon },
+  { name: "South Drop-off", lat: lat - 0.0012, lon },
+  { name: "East Drop-off", lat, lon: lon + 0.0012 },
+  { name: "West Drop-off", lat, lon: lon - 0.0012 },
+];
+
 export default function MapPicker() {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -94,38 +130,40 @@ export default function MapPicker() {
     })();
   }, [type, entranceSelect, mallLat, mallLon]);
 
-  // Fetch complex entrances and drop-off zones from Overpass API
+  // Fetch real entrances / drop-off zones around the place from OpenStreetMap
+  // (Overpass), with several mirrors so it works on mobile. Falls back to
+  // generic directional drop-offs — never hardcoded shop names.
   const fetchEntrances = async (lat: number, lon: number) => {
     setFetchingEntrances(true);
-    // Bolt style query: scan for high-traffic nodes within 150m (fast & lightweight)
-    const query = `[out:json][timeout:10];(
-      node(around:150,${lat},${lon})["entrance"];
-      node(around:150,${lat},${lon})["shop"~"department_store|supermarket|mall"];
-      node(around:150,${lat},${lon})["amenity"~"bank|restaurant|fast_food|cafe|cinema"];
-      node(around:150,${lat},${lon})["highway"="bus_stop"];
-    );out qt;`;
-    
+    const query = `[out:json][timeout:12];
+    (
+      node(around:300,${lat},${lon})["entrance"];
+      node(around:300,${lat},${lon})["shop"];
+      node(around:300,${lat},${lon})["amenity"~"bank|restaurant|fast_food|cafe|cinema|pharmacy|parking|fuel"];
+      node(around:300,${lat},${lon})["highway"="bus_stop"];
+      way(around:300,${lat},${lon})["shop"]["name"];
+      way(around:300,${lat},${lon})["amenity"]["name"];
+      way(around:300,${lat},${lon})["highway"="bus_stop"];
+      way(around:300,${lat},${lon})["building"]["name"];
+    );
+    out center 60;`;
+
     try {
-      const res = await fetch(
-        `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`
-      );
-      const data = await res.json();
-      
+      const data = await queryOverpass(query);
+
       let fetchedList: Entrance[] = [];
-      if (data?.elements && data.elements.length > 0) {
-        // Filter out elements that don't have tags or names
+      if (data) {
         fetchedList = data.elements
-          .map((e: any, i: number) => {
+          .map((e: any) => {
+            const t = e.tags || {};
             let label = "";
-            const nameTag = e.tags?.name;
-            const refTag = e.tags?.ref;
-            const entranceType = e.tags?.entrance;
-            const shopType = e.tags?.shop;
-            const amenityType = e.tags?.amenity;
+            const nameTag = t.name;
+            const refTag = t.ref;
+            const entranceType = t.entrance;
+            const amenityType = t.amenity;
 
             if (nameTag) {
-              // If there's a named place (e.g., "Panarottis" or "Standard Bank"), use it
-              // Pair with general entrances to look like Bolt: "Entrance 4 - Panarottis"
+              // "Entrance 4 - Panarottis", "Entrance - Cresta", or plain name
               if (refTag) {
                 label = `Entrance ${refTag} - ${nameTag}`;
               } else if (entranceType) {
@@ -137,44 +175,35 @@ export default function MapPicker() {
               label = `Entrance ${refTag}`;
             } else if (entranceType === "main") {
               label = "Main Entrance";
-            } else if (amenityType === "parking_entrance") {
+            } else if (entranceType === "parking_entrance" || amenityType === "parking") {
               label = "Parking Drop-off";
-            } else if (e.tags?.highway === "bus_stop") {
+            } else if (t.highway === "bus_stop") {
               label = "Transit Drop-off Zone";
             } else if (entranceType) {
-              label = `Entrance (${entranceType})`;
+              label = entranceType === "yes" ? "Entrance" : `Entrance (${entranceType})`;
             }
 
-            return {
-              name: label,
-              lat: e.lat || e.center?.lat,
-              lon: e.lon || e.center?.lon,
-            };
+            if (!label) return null;
+            const eLat = e.lat ?? e.center?.lat;
+            const eLon = e.lon ?? e.center?.lon;
+            if (eLat == null || eLon == null) return null;
+            return { name: label, lat: eLat, lon: eLon };
           })
-          .filter((item: any) => item.name && item.lat && item.lon);
+          .filter(Boolean) as Entrance[];
       }
 
-      // If Overpass returned no results or they are empty, generate default generic mall entrances
-      if (fetchedList.length === 0) {
-        fetchedList = [
-          { name: "Entrance 1 - Homemark", lat: lat + 0.0006, lon: lon + 0.0006 },
-          { name: "Entrance 4 - Panarottis", lat: lat - 0.0005, lon: lon - 0.0005 },
-          { name: "Entrance 5 - Standard Bank", lat: lat + 0.0008, lon: lon - 0.0004 },
-          { name: "Transit Bus Stop Zone", lat: lat - 0.0004, lon: lon + 0.0008 },
-        ];
-      }
-
-      // Remove potential duplicates
+      // Remove duplicates + cap the list.
       const unique: Entrance[] = [];
       const seen = new Set<string>();
       fetchedList.forEach((item) => {
-        if (!seen.has(item.name)) {
-          seen.add(item.name);
+        const key = `${item.name.toLowerCase()}|${item.lat.toFixed(5)},${item.lon.toFixed(5)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
           unique.push(item);
         }
       });
 
-      // Sort unique items to prioritize names that have "Entrance" in them, or have specific brands
+      // Prioritise named entrances, keep a readable order.
       unique.sort((a, b) => {
         const aHasEntrance = a.name.toLowerCase().includes("entrance");
         const bHasEntrance = b.name.toLowerCase().includes("entrance");
@@ -183,18 +212,23 @@ export default function MapPicker() {
         return a.name.localeCompare(b.name);
       });
 
-      setEntrances(unique);
-      if (unique.length > 0) {
+      // Always expose a main drop-off at the centre of the place.
+      const centre: Entrance = { name: "Main Entrance / Drop-off", lat, lon };
+      const hasCentre = unique.some(
+        (e) => Math.abs(e.lat - lat) < 1e-5 && Math.abs(e.lon - lon) < 1e-5
+      );
+      const list =
+        unique.length > 0
+          ? (hasCentre ? unique : [centre, ...unique]).slice(0, 8)
+          : genericDropoffs(lat, lon);
+
+      setEntrances(list);
+      if (list.length > 0) {
         setSelectedEntIndex(0);
-        updateSelectedLocation(unique[0], 0);
+        updateSelectedLocation(list[0], 0);
       }
     } catch {
-      // Fallback in case of server failures
-      const fallbacks = [
-        { name: "Entrance 1 - Homemark", lat: lat + 0.0006, lon: lon + 0.0006 },
-        { name: "Entrance 4 - Panarottis", lat: lat - 0.0005, lon: lon - 0.0005 },
-        { name: "Entrance 5 - Standard Bank", lat: lat + 0.0008, lon: lon - 0.0004 },
-      ];
+      const fallbacks = genericDropoffs(lat, lon);
       setEntrances(fallbacks);
       setSelectedEntIndex(0);
       updateSelectedLocation(fallbacks[0], 0);
@@ -536,9 +570,9 @@ export default function MapPicker() {
 
         <TouchableOpacity
           onPress={handleConfirm}
-          disabled={locating || fetchingEntrances}
+          disabled={!region || (entranceSelect && fetchingEntrances)}
           className={`w-full py-4 rounded-2xl items-center justify-center ${
-            locating || fetchingEntrances ? "bg-muted" : "bg-primary"
+            entranceSelect && fetchingEntrances ? "bg-muted" : "bg-primary"
           }`}
         >
           <Text className="text-sm font-bold text-primary-foreground">

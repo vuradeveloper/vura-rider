@@ -110,7 +110,7 @@ export default function ChatScreen() {
             flatListRef.current?.scrollToEnd({ animated: true })
           }
           renderItem={({ item }) => {
-            const isMe = item.sender_role === "rider";
+            const isMe = item.sender_role === "rider" || item.sender_role === "passenger";
             return (
               <View
                 className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${

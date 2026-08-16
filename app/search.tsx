@@ -71,6 +71,124 @@ export default function Search() {
     })();
   }, []);
 
+  const mergeResults = (nominatimData: any, photonData: any) => {
+    const merged: any[] = [];
+    const seenCoords = new Set<string>();
+
+    if (Array.isArray(nominatimData)) {
+      nominatimData.forEach((item: any) => {
+        const lat = parseFloat(item.lat);
+        const lon = parseFloat(item.lon);
+        const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+        const parts = item.display_name.split(",");
+        const name = parts[0] || "Selected Place";
+        const addr = parts.slice(1, 4).join(",").trim();
+        seenCoords.add(coordKey);
+        merged.push({ name, addr, lat, lon });
+      });
+    }
+
+    if (photonData?.features) {
+      photonData.features.forEach((f: any) => {
+        const lat = f.geometry.coordinates[1];
+        const lon = f.geometry.coordinates[0];
+        const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+        if (!seenCoords.has(coordKey)) {
+          seenCoords.add(coordKey);
+          const name = f.properties.name || f.properties.street || f.properties.city || "Selected Location";
+          const streetNum = f.properties.housenumber ? `${f.properties.housenumber} ` : "";
+          const street = f.properties.street ? `${streetNum}${f.properties.street}` : "";
+          const district = f.properties.district || "";
+          const city = f.properties.city || "";
+          const country = f.properties.country || "";
+          const addr = [street, district, city, country].filter(Boolean).join(", ");
+          merged.push({ name, addr, lat, lon });
+        }
+      });
+    }
+    return merged;
+  };
+
+  const fetchGeocoders = async (term: string, lat?: number, lon?: number, bounded = false) => {
+    const box = 0.35; // ~40km box for the strict "near pickup" pass
+
+    const photonUrl = bounded
+      ? `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8&bbox=${lon! - box},${lat! - box},${lon! + box},${lat! + box}`
+      : `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8${lat != null ? `&lat=${lat}&lon=${lon}` : ""}`;
+
+    const nominatimUrl = bounded
+      ? `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1&viewbox=${lon! - box},${lat! - box},${lon! + box},${lat! + box}&bounded=1`
+      : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1${
+          lat != null ? `&viewbox=${lon! - 0.15},${lat - 0.15},${lon! + 0.15},${lat + 0.15}&bounded=0` : ""
+        }`;
+
+    const photonPromise = fetch(photonUrl)
+      .then((r) => r.json())
+      .catch(() => ({ features: [] }));
+
+    const nominatimPromise = fetch(nominatimUrl, {
+      headers: { "User-Agent": "VuraRiderApp/1.0" },
+    })
+      .then((r) => r.json())
+      .catch(() => []);
+
+    const [photonData, nominatimData] = await Promise.all([photonPromise, nominatimPromise]);
+    return mergeResults(nominatimData, photonData);
+  };
+
+  // Strictly-scoped second pass: re-query each candidate with results forced
+  // inside a box around the pickup. Used ONLY when the first pass found nothing
+  // close by, so far destinations (other cities/airports) still work.
+  const boundedPass = async (terms: string[], lat: number, lon: number) => {
+    for (const term of terms) {
+      const res = await fetchGeocoders(term, lat, lon, true);
+      if (res.length > 0) return res;
+    }
+    return [];
+  };
+
+  // Last-resort fallback: search the LIVE OpenStreetMap database (Overpass)
+  // for named places near the pickup that the geocoders miss. Tries several
+  // public mirrors so it also works on mobile.
+  const overpassSearch = async (term: string, lat: number, lon: number) => {
+    const mirrors = [
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ];
+    const safe = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pad = 0.06; // ~6km box
+    const query = `[out:json][timeout:8];(nwr["name"~"${safe}",i](${lat - pad},${lon - pad},${lat + pad},${lon + pad}););out center 12;`;
+    for (const base of mirrors) {
+      try {
+        const res = await fetch(`${base}?data=${encodeURIComponent(query)}`, {
+          signal: AbortSignal.timeout(9000),
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data?.elements?.length) {
+          return data.elements
+            .map((e: any) => {
+              const t = e.tags || {};
+              const eLat = e.lat ?? e.center?.lat;
+              const eLon = e.lon ?? e.center?.lon;
+              if (eLat == null || eLon == null) return null;
+              return {
+                name: t.name || term,
+                addr: t["addr:city"] || "Nearby place on map",
+                lat: eLat,
+                lon: eLon,
+              };
+            })
+            .filter(Boolean);
+        }
+      } catch {
+        // try the next mirror
+      }
+    }
+    return [];
+  };
+
   useEffect(() => {
     let q = "";
     if (activeInput === "pickup") q = pickup;
@@ -85,84 +203,71 @@ export default function Search() {
     timerRef.current = setTimeout(async () => {
       setLoading(true);
       try {
-        let locBias = "";
+        let bias: { lat: number; lon: number } | null = null;
         const p = JSON.parse(
           (await AsyncStorage.getItem("vura.ride.pickup")) || "null"
         );
-        if (p && p.length === 2) locBias = `&lat=${p[0]}&lon=${p[1]}`;
+        if (p && p.length === 2) bias = { lat: p[0], lon: p[1] };
 
-        // 1. Fetch from Photon (fast autocomplete)
-        const photonPromise = fetch(
-          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5${locBias}`
-        )
-          .then((r) => r.json())
-          .catch(() => ({ features: [] }));
+        const words = q.trim().split(/\s+/).filter((w) => w.length > 1);
+        // Try the full phrase first, then progressively shorter names — so
+        // "Horizon Heights Student Accommodation" also matches "Horizon Heights".
+        const candidates = [
+          q,
+          words.slice(0, 2).join(" "),
+          words.slice(0, 1).join(" "),
+        ].filter((c) => c && c.length >= 3);
 
-        // 2. Fetch from Nominatim (precise building & point-of-interest search)
-        const nominatimPromise = fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=3&addressdetails=1${
-            p && p.length === 2 ? `&viewbox=${p[1]-0.15},${p[0]+0.15},${p[1]+0.15},${p[0]-0.15}&bounded=0` : ""
-          }`,
-          {
-            headers: {
-              "User-Agent": "VuraRiderApp/1.0",
-            },
-          }
-        )
-          .then((r) => r.json())
-          .catch(() => []);
-
-        const [photonData, nominatimData] = await Promise.all([
-          photonPromise,
-          nominatimPromise,
-        ]);
-
-        const merged: any[] = [];
-        const seenCoords = new Set<string>();
-
-        // Process Nominatim results (priority for buildings/landmarks)
-        if (Array.isArray(nominatimData)) {
-          nominatimData.forEach((item: any) => {
-            const lat = parseFloat(item.lat);
-            const lon = parseFloat(item.lon);
-            const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
-            
-            const parts = item.display_name.split(",");
-            const name = parts[0] || "Selected Place";
-            const addr = parts.slice(1, 4).join(",").trim();
-
-            seenCoords.add(coordKey);
-            merged.push({ name, addr, lat, lon });
-          });
-        }
-
-        // Process Photon results
-        if (photonData?.features) {
-          photonData.features.forEach((f: any) => {
-            const lat = f.geometry.coordinates[1];
-            const lon = f.geometry.coordinates[0];
-            const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
-
-            if (!seenCoords.has(coordKey)) {
-              seenCoords.add(coordKey);
-
-              const name = f.properties.name || f.properties.street || f.properties.city || "Selected Location";
-              const streetNum = f.properties.housenumber ? `${f.properties.housenumber} ` : "";
-              const street = f.properties.street ? `${streetNum}${f.properties.street}` : "";
-              const district = f.properties.district || "";
-              const city = f.properties.city || "";
-              const country = f.properties.country || "";
-
-              const addr = [street, district, city, country]
-                .filter(Boolean)
-                .join(", ");
-
-              merged.push({ name, addr, lat, lon });
+        let merged: any[] = [];
+        const all: any[] = [];
+        const seenAll = new Set<string>();
+        for (const term of [...new Set(candidates)]) {
+          const res = await fetchGeocoders(term, bias?.lat, bias?.lon);
+          res.forEach((r: any) => {
+            const k = `${r.lat.toFixed(4)},${r.lon.toFixed(4)}`;
+            if (!seenAll.has(k)) {
+              seenAll.add(k);
+              all.push(r);
             }
           });
+          // If this term found something close to the pickup, stop narrowing.
+          // Otherwise keep trying shorter names so far-away lookalikes (e.g. a
+          // UK "Student Accommodation") don't hide your local residence.
+          if (
+            bias
+              ? res.some((r: any) => haversineKm(bias!.lat, bias!.lon, r.lat, r.lon) <= 50)
+              : res.length > 0
+          ) {
+            break;
+          }
+        }
+        merged = all;
+
+        // Strictly-scoped second pass: if nothing close to the pickup was found,
+        // re-query with results forced inside a box around it — this is what
+        // stops "foreign lookalike" results hiding your local places. Far
+        // destinations are unaffected because this only runs when there's no
+        // nearby match.
+        if (bias && !merged.some((r: any) => haversineKm(bias!.lat, bias!.lon, r.lat, r.lon) <= 50)) {
+          const scoped = await boundedPass([...new Set(candidates)], bias.lat, bias.lon);
+          if (scoped.length > 0) merged = scoped;
         }
 
-        setResults(merged.slice(0, 7));
+        // Live-map fallback: search nearby OSM for named places the geocoders miss.
+        if (merged.length === 0 && bias) {
+          merged = await overpassSearch(words.slice(0, 2).join(" ") || q, bias.lat, bias.lon);
+        }
+
+        // Nearest first so local (e.g. South African) results surface on top.
+        if (bias && merged.length > 0) {
+          merged = [...merged].sort((a: any, b: any) => {
+            const da = haversineKm(bias!.lat, bias!.lon, a.lat, a.lon);
+            const db = haversineKm(bias!.lat, bias!.lon, b.lat, b.lon);
+            return da - db;
+          });
+        }
+
+        setResults(merged.slice(0, 9));
       } catch (err) {
         console.error("Autocomplete fetch error:", err);
       } finally {

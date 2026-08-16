@@ -30,8 +30,15 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
+# local env files (NEVER commit real secrets/keys)
+.env
 .env*.local
+server/.env
+deploy/production.env
+
+# local APK artifacts
+*.apk
+*.aab
 
 # typescript
 *.tsbuildinfo

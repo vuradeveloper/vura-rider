@@ -56,7 +56,7 @@ export default function ReceiptScreen() {
   }
 
   const total = receipt
-    ? receipt.fare + receipt.ride_request_fee + (tipAmount || 0)
+    ? (receipt.fare || 0) + (receipt.ride_request_fee || 0) + (tipAmount || 0)
     : 0;
 
   const tipSuggestions = receipt ? getTipSuggestions(receipt.fare) : [];
@@ -105,7 +105,7 @@ export default function ReceiptScreen() {
                 {receipt.receipt_number}
               </Text>
               <Text className="text-xs text-muted-foreground">
-                {new Date(receipt.completed_at).toLocaleDateString("en-ZA", {
+                {new Date(receipt.completed_at || receipt.created_at || new Date()).toLocaleDateString("en-ZA", {
                   day: "numeric",
                   month: "short",
                   year: "numeric",
@@ -122,15 +122,15 @@ export default function ReceiptScreen() {
               <View className="flex-row items-center gap-3">
                 <View className="h-10 w-10 rounded-full bg-secondary items-center justify-center">
                   <Text className="text-sm font-bold text-foreground">
-                    {receipt.driver_name.charAt(0).toUpperCase()}
+                    {(receipt.driver_name || "V").charAt(0).toUpperCase()}
                   </Text>
                 </View>
                 <View className="flex-1">
                   <Text className="text-sm font-bold text-foreground">
-                    {receipt.driver_name}
+                    {receipt.driver_name || "Your Driver"}
                   </Text>
                   <Text className="text-xs text-muted-foreground">
-                    {[receipt.vehicle_make, receipt.vehicle_model].filter(Boolean).join(" ")} · {receipt.license_plate}
+                    {[receipt.vehicle_make, receipt.vehicle_model].filter(Boolean).join(" ")}{receipt.license_plate ? ` · ${receipt.license_plate}` : ""}
                   </Text>
                 </View>
               </View>
@@ -148,10 +148,10 @@ export default function ReceiptScreen() {
                 </View>
                 <View className="flex-1 gap-y-3">
                   <Text className="text-sm font-medium text-foreground" numberOfLines={1}>
-                    {receipt.pickup_address}
+                    {receipt.pickup_address || "Pickup"}
                   </Text>
                   <Text className="text-sm font-medium text-foreground" numberOfLines={1}>
-                    {receipt.destination_address}
+                    {receipt.destination_address || "Destination"}
                   </Text>
                 </View>
               </View>
@@ -160,13 +160,13 @@ export default function ReceiptScreen() {
                 <View className="flex-row items-center gap-1">
                   <Ionicons name="speedometer" size={14} color="#80716b" />
                   <Text className="text-xs text-muted-foreground">
-                    {receipt.distance_km.toFixed(1)} km
+                    {(receipt.distance_km || 0).toFixed(1)} km
                   </Text>
                 </View>
                 <View className="flex-row items-center gap-1">
                   <Ionicons name="time" size={14} color="#80716b" />
                   <Text className="text-xs text-muted-foreground">
-                    {receipt.duration_mins} min
+                    {receipt.duration_mins || 0} min
                   </Text>
                 </View>
               </View>

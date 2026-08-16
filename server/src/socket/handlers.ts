@@ -52,10 +52,23 @@ export function setupSocketHandlers(io: SocketIOServer) {
       return undefined;
     };
 
+    // Ensure the chat messages table exists (best-effort; created on boot too).
+    const ensureChatTable = async () => {
+      await execute(
+        `CREATE TABLE IF NOT EXISTS chat_messages (
+           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+           ride_id UUID NOT NULL,
+           sender_id UUID NOT NULL,
+           message TEXT NOT NULL,
+           created_at TIMESTAMPTZ DEFAULT NOW()
+         )`
+      ).catch((err) => console.warn("chat_messages table init warning:", err.message));
+    };
+
     // ── Passenger: request ride ──
     socket.on("passenger:ride:request", async (data) => {
       try {
-        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng } = data;
+        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference } = data;
         let dbUserId = await getDbUserId();
 
         if (!dbUserId) {
@@ -78,12 +91,44 @@ export function setupSocketHandlers(io: SocketIOServer) {
           throw new Error("Passenger account not synced with database yet. Try again in a moment.");
         }
 
+        // ── Card payment pre-auth check ──
+        // A ride must not be booked until the card payment has actually gone
+        // through. The app initiates an iVeri payment and passes back the
+        // reference; we only create the ride if that payment completed.
+        if (paymentMethod === "card") {
+          if (!paymentReference) {
+            socket.emit("ride:requested:ack", { success: false, reason: "Card payment must be authorised before booking." });
+            return;
+          }
+          const payment = await queryOne<{ id: string; status: string; user_id: string }>(
+            "SELECT id, status, user_id FROM payments WHERE reference = $1",
+            [paymentReference]
+          ).catch(() => null);
+
+          const ok = payment && payment.user_id === dbUserId && payment.status === "completed";
+          if (!ok) {
+            socket.emit("ride:requested:ack", {
+              success: false,
+              reason: "Card payment was declined or insufficient funds. Ride was not booked.",
+            });
+            return;
+          }
+        }
+
         const ride = await queryOne<any>(
           `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching')
            RETURNING *`,
           [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng]
         );
+
+        // Link the successful payment to this ride so it can be refunded on cancel.
+        if (paymentReference) {
+          await execute(
+            "UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2",
+            [ride?.id, paymentReference]
+          ).catch(() => {});
+        }
 
         socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
         if (ride) socket.join(`ride:${ride.id}`);
@@ -101,6 +146,26 @@ export function setupSocketHandlers(io: SocketIOServer) {
           "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3",
           [socket.userId, reason, rideId]
         );
+
+        // ── Auto-refund ──
+        // If the rider cancels before the trip, refund the card payment that was
+        // taken at booking. iVeri Lite has no server-side reversal, so we mark it
+        // refunded here (mock mode returns the money instantly; in live mode the
+        // refund is completed in the Nedbank portal). The app is told so it can
+        // show the rider.
+        const payment = await queryOne<{ id: string; status: string }>(
+          "SELECT id, status FROM payments WHERE ride_id = $1 AND status = 'completed'",
+          [rideId]
+        ).catch(() => null);
+
+        if (payment) {
+          await execute(
+            "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
+            [payment.id]
+          ).catch(() => {});
+          io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "Your payment was refunded." });
+        }
+
         io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
       } catch (err: any) { console.error("Cancel error:", err); }
     });
@@ -149,13 +214,30 @@ export function setupSocketHandlers(io: SocketIOServer) {
     });
 
     // ── Chat ──
-    socket.on("chat:join", (data) => {
-      socket.join(`chat:${data.rideId}`);
+    socket.on("chat:join", async (data) => {
+      try {
+        const { rideId } = data;
+        if (!rideId) return;
+        socket.join(`chat:${rideId}`);
+        // Send the existing conversation history so the screen isn't empty.
+        await ensureChatTable();
+        const history = await query<any>(
+          `SELECT cm.id, cm.ride_id, cm.sender_id, cm.message, cm.created_at,
+                  COALESCE(u.role, 'rider') AS sender_role
+           FROM chat_messages cm
+           LEFT JOIN users u ON u.id = cm.sender_id
+           WHERE cm.ride_id = $1
+           ORDER BY cm.created_at ASC
+           LIMIT 200`,
+          [rideId]
+        );
+        socket.emit("chat:history", history);
+      } catch (err: any) { console.error("Chat history error:", err); }
     });
 
     // ── Chat ──
     socket.on("chat:leave", (data) => {
-      socket.leave(`chat:${data.rideId}`);
+      if (data?.rideId) socket.leave(`chat:${data.rideId}`);
     });
 
     socket.on("chat:send", async (data) => {
@@ -163,14 +245,18 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const { rideId, message } = data;
         const dbUserId = await getDbUserId();
         if (!dbUserId) throw new Error("User details not synced.");
-
+        if (!message || !String(message).trim()) return;
+        await ensureChatTable();
         const msg = await queryOne<any>(
           `INSERT INTO chat_messages (ride_id, sender_id, message)
            VALUES ($1, $2, $3)
            RETURNING id, ride_id, sender_id, message, created_at`,
-          [rideId, dbUserId, message]
+          [rideId, dbUserId, String(message).trim()]
         );
-        io.to(`chat:${rideId}`).emit("chat:message", msg);
+        io.to(`chat:${rideId}`).emit("chat:message", {
+          ...msg,
+          sender_role: socket.userRole || "rider",
+        });
       } catch (err: any) { console.error("Chat error:", err); }
     });
 
@@ -251,6 +337,24 @@ export function setupSocketHandlers(io: SocketIOServer) {
       const { rideId } = data;
       const shareToken = Math.random().toString(36).substring(2, 15);
       io.to(`ride:${rideId}`).emit("share:generated", { rideId, shareToken, shareUrl: `/share/${shareToken}` });
+    });
+
+    // ── Driver live location (persisted so public share pages can track it) ──
+    socket.on("driver:location", async (data) => {
+      try {
+        const { lat, lng, heading } = data || {};
+        if (lat == null || lng == null) return;
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+        await execute(
+          `UPDATE driver_profiles
+           SET current_lat = $1, current_lng = $2,
+               current_heading = COALESCE($3, current_heading),
+               updated_at = NOW()
+           WHERE user_id = $4`,
+          [lat, lng, heading ?? null, dbUserId]
+        );
+      } catch (err: any) { console.error("Driver location error:", err); }
     });
 
     socket.on("disconnect", () => {

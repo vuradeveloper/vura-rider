@@ -6,10 +6,8 @@ import { useEffect } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 import { useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import * as Notifications from "expo-notifications";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { registerForPushNotificationsAsync, registerDeviceToken } from "@/lib/notifications";
 
 const queryClient = new QueryClient();
 
@@ -34,9 +32,15 @@ function AuthGate() {
     }
   }, [user, loading, segments]);
 
-  // Register push notifications when user becomes authenticated
+  // Register push notifications when user becomes authenticated — the module
+  // is lazy-loaded so expo-notifications stays out of the initial JS bundle
+  // and the first screen paints sooner.
   useEffect(() => {
     if (!loading && user) {
+      const {
+        registerForPushNotificationsAsync,
+        registerDeviceToken,
+      } = require("@/lib/notifications") as typeof import("@/lib/notifications");
       registerForPushNotificationsAsync().then((token: string | null) => {
         if (token) {
           registerDeviceToken(token);
@@ -71,6 +75,9 @@ function RootLayout() {
   }, [url]);
 
   useEffect(() => {
+    // Notifications listeners are lazy-loaded to keep expo-notifications out
+    // of the initial JS bundle.
+    const Notifications = require("expo-notifications") as typeof import("expo-notifications");
     // Listen for notifications received while the app is in the foreground
     const notificationListener = Notifications.addNotificationReceivedListener((notification) => {
       console.log("Foreground notification received:", notification);

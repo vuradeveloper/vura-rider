@@ -1,0 +1,7 @@
+# Large build artifacts that don't belong in the EAS upload
+*.apk
+*.aab
+node_modules/
+.expo/
+dist/
+web-build/

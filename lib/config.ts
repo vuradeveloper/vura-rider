@@ -3,12 +3,16 @@ const fallbackApiBase =
 
 const apiBase = process.env.EXPO_PUBLIC_API_URL || fallbackApiBase;
 
+const allowHttp =
+  process.env.EXPO_PUBLIC_ALLOW_HTTP === "true" ||
+  process.env.EXPO_PUBLIC_ALLOW_HTTP === "1";
+
 export function getApiBaseUrl(): string {
   if (!apiBase) {
     throw new Error("EXPO_PUBLIC_API_URL is required");
   }
 
-  if (process.env.NODE_ENV === "production" && !apiBase.startsWith("https://")) {
+  if (process.env.NODE_ENV === "production" && !apiBase.startsWith("https://") && !allowHttp) {
     throw new Error("EXPO_PUBLIC_API_URL must use HTTPS in production");
   }
 

@@ -163,6 +163,16 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
     const firebaseUid = req.userId!;
     const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduledAt, tier } = req.body;
 
+    const scheduled = new Date(scheduledAt);
+    if (!scheduledAt || isNaN(scheduled.getTime())) {
+      res.status(400).json({ error: "A valid scheduledAt date/time is required" });
+      return;
+    }
+    if (scheduled.getTime() <= Date.now()) {
+      res.status(400).json({ error: "Scheduled time must be in the future" });
+      return;
+    }
+
     const user = await queryOne<{ id: string }>(
       "SELECT id FROM users WHERE firebase_uid = $1",
       [firebaseUid]
@@ -170,10 +180,10 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     const ride = await queryOne(
-      `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+      `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, scheduled_at, tier)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled', $8, $9)
        RETURNING *`,
-      [user.id, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng]
+      [user.id, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduled.toISOString(), tier || "x"]
     );
 
     res.status(201).json({ ride: mapRide(ride) });
@@ -183,7 +193,7 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
   }
 });
 
-// GET /api/rides/scheduled — Get scheduled rides
+// GET /api/rides/scheduled — Get upcoming scheduled rides
 router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
@@ -197,8 +207,8 @@ router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) =>
       `SELECT r.*, d.full_name AS driver_name
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
-       WHERE r.passenger_id = $1 AND r.status = 'pending'
-       ORDER BY r.created_at ASC`,
+       WHERE r.passenger_id = $1 AND r.status = 'scheduled' AND r.scheduled_at > NOW()
+       ORDER BY r.scheduled_at ASC`,
       [user.id]
     );
 
@@ -212,10 +222,22 @@ router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) =>
 // POST /api/rides/scheduled/:id/cancel — Cancel a scheduled ride
 router.post("/scheduled/:id/cancel", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await execute(
-      "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = 'Scheduled ride cancelled by user', cancelled_at = NOW() WHERE id = $2",
-      [req.userId, req.params.id]
+    const firebaseUid = req.userId!;
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [firebaseUid]
     );
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    const result = await execute(
+      `UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = 'Scheduled ride cancelled by user', cancelled_at = NOW()
+       WHERE id = $2 AND passenger_id = $3 AND status = 'scheduled'`,
+      [user.id, req.params.id, user.id]
+    );
+    if (!result.rowCount) {
+      res.status(404).json({ error: "Scheduled ride not found" });
+      return;
+    }
     res.json({ success: true });
   } catch (err: any) {
     console.error("Cancel scheduled ride error:", err);
@@ -278,7 +300,7 @@ router.patch("/:id/status", requireAuth, async (req: AuthRequest, res: Response)
 
     if (status === "completed") {
       updates.push("completed_at = NOW()");
-      updates.push("actual_fare = COALESCE(estimated_fare, 25.00)");
+      updates.push("actual_fare = COALESCE(estimated_fare, 0.20)");
     }
 
     await execute(
