@@ -1608,6 +1608,7 @@ export default function Track() {
         fields={iveriFields}
         gatewayUrl={iveriGateway}
         savedCard={iveriSavedCard}
+        reference={iveriRef.current ?? undefined}
         onClose={() => {
           setIveriVisible(false);
           pendingRequestRef.current = null;

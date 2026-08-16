@@ -413,9 +413,29 @@ router.post("/initialize", requireAuth, async (req: AuthRequest, res: Response) 
   }
 });
 
-// GET /api/payments/verify — Verify payment reference
-router.get("/verify", requireAuth, async (req: AuthRequest, res: Response) => {
-  res.json({ status: "success", reference: req.query.reference });
+// GET /api/payments/verify — Poll payment status by reference.
+// The gateway's S2S callback (Lite_Server_Server_Url) updates the DB
+// asynchronously; the mobile app polls this endpoint to learn the result.
+router.get("/verify", async (req: AuthRequest, res: Response) => {
+  try {
+    const { reference } = req.query;
+    if (!reference || typeof reference !== "string") {
+      res.status(400).json({ status: "error", error: "Missing reference" });
+      return;
+    }
+    const payment = await queryOne<{ status: string }>(
+      "SELECT status FROM payments WHERE reference = $1 LIMIT 1",
+      [reference]
+    );
+    if (!payment) {
+      res.json({ status: "pending", reference });
+      return;
+    }
+    res.json({ status: payment.status, reference });
+  } catch (err: any) {
+    console.error("Verify payment error:", err);
+    res.status(500).json({ status: "error", error: err.message });
+  }
 });
 
 // POST /api/payments/refund — Mark a payment refunded (rider cancelled before pickup).

@@ -22,6 +22,7 @@ export default function AddPaymentMethod() {
   const [iveriVisible, setIveriVisible] = useState(false);
   const [iveriFields, setIveriFields] = useState<Record<string, string>>({});
   const [iveriGateway, setIveriGateway] = useState("");
+  const [iveriReference, setIveriReference] = useState<string | undefined>();
 
   const navigateBack = () => {
     if (router.canGoBack()) {
@@ -45,6 +46,7 @@ export default function AddPaymentMethod() {
       }
       setIveriFields(result.fields || {});
       setIveriGateway(result.gatewayUrl || "");
+      setIveriReference(result.reference || undefined);
       setIveriVisible(true);
     } catch (e: any) {
       Alert.alert("Error", e.message || "Could not start secure card setup");
@@ -124,6 +126,7 @@ export default function AddPaymentMethod() {
         visible={iveriVisible}
         fields={iveriFields}
         gatewayUrl={iveriGateway}
+        reference={iveriReference}
         onClose={() => {
           setIveriVisible(false);
         }}
