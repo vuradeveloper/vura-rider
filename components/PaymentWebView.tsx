@@ -56,18 +56,6 @@ export default function PaymentWebView({
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
 
-  // Reset state each time the modal is (re)opened.
-  useEffect(() => {
-    if (visible) {
-      setShowForm(false);
-      reportedRef.current = false;
-      setErrorUrl(null);
-      setErrorCode(null);
-      setErrorDesc(null);
-      setPollStatus("idle");
-    }
-  }, [visible]);
-
   // ── Polling: after the WebView is visible and we have a reference, check
   // the server every 3 seconds. The gateway's S2S callback (Lite_Server_Server_Url)
   // posts the payment result to our /api/payments/return, which updates the DB.
@@ -75,6 +63,34 @@ export default function PaymentWebView({
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef = useRef(false);
+
+  const stopPolling = useCallback(() => {
+    stoppedRef.current = true;
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Reset state each time the modal is (re)opened. IMPORTANT: stoppedRef and
+  // reportedRef MUST be cleared here so startPolling() below can actually run
+  // when the modal opens — otherwise it bails immediately (the effect's cleanup
+  // calls stopPolling(), which flips stoppedRef to true before the body runs).
+  useEffect(() => {
+    if (visible) {
+      setShowForm(false);
+      reportedRef.current = false;
+      stoppedRef.current = false;
+      setErrorUrl(null);
+      setErrorCode(null);
+      setErrorDesc(null);
+      setPollStatus("idle");
+    }
+  }, [visible]);
 
   const startPolling = useCallback(() => {
     if (!reference || reportedRef.current || stoppedRef.current) return;
@@ -120,12 +136,6 @@ export default function PaymentWebView({
     check();
     pollIntervalRef.current = setInterval(check, 3000);
   }, [reference]);
-
-  const stopPolling = useCallback(() => {
-    stoppedRef.current = true;
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
-  }, []);
 
   // Start/stop polling based on visibility + reference.
   useEffect(() => {
@@ -322,80 +332,11 @@ export default function PaymentWebView({
             </TouchableOpacity>
           </View>
         </View>
-        {pollStatus === "polling" ||
-        (pollStatus === "timeout" && errorUrl) ? (
-          // Show polling/waiting overlay on top of everything
-          <View style={{ flex: 1 }}>
-            <WebView
-              key={webViewKey}
-              source={{ html: formHtml }}
-              originWhitelist={["*"]}
-              mixedContentMode="always"
-              javaScriptEnabled
-              domStorageEnabled
-              startInLoadingState
-              renderLoading={() => (
-                <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#fbf7f4" }}>
-                  <ActivityIndicator size="large" color="#e04e2f" />
-                  <Text style={{ marginTop: 14, fontSize: 13, color: "#80716b" }}>
-                    Loading secure payment…
-                  </Text>
-                </View>
-              )}
-              renderError={() => <CustomErrorView />}
-              onShouldStartLoadWithRequest={(request) => {
-                const url = request.url || "";
-                if (handleReturn(url)) return false;
-                return true;
-              }}
-              onNavigationStateChange={(nav) => {
-                const url = nav.url || "";
-                if (isReturnUrl(url)) {
-                  forwardReturnToServer(url);
-                  const result = parseReturn(url);
-                  if (result !== null && !reportedRef.current) {
-                    reportedRef.current = true;
-                    stopPolling();
-                    onDone({ success: result === "success", result });
-                  }
-                }
-              }}
-              onHttpError={(syntheticEvent) => {
-                const { url, statusCode } = syntheticEvent.nativeEvent;
-                console.warn("[PaymentWebView] HTTP error", statusCode, url);
-              }}
-              onError={(syntheticEvent) => {
-                const { code, description, url } = syntheticEvent.nativeEvent;
-                console.warn("[PaymentWebView] load error", code, description, url);
-                setErrorUrl(url);
-                setErrorCode(code != null ? String(code) : null);
-                setErrorDesc(description || null);
-              }}
-              style={{ flex: 1 }}
-            />
-            {/* Polling indicator bar at bottom */}
-            {pollStatus === "polling" ? (
-              <View
-                style={{
-                  paddingVertical: 8,
-                  paddingHorizontal: 16,
-                  backgroundColor: "#fff",
-                  borderTopWidth: 1,
-                  borderTopColor: "#eee",
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 8,
-                }}
-              >
-                <ActivityIndicator size="small" color="#e04e2f" />
-                <Text style={{ fontSize: 12, color: "#80716b" }}>
-                  Confirming payment with server…
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        ) : (
+        {/* Single WebView — never remounted, so the form is NOT re-submitted
+            to the gateway when pollStatus changes. The polling indicator is an
+            overlay; renderError switches between the error view and the
+            "checking payment status" view based on pollStatus. */}
+        <View style={{ flex: 1 }}>
           <WebView
             key={webViewKey}
             source={{ html: formHtml }}
@@ -443,7 +384,32 @@ export default function PaymentWebView({
             }}
             style={{ flex: 1 }}
           />
-        )}
+          {/* Polling indicator bar at bottom */}
+          {pollStatus === "polling" ? (
+            <View
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                paddingVertical: 10,
+                paddingHorizontal: 16,
+                backgroundColor: "#fff",
+                borderTopWidth: 1,
+                borderTopColor: "#eee",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              <ActivityIndicator size="small" color="#e04e2f" />
+              <Text style={{ fontSize: 12, color: "#80716b" }}>
+                Confirming payment with server…
+              </Text>
+            </View>
+          ) : null}
+        </View>
         {savedCard && !showForm ? (
           <View
             style={{
