@@ -227,6 +227,66 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
   }
 });
 
+// POST /api/payments/card-register — Start an iVeri (Nedbank) card
+// registration. Always shows the fresh hosted card-entry page (no stored token),
+// so a card can be added/tokenised even if the rider has never paid before.
+// On the gateway return, the /return handler captures the TransactionIndex and
+// stores it on the user's default saved card.
+router.post("/card-register", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const firebaseUid = req.userId!;
+    const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
+      "SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1",
+      [firebaseUid]
+    );
+    if (!user) { res.status(401).json({ error: "User not found" }); return; }
+
+    // A tiny AUTH-only registration amount. iVeri Lite requires an amount;
+    // R0.20 is our floor. This is a pre-auth to tokenise the card, not a fare.
+    const amount = 0.2;
+
+    const reference =
+      `VURACARD${Date.now().toString(36).toUpperCase()}` +
+      `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+    try {
+      await ensurePaymentsTable();
+      await execute(
+        `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+         VALUES ($1, NULL, $2, $3, 'ZAR', 'initiated', 'iveri')`,
+        [user.id, reference, amount]
+      );
+    } catch (e) { /* logging/table issues shouldn't block the payment */ }
+
+    const result = buildIveriFormFields({
+      amountRands: amount,
+      merchantReference: reference,
+      userEmail: user.email,
+      userFirstName: user.full_name,
+      userPhone: user.phone,
+      // Deliberately NO saved-card token: always show the card entry page.
+    });
+
+    if (result === null) {
+      res.json({ reference, live: false, fields: {}, gatewayUrl: "" });
+      return;
+    }
+
+    // Mock mode: simulate an approved charge so the registration completes.
+    if (!result.live) {
+      await execute(
+        `UPDATE payments SET status = 'completed', updated_at = NOW() WHERE reference = $1`,
+        [reference]
+      ).catch(() => {});
+    }
+
+    res.json({ reference, ...result });
+  } catch (err: any) {
+    console.error("Card register error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET/POST /api/payments/return — iVeri Lite redirects the customer here after
 // paying. The gateway POSTs the result (LITE_PAYMENT_CARD_STATUS etc.); we
 // record it, then bounce to a GET with ?result=... so the app's WebView can
@@ -260,6 +320,7 @@ router.all("/return", async (req: AuthRequest, res: Response) => {
       if (success) {
         const token = String(q.Lite_TransactionIndex || q.transaction_index || "").trim();
         const masked = String(q.Ecom_Payment_Card_Number || q.pan_masked || "").trim();
+        const last4 = String(masked).replace(/\D/g, "").slice(-4) || null;
         if (token) {
           try {
             const payment = await queryOne<{ user_id: string }>(
@@ -273,33 +334,45 @@ router.all("/return", async (req: AuthRequest, res: Response) => {
               const expYear = q.Ecom_Payment_Card_ExpDate_Year
                 ? parseInt(String(q.Ecom_Payment_Card_ExpDate_Year), 10)
                 : null;
-              await execute(
-                `UPDATE saved_cards
-                 SET transaction_index = $1,
-                     card_number_masked = $2,
-                     exp_month = COALESCE($3, exp_month),
-                     exp_year = COALESCE($4, exp_year)
-                 WHERE user_id = $5 AND is_default = true`,
-                [token, masked || null, expMonth, expYear, payment.user_id]
-              ).catch(() => {});
-              // If no default saved card row exists, insert one.
-              const updated = await queryOne<{ id: string }>(
+
+              // 1) Already-tokenised row → refresh its token/expiry.
+              const byToken = await queryOne<{ id: string }>(
                 `SELECT id FROM saved_cards
                  WHERE user_id = $1 AND transaction_index = $2 LIMIT 1`,
                 [payment.user_id, token]
               );
-              if (!updated) {
+              // 2) Existing row for this same card (matched by last4) → attach token.
+              const byLast4 = !byToken && last4
+                ? await queryOne<{ id: string; is_default: boolean }>(
+                    `SELECT id, is_default FROM saved_cards
+                     WHERE user_id = $1 AND last4 = $2 ORDER BY is_default DESC LIMIT 1`,
+                    [payment.user_id, last4]
+                  ).catch(() => null)
+                : null;
+
+              if (byToken) {
+                await execute(
+                  `UPDATE saved_cards
+                   SET card_number_masked = $1, exp_month = COALESCE($2, exp_month),
+                       exp_year = COALESCE($3, exp_year)
+                   WHERE id = $4`,
+                  [masked || null, expMonth, expYear, byToken.id]
+                ).catch(() => {});
+              } else if (byLast4) {
+                await execute(
+                  `UPDATE saved_cards
+                   SET transaction_index = $1, card_number_masked = $2,
+                       exp_month = COALESCE($3, exp_month), exp_year = COALESCE($4, exp_year),
+                       is_default = true
+                   WHERE id = $5`,
+                  [token, masked || null, expMonth, expYear, byLast4.id]
+                ).catch(() => {});
+              } else {
+                // 3) Brand-new card → insert as the default saved card.
                 await execute(
                   `INSERT INTO saved_cards (user_id, card_type, last4, card_number_masked, transaction_index, exp_month, exp_year, is_default)
                    VALUES ($1, 'card', $2, $3, $4, $5, $6, true)`,
-                  [
-                    payment.user_id,
-                    String(masked).replace(/\D/g, "").slice(-4) || "0000",
-                    masked || null,
-                    token,
-                    expMonth,
-                    expYear,
-                  ]
+                  [payment.user_id, last4 || "0000", masked || null, token, expMonth, expYear]
                 ).catch(() => {});
               }
             }

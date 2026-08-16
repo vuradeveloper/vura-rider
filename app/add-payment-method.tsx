@@ -3,7 +3,6 @@ import { useState } from "react";
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
@@ -12,67 +11,17 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
-import { addCard } from "@/services/PaymentService";
-
-const getCardType = (number: string): string => {
-  const cleanNumber = number.replace(/\D/g, "");
-  if (cleanNumber.startsWith("4")) {
-    return "Visa";
-  }
-  if (
-    /^(5[1-5]\d{2}|222[1-9]|22[3-9]\d|2[3-6]\d{2}|27[0-1]\d|2720)/.test(
-      cleanNumber
-    )
-  ) {
-    return "Mastercard";
-  }
-  if (/^3[47]/.test(cleanNumber)) {
-    return "American Express";
-  }
-  if (/^(6011|622(12[6-9]|1[3-9]\d|[2-8]\d{2}|9[0-1]\d|92[0-5])|64[4-9]|65)/.test(cleanNumber)) {
-    return "Discover";
-  }
-  if (/^35(2[89]|[3-8]\d)/.test(cleanNumber)) {
-    return "JCB";
-  }
-  if (/^(30[0-5]|36|38|39)/.test(cleanNumber)) {
-    return "Diners Club";
-  }
-  return "";
-};
-
-const getBankFromNumber = (number: string): string => {
-  const cleanNumber = number.replace(/\D/g, "");
-  const bin = cleanNumber.slice(0, 6);
-  if (bin.length < 6) return "";
-
-  if (bin.startsWith("4790") || bin.startsWith("5020") || bin.startsWith("5886") || bin.startsWith("6282")) {
-    return "Capitec Bank";
-  }
-  if (bin.startsWith("4905") || bin.startsWith("5049") || bin.startsWith("5206") || bin.startsWith("5373")) {
-    return "FNB";
-  }
-  if (bin.startsWith("5196") || bin.startsWith("5239") || bin.startsWith("5221") || bin.startsWith("5293") || bin.startsWith("5322") || bin.startsWith("5450")) {
-    return "Standard Bank";
-  }
-  if (bin.startsWith("4203") || bin.startsWith("5176") || bin.startsWith("5204") || bin.startsWith("5319")) {
-    return "ABSA Bank";
-  }
-  if (bin.startsWith("4838") || bin.startsWith("5108") || bin.startsWith("5264") || bin.startsWith("5275")) {
-    return "Nedbank";
-  }
-  return "";
-};
+import { registerIveriCard } from "@/services/PaymentService";
+import PaymentWebView from "@/components/PaymentWebView";
 
 export default function AddPaymentMethod() {
   const router = useRouter();
   const queryClient = useQueryClient();
 
-  const [cardNumber, setCardNumber] = useState("");
-  const [expiry, setExpiry] = useState("");
-  const [cvc, setCvc] = useState("");
-  const [name, setName] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [iveriVisible, setIveriVisible] = useState(false);
+  const [iveriFields, setIveriFields] = useState<Record<string, string>>({});
+  const [iveriGateway, setIveriGateway] = useState("");
 
   const navigateBack = () => {
     if (router.canGoBack()) {
@@ -82,115 +31,25 @@ export default function AddPaymentMethod() {
     }
   };
 
-  const detectedBrand = getCardType(cardNumber);
-  const detectedBank = getBankFromNumber(cardNumber);
-
-  const validateCard = () => {
-    const digitsOnly = cardNumber.replace(/\D/g, "");
-    if (!digitsOnly || digitsOnly.length < 15) {
-      Alert.alert("Error", "Invalid card number length");
-      return false;
-    }
-    
-    let sum = 0;
-    let shouldDouble = false;
-    for (let i = digitsOnly.length - 1; i >= 0; i--) {
-      let digit = parseInt(digitsOnly.charAt(i), 10);
-      if (shouldDouble) {
-        digit *= 2;
-        if (digit > 9) digit -= 9;
-      }
-      sum += digit;
-      shouldDouble = !shouldDouble;
-    }
-    // Accept test cards or valid Luhn sums
-    const isTestCard = digitsOnly.length >= 15 && digitsOnly.length <= 19;
-    if (sum % 10 !== 0 && !isTestCard) {
-      Alert.alert("Error", "Please enter a valid credit card number");
-      return false;
-    }
-
-    if (!expiry || !expiry.includes("/")) {
-      Alert.alert("Error", "Invalid expiry date (use MM/YY format)");
-      return false;
-    }
-
-    const [monthStr, yearStr] = expiry.split("/");
-    const expMonth = parseInt(monthStr, 10);
-    const expYear = parseInt(yearStr, 10);
-
-    if (isNaN(expMonth) || expMonth < 1 || expMonth > 12) {
-      Alert.alert("Error", "Expiry month must be between 01 and 12");
-      return false;
-    }
-
-    if (isNaN(expYear)) {
-      Alert.alert("Error", "Expiry year is invalid");
-      return false;
-    }
-
-    const currentYear = new Date().getFullYear() % 100;
-    const currentMonth = new Date().getMonth() + 1;
-    if (expYear < currentYear || (expYear === currentYear && expMonth < currentMonth)) {
-      Alert.alert("Error", "Card has expired");
-      return false;
-    }
-
-    if (!cvc || cvc.length < 3) {
-      Alert.alert("Error", "Please enter a valid 3 or 4 digit CVC");
-      return false;
-    }
-
-    if (!name.trim()) {
-      Alert.alert("Error", "Please enter name on card");
-      return false;
-    }
-
-    return true;
-  };
-
-  const handleSave = async () => {
-    if (!validateCard()) return;
-    setIsSaving(true);
-
+  const startSecureAdd = async () => {
+    setIsStarting(true);
     try {
-      const digitsOnly = cardNumber.replace(/\D/g, "");
-      const last4 = digitsOnly.slice(-4);
-      const [monthStr, yearStr] = expiry.split("/");
-      const expMonth = parseInt(monthStr, 10);
-      const expYear = parseInt(yearStr, 10);
-
-      const payload = {
-        card_type: detectedBrand || "Card",
-        last4,
-        bank: detectedBank || undefined,
-        exp_month: expMonth,
-        exp_year: expYear,
-      };
-
-      const result = await addCard(payload);
-
-      if (result.success) {
-        await queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
-        
+      const result = await registerIveriCard();
+      if (result.mock) {
         Alert.alert(
-          "Card Saved Safely",
-          "Your card was added successfully! Vura keeps your card safe by tokenizing payments and never storing full credit card numbers.",
-          [
-            {
-              text: "OK",
-              onPress: navigateBack,
-            },
-          ]
+          "Payments are in test mode",
+          "Your server is in mock payment mode (PAYMENTS_MODE=mock). No real card is charged. Fill in the IVERI_* values in server/.env to go live.",
+          [{ text: "OK" }]
         );
-        setTimeout(navigateBack, 100);
-      } else {
-        Alert.alert("Error", result.error || "Failed to add card");
+        return;
       }
-    } catch (error: any) {
-      Alert.alert("Error", error.message || "Failed to add card. Please try again.");
+      setIveriFields(result.fields || {});
+      setIveriGateway(result.gatewayUrl || "");
+      setIveriVisible(true);
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Could not start secure card setup");
     } finally {
-      setIsSaving(false);
+      setIsStarting(false);
     }
   };
 
@@ -211,119 +70,81 @@ export default function AddPaymentMethod() {
         </View>
       </View>
 
-      <ScrollView className="flex-1 px-5 pt-4" showsVerticalScrollIndicator={false}>
-        <View className="flex-row items-center gap-3 p-3 mb-6 bg-emerald-50 border border-emerald-100 rounded-xl">
-          <Ionicons name="shield-checkmark" size={20} color="#059669" />
+      <ScrollView className="flex-1 px-5 pt-6" showsVerticalScrollIndicator={false}>
+        <View className="items-center mt-2 mb-6">
+          <View className="w-20 h-20 rounded-full bg-primary/10 items-center justify-center">
+            <Ionicons name="card" size={40} color="#e04e2f" />
+          </View>
+          <Text className="mt-4 text-xl font-extrabold text-foreground text-center">
+            Add a card securely
+          </Text>
+          <Text className="mt-2 text-sm text-muted-foreground text-center leading-relaxed max-w-[300px]">
+            We'll take you to a secure Nedbank payment page to add your card.
+            Your card details are never stored on our servers.
+          </Text>
+        </View>
+
+        <View className="flex-row items-center gap-3 p-4 bg-emerald-50 border border-emerald-100 rounded-xl mb-6">
+          <Ionicons name="shield-checkmark" size={22} color="#059669" />
           <View className="flex-1">
             <Text className="text-xs font-bold text-emerald-800">
               Safe & Secure Processing
             </Text>
-            <Text className="text-[10px] text-emerald-600 leading-normal">
-              We use secure bank tokenization. Your full card details and CVV are never saved on our servers.
+            <Text className="text-[11px] text-emerald-600 leading-normal mt-0.5">
+              Your full card number and CVV never touch our servers. Payments are
+              processed on Nedbank's PCI-compliant page.
             </Text>
           </View>
         </View>
 
-        <View className="mb-4">
-          <Text className="text-sm font-semibold text-foreground mb-1">
-            Card Number
-          </Text>
-          <View className="relative justify-center">
-            <TextInput
-              placeholder="•••• •••• •••• ••••"
-              placeholderTextColor="#80716b"
-              value={cardNumber}
-              onChangeText={(text) => {
-                const cleaned = text.replace(/\D/g, "");
-                const formatted = cleaned.match(/.{1,4}/g)?.join(" ") || "";
-                setCardNumber(formatted);
-              }}
-              keyboardType="number-pad"
-              maxLength={19}
-              className="w-full rounded-xl pl-4 pr-24 py-3 text-sm font-medium border border-border bg-surface text-foreground"
-            />
-            {detectedBrand || detectedBank ? (
-              <View className="absolute right-3 flex-row items-center gap-1.5 px-2 py-1 rounded bg-secondary/80 border border-border">
-                <Text className="text-[10px] font-bold text-foreground uppercase">
-                  {detectedBank ? `${detectedBank} (${detectedBrand})` : detectedBrand}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
+        <TouchableOpacity
+          onPress={startSecureAdd}
+          disabled={isStarting}
+          className={`w-full rounded-xl bg-primary py-4 items-center ${isStarting ? "opacity-60" : ""}`}
+        >
+          {isStarting ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <View className="flex-row items-center gap-2">
+              <Ionicons name="lock-closed" size={16} color="#fff" />
+              <Text className="text-sm font-bold text-primary-foreground">
+                Continue to secure payment
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
 
-        <View className="flex-row gap-4 mb-4">
-          <View className="flex-1">
-            <Text className="text-sm font-semibold text-foreground mb-1">
-              Expiry Date (MM/YY)
-            </Text>
-            <TextInput
-              placeholder="MM / YY"
-              placeholderTextColor="#80716b"
-              value={expiry}
-              onChangeText={(text) => {
-                const cleaned = text.replace(/\D/g, "");
-                if (cleaned.length <= 2) {
-                  setExpiry(cleaned);
-                } else {
-                  setExpiry(`${cleaned.slice(0, 2)}/${cleaned.slice(2, 4)}`);
-                }
-              }}
-              keyboardType="number-pad"
-              maxLength={5}
-              className="w-full rounded-xl px-4 py-3 text-sm font-medium border border-border bg-surface text-foreground"
-            />
-          </View>
-
-          <View className="flex-1">
-            <Text className="text-sm font-semibold text-foreground mb-1">
-              CVC / CVV
-            </Text>
-            <TextInput
-              placeholder="•••"
-              placeholderTextColor="#80716b"
-              value={cvc}
-              onChangeText={(t) => setCvc(t.replace(/\D/g, ""))}
-              keyboardType="number-pad"
-              maxLength={4}
-              secureTextEntry
-              className="w-full rounded-xl px-4 py-3 text-sm font-medium border border-border bg-surface text-foreground"
-            />
-          </View>
-        </View>
-
-        <View className="mb-6">
-          <Text className="text-sm font-semibold text-foreground mb-1">
-            Name on Card
-          </Text>
-          <TextInput
-            placeholder="John Doe"
-            placeholderTextColor="#80716b"
-            value={name}
-            onChangeText={setName}
-            autoCapitalize="words"
-            className="w-full rounded-xl px-4 py-3 text-sm font-medium border border-border bg-surface text-foreground"
-          />
-        </View>
-
-        {isSaving ? (
-          <View className="items-center py-6">
-            <ActivityIndicator size="large" color="#e04e2f" />
-            <Text className="text-sm text-muted-foreground mt-3">
-              Verifying with Bank...
-            </Text>
-          </View>
-        ) : (
-          <TouchableOpacity
-            onPress={handleSave}
-            className="w-full rounded-xl bg-primary py-4 items-center"
-          >
-            <Text className="text-sm font-bold text-primary-foreground">
-              Save Card Securely
-            </Text>
-          </TouchableOpacity>
-        )}
+        <Text className="mt-4 text-[11px] text-muted-foreground text-center leading-relaxed">
+          By continuing you agree to save this card for future rides. You can
+          remove it anytime from your wallet.
+        </Text>
       </ScrollView>
+
+      <PaymentWebView
+        visible={iveriVisible}
+        fields={iveriFields}
+        gatewayUrl={iveriGateway}
+        onClose={() => {
+          setIveriVisible(false);
+        }}
+        onDone={({ success }) => {
+          setIveriVisible(false);
+          if (success) {
+            queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
+            Alert.alert(
+              "Card Added",
+              "Your card was added and saved securely. You'll never need to re-enter it when paying for a ride.",
+              [{ text: "OK", onPress: navigateBack }]
+            );
+            setTimeout(navigateBack, 100);
+          } else {
+            Alert.alert(
+              "Card not added",
+              "The payment page did not complete. No card was saved. Please try again."
+            );
+          }
+        }}
+      />
     </SafeAreaView>
   );
 }

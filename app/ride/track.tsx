@@ -147,6 +147,9 @@ export default function Track() {
   const [iveriSavedCard, setIveriSavedCard] = useState(false);
   const iveriRef = useRef<string | null>(null);
   const pendingRequestRef = useRef<any>(null);
+  // Payment gate: no driver search may begin until the card payment (if any)
+  // has been confirmed by the server. Set true for cash/affiliate/mock.
+  const paymentConfirmedRef = useRef(false);
 
   // Cancellation for the demo simulation. Deliberately refs (not locals) and
   // set by a dedicated unmount-only effect so that re-renders caused by
@@ -382,6 +385,17 @@ export default function Track() {
     };
 
     (async () => {
+      // 0. Payment gate: NEVER start looking for a driver until the card
+      // payment (if any) has been confirmed. The socket effect below does the
+      // payment and flips paymentConfirmedRef on success; the demo simulation
+      // (used when no real backend driver matching exists) must not show a
+      // driver before that happens.
+      while (!paymentConfirmedRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (demoCancelledRef.current) return;
+      }
+      if (demoCancelledRef.current) return;
+
       // 1. Initial State: Searching (~45s so the rider can edit/pickup/stops)
       setStatus("searching");
       setDenseRoute([]);
@@ -768,6 +782,7 @@ export default function Track() {
             const init = await initiateIveriPayment(fare);
             if (init.mock) {
               // Mock mode: the server marks the payment completed for us.
+              paymentConfirmedRef.current = true;
               fireRequest(init.reference);
             } else {
               iveriRef.current = init.reference;
@@ -781,6 +796,7 @@ export default function Track() {
             setError(e.message || "Could not start card payment");
           }
         } else {
+          paymentConfirmedRef.current = true;
           fireRequest();
         }
       } catch (e: any) {
@@ -1603,6 +1619,9 @@ export default function Track() {
           const ref = iveriRef.current;
           pendingRequestRef.current = null;
           if (success && fire && ref) {
+            // Payment was confirmed by the server — only NOW is it safe to
+            // look for a driver.
+            paymentConfirmedRef.current = true;
             fire(ref);
           } else {
             setError(

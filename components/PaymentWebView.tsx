@@ -52,24 +52,50 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "#fff" }}>
+        {/* Branded header */}
         <View
           style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            paddingTop: 12,
-            paddingBottom: 8,
+            backgroundColor: "#2e1e1a",
+            paddingTop: 14,
+            paddingBottom: 12,
             paddingHorizontal: 16,
-            borderBottomWidth: 1,
-            borderBottomColor: "#f1ebe7",
           }}
         >
-          <Text style={{ fontSize: 16, fontWeight: "700", color: "#2e1e1a" }}>
-            Secure payment
-          </Text>
-          <TouchableOpacity onPress={onClose} style={{ padding: 6 }}>
-            <Text style={{ color: "#80716b", fontSize: 14 }}>Cancel</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <View
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  backgroundColor: "#e04e2f",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800" }}>V</Text>
+              </View>
+              <View>
+                <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700" }}>
+                  {savedCard ? "Confirm payment" : "Add a card"}
+                </Text>
+                <Text style={{ color: "#d8cbc4", fontSize: 11 }}>
+                  Secured by Nedbank iVeri
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={onClose}
+              style={{
+                paddingHorizontal: 14,
+                paddingVertical: 6,
+                borderRadius: 20,
+                backgroundColor: "rgba(255,255,255,0.12)",
+              }}
+            >
+              <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         <WebView
           source={{ html: formHtml }}
@@ -78,8 +104,11 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
           domStorageEnabled
           startInLoadingState
           renderLoading={() => (
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#fbf7f4" }}>
               <ActivityIndicator size="large" color="#e04e2f" />
+              <Text style={{ marginTop: 14, fontSize: 13, color: "#80716b" }}>
+                Loading secure payment…
+              </Text>
             </View>
           )}
           onNavigationStateChange={(nav) => {
@@ -107,17 +136,29 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
               backgroundColor: "#fff",
               alignItems: "center",
               justifyContent: "center",
+              paddingHorizontal: 32,
             }}
           >
-            <ActivityIndicator size="large" color="#e04e2f" />
-            <Text style={{ marginTop: 16, fontSize: 15, fontWeight: "600", color: "#2e1e1a" }}>
-              Processing payment with your saved card…
+            <View
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: 32,
+                backgroundColor: "#fdeee9",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <ActivityIndicator size="large" color="#e04e2f" />
+            </View>
+            <Text style={{ marginTop: 20, fontSize: 17, fontWeight: "700", color: "#2e1e1a", textAlign: "center" }}>
+              Processing payment…
             </Text>
-            <Text style={{ marginTop: 6, fontSize: 12, color: "#80716b", textAlign: "center", paddingHorizontal: 32 }}>
-              This should only take a few seconds. Your ride won't be booked until the payment is confirmed.
+            <Text style={{ marginTop: 8, fontSize: 13, color: "#80716b", textAlign: "center", lineHeight: 19 }}>
+              We're charging your saved card. Your ride won't be booked until the payment is confirmed.
             </Text>
-            <TouchableOpacity onPress={() => setShowForm(true)} style={{ marginTop: 16, padding: 8 }}>
-              <Text style={{ fontSize: 12, color: "#e04e2f", fontWeight: "600" }}>
+            <TouchableOpacity onPress={() => setShowForm(true)} style={{ marginTop: 20, padding: 8 }}>
+              <Text style={{ fontSize: 13, color: "#e04e2f", fontWeight: "600" }}>
                 View payment page
               </Text>
             </TouchableOpacity>

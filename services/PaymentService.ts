@@ -71,6 +71,35 @@ export const initiateIveriPayment = async (amountRands: number, rideId?: string)
   return { ...result, mock: false };
 };
 
+/**
+ * Starts an iVeri (Nedbank) card registration. Always opens the hosted card
+ * entry page so a card can be tokenised and saved for the first time. On the
+ * gateway return, the server stores the TransactionIndex on the saved card.
+ */
+export const registerIveriCard = async () => {
+  const result = await apiFetch<{
+    reference: string;
+    live: boolean;
+    fields: Record<string, string>;
+    gatewayUrl: string;
+    error?: string;
+  }>("/api/payments/card-register", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+
+  if (result.error) throw new Error(result.error);
+  if (!result.live) {
+    return {
+      ...result,
+      mock: true,
+      fields: result.fields || {},
+      gatewayUrl: result.gatewayUrl || "",
+    };
+  }
+  return { ...result, mock: false };
+};
+
 export const payForRide = async (rideId: string) => {
   try {
     const result = await apiFetch<any>("/api/payments/initialize", {
