@@ -108,6 +108,7 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
         <WebView
           source={{ html: formHtml }}
           originWhitelist={["*"]}
+          mixedContentMode="always"
           javaScriptEnabled
           domStorageEnabled
           startInLoadingState
@@ -121,17 +122,25 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
           )}
           onShouldStartLoadWithRequest={(request) => {
             const url = request.url || "";
-            // Detect the gateway's redirect back to our server's return URL
-            // from the URL alone, and STOP the navigation before the WebView
-            // tries to render the plain-HTTP page (which some Android devices
-            // refuse with ERR_CONNECTION_REFUSED). Reporting from the URL here
-            // means the flow completes even when that page can't be loaded.
+            // Detect the gateway's redirect back to our server's return URL.
+            // The token (Lite_TransactionIndex) which saves the card for auto-pay
+            // comes ONLY in this redirect URL. We MUST forward it to the server
+            // via the app's native network layer (which works over HTTP) BEFORE
+            // blocking the WebView navigation that otherwise ERR_CONNECTION_REFUSED.
             if (url.includes("/api/payments/return")) {
+              // 1) Forward the full URL to the server so it records the payment
+              //    and the token. Fire-and-forget — the server already handles
+              //    the idempotent upsert.
+              fetch(url).catch((e: Error) =>
+                console.warn("[PaymentWebView] return forward failed", e.message)
+              );
+              // 2) Parse the outcome from the URL so the app responds.
               const result = parseReturn(url);
               if (result !== null && !reportedRef.current) {
                 reportedRef.current = true;
                 onDone({ success: result === "success", result });
               }
+              // 3) Block the WebView from trying to render the HTTP page.
               return false;
             }
             return true;
