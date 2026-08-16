@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
 import { WebView } from "react-native-webview";
 
@@ -18,10 +18,18 @@ type Props = {
 // auto-submits the signed form returned by POST /api/payments/initiate.
 export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, onClose, savedCard }: Props) {
   const [showForm, setShowForm] = useState(false);
+  // Fire onDone exactly once per payment attempt. The return is detected from
+  // the redirect URL (below), which can surface both as a navigation callback
+  // and as the gateway's own redirect — without this guard onDone would be
+  // called twice and book a ride twice.
+  const reportedRef = useRef(false);
 
-  // Reset the overlay each time the modal is (re)opened.
+  // Reset the overlay + the "reported" guard each time the modal is (re)opened.
   useEffect(() => {
-    if (visible) setShowForm(false);
+    if (visible) {
+      setShowForm(false);
+      reportedRef.current = false;
+    }
   }, [visible]);
   const formHtml = useMemo(() => {
     if (!gatewayUrl) return "<html><body></body></html>";
@@ -111,17 +119,44 @@ export default function PaymentWebView({ visible, fields, gatewayUrl, onDone, on
               </Text>
             </View>
           )}
-          onNavigationStateChange={(nav) => {
-            const url = nav.url || "";
-            // The gateway POSTs the result to /api/payments/return, which our
-            // server bounces to a GET ?result=success|failed. Only report once
-            // we can actually read the outcome from the URL.
+          onShouldStartLoadWithRequest={(request) => {
+            const url = request.url || "";
+            // Detect the gateway's redirect back to our server's return URL
+            // from the URL alone, and STOP the navigation before the WebView
+            // tries to render the plain-HTTP page (which some Android devices
+            // refuse with ERR_CONNECTION_REFUSED). Reporting from the URL here
+            // means the flow completes even when that page can't be loaded.
             if (url.includes("/api/payments/return")) {
               const result = parseReturn(url);
-              if (result !== null) {
-                onDone({ success: result === "success", result: result || undefined });
+              if (result !== null && !reportedRef.current) {
+                reportedRef.current = true;
+                onDone({ success: result === "success", result });
+              }
+              return false;
+            }
+            return true;
+          }}
+          onNavigationStateChange={(nav) => {
+            const url = nav.url || "";
+            // Fallback if onShouldStartLoadWithRequest was not triggered.
+            if (url.includes("/api/payments/return")) {
+              const result = parseReturn(url);
+              if (result !== null && !reportedRef.current) {
+                reportedRef.current = true;
+                onDone({ success: result === "success", result });
               }
             }
+          }}
+          onHttpError={(syntheticEvent) => {
+            // Surface the exact failing URL/status instead of Android's opaque
+            // "Domain: undefined / ERR_CONNECTION_REFUSED" so support calls are
+            // based on facts, not guesses.
+            const { url, statusCode } = syntheticEvent.nativeEvent;
+            console.warn("[PaymentWebView] HTTP error", statusCode, url);
+          }}
+          onError={(syntheticEvent) => {
+            const { code, description, url } = syntheticEvent.nativeEvent;
+            console.warn("[PaymentWebView] load error", code, description, url);
           }}
           style={{ flex: 1 }}
         />
