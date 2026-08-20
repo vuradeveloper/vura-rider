@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "build": "npx tsc",
+    "start": "npx tsc && node dist/index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
