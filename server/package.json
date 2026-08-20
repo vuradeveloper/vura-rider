@@ -5,7 +5,6 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "npx tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
