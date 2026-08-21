@@ -110,6 +110,10 @@ app.use("/api/route", routeLimiter, route_1.default);
 app.get("/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+// Root endpoint for load balancer health checks
+app.get("/", (_req, res) => {
+    res.json({ status: "ok", service: "vura-rider-backend" });
+});
 // ── Routes ──
 app.use("/api/users", users_1.default);
 app.use("/api/rides", rides_1.default);

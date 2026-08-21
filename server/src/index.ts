@@ -85,6 +85,11 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Root endpoint for load balancer health checks
+app.get("/", (_req, res) => {
+  res.json({ status: "ok", service: "vura-rider-backend" });
+});
+
 // ── Routes ──
 app.use("/api/users", usersRouter);
 app.use("/api/rides", ridesRouter);
