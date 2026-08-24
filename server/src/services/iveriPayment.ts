@@ -105,14 +105,16 @@ export function buildIveriFormFields(input: IveriFormInput): {
     Ecom_TransactionComplete: "FALSE",
     // Order total (cents)
     Lite_Order_Amount: String(amountCents),
-    // Redirect-back URLs — the browser redirect may fail due to Android's
-    // HTTPS->HTTP mixed-content block. The server-to-server callback below
-    // (Lite_Server_Server_Url) is the reliable path — the gateway POSTs the
-    // result directly to our HTTP server regardless of what the browser does.
-    Lite_Website_Successful_Url: "https://vura-payments.local/return",
-    Lite_Website_Fail_Url: "https://vura-payments.local/return",
-    Lite_Website_TryLater_Url: "https://vura-payments.local/return",
-    Lite_Website_Error_Url: "https://vura-payments.local/return",
+    // Redirect-back URLs — the customer's browser (WebView) is sent here after
+    // payment. Use the same configured IVERI_RETURN_URL as the S2S callback
+    // (not a placeholder hostname). If the gateway page is HTTPS and this is
+    // HTTP, Android may block the redirect — the WebView intercepts the URL in
+    // onShouldStartLoadWithRequest before it loads, and the S2S callback below
+    // is the reliable fallback that records the result server-side regardless.
+    Lite_Website_Successful_Url: `${cfg.returnUrl}`,
+    Lite_Website_Fail_Url: `${cfg.returnUrl}`,
+    Lite_Website_TryLater_Url: `${cfg.returnUrl}`,
+    Lite_Website_Error_Url: `${cfg.returnUrl}`,
     // Server-to-server callback: the gateway POSTs the payment result here
     // AFTER processing, regardless of the browser redirect outcome. This is
     // the reliable path when Android's WebView blocks HTTPS->HTTP redirects.

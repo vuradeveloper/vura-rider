@@ -25,10 +25,9 @@ const API_BASE_URL =
  * Opens the iVeri (Nedbank) hosted payment page inside a WebView and
  * auto-submits the signed form returned by POST /api/payments/initiate.
  *
- * The gateway is told to redirect to a fake HTTPS URL
- * (https://vura-payments.local/return) — Android doesn't block HTTPS→?
- * navigation. The redirect is caught in onShouldStartLoadWithRequest AND
- * as a fallback the app polls the server for payment status via the
+ * The gateway redirects the browser to the configured IVERI_RETURN_URL
+ * (/api/payments/return). The redirect is caught in onShouldStartLoadWithRequest
+ * AND as a fallback the app polls the server for payment status via the
  * reference prop (the gateway's S2S callback updates the DB directly).
  */
 export default function PaymentWebView({
@@ -182,8 +181,7 @@ export default function PaymentWebView({
     );
   };
 
-  const isReturnUrl = (url: string) =>
-    url.includes("/api/payments/return") || url.includes("vura-payments.local");
+  const isReturnUrl = (url: string) => url.includes("/api/payments/return");
 
   const handleReturn = (url: string) => {
     if (!isReturnUrl(url)) return false;

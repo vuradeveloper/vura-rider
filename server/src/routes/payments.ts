@@ -242,8 +242,9 @@ router.post("/card-register", requireAuth, async (req: AuthRequest, res: Respons
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
     // A tiny AUTH-only registration amount. iVeri Lite requires an amount;
-    // R0.20 is our floor. This is a pre-auth to tokenise the card, not a fare.
-    const amount = 0.2;
+    // R1.00 minimum to avoid gateway rejection. This is a pre-auth to tokenise
+    // the card, not a fare. The rider sees this as a pending auth that drops off.
+    const amount = 1.0;
 
     const reference =
       `VURACARD${Date.now().toString(36).toUpperCase()}` +
