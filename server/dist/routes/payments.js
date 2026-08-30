@@ -133,9 +133,8 @@ router.delete("/methods/:id", auth_1.requireAuth, async (req, res) => {
     }
 });
 // POST /api/payments/card-register — Start a Paystack card registration.
-// Creates a hosted-checkout transaction with zero amount — the card is
-// validated and tokenised but NOT charged. On success the /verify handler
-// stores the returned authorization_code as the saved card's token.
+// Uses a R1.00 auth (the minimum Paystack accepts) which is immediately
+// refunded on success. The card is tokenised for future ride payments.
 router.post("/card-register", auth_1.requireAuth, async (req, res) => {
     try {
         const user = await (0, database_1.queryOne)("SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1", [req.userId]);
@@ -143,7 +142,7 @@ router.post("/card-register", auth_1.requireAuth, async (req, res) => {
             res.status(401).json({ error: "User not found" });
             return;
         }
-        const amount = 0;
+        const amount = 1.0;
         const reference = `VURACARD${Date.now().toString(36).toUpperCase()}` +
             `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
         try {
@@ -254,9 +253,21 @@ router.get("/return", async (req, res) => {
             // Tokenise the card on a successful checkout so future rides charge it
             // directly. Only do this for card registrations (ride_id is NULL).
             if (success && verified.authorization?.reusable) {
-                const payment = await (0, database_1.queryOne)("SELECT user_id, ride_id FROM payments WHERE reference = $1", [reference]);
-                if (payment && !payment.ride_id) {
+                const payment = await (0, database_1.queryOne)("SELECT user_id, ride_id, amount FROM payments WHERE reference = $1", [reference]);
+                if (payment) {
                     await storeAuthorizationCard(payment.user_id, verified);
+                    // Card registration used a R1.00 auth — refund it immediately so
+                    // the rider is never actually charged for adding a card.
+                    if (!payment.ride_id) {
+                        try {
+                            await (0, paystackPayment_1.refundTransaction)(reference, Number(payment.amount));
+                            await (0, database_1.execute)(`UPDATE payments SET status = 'refunded', updated_at = NOW()
+                 WHERE reference = $1`, [reference]).catch(() => { });
+                        }
+                        catch (e) {
+                            console.warn("Card-register refund failed (manual refund may be needed):", e);
+                        }
+                    }
                 }
             }
         }
@@ -291,9 +302,21 @@ router.get("/verify", async (req, res) => {
                     await (0, database_1.execute)(`UPDATE payments SET status = $1, raw_response = $2, updated_at = NOW()
              WHERE reference = $3`, [success ? "completed" : "failed", JSON.stringify(verified), reference]).catch(() => { });
                     if (success && verified.authorization?.reusable) {
-                        const rec = await (0, database_1.queryOne)("SELECT user_id, ride_id FROM payments WHERE reference = $1", [reference]);
+                        const rec = await (0, database_1.queryOne)("SELECT user_id, ride_id, amount FROM payments WHERE reference = $1", [reference]);
                         if (rec) {
                             await storeAuthorizationCard(rec.user_id, verified);
+                            // Card registration (no ride) used a R1.00 auth — refund it
+                            // immediately so adding a card never charges the rider.
+                            if (!rec.ride_id) {
+                                try {
+                                    await (0, paystackPayment_1.refundTransaction)(reference, Number(rec.amount));
+                                    await (0, database_1.execute)(`UPDATE payments SET status = 'refunded', updated_at = NOW()
+                     WHERE reference = $1`, [reference]).catch(() => { });
+                                }
+                                catch (e) {
+                                    console.warn("Card-register refund failed (manual refund may be needed):", e);
+                                }
+                            }
                         }
                     }
                     res.json({ status: success ? "completed" : "failed", reference });

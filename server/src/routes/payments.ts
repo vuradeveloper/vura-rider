@@ -149,9 +149,8 @@ router.delete("/methods/:id", requireAuth, async (req: AuthRequest, res: Respons
 });
 
 // POST /api/payments/card-register — Start a Paystack card registration.
-// Creates a hosted-checkout transaction with zero amount — the card is
-// validated and tokenised but NOT charged. On success the /verify handler
-// stores the returned authorization_code as the saved card's token.
+// Uses a R1.00 auth (the minimum Paystack accepts) which is immediately
+// refunded on success. The card is tokenised for future ride payments.
 router.post("/card-register", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
@@ -160,7 +159,7 @@ router.post("/card-register", requireAuth, async (req: AuthRequest, res: Respons
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
-    const amount = 0;
+    const amount = 1.0;
 
     const reference =
       `VURACARD${Date.now().toString(36).toUpperCase()}` +
@@ -309,12 +308,26 @@ router.get("/return", async (req: AuthRequest, res: Response) => {
       // Tokenise the card on a successful checkout so future rides charge it
       // directly. Only do this for card registrations (ride_id is NULL).
       if (success && verified.authorization?.reusable) {
-        const payment = await queryOne<{ user_id: string; ride_id: string | null }>(
-          "SELECT user_id, ride_id FROM payments WHERE reference = $1",
+        const payment = await queryOne<{ user_id: string; ride_id: string | null; amount: string }>(
+          "SELECT user_id, ride_id, amount FROM payments WHERE reference = $1",
           [reference]
         );
-        if (payment && !payment.ride_id) {
+        if (payment) {
           await storeAuthorizationCard(payment.user_id, verified);
+          // Card registration used a R1.00 auth — refund it immediately so
+          // the rider is never actually charged for adding a card.
+          if (!payment.ride_id) {
+            try {
+              await refundTransaction(reference, Number(payment.amount));
+              await execute(
+                `UPDATE payments SET status = 'refunded', updated_at = NOW()
+                 WHERE reference = $1`,
+                [reference]
+              ).catch(() => {});
+            } catch (e) {
+              console.warn("Card-register refund failed (manual refund may be needed):", e);
+            }
+          }
         }
       }
     }
@@ -359,12 +372,26 @@ router.get("/verify", async (req: AuthRequest, res: Response) => {
           ).catch(() => {});
 
           if (success && verified.authorization?.reusable) {
-            const rec = await queryOne<{ user_id: string; ride_id: string | null }>(
-              "SELECT user_id, ride_id FROM payments WHERE reference = $1",
+            const rec = await queryOne<{ user_id: string; ride_id: string | null; amount: string }>(
+              "SELECT user_id, ride_id, amount FROM payments WHERE reference = $1",
               [reference]
             );
             if (rec) {
               await storeAuthorizationCard(rec.user_id, verified);
+              // Card registration (no ride) used a R1.00 auth — refund it
+              // immediately so adding a card never charges the rider.
+              if (!rec.ride_id) {
+                try {
+                  await refundTransaction(reference, Number(rec.amount));
+                  await execute(
+                    `UPDATE payments SET status = 'refunded', updated_at = NOW()
+                     WHERE reference = $1`,
+                    [reference]
+                  ).catch(() => {});
+                } catch (e) {
+                  console.warn("Card-register refund failed (manual refund may be needed):", e);
+                }
+              }
             }
           }
           res.json({ status: success ? "completed" : "failed", reference });
