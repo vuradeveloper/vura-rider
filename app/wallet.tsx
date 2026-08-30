@@ -281,42 +281,38 @@ export default function WalletPage() {
               </View>
             </View>
           </View>
-          {!isDriver && (
-            <TouchableOpacity
-              onPress={() => router.push("/add-payment-method")}
-              disabled={addingCard}
-              className="mt-3 flex-row items-center justify-center gap-2 rounded-xl border border-dashed border-border py-3"
-            >
-              {addingCard ? (
-                <ActivityIndicator size="small" color="#e04e2f" />
-              ) : (
-                <>
-                  <Ionicons name="add-circle" size={18} color="#e04e2f" />
-                  <Text className="text-sm font-bold text-primary">
-                    Add Payment Method
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          )}
-          {!isDriver && (
-            <TouchableOpacity
-              onPress={startTestPayment}
-              disabled={startingPaystack}
-              className="mt-2 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3"
-            >
-              {startingPaystack ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <>
-                  <Ionicons name="card" size={18} color="#fff" />
-                  <Text className="text-sm font-bold text-primary-foreground">
-                    Test card payment
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            onPress={() => router.push("/add-payment-method")}
+            disabled={addingCard}
+            className="mt-3 flex-row items-center justify-center gap-2 rounded-xl border border-dashed border-border py-3"
+          >
+            {addingCard ? (
+              <ActivityIndicator size="small" color="#e04e2f" />
+            ) : (
+              <>
+                <Ionicons name="add-circle" size={18} color="#e04e2f" />
+                <Text className="text-sm font-bold text-primary">
+                  Add Payment Method
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={startTestPayment}
+            disabled={startingPaystack}
+            className="mt-2 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3"
+          >
+            {startingPaystack ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="card" size={18} color="#fff" />
+                <Text className="text-sm font-bold text-primary-foreground">
+                  Test card payment
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
         </View>
         <View className="h-6" />
       </ScrollView>
