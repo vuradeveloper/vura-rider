@@ -259,6 +259,18 @@ async function start() {
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      await execute(`
+        CREATE TABLE IF NOT EXISTS ratings (
+          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+          ride_id UUID NOT NULL REFERENCES rides(id),
+          passenger_id UUID NOT NULL REFERENCES users(id),
+          driver_id UUID NOT NULL REFERENCES users(id),
+          score INTEGER NOT NULL CHECK (score >= 1 AND score <= 5),
+          comment TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(ride_id, passenger_id)
+        )
+      `);
       console.log("✓ Schema bootstrapped");
     } catch (err) {
       console.warn("⚠ Schema bootstrap skipped:", err);
