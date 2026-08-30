@@ -15,8 +15,7 @@ import { Link, useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
-import { getSavedCards, removeCard, initiatePaystackPayment } from "@/services/PaymentService";
-import PaymentWebView from "@/components/PaymentWebView";
+import { getSavedCards, removeCard } from "@/services/PaymentService";
 import {
   getBanks,
   verifyBankAccount,
@@ -59,42 +58,6 @@ export default function WalletPage() {
 
   const [isCashingOut, setIsCashingOut] = useState(false);
   const [addingCard, setAddingCard] = useState(false);
-  const [paystackVisible, setPaystackVisible] = useState(false);
-  const [paystackUrl, setPaystackUrl] = useState("");
-  const [paystackRef, setPaystackRef] = useState<string | undefined>();
-  const [startingPaystack, setStartingPaystack] = useState(false);
-
-  const startTestPayment = async () => {
-    setStartingPaystack(true);
-    try {
-      const result = await initiatePaystackPayment(1.0);
-      if (result.mock) {
-        Alert.alert(
-          "Payments are in mock mode",
-          "Your server is not configured for live Paystack payments yet (PAYMENTS_MODE=mock). Fill in the PAYSTACK_* values in server/.env to go live.",
-          [{ text: "OK" }]
-        );
-        return;
-      }
-      if (result.status === "success") {
-        Alert.alert("Payment successful", "Your saved card was charged.");
-        return;
-      }
-      if (result.status === "failed") {
-        Alert.alert("Payment failed", result.message || "The payment was declined.");
-        return;
-      }
-      if (result.authorizationUrl) {
-        setPaystackUrl(result.authorizationUrl);
-        setPaystackRef(result.reference);
-        setPaystackVisible(true);
-      }
-    } catch (e: any) {
-      Alert.alert("Error", e.message || "Could not start payment");
-    } finally {
-      setStartingPaystack(false);
-    }
-  };
   const [bankQuery, setBankQuery] = useState("");
   const [selectedBank, setSelectedBank] = useState<Bank | null>(null);
   const [accountNumber, setAccountNumber] = useState("");
@@ -297,22 +260,6 @@ export default function WalletPage() {
               </>
             )}
           </TouchableOpacity>
-          <TouchableOpacity
-            onPress={startTestPayment}
-            disabled={startingPaystack}
-            className="mt-2 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3"
-          >
-            {startingPaystack ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="card" size={18} color="#fff" />
-                <Text className="text-sm font-bold text-primary-foreground">
-                  Test card payment
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
         </View>
         <View className="h-6" />
       </ScrollView>
@@ -448,25 +395,6 @@ export default function WalletPage() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
-
-      {/* Paystack hosted checkout */}
-      <PaymentWebView
-        visible={paystackVisible}
-        authorizationUrl={paystackUrl}
-        reference={paystackRef}
-        onDone={(res) => {
-          setPaystackVisible(false);
-          Alert.alert(
-            res.success ? "Payment successful" : "Payment not completed",
-            res.success
-              ? "Your card was charged."
-              : res.result === "failed"
-                ? "The payment was declined."
-                : "The payment did not complete."
-          );
-        }}
-        onClose={() => setPaystackVisible(false)}
-      />
     </SafeAreaView>
   );
 }

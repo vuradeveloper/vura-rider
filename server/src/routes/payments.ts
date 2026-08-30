@@ -149,9 +149,9 @@ router.delete("/methods/:id", requireAuth, async (req: AuthRequest, res: Respons
 });
 
 // POST /api/payments/card-register — Start a Paystack card registration.
-// Creates a hosted-checkout transaction (R1 pre-auth) so the card can be
-// tokenised and saved. On success the /verify handler stores the returned
-// authorization_code as the saved card's token (transaction_index).
+// Creates a hosted-checkout transaction with zero amount — the card is
+// validated and tokenised but NOT charged. On success the /verify handler
+// stores the returned authorization_code as the saved card's token.
 router.post("/card-register", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
@@ -160,7 +160,7 @@ router.post("/card-register", requireAuth, async (req: AuthRequest, res: Respons
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
-    const amount = 1.0;
+    const amount = 0;
 
     const reference =
       `VURACARD${Date.now().toString(36).toUpperCase()}` +
