@@ -215,6 +215,7 @@ export default function Track() {
       if (tier) {
         if (tier === "go") setTierName("VuraGo");
         else if (tier === "x") setTierName("VuraX");
+        else if (tier === "electric") setTierName("Electric");
         else if (tier === "lux") setTierName("VuraLux");
       }
     })();

@@ -48,6 +48,15 @@ const tiers = [
     badge: "Popular",
   },
   {
+    id: "electric",
+    name: "Electric",
+    desc: "Eco-friendly EV rides",
+    icon: "flash-outline" as const,
+    multiplier: 1.5,
+    etaOffset: 2,
+    badge: "Green",
+  },
+  {
     id: "lux",
     name: "VuraLux",
     desc: "Premium cars, top-rated drivers",
