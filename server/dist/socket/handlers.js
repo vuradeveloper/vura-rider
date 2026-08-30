@@ -71,7 +71,7 @@ function setupSocketHandlers(io) {
                 }
                 // ── Card payment pre-auth check ──
                 // A ride must not be booked until the card payment has actually gone
-                // through. The app initiates an iVeri payment and passes back the
+                // through. The app initiates a Paystack payment and passes back the
                 // reference; we only create the ride if that payment completed.
                 if (paymentMethod === "card") {
                     if (!paymentReference) {
@@ -111,10 +111,9 @@ function setupSocketHandlers(io) {
                 await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3", [socket.userId, reason, rideId]);
                 // ── Auto-refund ──
                 // If the rider cancels before the trip, refund the card payment that was
-                // taken at booking. iVeri Lite has no server-side reversal, so we mark it
-                // refunded here (mock mode returns the money instantly; in live mode the
-                // refund is completed in the Nedbank portal). The app is told so it can
-                // show the rider.
+                // taken at booking. The app is told so it can show the rider. (Live
+                // Paystack refunds are processed via /api/payments/refund; here we mark
+                // the payment refunded so the ride flow completes.)
                 const payment = await (0, database_1.queryOne)("SELECT id, status FROM payments WHERE ride_id = $1 AND status = 'completed'", [rideId]).catch(() => null);
                 if (payment) {
                     await (0, database_1.execute)("UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1", [payment.id]).catch(() => { });
