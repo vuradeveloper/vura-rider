@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Modal, View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
+import { Modal, View, Text, TouchableOpacity, ActivityIndicator, Platform } from "react-native";
 import { WebView } from "react-native-webview";
 
 type Props = {
@@ -19,6 +19,70 @@ type Props = {
 const API_BASE_URL =
   (typeof process !== "undefined" && (process as any).env?.EXPO_PUBLIC_API_URL) ||
   "http://92.4.135.243";
+
+/** Web-only: opens the Paystack checkout in a new browser tab and shows a
+ *  waiting screen since react-native-webview is unsupported on web. */
+function WebCheckoutScreen({
+  authorizationUrl,
+  retryKey,
+  pollStatus,
+  onClose,
+}: {
+  authorizationUrl: string;
+  retryKey: number;
+  pollStatus: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (authorizationUrl && authorizationUrl !== "about:blank") {
+      window.open(authorizationUrl, "_blank");
+    }
+  }, [authorizationUrl, retryKey]);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: "#fbf7f4", alignItems: "center", justifyContent: "center", padding: 32 }}>
+      <View
+        style={{
+          width: 64,
+          height: 64,
+          borderRadius: 32,
+          backgroundColor: "#fdeee9",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <ActivityIndicator size="large" color="#e04e2f" />
+      </View>
+      <Text style={{ marginTop: 20, fontSize: 17, fontWeight: "700", color: "#2e1e1a", textAlign: "center" }}>
+        {pollStatus === "timeout" ? "Still waiting…" : "Waiting for payment…"}
+      </Text>
+      <Text style={{ marginTop: 8, fontSize: 13, color: "#80716b", textAlign: "center", lineHeight: 19 }}>
+        Paystack checkout opened in a new tab. Complete the payment there, then return here.
+      </Text>
+      <TouchableOpacity
+        onPress={() => {
+          if (authorizationUrl && authorizationUrl !== "about:blank") {
+            window.open(authorizationUrl, "_blank");
+          }
+        }}
+        style={{
+          marginTop: 24,
+          backgroundColor: "#e04e2f",
+          paddingVertical: 14,
+          paddingHorizontal: 24,
+          borderRadius: 10,
+        }}
+      >
+        <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>
+          Open payment page again
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onClose} style={{ marginTop: 12, paddingVertical: 10 }}>
+        <Text style={{ color: "#80716b", fontSize: 14 }}>Cancel</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
 
 /**
  * Opens the Paystack hosted payment page inside a WebView and lets the rider
@@ -320,8 +384,18 @@ export default function PaymentWebView({
         {/* Single WebView — never remounted, so the checkout is NOT reloaded
             when pollStatus changes. The polling indicator is an overlay;
             renderError switches between the error view and the "checking
-            payment status" view based on pollStatus. */}
+            payment status" view based on pollStatus.
+            On web, react-native-webview isn't supported, so we open the
+            checkout in a new browser tab and rely on the polling below. */}
         <View style={{ flex: 1 }}>
+          {Platform.OS === "web" ? (
+            <WebCheckoutScreen
+              authorizationUrl={uri}
+              retryKey={webViewKey}
+              pollStatus={pollStatus}
+              onClose={onClose}
+            />
+          ) : (
           <WebView
             key={webViewKey}
             source={{ uri }}
@@ -369,6 +443,7 @@ export default function PaymentWebView({
             }}
             style={{ flex: 1 }}
           />
+          )}
           {/* Polling indicator bar at bottom */}
           {pollStatus === "polling" ? (
             <View
