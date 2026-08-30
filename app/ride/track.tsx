@@ -3,7 +3,7 @@ import { fetchRoute } from "@/lib/route";
 import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
-import { payWithCash, payWithAffiliate, initiateIveriPayment } from "@/services/PaymentService";
+import { payWithCash, payWithAffiliate, initiatePaystackPayment } from "@/services/PaymentService";
 import PaymentWebView from "@/components/PaymentWebView";
 import { getActiveRide, getRide, submitRating } from "@/services/RideService";
 import { submitTip, getTipSuggestions } from "@/services/TipService";
@@ -140,12 +140,12 @@ export default function Track() {
   const demoRanRef = useRef(false);
   const prevPickupRef = useRef<[number, number] | null>(null);
 
-  // iVeri (Nedbank) pre-auth payment before the ride is booked.
-  const [iveriVisible, setIveriVisible] = useState(false);
-  const [iveriFields, setIveriFields] = useState<Record<string, string>>({});
-  const [iveriGateway, setIveriGateway] = useState("");
-  const [iveriSavedCard, setIveriSavedCard] = useState(false);
-  const iveriRef = useRef<string | null>(null);
+  // Paystack payment before the ride is booked. With a saved card the server
+  // charges it synchronously (charge_authorization); with no saved card it
+  // returns a hosted-checkout URL we open in the WebView.
+  const [paystackVisible, setPaystackVisible] = useState(false);
+  const [paystackUrl, setPaystackUrl] = useState("");
+  const paystackRef = useRef<string | null>(null);
   const pendingRequestRef = useRef<any>(null);
   // Payment gate: no driver search may begin until the card payment (if any)
   // has been confirmed by the server. Set true for cash/affiliate/mock.
@@ -779,18 +779,21 @@ export default function Track() {
 
         if (paymentMethodRef === "card") {
           try {
-            const init = await initiateIveriPayment(fare);
-            if (init.mock) {
-              // Mock mode: the server marks the payment completed for us.
+            const init = await initiatePaystackPayment(fare);
+            if (init.mock || init.status === "success") {
+              // Mock mode, or the saved card was charged synchronously.
               paymentConfirmedRef.current = true;
               fireRequest(init.reference);
-            } else {
-              iveriRef.current = init.reference;
-              setIveriFields(init.fields || {});
-              setIveriGateway(init.gatewayUrl || "");
-              setIveriSavedCard(Boolean((init as any).usesSavedCard));
+            } else if (init.status === "failed") {
+              setError(init.message || "Card payment was declined or insufficient funds.");
+            } else if (init.authorizationUrl) {
+              // No saved card → Paystack hosted checkout.
+              paystackRef.current = init.reference;
+              setPaystackUrl(init.authorizationUrl);
               pendingRequestRef.current = fireRequest;
-              setIveriVisible(true);
+              setPaystackVisible(true);
+            } else {
+              setError("Could not start card payment");
             }
           } catch (e: any) {
             setError(e.message || "Could not start card payment");
@@ -1602,22 +1605,21 @@ export default function Track() {
         </View>
       </Modal>
 
-      {/* iVeri (Nedbank) hosted card payment — pre-auth before booking */}
+      {/* Paystack hosted checkout — only when the rider has no saved card */}
       <PaymentWebView
-        visible={iveriVisible}
-        fields={iveriFields}
-        gatewayUrl={iveriGateway}
-        savedCard={iveriSavedCard}
-        reference={iveriRef.current ?? undefined}
+        visible={paystackVisible}
+        authorizationUrl={paystackUrl}
+        savedCard={false}
+        reference={paystackRef.current ?? undefined}
         onClose={() => {
-          setIveriVisible(false);
+          setPaystackVisible(false);
           pendingRequestRef.current = null;
           setError("Card payment cancelled. Ride was not booked.");
         }}
         onDone={({ success }) => {
-          setIveriVisible(false);
+          setPaystackVisible(false);
           const fire = pendingRequestRef.current;
-          const ref = iveriRef.current;
+          const ref = paystackRef.current;
           pendingRequestRef.current = null;
           if (success && fire && ref) {
             // Payment was confirmed by the server — only NOW is it safe to

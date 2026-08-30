@@ -4,16 +4,15 @@ import { WebView } from "react-native-webview";
 
 type Props = {
   visible: boolean;
-  fields: Record<string, string>;
-  gatewayUrl: string;
+  /** Paystack hosted-checkout URL to load in the WebView. */
+  authorizationUrl: string;
   onDone: (result: { success: boolean; result?: string }) => void;
   onClose: () => void;
   savedCard?: boolean;
-  /** Payment reference returned by the initiate/card-register endpoint.
+  /** Payment reference returned by the card-register/initiate endpoint.
    *  When provided, the component polls GET /api/payments/verify?reference=
-   *  every 3 seconds as a fallback — the gateway's S2S callback updates the
-   *  DB asynchronously, so even if the WebView redirect fails (Android
-   *  blocks HTTPS→HTTP), the app eventually detects the success. */
+   *  every 3 seconds as a fallback — so even if the WebView redirect fails
+   *  (Android blocks HTTPS→HTTP), the app eventually detects the success. */
   reference?: string;
 };
 
@@ -22,18 +21,18 @@ const API_BASE_URL =
   "http://92.4.135.243";
 
 /**
- * Opens the iVeri (Nedbank) hosted payment page inside a WebView and
- * auto-submits the signed form returned by POST /api/payments/initiate.
+ * Opens the Paystack hosted payment page inside a WebView and lets the rider
+ * enter card details on Paystack's PCI-compliant page.
  *
- * The gateway redirects the browser to the configured IVERI_RETURN_URL
- * (/api/payments/return). The redirect is caught in onShouldStartLoadWithRequest
- * AND as a fallback the app polls the server for payment status via the
- * reference prop (the gateway's S2S callback updates the DB directly).
+ * After payment, Paystack redirects the browser to PAYSTACK_CALLBACK_URL
+ * (/api/payments/return). The redirect is caught in
+ * onShouldStartLoadWithRequest AND the app polls the server for payment status
+ * via the reference prop as a fallback (the server calls Paystack's verify
+ * endpoint and records the result, including the card's authorization token).
  */
 export default function PaymentWebView({
   visible,
-  fields,
-  gatewayUrl,
+  authorizationUrl,
   onDone,
   onClose,
   savedCard,
@@ -56,9 +55,9 @@ export default function PaymentWebView({
   onDoneRef.current = onDone;
 
   // ── Polling: after the WebView is visible and we have a reference, check
-  // the server every 3 seconds. The gateway's S2S callback (Lite_Server_Server_Url)
-  // posts the payment result to our /api/payments/return, which updates the DB.
-  // Once the poll sees "completed" or "failed", we call onDone and stop.
+  // the server every 3 seconds. The server verifies the Paystack transaction
+  // (GET /api/payments/verify) and updates the DB. Once the poll sees
+  // "completed" or "failed", we call onDone and stop.
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef = useRef(false);
@@ -147,20 +146,6 @@ export default function PaymentWebView({
   }, [visible, reference, startPolling, stopPolling]);
 
   // ── WebView handling ────────────────────────────────────────────────────
-  const formHtml = useMemo(() => {
-    if (!gatewayUrl) return "<html><body></body></html>";
-    const inputs = Object.entries(fields)
-      .map(
-        ([k, v]) =>
-          `<input type="hidden" name="${k.replace(/"/g, "&quot;")}" value="${String(v).replace(/"/g, "&quot;")}">`
-      )
-      .join("");
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
-      <form id="iveri" method="POST" action="${gatewayUrl}">${inputs}</form>
-      <script>document.getElementById("iveri").submit();</script>
-    </body></html>`;
-  }, [fields, gatewayUrl]);
-
   const parseReturn = (url: string): string | null => {
     try {
       const m = url.match(/[?&](result|status)=([^&]+)/i);
@@ -195,6 +180,8 @@ export default function PaymentWebView({
     return true;
   };
 
+  const uri = useMemo(() => (authorizationUrl ? authorizationUrl : "about:blank"), [authorizationUrl]);
+
   // ── Error / Waiting view ────────────────────────────────────────────────
   const CustomErrorView = () => {
     // If we're polling, show a calm "checking status" screen instead of an error.
@@ -219,7 +206,7 @@ export default function PaymentWebView({
           <Text style={{ marginTop: 8, fontSize: 13, color: "#80716b", textAlign: "center", lineHeight: 19 }}>
             {pollStatus === "timeout"
               ? "The payment page could not load, but your payment may still have gone through. Check your bank or tap Cancel."
-              : "Nedbank is processing your payment. This should only take a few seconds."}
+              : "Paystack is processing your payment. This should only take a few seconds."}
           </Text>
           <TouchableOpacity
             onPress={() => {
@@ -313,7 +300,7 @@ export default function PaymentWebView({
                   {savedCard ? "Confirm payment" : "Add a card"}
                 </Text>
                 <Text style={{ color: "#d8cbc4", fontSize: 11 }}>
-                  Secured by Nedbank iVeri
+                  Secured by Paystack
                 </Text>
               </View>
             </View>
@@ -330,14 +317,14 @@ export default function PaymentWebView({
             </TouchableOpacity>
           </View>
         </View>
-        {/* Single WebView — never remounted, so the form is NOT re-submitted
-            to the gateway when pollStatus changes. The polling indicator is an
-            overlay; renderError switches between the error view and the
-            "checking payment status" view based on pollStatus. */}
+        {/* Single WebView — never remounted, so the checkout is NOT reloaded
+            when pollStatus changes. The polling indicator is an overlay;
+            renderError switches between the error view and the "checking
+            payment status" view based on pollStatus. */}
         <View style={{ flex: 1 }}>
           <WebView
             key={webViewKey}
-            source={{ html: formHtml }}
+            source={{ uri }}
             originWhitelist={["*"]}
             mixedContentMode="always"
             javaScriptEnabled

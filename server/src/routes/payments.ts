@@ -2,8 +2,12 @@ import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import {
-  buildIveriFormFields,
-} from "../services/iveriPayment";
+  initializeTransaction,
+  verifyTransaction,
+  chargeAuthorization,
+  refundTransaction,
+  paymentsMode,
+} from "../services/paystackPayment";
 
 const router = Router();
 
@@ -30,14 +34,54 @@ async function ensurePaymentsTable() {
   }
 }
 
+// Ensure saved_cards exists with the columns we need. The Paystack
+// authorization_code is stored in transaction_index so no schema change is
+// needed for the tokenisation flow.
+async function ensureSavedCardsTable() {
+  try {
+    await execute(`
+      CREATE TABLE IF NOT EXISTS saved_cards (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id),
+        card_type VARCHAR(20),
+        last4 VARCHAR(4),
+        bank VARCHAR(100),
+        exp_month INTEGER,
+        exp_year INTEGER,
+        card_number_masked VARCHAR(30),
+        transaction_index VARCHAR(100),
+        is_default BOOLEAN DEFAULT false,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await execute(`ALTER TABLE saved_cards ADD COLUMN IF NOT EXISTS card_number_masked VARCHAR(30)`);
+    await execute(`ALTER TABLE saved_cards ADD COLUMN IF NOT EXISTS transaction_index VARCHAR(100)`);
+  } catch {
+    /* already exists */
+  }
+}
+
+async function getOrCreateUser(firebaseUid: string, name?: string | null, email?: string | null) {
+  let user = await queryOne<{ id: string }>(
+    "SELECT id FROM users WHERE firebase_uid = $1",
+    [firebaseUid]
+  );
+  if (!user) {
+    user = await queryOne<{ id: string }>(
+      `INSERT INTO users (firebase_uid, full_name, email, role)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (firebase_uid) DO UPDATE SET updated_at = NOW()
+       RETURNING id`,
+      [firebaseUid, name || "Rider", email || null, "passenger"]
+    );
+  }
+  return user || null;
+}
+
 // GET /api/payments/methods — List saved payment methods
 router.get("/methods", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
+    const user = await getOrCreateUser(req.userId!);
     if (!user) { res.json([]); return; }
 
     const cards = await query(
@@ -46,62 +90,27 @@ router.get("/methods", requireAuth, async (req: AuthRequest, res: Response) => {
     );
     res.json(cards);
   } catch (err: any) {
-    // Table might not exist yet — return empty
     if (err.code === "42P01") { res.json([]); return; }
     console.error("List cards error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/payments/methods — Add a new card
+// POST /api/payments/methods — Add a new card manually (fallback; the normal
+// path is the hosted Paystack card-register flow which tokenises the card).
 router.post("/methods", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const firebaseUid = req.userId!;
-    let user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
-    if (!user) {
-      user = await queryOne<{ id: string }>(
-        `INSERT INTO users (firebase_uid, full_name, email, role)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (firebase_uid) DO UPDATE SET updated_at = NOW()
-         RETURNING id`,
-        [firebaseUid, req.user?.name || "Rider", req.user?.email || null, "passenger"]
-      );
-    }
+    const user = await getOrCreateUser(req.userId!, req.user?.name, req.user?.email);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
-    // Create saved_cards table if needed
-    try {
-      await execute(`
-        CREATE TABLE IF NOT EXISTS saved_cards (
-          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-          user_id UUID NOT NULL REFERENCES users(id),
-          card_type VARCHAR(20),
-          last4 VARCHAR(4),
-          bank VARCHAR(100),
-          exp_month INTEGER,
-          exp_year INTEGER,
-          card_number_masked VARCHAR(30),
-          transaction_index VARCHAR(100),
-          is_default BOOLEAN DEFAULT false,
-          created_at TIMESTAMPTZ DEFAULT NOW()
-        )
-      `);
-      // Add tokenisation columns for databases created before this change.
-      await execute(`ALTER TABLE saved_cards ADD COLUMN IF NOT EXISTS card_number_masked VARCHAR(30)`);
-      await execute(`ALTER TABLE saved_cards ADD COLUMN IF NOT EXISTS transaction_index VARCHAR(100)`);
-    } catch { /* already exists */ }
+    await ensureSavedCardsTable();
 
     const { card_type, last4, bank, exp_month, exp_year } = req.body;
 
-    // Check if the user has any saved cards to determine if this should be the default
     const existingCards = await query(
       "SELECT id FROM saved_cards WHERE user_id = $1 LIMIT 1",
       [user.id]
-    ).catch(() => []); // Fallback if table query fails
-    
+    ).catch(() => []);
     const isDefault = existingCards.length === 0;
 
     const card = await queryOne(
@@ -128,11 +137,7 @@ router.post("/methods", requireAuth, async (req: AuthRequest, res: Response) => 
 // DELETE /api/payments/methods/:id — Remove a saved card
 router.delete("/methods/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
+    const user = await getOrCreateUser(req.userId!);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     await execute("DELETE FROM saved_cards WHERE id = $1 AND user_id = $2", [req.params.id, user.id]);
@@ -143,37 +148,71 @@ router.delete("/methods/:id", requireAuth, async (req: AuthRequest, res: Respons
   }
 });
 
-// POST /api/payments/initiate — Start an iVeri (Nedbank) hosted payment.
-// Server-side only: builds the signed form fields; the secret never leaves the
-// server. Adapted from the partner's snippet to Express + Firebase + Postgres.
+// POST /api/payments/card-register — Start a Paystack card registration.
+// Creates a hosted-checkout transaction (R1 pre-auth) so the card can be
+// tokenised and saved. On success the /verify handler stores the returned
+// authorization_code as the saved card's token (transaction_index).
+router.post("/card-register", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
+      "SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) { res.status(401).json({ error: "User not found" }); return; }
+
+    const amount = 1.0;
+
+    const reference =
+      `VURACARD${Date.now().toString(36).toUpperCase()}` +
+      `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+    try {
+      await ensurePaymentsTable();
+      await execute(
+        `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+         VALUES ($1, NULL, $2, $3, 'ZAR', 'initiated', 'paystack')`,
+        [user.id, reference, amount]
+      );
+    } catch (e) { /* logging/table issues shouldn't block the payment */ }
+
+    const result = await initializeTransaction({
+      amountRands: amount,
+      reference,
+      email: user.email,
+    });
+
+    res.json({ ...result, reference });
+  } catch (err: any) {
+    console.error("Card register error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/payments/initiate — Charge a saved card (card-on-file) via Paystack,
+// OR return a hosted-checkout URL when the rider has no saved card yet.
+// The saved card's Paystack authorization_code (stored as transaction_index)
+// lets us charge without re-entering card details.
 router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { amountRands, rideId } = req.body;
     const amount = Number(amountRands);
-    // TEMPORARY: minimum is R0.20 for testing. Raise before production.
     if (!amount || amount < 0.2 || amount > 5000) {
       res.status(400).json({ error: "Amount must be between R0.20 and R5 000" });
       return;
     }
 
-    const firebaseUid = req.userId!;
     const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
       "SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
+      [req.userId!]
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
-    // Saved card (iVeri transaction index) — lets the rider pay without
-    // re-entering card details if they've paid before.
+    // Default saved card (authorization_code token).
     const savedCard = await queryOne<{
       transaction_index: string;
       last4: string;
-      card_number_masked: string | null;
-      exp_month: number | null;
-      exp_year: number | null;
     }>(
-      `SELECT transaction_index, last4, card_number_masked, exp_month, exp_year
-       FROM saved_cards
+      `SELECT transaction_index, last4 FROM saved_cards
        WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC LIMIT 1`,
       [user.id]
     ).catch(() => null);
@@ -186,209 +225,98 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
       await ensurePaymentsTable();
       await execute(
         `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
-         VALUES ($1, $2, $3, $4, 'ZAR', 'initiated', 'iveri')`,
+         VALUES ($1, $2, $3, $4, 'ZAR', 'initiated', 'paystack')`,
         [user.id, rideId || null, reference, amount]
       );
     } catch (e) { /* logging/table issues shouldn't block the payment */ }
 
-    const result = buildIveriFormFields({
-      amountRands: amount,
-      merchantReference: reference,
-      userEmail: user.email,
-      userFirstName: user.full_name,
-      userPhone: user.phone,
-      // Card-on-file token from a previous successful payment, so the rider
-      // doesn't re-enter card details on the hosted page.
-      transactionIndex: savedCard?.transaction_index || null,
-      cardNumberMasked: savedCard?.card_number_masked || null,
-      cardExpMonth: savedCard?.exp_month || null,
-      cardExpYear: savedCard?.exp_year || null,
-    });
-
-    if (result === null) {
-      res.json({ reference, live: false, fields: {}, gatewayUrl: "" });
-      return;
-    }
-
-    // In mock mode there is no real gateway redirect, so simulate an approved
-    // charge straight away — this is what lets the ride booking pre-auth check
-    // pass and the refund flow work end-to-end during testing.
-    if (!result.live) {
+    // Mock mode: simulate an approved charge so the flow works end-to-end.
+    if (paymentsMode() === "mock") {
       await execute(
         `UPDATE payments SET status = 'completed', updated_at = NOW() WHERE reference = $1`,
         [reference]
       ).catch(() => {});
+      res.json({ reference, live: false, mock: true, status: "success" });
+      return;
     }
 
-    res.json({ reference, ...result });
+    // Have a tokenised card → charge it directly, no WebView needed.
+    if (savedCard?.transaction_index) {
+      const charge = await chargeAuthorization({
+        amountRands: amount,
+        reference,
+        email: user.email || "rider@vura.com",
+        authorizationCode: savedCard.transaction_index,
+      });
+
+      await execute(
+        `UPDATE payments SET status = $1, raw_response = $2, updated_at = NOW()
+         WHERE reference = $3`,
+        [charge.success ? "completed" : "failed", JSON.stringify(charge), reference]
+      ).catch(() => {});
+
+      res.json({
+        reference,
+        live: paymentsMode() === "live",
+        status: charge.success ? "success" : "failed",
+        message: charge.message,
+        usesSavedCard: true,
+      });
+      return;
+    }
+
+    // No saved card → return a Paystack hosted checkout URL.
+    const init = await initializeTransaction({
+      amountRands: amount,
+      reference,
+      email: user.email,
+    });
+
+    res.json({
+      ...init,
+      reference,
+      status: "pending",
+      authorizationUrl: init.authorizationUrl,
+    });
   } catch (err: any) {
     console.error("Payment initiate error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/payments/card-register — Start an iVeri (Nedbank) card
-// registration. Always shows the fresh hosted card-entry page (no stored token),
-// so a card can be added/tokenised even if the rider has never paid before.
-// On the gateway return, the /return handler captures the TransactionIndex and
-// stores it on the user's default saved card.
-router.post("/card-register", requireAuth, async (req: AuthRequest, res: Response) => {
+// GET /api/payments/return — Paystack redirects the customer's browser here
+// after a hosted checkout. The WebView intercepts this URL; we verify the
+// transaction and record the result.
+router.get("/return", async (req: AuthRequest, res: Response) => {
   try {
-    const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
-      "SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
-    if (!user) { res.status(401).json({ error: "User not found" }); return; }
-
-    // A tiny AUTH-only registration amount. iVeri Lite requires an amount;
-    // R1.00 minimum to avoid gateway rejection. This is a pre-auth to tokenise
-    // the card, not a fare. The rider sees this as a pending auth that drops off.
-    const amount = 1.0;
-
-    const reference =
-      `VURACARD${Date.now().toString(36).toUpperCase()}` +
-      `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-
-    try {
-      await ensurePaymentsTable();
-      await execute(
-        `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
-         VALUES ($1, NULL, $2, $3, 'ZAR', 'initiated', 'iveri')`,
-        [user.id, reference, amount]
-      );
-    } catch (e) { /* logging/table issues shouldn't block the payment */ }
-
-    const result = buildIveriFormFields({
-      amountRands: amount,
-      merchantReference: reference,
-      userEmail: user.email,
-      userFirstName: user.full_name,
-      userPhone: user.phone,
-      // Deliberately NO saved-card token: always show the card entry page.
-    });
-
-    if (result === null) {
-      res.json({ reference, live: false, fields: {}, gatewayUrl: "" });
+    const q = req.query as Record<string, string>;
+    const reference = String(q.reference || q.trxref || q.merchant_reference || "");
+    if (!reference) {
+      res.json({ result: "failed", error: "Missing reference" });
       return;
     }
 
-    // Mock mode: simulate an approved charge so the registration completes.
-    if (!result.live) {
-      await execute(
-        `UPDATE payments SET status = 'completed', updated_at = NOW() WHERE reference = $1`,
-        [reference]
-      ).catch(() => {});
-    }
+    const verified = await verifyTransaction(reference);
+    const success = Boolean(verified && verified.status === "success");
 
-    res.json({ reference, ...result });
-  } catch (err: any) {
-    console.error("Card register error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET/POST /api/payments/return — iVeri Lite redirects the customer here after
-// paying. The gateway POSTs the result (LITE_PAYMENT_CARD_STATUS etc.); we
-// record it, then bounce to a GET with ?result=... so the app's WebView can
-// detect the outcome from the URL.
-router.all("/return", async (req: AuthRequest, res: Response) => {
-  try {
-    const q =
-      req.method === "POST"
-        ? (req.body as Record<string, any>)
-        : (req.query as Record<string, string>);
-
-    const reference =
-      String(q.ECOM_CONSUMERORDERID || q.merchant_reference || q.reference || "");
-    const statusCode = String(q.LITE_PAYMENT_CARD_STATUS ?? "").trim();
-    const resultCode = String(q.result || q.status || "").toLowerCase().trim();
-
-    // Success = iVeri result code "0", or our own "success" bounce.
-    const success =
-      statusCode === "0" || resultCode === "0" || resultCode === "success";
-
-    if (reference) {
+    if (verified) {
       await execute(
         `UPDATE payments SET status = $1, raw_response = $2, updated_at = NOW()
          WHERE reference = $3`,
-        [success ? "completed" : "failed", JSON.stringify(q), reference]
+        [success ? "completed" : "failed", JSON.stringify(verified), reference]
       ).catch(() => {});
 
-      // Card-on-file: on a successful payment the gateway returns the
-      // TransactionIndex token + masked PAN + expiry. Store these on the user's
-      // saved card so the NEXT ride uses them and never asks for card details.
-      if (success) {
-        const token = String(q.Lite_TransactionIndex || q.transaction_index || "").trim();
-        const masked = String(q.Ecom_Payment_Card_Number || q.pan_masked || "").trim();
-        const last4 = String(masked).replace(/\D/g, "").slice(-4) || null;
-        if (token) {
-          try {
-            const payment = await queryOne<{ user_id: string }>(
-              "SELECT user_id FROM payments WHERE reference = $1",
-              [reference]
-            );
-            if (payment) {
-              const expMonth = q.Ecom_Payment_Card_ExpDate_Month
-                ? parseInt(String(q.Ecom_Payment_Card_ExpDate_Month), 10)
-                : null;
-              const expYear = q.Ecom_Payment_Card_ExpDate_Year
-                ? parseInt(String(q.Ecom_Payment_Card_ExpDate_Year), 10)
-                : null;
-
-              // 1) Already-tokenised row → refresh its token/expiry.
-              const byToken = await queryOne<{ id: string }>(
-                `SELECT id FROM saved_cards
-                 WHERE user_id = $1 AND transaction_index = $2 LIMIT 1`,
-                [payment.user_id, token]
-              );
-              // 2) Existing row for this same card (matched by last4) → attach token.
-              const byLast4 = !byToken && last4
-                ? await queryOne<{ id: string; is_default: boolean }>(
-                    `SELECT id, is_default FROM saved_cards
-                     WHERE user_id = $1 AND last4 = $2 ORDER BY is_default DESC LIMIT 1`,
-                    [payment.user_id, last4]
-                  ).catch(() => null)
-                : null;
-
-              if (byToken) {
-                await execute(
-                  `UPDATE saved_cards
-                   SET card_number_masked = $1, exp_month = COALESCE($2, exp_month),
-                       exp_year = COALESCE($3, exp_year)
-                   WHERE id = $4`,
-                  [masked || null, expMonth, expYear, byToken.id]
-                ).catch(() => {});
-              } else if (byLast4) {
-                await execute(
-                  `UPDATE saved_cards
-                   SET transaction_index = $1, card_number_masked = $2,
-                       exp_month = COALESCE($3, exp_month), exp_year = COALESCE($4, exp_year),
-                       is_default = true
-                   WHERE id = $5`,
-                  [token, masked || null, expMonth, expYear, byLast4.id]
-                ).catch(() => {});
-              } else {
-                // 3) Brand-new card → insert as the default saved card.
-                await execute(
-                  `INSERT INTO saved_cards (user_id, card_type, last4, card_number_masked, transaction_index, exp_month, exp_year, is_default)
-                   VALUES ($1, 'card', $2, $3, $4, $5, $6, true)`,
-                  [payment.user_id, last4 || "0000", masked || null, token, expMonth, expYear]
-                ).catch(() => {});
-              }
-            }
-          } catch (e) { /* token storage must never break the return flow */ }
+      // Tokenise the card on a successful checkout so future rides charge it
+      // directly. Only do this for card registrations (ride_id is NULL).
+      if (success && verified.authorization?.reusable) {
+        const payment = await queryOne<{ user_id: string; ride_id: string | null }>(
+          "SELECT user_id, ride_id FROM payments WHERE reference = $1",
+          [reference]
+        );
+        if (payment && !payment.ride_id) {
+          await storeAuthorizationCard(payment.user_id, verified);
         }
       }
-    }
-
-    // iVeri POSTs the result — bounce to a readable GET for the app.
-    if (req.method === "POST") {
-      const qs = `?result=${success ? "success" : "failed"}${
-        reference ? `&reference=${encodeURIComponent(reference)}` : ""
-      }`;
-      res.redirect(302, `/api/payments/return${qs}`);
-      return;
     }
 
     res.json({ reference, result: success ? "success" : "failed", success });
@@ -398,7 +326,114 @@ router.all("/return", async (req: AuthRequest, res: Response) => {
   }
 });
 
-// POST /api/payments/initialize — Initialize ride payment
+// GET /api/payments/verify — Poll payment status by reference. The app's
+// WebView polls this; for hosted checkouts we call Paystack's verify endpoint
+// to get the authoritative result and tokenise the card on success.
+router.get("/verify", async (req: AuthRequest, res: Response) => {
+  try {
+    const { reference } = req.query;
+    if (!reference || typeof reference !== "string") {
+      res.status(400).json({ status: "error", error: "Missing reference" });
+      return;
+    }
+
+    const payment = await queryOne<{ status: string }>(
+      "SELECT status FROM payments WHERE reference = $1 LIMIT 1",
+      [reference]
+    );
+    if (!payment) {
+      res.json({ status: "pending", reference });
+      return;
+    }
+
+    // If the row is still initiated and it's a hosted checkout, ask Paystack.
+    if (payment.status === "initiated") {
+      try {
+        const verified = await verifyTransaction(reference);
+        if (verified) {
+          const success = verified.status === "success";
+          await execute(
+            `UPDATE payments SET status = $1, raw_response = $2, updated_at = NOW()
+             WHERE reference = $3`,
+            [success ? "completed" : "failed", JSON.stringify(verified), reference]
+          ).catch(() => {});
+
+          if (success && verified.authorization?.reusable) {
+            const rec = await queryOne<{ user_id: string; ride_id: string | null }>(
+              "SELECT user_id, ride_id FROM payments WHERE reference = $1",
+              [reference]
+            );
+            if (rec) {
+              await storeAuthorizationCard(rec.user_id, verified);
+            }
+          }
+          res.json({ status: success ? "completed" : "failed", reference });
+          return;
+        }
+      } catch (e) {
+        console.warn("Verify against Paystack failed:", e);
+      }
+    }
+
+    res.json({ status: payment.status, reference });
+  } catch (err: any) {
+    console.error("Verify payment error:", err);
+    res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+// Store a Paystack authorization_code as the user's saved (default) card.
+async function storeAuthorizationCard(userId: string, verified: any) {
+  const auth = verified.authorization;
+  if (!auth) return;
+  try {
+    await ensureSavedCardsTable();
+    const token = String(auth.authorization_code || "").trim();
+    const last4 = String(auth.last4 || "").replace(/\D/g, "").slice(-4) || null;
+    if (!token) return;
+
+    const byToken = await queryOne<{ id: string }>(
+      `SELECT id FROM saved_cards WHERE user_id = $1 AND transaction_index = $2 LIMIT 1`,
+      [userId, token]
+    );
+    const byLast4 = !byToken && last4
+      ? await queryOne<{ id: string; is_default: boolean }>(
+          `SELECT id, is_default FROM saved_cards
+           WHERE user_id = $1 AND last4 = $2 ORDER BY is_default DESC LIMIT 1`,
+          [userId, last4]
+        ).catch(() => null)
+      : null;
+
+    if (byToken) {
+      await execute(
+        `UPDATE saved_cards
+         SET card_type = COALESCE($1, card_type), bank = COALESCE($2, bank),
+             exp_month = COALESCE($3, exp_month), exp_year = COALESCE($4, exp_year)
+         WHERE id = $5`,
+        [auth.card_type || null, auth.bank || null, auth.exp_month || null, auth.exp_year || null, byToken.id]
+      ).catch(() => {});
+    } else if (byLast4) {
+      await execute(
+        `UPDATE saved_cards
+         SET transaction_index = $1, card_type = COALESCE($2, card_type),
+             bank = COALESCE($3, bank), exp_month = COALESCE($4, exp_month),
+             exp_year = COALESCE($5, exp_year), is_default = true
+         WHERE id = $6`,
+        [token, auth.card_type || null, auth.bank || null, auth.exp_month || null, auth.exp_year || null, byLast4.id]
+      ).catch(() => {});
+    } else {
+      await execute(
+        `INSERT INTO saved_cards (user_id, card_type, last4, transaction_index, exp_month, exp_year, bank, is_default)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true)`,
+        [userId, auth.card_type || "card", last4 || "0000", token, auth.exp_month || null, auth.exp_year || null, auth.bank || null]
+      ).catch(() => {});
+    }
+  } catch (e) {
+    console.warn("Could not store authorization card:", e);
+  }
+}
+
+// POST /api/payments/initialize — Initialize ride payment (cash vs card marker)
 router.post("/initialize", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { rideId, paymentMethod } = req.body;
@@ -414,42 +449,12 @@ router.post("/initialize", requireAuth, async (req: AuthRequest, res: Response) 
   }
 });
 
-// GET /api/payments/verify — Poll payment status by reference.
-// The gateway's S2S callback (Lite_Server_Server_Url) updates the DB
-// asynchronously; the mobile app polls this endpoint to learn the result.
-router.get("/verify", async (req: AuthRequest, res: Response) => {
-  try {
-    const { reference } = req.query;
-    if (!reference || typeof reference !== "string") {
-      res.status(400).json({ status: "error", error: "Missing reference" });
-      return;
-    }
-    const payment = await queryOne<{ status: string }>(
-      "SELECT status FROM payments WHERE reference = $1 LIMIT 1",
-      [reference]
-    );
-    if (!payment) {
-      res.json({ status: "pending", reference });
-      return;
-    }
-    res.json({ status: payment.status, reference });
-  } catch (err: any) {
-    console.error("Verify payment error:", err);
-    res.status(500).json({ status: "error", error: err.message });
-  }
-});
-
-// POST /api/payments/refund — Mark a payment refunded (rider cancelled before pickup).
-// iVeri Lite has no server-side reversal call, so this records the refund so it can
-// be completed in the Nedbank portal. In mock mode it returns instantly.
+// POST /api/payments/refund — Refund a payment. Uses Paystack's refund API
+// when the transaction reference is available.
 router.post("/refund", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { rideId, reference } = req.body;
-    const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
+    const user = await getOrCreateUser(req.userId!);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     let payment: any = null;
@@ -467,6 +472,15 @@ router.post("/refund", requireAuth, async (req: AuthRequest, res: Response) => {
 
     if (!payment) { res.json({ success: true, note: "No payment to refund" }); return; }
     if (payment.status === "refunded") { res.json({ success: true, amount: Number(payment.amount), note: "Already refunded" }); return; }
+
+    if (payment.provider === "paystack" && payment.status === "completed") {
+      try {
+        const refund = await refundTransaction(payment.reference, Number(payment.amount));
+        console.log("Paystack refund result:", refund);
+      } catch (err: any) {
+        console.warn("Paystack refund failed (recording locally):", err.message);
+      }
+    }
 
     await execute(
       "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
@@ -506,16 +520,11 @@ router.post("/banks/verify", requireAuth, async (req: AuthRequest, res: Response
 // POST /api/payments/driver/banking — Save banking details
 router.post("/driver/banking", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
+    const user = await getOrCreateUser(req.userId!);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     const { accountNumber, bankCode, bankName } = req.body;
 
-    // Store in a driver_banking table (create if needed)
     try {
       await execute(`
         CREATE TABLE IF NOT EXISTS driver_banking (
@@ -550,14 +559,9 @@ router.post("/driver/banking", requireAuth, async (req: AuthRequest, res: Respon
 // GET /api/payments/driver/earnings/pending — Get pending earnings
 router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
+    const user = await getOrCreateUser(req.userId!);
     if (!user) { res.json({ total_rides: 0, total_earnings: 0 }); return; }
 
-    // Aggregate from driver_earnings — sum net_amount for completed rides not yet paid out
     const earnings = await queryOne(
       `SELECT COUNT(*)::int AS total_rides, COALESCE(SUM(net_amount), 0)::float AS total_earnings
        FROM driver_earnings WHERE driver_id = $1`,

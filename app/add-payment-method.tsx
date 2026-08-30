@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
-import { registerIveriCard } from "@/services/PaymentService";
+import { registerPaystackCard } from "@/services/PaymentService";
 import PaymentWebView from "@/components/PaymentWebView";
 
 export default function AddPaymentMethod() {
@@ -19,10 +19,9 @@ export default function AddPaymentMethod() {
   const queryClient = useQueryClient();
 
   const [isStarting, setIsStarting] = useState(false);
-  const [iveriVisible, setIveriVisible] = useState(false);
-  const [iveriFields, setIveriFields] = useState<Record<string, string>>({});
-  const [iveriGateway, setIveriGateway] = useState("");
-  const [iveriReference, setIveriReference] = useState<string | undefined>();
+  const [paystackVisible, setPaystackVisible] = useState(false);
+  const [paystackUrl, setPaystackUrl] = useState("");
+  const [paystackReference, setPaystackReference] = useState<string | undefined>();
 
   const navigateBack = () => {
     if (router.canGoBack()) {
@@ -35,19 +34,18 @@ export default function AddPaymentMethod() {
   const startSecureAdd = async () => {
     setIsStarting(true);
     try {
-      const result = await registerIveriCard();
+      const result = await registerPaystackCard();
       if (result.mock) {
         Alert.alert(
           "Payments are in test mode",
-          "Your server is in mock payment mode (PAYMENTS_MODE=mock). No real card is charged. Fill in the IVERI_* values in server/.env to go live.",
+          "Your server is in mock payment mode (PAYMENTS_MODE=mock). No real card is charged. Fill in the PAYSTACK_* values in server/.env to go live.",
           [{ text: "OK" }]
         );
         return;
       }
-      setIveriFields(result.fields || {});
-      setIveriGateway(result.gatewayUrl || "");
-      setIveriReference(result.reference || undefined);
-      setIveriVisible(true);
+      setPaystackUrl(result.authorizationUrl || "");
+      setPaystackReference(result.reference || undefined);
+      setPaystackVisible(true);
     } catch (e: any) {
       Alert.alert("Error", e.message || "Could not start secure card setup");
     } finally {
@@ -81,7 +79,7 @@ export default function AddPaymentMethod() {
             Add a card securely
           </Text>
           <Text className="mt-2 text-sm text-muted-foreground text-center leading-relaxed max-w-[300px]">
-            We'll take you to a secure Nedbank payment page to add your card.
+            We'll take you to a secure Paystack payment page to add your card.
             Your card details are never stored on our servers.
           </Text>
         </View>
@@ -94,7 +92,7 @@ export default function AddPaymentMethod() {
             </Text>
             <Text className="text-[11px] text-emerald-600 leading-normal mt-0.5">
               Your full card number and CVV never touch our servers. Payments are
-              processed on Nedbank's PCI-compliant page.
+              processed on Paystack's PCI-compliant page.
             </Text>
           </View>
         </View>
@@ -123,15 +121,14 @@ export default function AddPaymentMethod() {
       </ScrollView>
 
       <PaymentWebView
-        visible={iveriVisible}
-        fields={iveriFields}
-        gatewayUrl={iveriGateway}
-        reference={iveriReference}
+        visible={paystackVisible}
+        authorizationUrl={paystackUrl}
+        reference={paystackReference}
         onClose={() => {
-          setIveriVisible(false);
+          setPaystackVisible(false);
         }}
         onDone={({ success }) => {
-          setIveriVisible(false);
+          setPaystackVisible(false);
           if (success) {
             queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
             Alert.alert(

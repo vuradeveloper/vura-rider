@@ -15,7 +15,7 @@ import { Link, useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
-import { getSavedCards, removeCard, initiateIveriPayment } from "@/services/PaymentService";
+import { getSavedCards, removeCard, initiatePaystackPayment } from "@/services/PaymentService";
 import PaymentWebView from "@/components/PaymentWebView";
 import {
   getBanks,
@@ -59,30 +59,40 @@ export default function WalletPage() {
 
   const [isCashingOut, setIsCashingOut] = useState(false);
   const [addingCard, setAddingCard] = useState(false);
-  const [iveriVisible, setIveriVisible] = useState(false);
-  const [iveriFields, setIveriFields] = useState<Record<string, string>>({});
-  const [iveriGateway, setIveriGateway] = useState("");
-  const [startingIveri, setStartingIveri] = useState(false);
+  const [paystackVisible, setPaystackVisible] = useState(false);
+  const [paystackUrl, setPaystackUrl] = useState("");
+  const [paystackRef, setPaystackRef] = useState<string | undefined>();
+  const [startingPaystack, setStartingPaystack] = useState(false);
 
   const startTestPayment = async () => {
-    setStartingIveri(true);
+    setStartingPaystack(true);
     try {
-      const result = await initiateIveriPayment(0.2);
+      const result = await initiatePaystackPayment(1.0);
       if (result.mock) {
         Alert.alert(
           "Payments are in mock mode",
-          "Your server is not configured for live iVeri payments yet (PAYMENTS_MODE=mock). Fill in the IVERI_* values in server/.env to go live.",
+          "Your server is not configured for live Paystack payments yet (PAYMENTS_MODE=mock). Fill in the PAYSTACK_* values in server/.env to go live.",
           [{ text: "OK" }]
         );
         return;
       }
-      setIveriFields(result.fields);
-      setIveriGateway(result.gatewayUrl);
-      setIveriVisible(true);
+      if (result.status === "success") {
+        Alert.alert("Payment successful", "Your saved card was charged.");
+        return;
+      }
+      if (result.status === "failed") {
+        Alert.alert("Payment failed", result.message || "The payment was declined.");
+        return;
+      }
+      if (result.authorizationUrl) {
+        setPaystackUrl(result.authorizationUrl);
+        setPaystackRef(result.reference);
+        setPaystackVisible(true);
+      }
     } catch (e: any) {
       Alert.alert("Error", e.message || "Could not start payment");
     } finally {
-      setStartingIveri(false);
+      setStartingPaystack(false);
     }
   };
   const [bankQuery, setBankQuery] = useState("");
@@ -292,10 +302,10 @@ export default function WalletPage() {
           {!isDriver && (
             <TouchableOpacity
               onPress={startTestPayment}
-              disabled={startingIveri}
+              disabled={startingPaystack}
               className="mt-2 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3"
             >
-              {startingIveri ? (
+              {startingPaystack ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
@@ -443,13 +453,13 @@ export default function WalletPage() {
         </TouchableOpacity>
       </Modal>
 
-      {/* iVeri (Nedbank) hosted payment */}
+      {/* Paystack hosted checkout */}
       <PaymentWebView
-        visible={iveriVisible}
-        fields={iveriFields}
-        gatewayUrl={iveriGateway}
+        visible={paystackVisible}
+        authorizationUrl={paystackUrl}
+        reference={paystackRef}
         onDone={(res) => {
-          setIveriVisible(false);
+          setPaystackVisible(false);
           Alert.alert(
             res.success ? "Payment successful" : "Payment not completed",
             res.success
@@ -459,7 +469,7 @@ export default function WalletPage() {
                 : "The payment did not complete."
           );
         }}
-        onClose={() => setIveriVisible(false)}
+        onClose={() => setPaystackVisible(false)}
       />
     </SafeAreaView>
   );

@@ -5,8 +5,8 @@ import { apiFetch } from "@/lib/api";
 import { getApiUrl } from "@/lib/config";
 
 /**
- * Parses the redirect URL from the payment gateway (e.g. Payfast, Paystack)
- * to extract the reference or transaction ID. Returns null if it is a cancel/fallback URL.
+ * Parses the redirect URL from the payment gateway (e.g. Paystack) to extract
+ * the reference or transaction ID. Returns null if it is a cancel/fallback URL.
  */
 const parsePaymentReference = (urlStr: string): string | null => {
   const lowerUrl = urlStr.toLowerCase();
@@ -24,14 +24,12 @@ const parsePaymentReference = (urlStr: string): string | null => {
     return (
       url.searchParams.get("reference") ||
       url.searchParams.get("trxref") ||
-      url.searchParams.get("pf_payment_id") ||
-      url.searchParams.get("m_payment_id") ||
       url.searchParams.get("payment_id") ||
       url.searchParams.get("paymentId")
     );
   } catch {
     // Regex fallback for deep links or custom schemes
-    const params = ["reference", "trxref", "pf_payment_id", "m_payment_id", "payment_id", "paymentId"];
+    const params = ["reference", "trxref", "payment_id", "paymentId"];
     for (const param of params) {
       const regex = new RegExp(`[?&]${param}=([^&#]*)`, "i");
       const match = urlStr.match(regex);
@@ -42,46 +40,15 @@ const parsePaymentReference = (urlStr: string): string | null => {
 };
 
 /**
- * Starts an iVeri (Nedbank) hosted card payment. Returns the signed form fields
- * + gateway URL. The app then submits those fields (see PaymentWebView) and
- * the gateway redirects back to GET /api/payments/return.
+ * Starts a Paystack card registration. Creates a hosted-checkout transaction
+ * (R1 pre-auth). The app opens `authorizationUrl` in a WebView; on success the
+ * server stores the returned authorization_code as the saved card's token.
  */
-export const initiateIveriPayment = async (amountRands: number, rideId?: string) => {
+export const registerPaystackCard = async () => {
   const result = await apiFetch<{
     reference: string;
     live: boolean;
-    fields: Record<string, string>;
-    gatewayUrl: string;
-    usesSavedCard?: boolean;
-    error?: string;
-  }>("/api/payments/initiate", {
-    method: "POST",
-    body: JSON.stringify({ amountRands, rideId }),
-  });
-
-  if (result.error) throw new Error(result.error);
-  if (!result.live) {
-    return {
-      ...result,
-      mock: true,
-      fields: result.fields || {},
-      gatewayUrl: result.gatewayUrl || "",
-    };
-  }
-  return { ...result, mock: false };
-};
-
-/**
- * Starts an iVeri (Nedbank) card registration. Always opens the hosted card
- * entry page so a card can be tokenised and saved for the first time. On the
- * gateway return, the server stores the TransactionIndex on the saved card.
- */
-export const registerIveriCard = async () => {
-  const result = await apiFetch<{
-    reference: string;
-    live: boolean;
-    fields: Record<string, string>;
-    gatewayUrl: string;
+    authorizationUrl: string;
     error?: string;
   }>("/api/payments/card-register", {
     method: "POST",
@@ -89,15 +56,37 @@ export const registerIveriCard = async () => {
   });
 
   if (result.error) throw new Error(result.error);
-  if (!result.live) {
-    return {
-      ...result,
-      mock: true,
-      fields: result.fields || {},
-      gatewayUrl: result.gatewayUrl || "",
-    };
-  }
-  return { ...result, mock: false };
+  return {
+    reference: result.reference,
+    authorizationUrl: result.authorizationUrl || "",
+    mock: !result.live,
+  };
+};
+
+/**
+ * Starts a Paystack ride payment.
+ * - If the rider has a saved card, the server charges it immediately via
+ *   charge_authorization and returns { status: "success" | "failed" }.
+ * - If there is no saved card, the server returns a hosted-checkout
+ *   authorizationUrl for the WebView.
+ */
+export const initiatePaystackPayment = async (amountRands: number, rideId?: string) => {
+  const result = await apiFetch<{
+    reference: string;
+    live: boolean;
+    status?: string;
+    message?: string;
+    usesSavedCard?: boolean;
+    authorizationUrl?: string;
+    mock?: boolean;
+    error?: string;
+  }>("/api/payments/initiate", {
+    method: "POST",
+    body: JSON.stringify({ amountRands, rideId }),
+  });
+
+  if (result.error) throw new Error(result.error);
+  return result;
 };
 
 export const payForRide = async (rideId: string) => {
