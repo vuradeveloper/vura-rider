@@ -148,6 +148,122 @@ async function start() {
   if (!dbConnected) {
     console.warn("⚠ DB connection failed — server will still start but DB features won't work");
   } else {
+    // Bootstrap: create the core tables if this is a fresh/empty database.
+    // (Previously these were pre-created manually; the app now self-heals.)
+    try {
+      await execute(`
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          firebase_uid VARCHAR(128) UNIQUE,
+          full_name VARCHAR(255),
+          email VARCHAR(255),
+          phone VARCHAR(50),
+          role VARCHAR(20) DEFAULT 'passenger',
+          profile_photo_url TEXT,
+          id_number VARCHAR(50),
+          id_document_name VARCHAR(255),
+          license_document_name VARCHAR(255),
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await execute(`
+        CREATE TABLE IF NOT EXISTS rides (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          passenger_id UUID REFERENCES users(id),
+          driver_id UUID,
+          pickup_address TEXT,
+          pickup_lat DOUBLE PRECISION,
+          pickup_lng DOUBLE PRECISION,
+          destination_address TEXT,
+          destination_lat DOUBLE PRECISION,
+          destination_lng DOUBLE PRECISION,
+          waypoints JSONB,
+          status VARCHAR(20) DEFAULT 'searching',
+          estimated_fare NUMERIC(10,2),
+          actual_fare NUMERIC(10,2),
+          platform_fee NUMERIC(10,2),
+          distance_km NUMERIC(10,2),
+          duration_mins NUMERIC(10,2),
+          cancelled_by VARCHAR(50),
+          cancel_reason TEXT,
+          cancelled_at TIMESTAMPTZ,
+          completed_at TIMESTAMPTZ,
+          payment_status VARCHAR(20),
+          payment_method VARCHAR(20),
+          scheduled_at TIMESTAMPTZ,
+          tier VARCHAR(20) DEFAULT 'x',
+          announced BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await execute(`
+        CREATE TABLE IF NOT EXISTS driver_profiles (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id),
+          license_number VARCHAR(50),
+          vehicle_make VARCHAR(100),
+          vehicle_model VARCHAR(100),
+          vehicle_year INTEGER,
+          vehicle_color VARCHAR(50),
+          license_plate VARCHAR(20),
+          is_online BOOLEAN DEFAULT FALSE,
+          current_lat DOUBLE PRECISION,
+          current_lng DOUBLE PRECISION,
+          current_heading DOUBLE PRECISION,
+          rating_avg NUMERIC(3,2) DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await execute(`
+        CREATE TABLE IF NOT EXISTS driver_earnings (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          driver_id UUID NOT NULL REFERENCES users(id),
+          ride_id UUID,
+          gross_amount NUMERIC(10,2) DEFAULT 0,
+          fee NUMERIC(10,2) DEFAULT 0,
+          request_fee NUMERIC(10,2) DEFAULT 0,
+          net_amount NUMERIC(10,2) DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await execute(`
+        CREATE TABLE IF NOT EXISTS payments (
+          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+          user_id UUID REFERENCES users(id),
+          ride_id UUID REFERENCES rides(id),
+          reference VARCHAR(100),
+          amount NUMERIC(10,2),
+          currency VARCHAR(3) DEFAULT 'ZAR',
+          status VARCHAR(20),
+          provider VARCHAR(20),
+          raw_response JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await execute(`
+        CREATE TABLE IF NOT EXISTS saved_cards (
+          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id),
+          card_type VARCHAR(20),
+          last4 VARCHAR(4),
+          bank VARCHAR(100),
+          exp_month INTEGER,
+          exp_year INTEGER,
+          card_number_masked VARCHAR(30),
+          transaction_index VARCHAR(100),
+          is_default BOOLEAN DEFAULT false,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      console.log("✓ Schema bootstrapped");
+    } catch (err) {
+      console.warn("⚠ Schema bootstrap skipped:", err);
+    }
+
     // One-time migration — runs only at boot, never per request (previously
     // this DDL ran on every /api/users/sync call and slowed down app start).
     try {
