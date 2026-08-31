@@ -359,7 +359,7 @@ export default function Track() {
         demoOnDoneRef.current = null;
         if (done) done();
       }
-    }, 1200);
+    }, 500);
   };
 
   // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
