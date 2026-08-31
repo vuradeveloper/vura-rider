@@ -325,19 +325,20 @@ export default function Track() {
   // Starts (or re-starts) the car glide along the given points. Safe to call
   // repeatedly — it clears the previous interval, so a pickup update can
   // re-target the car without stopping the simulation.
-  const startDemoAnimation = (points: { latitude: number; longitude: number }[]) => {
+  const startDemoAnimation = (points: { latitude: number; longitude: number }[], startStep = 0) => {
     if (points.length < 2) return;
     demoRouteRef.current = points;
-    demoStepRef.current = 0;
-    const startBearing = computeBearing(points[0], points[1] || points[0]);
+    demoStepRef.current = startStep;
+    const idx = Math.min(startStep, points.length - 1);
+    const startBearing = computeBearing(points[idx], points[Math.min(idx + 1, points.length - 1)] || points[idx]);
     setDenseRoute(points);
     setRouteCoords(points);
     setDriverLoc({
-      lat: points[0].latitude,
-      lng: points[0].longitude,
-      bearing: startBearing,
+      lat: points[idx].latitude,
+      lng: points[idx].longitude,
+      bearing: Number.isFinite(startBearing) ? startBearing : 0,
     });
-    driverLocRef.current = { lat: points[0].latitude, lng: points[0].longitude, bearing: startBearing };
+    driverLocRef.current = { lat: points[idx].latitude, lng: points[idx].longitude, bearing: Number.isFinite(startBearing) ? startBearing : 0 };
     if (demoAnimIntervalRef.current) clearInterval(demoAnimIntervalRef.current);
     demoAnimIntervalRef.current = setInterval(() => {
     const route = demoRouteRef.current;
@@ -402,22 +403,33 @@ export default function Track() {
       }
       if (demoCancelledRef.current) return;
 
-      // If returning to a ride that's already past searching, restore its
-      // state instead of restarting the demo from the beginning.
-      const minimized = useAppStore.getState().activeRide;
-      if (minimized?.id && minimized.status !== "searching") {
-        // Ride restored — clear the minimized flag so the banner hides on the
-        // track screen.
+      // If returning to a ride that was minimized, resume it exactly where the
+      // car was (position + route progress) so motion continues like Uber/Bolt.
+      const saved = useAppStore.getState().savedDemoRide;
+      if (saved?.route && saved.route.length > 1) {
         useAppStore.getState().setRideMinimized(false);
-        setStatus(minimized.status as any);
-        if (minimized.driver_name) {
+        useAppStore.getState().setSavedDemoRide(null);
+        setStatus(saved.status as any);
+        if (saved.driver_name) {
           setDriver({
-            name: minimized.driver_name,
-            vehicle: [minimized.vehicle_color, minimized.vehicle_make, minimized.vehicle_model].filter(Boolean).join(" ") || null,
-            license_plate: minimized.driver_license_plate,
+            name: saved.driver_name,
+            vehicle: [saved.vehicle_color, saved.vehicle_make, saved.vehicle_model].filter(Boolean).join(" ") || null,
+            license_plate: saved.driver_license_plate ?? null,
             rating: null,
           });
         }
+        if (saved.driverLoc) {
+          setCarBearing(saved.driverLoc.bearing);
+          setDriverLoc(saved.driverLoc);
+          driverLocRef.current = saved.driverLoc;
+        }
+        // Resume the car from the saved route + step, continuing its motion.
+        demoRouteRef.current = saved.route;
+        demoStepRef.current = saved.step;
+        demoPhaseRef.current = (saved.phase as any) || "to_pickup";
+        setDenseRoute(saved.route);
+        setRouteCoords(saved.route);
+        startDemoAnimation(saved.route, saved.step);
         return;
       }
 
@@ -1099,6 +1111,21 @@ export default function Track() {
         onPress={() => {
           // Leaving via the X minimizes the ride — the floating "Go Back To
           // Ride" banner then shows on every screen until the ride ends.
+          // Save the exact simulation state so returning resumes right where
+          // the car was, continuing its motion (like Uber/Bolt).
+          const loc = driverLocRef.current;
+          useAppStore.getState().setSavedDemoRide({
+            status,
+            driver_name: driver?.name ?? null,
+            driver_license_plate: driver?.license_plate ?? null,
+            vehicle_make: driver?.vehicle?.includes("Toyota") ? "Toyota" : null,
+            vehicle_model: driver?.vehicle?.includes("Corolla") ? "Corolla" : null,
+            vehicle_color: driver?.vehicle?.includes("White") ? "White" : null,
+            driverLoc: loc ? { lat: loc.lat, lng: loc.lng, bearing: carBearing } : null,
+            route: demoRouteRef.current,
+            step: demoStepRef.current,
+            phase: demoPhaseRef.current,
+          });
           useAppStore.getState().setRideMinimized(true);
           router.replace("/");
         }}

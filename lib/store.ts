@@ -25,11 +25,24 @@ interface AppState {
   isSharingTrip: boolean;
   shareToken: string | null;
   rideMinimized: boolean;
+  savedDemoRide: {
+    status: string;
+    driver_name?: string | null;
+    driver_license_plate?: string | null;
+    vehicle_make?: string | null;
+    vehicle_model?: string | null;
+    vehicle_color?: string | null;
+    driverLoc: { lat: number; lng: number; bearing: number } | null;
+    route: { latitude: number; longitude: number }[];
+    step: number;
+    phase: string;
+  } | null;
   
   // Actions
   setUser: (user: UserProfile | null) => void;
   setActiveRide: (ride: RideWithDetails | null) => void;
   setRideMinimized: (minimized: boolean) => void;
+  setSavedDemoRide: (saved: AppState["savedDemoRide"]) => void;
   setPickup: (coords: [number, number] | null, address: string | null) => void;
   setDestination: (coords: [number, number] | null, address: string | null) => void;
   setWaypoints: (waypoints: Waypoint[]) => void;
@@ -59,10 +72,12 @@ export const useAppStore = create<AppState>()((set) => ({
   isSharingTrip: false,
   shareToken: null,
   rideMinimized: false,
+  savedDemoRide: null,
 
   setUser: (user) => set({ user }),
   setActiveRide: (activeRide) => set({ activeRide }),
   setRideMinimized: (rideMinimized) => set({ rideMinimized }),
+  setSavedDemoRide: (savedDemoRide) => set({ savedDemoRide }),
   setPickup: (pickup, pickupAddress) => set({ pickup, pickupAddress }),
   setDestination: (destination, destinationAddress) => set({ destination, destinationAddress }),
   setWaypoints: (waypoints) => set({ waypoints }),
@@ -78,6 +93,7 @@ export const useAppStore = create<AppState>()((set) => ({
     set({
       activeRide: null,
       rideMinimized: false,
+      savedDemoRide: null,
       pickup: null,
       pickupAddress: null,
       destination: null,
