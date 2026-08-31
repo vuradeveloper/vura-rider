@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupSocketHandlers = setupSocketHandlers;
 const firebase_1 = require("../config/firebase");
 const database_1 = require("../config/database");
+const paystackPayment_1 = require("../services/paystackPayment");
 function setupSocketHandlers(io) {
     // Auth middleware
     io.use(async (socket, next) => {
@@ -111,11 +112,17 @@ function setupSocketHandlers(io) {
                 await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3", [socket.userId, reason, rideId]);
                 // ── Auto-refund ──
                 // If the rider cancels before the trip, refund the card payment that was
-                // taken at booking. The app is told so it can show the rider. (Live
-                // Paystack refunds are processed via /api/payments/refund; here we mark
-                // the payment refunded so the ride flow completes.)
-                const payment = await (0, database_1.queryOne)("SELECT id, status FROM payments WHERE ride_id = $1 AND status = 'completed'", [rideId]).catch(() => null);
+                // taken at booking. For Paystack, call the refund API so the money is
+                // actually returned to the rider's card, then mark the payment refunded.
+                const payment = await (0, database_1.queryOne)("SELECT id, status, reference, amount FROM payments WHERE ride_id = $1 AND status = 'completed'", [rideId]).catch(() => null);
                 if (payment) {
+                    try {
+                        await (0, paystackPayment_1.refundTransaction)(payment.reference, Number(payment.amount));
+                        console.log(`Refunded Paystack payment ${payment.reference}`);
+                    }
+                    catch (e) {
+                        console.warn("Paystack refund failed on cancel:", e);
+                    }
                     await (0, database_1.execute)("UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1", [payment.id]).catch(() => { });
                     io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "Your payment was refunded." });
                 }

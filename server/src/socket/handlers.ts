@@ -1,6 +1,7 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { getAuth } from "../config/firebase";
 import { query, queryOne, execute } from "../config/database";
+import { refundTransaction } from "../services/paystackPayment";
 
 interface AuthSocket extends Socket {
   userId?: string;
@@ -149,15 +150,20 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         // ── Auto-refund ──
         // If the rider cancels before the trip, refund the card payment that was
-        // taken at booking. The app is told so it can show the rider. (Live
-        // Paystack refunds are processed via /api/payments/refund; here we mark
-        // the payment refunded so the ride flow completes.)
-        const payment = await queryOne<{ id: string; status: string }>(
-          "SELECT id, status FROM payments WHERE ride_id = $1 AND status = 'completed'",
+        // taken at booking. For Paystack, call the refund API so the money is
+        // actually returned to the rider's card, then mark the payment refunded.
+        const payment = await queryOne<{ id: string; status: string; reference: string; amount: string }>(
+          "SELECT id, status, reference, amount FROM payments WHERE ride_id = $1 AND status = 'completed'",
           [rideId]
         ).catch(() => null);
 
         if (payment) {
+          try {
+            await refundTransaction(payment.reference, Number(payment.amount));
+            console.log(`Refunded Paystack payment ${payment.reference}`);
+          } catch (e) {
+            console.warn("Paystack refund failed on cancel:", e);
+          }
           await execute(
             "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
             [payment.id]
