@@ -455,6 +455,7 @@ export default function Track() {
       demoPhaseRef.current = "arrived";
       setStatus("driver_arrived");
       await updateDbStatus("driver_arrived");
+      chargeCardOnPickup();
       await new Promise((resolve) => setTimeout(resolve, 20000));
       if (demoCancelledRef.current) return;
 
@@ -912,7 +913,7 @@ export default function Track() {
   const canCancel = status === "searching" || status === "accepted";
   const canEditPickup =
     !isHistory &&
-    ["searching", "accepted", "driver_arrived", "in_progress"].includes(status);
+    ["searching", "accepted", "driver_arrived"].includes(status);
   const tipSuggestions = getTipSuggestions(fare && fare > 0 ? fare : 50);
   const driverInitials = driver?.name
     ? driver.name
