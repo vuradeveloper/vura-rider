@@ -96,6 +96,34 @@ function setupSocketHandlers(io) {
                 socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
                 if (ride)
                     socket.join(`ride:${ride.id}`);
+                // ── Notify a nearby driver about the new ride ──
+                // Find an online driver and emit ride:request so they can accept.
+                (async () => {
+                    try {
+                        const driver = await (0, database_1.queryOne)(`SELECT u.id, u.firebase_uid FROM users u
+               JOIN driver_profiles dp ON dp.user_id = u.id
+               WHERE u.role = 'driver' AND dp.is_online = true
+               ORDER BY dp.updated_at DESC LIMIT 1`);
+                        if (driver?.firebase_uid) {
+                            io.to(`user:${driver.firebase_uid}`).emit("ride:request", {
+                                id: ride?.id,
+                                pickupAddress,
+                                pickupLat,
+                                pickupLng,
+                                destinationAddress,
+                                destinationLat,
+                                destinationLng,
+                                fare: 0,
+                                paymentMethod: paymentMethod || "cash",
+                                riderName: "Rider",
+                                riderRating: 5,
+                            });
+                        }
+                    }
+                    catch (e) {
+                        console.warn("Failed to notify driver:", e);
+                    }
+                })();
             }
             catch (err) {
                 console.error("Ride request error:", err);
@@ -292,6 +320,87 @@ function setupSocketHandlers(io) {
             }
             catch (err) {
                 console.error("Driver location error:", err);
+            }
+        });
+        // ── Driver: accept ride request ──
+        socket.on("driver:ride:accept", async (data) => {
+            try {
+                const { rideId } = data;
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status FROM rides WHERE id = $1 AND status = 'searching'", [rideId]);
+                if (!ride) {
+                    socket.emit("ride:accepted:ack", { success: false, error: "Ride no longer available" });
+                    return;
+                }
+                await (0, database_1.execute)("UPDATE rides SET driver_id = $1, status = 'accepted' WHERE id = $2", [dbUserId, rideId]);
+                socket.join(`ride:${rideId}`);
+                // Notify the rider
+                const driver = await (0, database_1.queryOne)("SELECT u.full_name, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id WHERE u.id = $1", [dbUserId]);
+                io.to(`ride:${rideId}`).emit("ride:accepted", {
+                    id: rideId,
+                    driver_name: driver?.full_name || "Driver",
+                    vehicle_color: driver?.vehicle_color,
+                    vehicle_make: driver?.vehicle_make,
+                    vehicle_model: driver?.vehicle_model,
+                    driver_license_plate: driver?.license_plate,
+                });
+                socket.emit("ride:accepted:ack", { success: true, rideId });
+            }
+            catch (err) {
+                console.error("Driver accept error:", err);
+            }
+        });
+        // ── Driver: start trip (arrived at pickup) ──
+        socket.on("driver:ride:start", async (data) => {
+            try {
+                const { rideId } = data;
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                const ride = await (0, database_1.queryOne)("SELECT id, driver_id FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
+                if (!ride)
+                    return;
+                await (0, database_1.execute)("UPDATE rides SET status = 'driver_arrived' WHERE id = $1", [rideId]);
+                io.to(`ride:${rideId}`).emit("ride:driver:arrived");
+            }
+            catch (err) {
+                console.error("Driver start error:", err);
+            }
+        });
+        // ── Driver: begin trip to destination ──
+        socket.on("driver:ride:begin", async (data) => {
+            try {
+                const { rideId } = data;
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                const ride = await (0, database_1.queryOne)("SELECT id, driver_id FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
+                if (!ride)
+                    return;
+                await (0, database_1.execute)("UPDATE rides SET status = 'in_progress' WHERE id = $1", [rideId]);
+                io.to(`ride:${rideId}`).emit("ride:started");
+            }
+            catch (err) {
+                console.error("Driver begin error:", err);
+            }
+        });
+        // ── Driver: complete trip ──
+        socket.on("driver:ride:complete", async (data) => {
+            try {
+                const { rideId } = data;
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                const ride = await (0, database_1.queryOne)("SELECT id, driver_id, fare FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
+                if (!ride)
+                    return;
+                await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW() WHERE id = $1", [rideId]);
+                io.to(`ride:${rideId}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
+            }
+            catch (err) {
+                console.error("Driver complete error:", err);
             }
         });
         socket.on("disconnect", () => {
