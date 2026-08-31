@@ -417,7 +417,7 @@ export default function Track() {
       driverLocRef.current = null;
       demoPhaseRef.current = "searching";
 
-      await new Promise((resolve) => setTimeout(resolve, 45000));
+      await new Promise((resolve) => setTimeout(resolve, 15000));
       if (demoCancelledRef.current) return;
 
       // 2. Driver Found: Status "accepted"
