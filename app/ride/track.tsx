@@ -861,12 +861,14 @@ export default function Track() {
     const pm = await AsyncStorage.getItem("vura.ride.payment");
     if (pm !== "card") return;
     const rideId = rideIdRef.current;
-    if (!rideId) return;
     const fareStr = await AsyncStorage.getItem("vura.ride.fare");
     const fare = parseFloat(fareStr || "0.2") || 0.2;
     try {
-      const result = await initiatePaystackPayment(fare, rideId);
-      if (result.mock || result.status === "success") return;
+      const result = await initiatePaystackPayment(fare, rideId ?? undefined);
+      if (result.mock || result.status === "success") {
+        Alert.alert("Payment", `R${fare.toFixed(2)} charged from your saved card.`);
+        return;
+      }
       if (result.status === "failed") {
         Alert.alert("Payment", result.message || "Card payment was declined.");
         return;
