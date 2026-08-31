@@ -14,14 +14,16 @@ import { Ionicons } from "@expo/vector-icons";
 const queryClient = new QueryClient();
 
 // Floating "Go Back To Ride" pill shown on every screen while a ride is active
-// (searching/accepted/in_progress), so the rider can return to the live trip.
+// AND the rider left the ride screen with the X (rideMinimized). Once minimized,
+// the rider can return to the live trip from anywhere until the ride ends.
 function ActiveRideBanner() {
   const router = useRouter();
   const activeRide = useAppStore((s) => s.activeRide);
+  const rideMinimized = useAppStore((s) => s.rideMinimized);
   const blink = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    if (!activeRide) return;
+    if (!rideMinimized || !activeRide) return;
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(blink, { toValue: 0.2, duration: 600, useNativeDriver: true }),
@@ -30,9 +32,9 @@ function ActiveRideBanner() {
     );
     loop.start();
     return () => loop.stop();
-  }, [activeRide, blink]);
+  }, [rideMinimized, activeRide, blink]);
 
-  if (!activeRide) return null;
+  if (!rideMinimized || !activeRide) return null;
 
   const active = ["searching", "accepted", "driver_arrived", "in_progress"].includes(activeRide.status);
   if (!active) return null;
@@ -40,6 +42,8 @@ function ActiveRideBanner() {
   return (
     <TouchableOpacity
       onPress={() => {
+        // Returning to the ride clears the minimized flag.
+        useAppStore.getState().setRideMinimized(false);
         if (activeRide.id) {
           router.push(`/ride/track?rideId=${activeRide.id}`);
         } else {

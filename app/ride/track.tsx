@@ -1047,7 +1047,12 @@ export default function Track() {
 
       {/* Floating Header Actions */}
       <TouchableOpacity
-        onPress={() => router.replace("/")}
+        onPress={() => {
+          // Leaving via the X minimizes the ride — the floating "Go Back To
+          // Ride" banner then shows on every screen until the ride ends.
+          useAppStore.getState().setRideMinimized(true);
+          router.replace("/");
+        }}
         className="absolute top-12 right-5 w-9 h-9 rounded-full bg-surface border border-border items-center justify-center z-10 shadow-md"
       >
         <Ionicons name="close" size={16} color="#2e1e1a" />

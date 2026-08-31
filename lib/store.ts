@@ -24,10 +24,12 @@ interface AppState {
   splitFareId: string | null;
   isSharingTrip: boolean;
   shareToken: string | null;
+  rideMinimized: boolean;
   
   // Actions
   setUser: (user: UserProfile | null) => void;
   setActiveRide: (ride: RideWithDetails | null) => void;
+  setRideMinimized: (minimized: boolean) => void;
   setPickup: (coords: [number, number] | null, address: string | null) => void;
   setDestination: (coords: [number, number] | null, address: string | null) => void;
   setWaypoints: (waypoints: Waypoint[]) => void;
@@ -56,9 +58,11 @@ export const useAppStore = create<AppState>()((set) => ({
   splitFareId: null,
   isSharingTrip: false,
   shareToken: null,
+  rideMinimized: false,
 
   setUser: (user) => set({ user }),
   setActiveRide: (activeRide) => set({ activeRide }),
+  setRideMinimized: (rideMinimized) => set({ rideMinimized }),
   setPickup: (pickup, pickupAddress) => set({ pickup, pickupAddress }),
   setDestination: (destination, destinationAddress) => set({ destination, destinationAddress }),
   setWaypoints: (waypoints) => set({ waypoints }),
@@ -73,6 +77,7 @@ export const useAppStore = create<AppState>()((set) => ({
   resetRideState: () =>
     set({
       activeRide: null,
+      rideMinimized: false,
       pickup: null,
       pickupAddress: null,
       destination: null,
