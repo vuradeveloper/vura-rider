@@ -10,6 +10,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
+import { getActiveRide } from "@/services/RideService";
 
 const queryClient = new QueryClient();
 
@@ -143,6 +144,32 @@ function AuthGate() {
         }
       });
     }
+  }, [user, loading]);
+
+  // Restore the rider's active ride on app launch (it's per-account on the
+  // server), so closing/reopening the app still shows the live trip and the
+  // "Go Back To Ride" banner. Clears the in-memory demo snapshot since we now
+  // have the authoritative state from the DB.
+  useEffect(() => {
+    if (loading || !user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { ride } = await getActiveRide();
+        if (cancelled) return;
+        if (ride) {
+          useAppStore.getState().setActiveRide(ride as any);
+          useAppStore.getState().setSavedDemoRide(null);
+          // Keep minimized state so the banner shows even right after launch.
+          useAppStore.getState().setRideMinimized(true);
+        }
+      } catch {
+        // ignore — no active ride or offline
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [user, loading]);
 
   if (loading) {
