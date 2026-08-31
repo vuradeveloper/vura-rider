@@ -27,7 +27,7 @@ function storeTile(url,dataUrl){
     localStorage.setItem('vura:tile:'+url,dataUrl);
   }catch(e){}
 }
-function createCachedTileLayer(tpl){
+function createCachedTileLayer(tpl,opts){
   var L=window.L;
   var CacheLayer=L.TileLayer.extend({
     createTile:function(coords,done){
@@ -57,7 +57,7 @@ function createCachedTileLayer(tpl){
       return img;
     }
   });
-  return new CacheLayer(tpl,{maxZoom:19,subdomains:'abc',attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'});
+  return new CacheLayer(tpl,{maxZoom:19,subdomains:opts&&opts.subdomains||'abcd',detectRetina:opts&&opts.detectRetina||false,maxNativeZoom:opts&&opts.maxNativeZoom||19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'});
 }
 `;
 
@@ -119,7 +119,7 @@ const MAP_BODY_JS = `
     var latD=region.latitudeDelta||0.05, lngD=region.longitudeDelta||0.05;
     var zoom=Math.max(10, Math.min(18, Math.round(Math.log2(360/Math.max(latD,lngD)))));
     map=L.map('map',{zoomControl:true,attributionControl:true}).setView([region.latitude,region.longitude],zoom);
-    createCachedTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    createCachedTileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',detectRetina:true,maxNativeZoom:20}).addTo(map);
     map.on('move',function(){ if(!map)return; var c=map.getCenter(),b=map.getBounds(); post({type:'regionChange',latitude:c.lat,longitude:c.lng,latitudeDelta:Math.abs(b.getNorth()-b.getSouth()),longitudeDelta:Math.abs(b.getEast()-b.getWest())}); });
     map.on('moveend',function(){ if(!map)return; var c=map.getCenter(),b=map.getBounds(); post({type:'regionChangeComplete',latitude:c.lat,longitude:c.lng,latitudeDelta:Math.abs(b.getNorth()-b.getSouth()),longitudeDelta:Math.abs(b.getEast()-b.getWest())}); });
     setTimeout(function(){ if(map) map.invalidateSize(); }, 50);

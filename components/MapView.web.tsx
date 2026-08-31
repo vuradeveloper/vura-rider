@@ -71,7 +71,7 @@ function storeTile(url: string, dataUrl: string) {
   } catch (e) {}
 }
 
-function createCachedTileLayer(L: any, tpl: string) {
+function createCachedTileLayer(L: any, tpl: string, opts: any = {}) {
   const CacheLayer = L.TileLayer.extend({
     createTile: function (coords: any, done: any) {
       const url = this.getTileUrl(coords);
@@ -114,8 +114,10 @@ function createCachedTileLayer(L: any, tpl: string) {
   });
   return new CacheLayer(tpl, {
     maxZoom: 19,
-    subdomains: "abc",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    subdomains: opts.subdomains || "abc",
+    detectRetina: opts.detectRetina || false,
+    maxNativeZoom: opts.maxNativeZoom || 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
   });
 }
 
@@ -359,7 +361,8 @@ const MapView = forwardRef<any, any>((props, ref) => {
       }).setView([initialRegion.latitude, initialRegion.longitude], zoom);
       createCachedTileLayer(
         L,
-        "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        { subdomains: "abcd", detectRetina: true, maxNativeZoom: 20 }
       ).addTo(map);
 
       map.on("move", () => {
