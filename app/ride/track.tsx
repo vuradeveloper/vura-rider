@@ -156,6 +156,9 @@ export default function Track() {
   // fire its cleanup — do NOT cancel an in-flight simulation.
   const demoCancelledRef = useRef(false);
   const demoAnimIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Prevents chargeCardOnPickup from firing more than once per ride, even if
+  // both the demo simulation AND a real socket event trigger it.
+  const chargeFiredRef = useRef(false);
 
   // Live state for the demo simulation, stored in refs so a pickup update can
   // re-route the car mid-leg without restarting the whole simulation.
@@ -430,6 +433,51 @@ export default function Track() {
         setDenseRoute(saved.route);
         setRouteCoords(saved.route);
         startDemoAnimation(saved.route, saved.step);
+        // Set up the phase continuation so the car doesn't stop at the end of
+        // the saved route — it continues to the next phase (to_dest, completed).
+        const phase = saved.phase || "to_pickup";
+        if (phase === "to_pickup" || phase === "to_dest") {
+          demoOnDoneRef.current = async () => {
+            if (demoCancelledRef.current) return;
+            if (demoPhaseRef.current === "to_pickup") {
+              demoPhaseRef.current = "arrived";
+              setStatus("driver_arrived");
+              await updateDbStatus("driver_arrived");
+              chargeCardOnPickup();
+              await new Promise((resolve) => setTimeout(resolve, 20000));
+              if (demoCancelledRef.current) return;
+              setStatus("in_progress");
+              await updateDbStatus("in_progress");
+              // Fetch route to destination
+              const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
+              const [endLat, endLng] = dropoffCoord ?? [baseLat + (Math.random() - 0.5) * 0.04, baseLng + (Math.random() - 0.5) * 0.04];
+              const routeToDest = await fetchRoute([baseLat, baseLng], [endLat, endLng], waypoints);
+              if (demoCancelledRef.current) return;
+              const denseDest = densifyRoute(
+                routeToDest.length > 1 ? routeToDest : [[baseLat, baseLng], [endLat, endLng]].map((c) => ({ latitude: c[0], longitude: c[1] })),
+                60
+              );
+              demoPhaseRef.current = "to_dest";
+              await new Promise<void>((resolve) => {
+                demoOnDoneRef.current = resolve;
+                startDemoAnimation(denseDest);
+              });
+              if (demoCancelledRef.current) return;
+              // Arrived at destination
+              setStatus("completed");
+              await updateDbStatus("completed");
+              await new Promise((resolve) => setTimeout(resolve, 8000));
+              if (demoCancelledRef.current) return;
+              setShowRating(true);
+            } else if (demoPhaseRef.current === "to_dest") {
+              setStatus("completed");
+              await updateDbStatus("completed");
+              await new Promise((resolve) => setTimeout(resolve, 8000));
+              if (demoCancelledRef.current) return;
+              setShowRating(true);
+            }
+          };
+        }
         return;
       }
 
@@ -931,6 +979,10 @@ export default function Track() {
   /** Charge the rider's saved card when the driver arrives at pickup.
    *  Called from the ride:driver:arrived socket handler. */
   const chargeCardOnPickup = async () => {
+    // Never charge twice for the same ride — the demo simulation and the real
+    // socket ride:driver:arrived event can both call this.
+    if (chargeFiredRef.current) return;
+    chargeFiredRef.current = true;
     const pm = await AsyncStorage.getItem("vura.ride.payment");
     if (pm !== "card") return;
     const rideId = rideIdRef.current;
