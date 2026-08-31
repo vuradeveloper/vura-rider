@@ -102,14 +102,14 @@ export default function AddPaymentMethod() {
             <TouchableOpacity
               onPress={startSecureAdd}
               disabled={isStarting}
-              className={`w-full rounded-xl bg-primary py-4 items-center ${isStarting ? "opacity-60" : ""}`}
+              className={`w-full rounded-xl bg-white border border-border py-4 items-center ${isStarting ? "opacity-60" : ""}`}
             >
               {isStarting ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color="#e04e2f" />
               ) : (
                 <View className="flex-row items-center gap-2">
-                  <Ionicons name="lock-closed" size={16} color="#fff" />
-                  <Text className="text-sm font-bold text-primary-foreground">
+                  <Ionicons name="lock-closed" size={16} color="#2e1e1a" />
+                  <Text className="text-sm font-bold text-foreground">
                     Continue to secure payment
                   </Text>
                 </View>
