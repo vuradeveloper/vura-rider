@@ -70,21 +70,18 @@ function setupSocketHandlers(io) {
                 if (!dbUserId) {
                     throw new Error("Passenger account not synced with database yet. Try again in a moment.");
                 }
-                // ── Card payment pre-auth check ──
-                // A ride must not be booked until the card payment has actually gone
-                // through. The app initiates a Paystack payment and passes back the
-                // reference; we only create the ride if that payment completed.
-                if (paymentMethod === "card") {
-                    if (!paymentReference) {
-                        socket.emit("ride:requested:ack", { success: false, reason: "Card payment must be authorised before booking." });
-                        return;
-                    }
+                // ── Card payment check ──
+                // The rider books with "card" but the charge happens later, when the
+                // driver arrives at pickup. So we no longer require a completed payment
+                // upfront. If a paymentReference IS provided (e.g. from a hosted
+                // checkout), just link it to the ride below.
+                if (paymentMethod === "card" && paymentReference) {
                     const payment = await (0, database_1.queryOne)("SELECT id, status, user_id FROM payments WHERE reference = $1", [paymentReference]).catch(() => null);
-                    const ok = payment && payment.user_id === dbUserId && payment.status === "completed";
+                    const ok = payment && payment.user_id === dbUserId;
                     if (!ok) {
                         socket.emit("ride:requested:ack", {
                             success: false,
-                            reason: "Card payment was declined or insufficient funds. Ride was not booked.",
+                            reason: "Card payment could not be verified. Ride was not booked.",
                         });
                         return;
                     }
@@ -110,23 +107,30 @@ function setupSocketHandlers(io) {
             try {
                 const { rideId, reason } = data;
                 await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3", [socket.userId, reason, rideId]);
-                // ── Auto-refund ──
-                // If the rider cancels before the trip, refund the card payment that was
-                // taken at booking. For Paystack, call the refund API so the money is
-                // actually returned to the rider's card, then mark the payment refunded.
-                const payment = await (0, database_1.queryOne)("SELECT id, status, reference, amount FROM payments WHERE ride_id = $1 AND status = 'completed'", [rideId]).catch(() => null);
-                if (payment) {
-                    try {
-                        await (0, paystackPayment_1.refundTransaction)(payment.reference, Number(payment.amount));
-                        console.log(`Refunded Paystack payment ${payment.reference}`);
-                    }
-                    catch (e) {
-                        console.warn("Paystack refund failed on cancel:", e);
-                    }
-                    await (0, database_1.execute)("UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1", [payment.id]).catch(() => { });
-                    io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "Your payment was refunded." });
-                }
+                // Tell the rider instantly — no waiting on the refund API.
                 io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
+                // ── Auto-refund (async, non-blocking) ──
+                // If the rider cancels, refund the card payment taken at pickup. This
+                // runs in the background so the cancel is instant for the rider.
+                (async () => {
+                    try {
+                        const payment = await (0, database_1.queryOne)("SELECT id, status, reference, amount FROM payments WHERE ride_id = $1 AND status = 'completed'", [rideId]).catch(() => null);
+                        if (!payment)
+                            return;
+                        try {
+                            await (0, paystackPayment_1.refundTransaction)(payment.reference, Number(payment.amount));
+                            console.log(`Refunded Paystack payment ${payment.reference}`);
+                        }
+                        catch (e) {
+                            console.warn("Paystack refund failed on cancel:", e);
+                        }
+                        await (0, database_1.execute)("UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1", [payment.id]).catch(() => { });
+                        io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "Your payment was refunded." });
+                    }
+                    catch (err) {
+                        console.error("Async refund error on cancel:", err);
+                    }
+                })();
             }
             catch (err) {
                 console.error("Cancel error:", err);

@@ -146,7 +146,6 @@ export default function Track() {
   const [paystackVisible, setPaystackVisible] = useState(false);
   const [paystackUrl, setPaystackUrl] = useState("");
   const paystackRef = useRef<string | null>(null);
-  const pendingRequestRef = useRef<any>(null);
   // Payment gate: no driver search may begin until the card payment (if any)
   // has been confirmed by the server. Set true for cash/affiliate/mock.
   const paymentConfirmedRef = useRef(false);
@@ -646,6 +645,8 @@ export default function Track() {
           if (active) {
             useAppStore.getState().setActiveRide({ ...active, status: "driver_arrived" });
           }
+          // Charge the rider's card now that the driver has arrived.
+          chargeCardOnPickup();
         });
 
         socket.on("ride:started", () => {
@@ -753,9 +754,10 @@ export default function Track() {
           return;
         }
 
-        // ── Card pre-auth: charge the card BEFORE booking the ride ──
-        // If the card is declined or has insufficient funds, we never emit the
-        // ride request, so the ride is never booked.
+        // ── Card payment: charge happens later, when the driver arrives at
+        // pickup. The ride books immediately with the payment method "card",
+        // and initiatePaystackPayment(fare, rideId) is called on
+        // ride:driver:arrived. No charge is taken at booking time.
         const paymentMethodRef = await AsyncStorage.getItem("vura.ride.payment");
         const fareStr = await AsyncStorage.getItem("vura.ride.fare");
         const fare = parseFloat(fareStr || "0.2") || 0.2;
@@ -773,32 +775,16 @@ export default function Track() {
               lat: w.lat,
               lng: w.lng,
             })),
-            paymentMethod: paymentReference ? "card" : paymentMethodRef || undefined,
+            paymentMethod: paymentMethodRef || undefined,
             paymentReference,
           });
         };
 
         if (paymentMethodRef === "card") {
-          try {
-            const init = await initiatePaystackPayment(fare);
-            if (init.mock || init.status === "success") {
-              // Mock mode, or the saved card was charged synchronously.
-              paymentConfirmedRef.current = true;
-              fireRequest(init.reference);
-            } else if (init.status === "failed") {
-              setError(init.message || "Card payment was declined or insufficient funds.");
-            } else if (init.authorizationUrl) {
-              // No saved card → Paystack hosted checkout.
-              paystackRef.current = init.reference;
-              setPaystackUrl(init.authorizationUrl);
-              pendingRequestRef.current = fireRequest;
-              setPaystackVisible(true);
-            } else {
-              setError("Could not start card payment");
-            }
-          } catch (e: any) {
-            setError(e.message || "Could not start card payment");
-          }
+          // No upfront charge — just book the ride. The card is charged when
+          // the driver arrives at pickup (see ride:driver:arrived below).
+          paymentConfirmedRef.current = true;
+          fireRequest();
         } else {
           paymentConfirmedRef.current = true;
           fireRequest();
@@ -861,6 +847,32 @@ export default function Track() {
     setWaypoints(next);
     await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(next));
   }
+
+  /** Charge the rider's saved card when the driver arrives at pickup.
+   *  Called from the ride:driver:arrived socket handler. */
+  const chargeCardOnPickup = async () => {
+    const pm = await AsyncStorage.getItem("vura.ride.payment");
+    if (pm !== "card") return;
+    const rideId = rideIdRef.current;
+    if (!rideId) return;
+    const fareStr = await AsyncStorage.getItem("vura.ride.fare");
+    const fare = parseFloat(fareStr || "0.2") || 0.2;
+    try {
+      const result = await initiatePaystackPayment(fare, rideId);
+      if (result.mock || result.status === "success") return;
+      if (result.status === "failed") {
+        Alert.alert("Payment", result.message || "Card payment was declined.");
+        return;
+      }
+      if (result.authorizationUrl) {
+        paystackRef.current = result.reference;
+        setPaystackUrl(result.authorizationUrl);
+        setPaystackVisible(true);
+      }
+    } catch (e: any) {
+      Alert.alert("Payment", e.message || "Could not process card payment.");
+    }
+  };
 
   async function doCancel(reason: string) {
     setShowCancel(false);
@@ -1614,23 +1626,11 @@ export default function Track() {
         reference={paystackRef.current ?? undefined}
         onClose={() => {
           setPaystackVisible(false);
-          pendingRequestRef.current = null;
-          setError("Card payment cancelled. Ride was not booked.");
         }}
         onDone={({ success }) => {
           setPaystackVisible(false);
-          const fire = pendingRequestRef.current;
-          const ref = paystackRef.current;
-          pendingRequestRef.current = null;
-          if (success && fire && ref) {
-            // Payment was confirmed by the server — only NOW is it safe to
-            // look for a driver.
-            paymentConfirmedRef.current = true;
-            fire(ref);
-          } else {
-            setError(
-              "Card payment was declined or insufficient funds. Ride was not booked."
-            );
+          if (!success) {
+            Alert.alert("Payment", "Card payment was declined. No charge was made.");
           }
         }}
       />
