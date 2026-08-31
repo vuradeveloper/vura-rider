@@ -78,13 +78,9 @@ export default function AddPaymentMethod() {
         </View>
       </View>
 
-      <ScrollView
-        className="flex-1"
-        contentContainerClassName="flex-grow px-5"
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView className="flex-1 px-5 pt-6" showsVerticalScrollIndicator={false}>
         {verified ? (
-          <View className="flex-1 items-center justify-center">
+          <View className="items-center mt-20 mb-6">
             <View className="w-24 h-24 rounded-full bg-emerald-100 items-center justify-center">
               <Ionicons name="checkmark-circle" size={56} color="#16a34a" />
             </View>
@@ -93,18 +89,20 @@ export default function AddPaymentMethod() {
             </Text>
           </View>
         ) : (
-          <View className="flex-1 justify-center items-center">
-            <View className="w-20 h-20 rounded-full bg-primary/10 items-center justify-center">
-              <Ionicons name="card" size={40} color="#e04e2f" />
+          <>
+            <View className="items-center mt-2 mb-6">
+              <View className="w-20 h-20 rounded-full bg-primary/10 items-center justify-center">
+                <Ionicons name="card" size={40} color="#e04e2f" />
+              </View>
+              <Text className="mt-4 text-xl font-extrabold text-foreground text-center">
+                Add a card
+              </Text>
             </View>
-            <Text className="mt-4 text-xl font-extrabold text-foreground text-center">
-              Add a card
-            </Text>
 
             <TouchableOpacity
               onPress={startSecureAdd}
               disabled={isStarting}
-              className={`w-full rounded-xl bg-white border border-border py-4 items-center mt-8 ${isStarting ? "opacity-60" : ""}`}
+              className={`w-full rounded-xl bg-white border border-border py-4 items-center ${isStarting ? "opacity-60" : ""}`}
             >
               {isStarting ? (
                 <ActivityIndicator size="small" color="#e04e2f" />
@@ -117,7 +115,7 @@ export default function AddPaymentMethod() {
                 </View>
               )}
             </TouchableOpacity>
-          </View>
+          </>
         )}
       </ScrollView>
 
