@@ -340,17 +340,23 @@ export default function Track() {
     driverLocRef.current = { lat: points[0].latitude, lng: points[0].longitude, bearing: startBearing };
     if (demoAnimIntervalRef.current) clearInterval(demoAnimIntervalRef.current);
     demoAnimIntervalRef.current = setInterval(() => {
-      const route = demoRouteRef.current;
-      const step = demoStepRef.current;
-      if (step < route.length - 1) {
-        const cur = route[step];
-        const nxt = route[step + 1];
-        const bearing = computeBearing(cur, nxt);
-        setCarBearing(bearing);
-        setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing });
-        driverLocRef.current = { lat: nxt.latitude, lng: nxt.longitude, bearing };
-        demoStepRef.current++;
-      } else {
+    const route = demoRouteRef.current;
+    const step = demoStepRef.current;
+    // Skip past any duplicate/zero-length points so the car never stalls on a
+    // single spot — find the next point that is actually different.
+    let next = step;
+    while (next < route.length - 1 && route[next].latitude === route[next + 1].latitude && route[next].longitude === route[next + 1].longitude) {
+      next++;
+    }
+    if (next < route.length - 1) {
+      const cur = route[next];
+      const nxt = route[next + 1];
+      const bearing = computeBearing(cur, nxt);
+      setCarBearing(Number.isFinite(bearing) ? bearing : 0);
+      setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing: Number.isFinite(bearing) ? bearing : 0 });
+      driverLocRef.current = { lat: nxt.latitude, lng: nxt.longitude, bearing: Number.isFinite(bearing) ? bearing : 0 };
+      demoStepRef.current = next + 1;
+    } else {
         if (demoAnimIntervalRef.current) {
           clearInterval(demoAnimIntervalRef.current);
           demoAnimIntervalRef.current = null;
@@ -359,7 +365,7 @@ export default function Track() {
         demoOnDoneRef.current = null;
         if (done) done();
       }
-    }, 500);
+    }, 250);
   };
 
   // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
