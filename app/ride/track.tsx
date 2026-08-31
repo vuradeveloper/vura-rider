@@ -404,6 +404,12 @@ export default function Track() {
 
       // 1. Initial State: Searching (~45s so the rider can edit/pickup/stops)
       setStatus("searching");
+      // Mark the ride active in the store so the floating "Go Back To Ride"
+      // banner shows on every screen, even during the demo simulation.
+      useAppStore.getState().setActiveRide({
+        id: "demo",
+        status: "searching",
+      } as any);
       setDenseRoute([]);
       setRouteCoords([]);
       setDriver(null);
@@ -599,6 +605,12 @@ export default function Track() {
           if (data.success) {
             setRideId(data.rideId ?? null);
             rideIdRef.current = data.rideId ?? null;
+            // Immediately mark the ride active in the store so the floating
+            // "Go Back To Ride" banner shows even while searching.
+            useAppStore.getState().setActiveRide({
+              id: data.rideId || "",
+              status: "searching",
+            } as any);
           } else {
             setError(data.reason || "Could not request ride");
           }

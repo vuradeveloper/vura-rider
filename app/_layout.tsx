@@ -2,14 +2,100 @@ import "../global.css";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { View, Text, ActivityIndicator } from "react-native";
+import { useEffect, useRef } from "react";
+import { View, Text, ActivityIndicator, TouchableOpacity, Animated } from "react-native";
 import { useAuth } from "@/lib/auth";
+import { useAppStore } from "@/lib/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
 
 const queryClient = new QueryClient();
+
+// Floating "Go Back To Ride" pill shown on every screen while a ride is active
+// (searching/accepted/in_progress), so the rider can return to the live trip.
+function ActiveRideBanner() {
+  const router = useRouter();
+  const activeRide = useAppStore((s) => s.activeRide);
+  const blink = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!activeRide) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(blink, { toValue: 0.2, duration: 600, useNativeDriver: true }),
+        Animated.timing(blink, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [activeRide, blink]);
+
+  if (!activeRide) return null;
+
+  const active = ["searching", "accepted", "driver_arrived", "in_progress"].includes(activeRide.status);
+  if (!active) return null;
+
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        if (activeRide.id) {
+          router.push(`/ride/track?rideId=${activeRide.id}`);
+        } else {
+          router.push("/ride/track");
+        }
+      }}
+      activeOpacity={0.85}
+      style={{
+        position: "absolute",
+        bottom: 96,
+        left: 24,
+        right: 24,
+        zIndex: 999,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        backgroundColor: "#fff",
+        borderRadius: 16,
+        borderWidth: 1.5,
+        borderColor: "#3b82f6",
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+        elevation: 8,
+      }}
+    >
+      <View
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: 7,
+          backgroundColor: "#3b82f6",
+        }}
+      />
+      <Animated.View
+        style={{
+          position: "absolute",
+          left: 18,
+          width: 10,
+          height: 10,
+          borderRadius: 5,
+          backgroundColor: "#3b82f6",
+          opacity: blink,
+        }}
+      />
+      <Ionicons name="car" size={20} color="#3b82f6" />
+      <Text style={{ flex: 1, color: "#2e1e1a", fontSize: 15, fontWeight: "700" }}>
+        Go Back To Ride
+      </Text>
+      <Ionicons name="chevron-forward" size={18} color="#3b82f6" />
+    </TouchableOpacity>
+  );
+}
 
 function AuthGate() {
   const { user, loading } = useAuth();
@@ -153,6 +239,7 @@ function RootLayout() {
           />
           <Stack.Screen name="+not-found" />
         </Stack>
+        <ActiveRideBanner />
       </QueryClientProvider>
     </ErrorBoundary>
   );
