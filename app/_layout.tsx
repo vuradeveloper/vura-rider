@@ -42,8 +42,9 @@ function ActiveRideBanner() {
   return (
     <TouchableOpacity
       onPress={() => {
-        // Returning to the ride clears the minimized flag.
-        useAppStore.getState().setRideMinimized(false);
+        // Navigate back to the ride WITHOUT clearing the minimized flag — the
+        // track screen restores the ride state and clears it once restored,
+        // so the ride request is not re-fired and searching isn't restarted.
         if (activeRide.id) {
           router.push(`/ride/track?rideId=${activeRide.id}`);
         } else {

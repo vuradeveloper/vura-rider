@@ -402,7 +402,26 @@ export default function Track() {
       }
       if (demoCancelledRef.current) return;
 
-      // 1. Initial State: Searching (~45s so the rider can edit/pickup/stops)
+      // If returning to a ride that's already past searching, restore its
+      // state instead of restarting the demo from the beginning.
+      const minimized = useAppStore.getState().activeRide;
+      if (minimized?.id && minimized.status !== "searching") {
+        // Ride restored — clear the minimized flag so the banner hides on the
+        // track screen.
+        useAppStore.getState().setRideMinimized(false);
+        setStatus(minimized.status as any);
+        if (minimized.driver_name) {
+          setDriver({
+            name: minimized.driver_name,
+            vehicle: [minimized.vehicle_color, minimized.vehicle_make, minimized.vehicle_model].filter(Boolean).join(" ") || null,
+            license_plate: minimized.driver_license_plate,
+            rating: null,
+          });
+        }
+        return;
+      }
+
+      // 1. Initial State: Searching (~15s so the rider can edit/pickup/stops)
       setStatus("searching");
       // Mark the ride active in the store so the floating "Go Back To Ride"
       // banner shows on every screen, even during the demo simulation.
@@ -429,6 +448,17 @@ export default function Track() {
         vehicle: "White Toyota Corolla",
         license_plate: "VURA 123 GP",
       });
+      // Keep the store in sync — the restore check reads this when returning
+      // from a minimized ride and needs the real status, not "searching".
+      useAppStore.getState().setActiveRide({
+        id: "demo",
+        status: "accepted",
+        driver_name: "Sipho Khumalo",
+        driver_license_plate: "VURA 123 GP",
+        vehicle_make: "Toyota",
+        vehicle_model: "Corolla",
+        vehicle_color: "White",
+      } as any);
 
       const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
       const [endLat, endLng] = dropoffCoord ?? [
@@ -467,12 +497,30 @@ export default function Track() {
       demoPhaseRef.current = "arrived";
       setStatus("driver_arrived");
       await updateDbStatus("driver_arrived");
+      useAppStore.getState().setActiveRide({
+        id: "demo",
+        status: "driver_arrived",
+        driver_name: "Sipho Khumalo",
+        driver_license_plate: "VURA 123 GP",
+        vehicle_make: "Toyota",
+        vehicle_model: "Corolla",
+        vehicle_color: "White",
+      } as any);
       chargeCardOnPickup();
       await new Promise((resolve) => setTimeout(resolve, 20000));
       if (demoCancelledRef.current) return;
 
       setStatus("in_progress");
       await updateDbStatus("in_progress");
+      useAppStore.getState().setActiveRide({
+        id: "demo",
+        status: "in_progress",
+        driver_name: "Sipho Khumalo",
+        driver_license_plate: "VURA 123 GP",
+        vehicle_make: "Toyota",
+        vehicle_model: "Corolla",
+        vehicle_color: "White",
+      } as any);
 
       // Fetch route from pickup to destination, passing all stop waypoints
       const routeToDest = await fetchRoute([baseLat, baseLng], [endLat, endLng], waypoints);
@@ -803,10 +851,11 @@ export default function Track() {
           // No upfront charge — just book the ride. The card is charged when
           // the driver arrives at pickup (see ride:driver:arrived below).
           paymentConfirmedRef.current = true;
-          fireRequest();
+          // Skip re-firing the ride request if returning to a minimized ride.
+          if (!useAppStore.getState().rideMinimized) fireRequest();
         } else {
           paymentConfirmedRef.current = true;
-          fireRequest();
+          if (!useAppStore.getState().rideMinimized) fireRequest();
         }
       } catch (e: any) {
         setError(e.message || "Could not connect");
