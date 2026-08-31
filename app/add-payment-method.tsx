@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ export default function AddPaymentMethod() {
   const [paystackVisible, setPaystackVisible] = useState(false);
   const [paystackUrl, setPaystackUrl] = useState("");
   const [paystackReference, setPaystackReference] = useState<string | undefined>();
+  const [verified, setVerified] = useState(false);
 
   const navigateBack = () => {
     if (router.canGoBack()) {
@@ -31,6 +32,13 @@ export default function AddPaymentMethod() {
     }
   };
 
+  useEffect(() => {
+    if (verified) {
+      const timer = setTimeout(navigateBack, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [verified]);
+
   const startSecureAdd = async () => {
     setIsStarting(true);
     try {
@@ -38,7 +46,7 @@ export default function AddPaymentMethod() {
       if (result.mock) {
         Alert.alert(
           "Payments are in test mode",
-          "Your server is in mock payment mode (PAYMENTS_MODE=mock). No real card is charged. Fill in the PAYSTACK_* values in server/.env to go live.",
+          "Your server is in mock payment mode (PAYMENTS_MODE=mock). Fill in the PAYSTACK_* values in server/.env to go live.",
           [{ text: "OK" }]
         );
         return;
@@ -71,53 +79,44 @@ export default function AddPaymentMethod() {
       </View>
 
       <ScrollView className="flex-1 px-5 pt-6" showsVerticalScrollIndicator={false}>
-        <View className="items-center mt-2 mb-6">
-          <View className="w-20 h-20 rounded-full bg-primary/10 items-center justify-center">
-            <Ionicons name="card" size={40} color="#e04e2f" />
-          </View>
-          <Text className="mt-4 text-xl font-extrabold text-foreground text-center">
-            Add a card securely
-          </Text>
-          <Text className="mt-2 text-sm text-muted-foreground text-center leading-relaxed max-w-[300px]">
-            We'll take you to a secure Paystack payment page to add your card.
-            Your card details are never stored on our servers.
-          </Text>
-        </View>
-
-        <View className="flex-row items-center gap-3 p-4 bg-emerald-50 border border-emerald-100 rounded-xl mb-6">
-          <Ionicons name="shield-checkmark" size={22} color="#059669" />
-          <View className="flex-1">
-            <Text className="text-xs font-bold text-emerald-800">
-              Safe & Secure Processing
-            </Text>
-            <Text className="text-[11px] text-emerald-600 leading-normal mt-0.5">
-              Your full card number and CVV never touch our servers. Payments are
-              processed on Paystack's PCI-compliant page.
+        {verified ? (
+          <View className="items-center mt-20 mb-6">
+            <View className="w-24 h-24 rounded-full bg-emerald-100 items-center justify-center">
+              <Ionicons name="checkmark-circle" size={56} color="#16a34a" />
+            </View>
+            <Text className="mt-4 text-xl font-extrabold text-emerald-700 text-center">
+              Verified
             </Text>
           </View>
-        </View>
-
-        <TouchableOpacity
-          onPress={startSecureAdd}
-          disabled={isStarting}
-          className={`w-full rounded-xl bg-primary py-4 items-center ${isStarting ? "opacity-60" : ""}`}
-        >
-          {isStarting ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <View className="flex-row items-center gap-2">
-              <Ionicons name="lock-closed" size={16} color="#fff" />
-              <Text className="text-sm font-bold text-primary-foreground">
-                Continue to secure payment
+        ) : (
+          <>
+            <View className="items-center mt-2 mb-6">
+              <View className="w-20 h-20 rounded-full bg-primary/10 items-center justify-center">
+                <Ionicons name="card" size={40} color="#e04e2f" />
+              </View>
+              <Text className="mt-4 text-xl font-extrabold text-foreground text-center">
+                Add a card
               </Text>
             </View>
-          )}
-        </TouchableOpacity>
 
-        <Text className="mt-4 text-[11px] text-muted-foreground text-center leading-relaxed">
-          By continuing you agree to save this card for future rides. You can
-          remove it anytime from your wallet.
-        </Text>
+            <TouchableOpacity
+              onPress={startSecureAdd}
+              disabled={isStarting}
+              className={`w-full rounded-xl bg-primary py-4 items-center ${isStarting ? "opacity-60" : ""}`}
+            >
+              {isStarting ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <View className="flex-row items-center gap-2">
+                  <Ionicons name="lock-closed" size={16} color="#fff" />
+                  <Text className="text-sm font-bold text-primary-foreground">
+                    Continue to secure payment
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
       </ScrollView>
 
       <PaymentWebView
@@ -131,12 +130,7 @@ export default function AddPaymentMethod() {
           setPaystackVisible(false);
           if (success) {
             queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
-            Alert.alert(
-              "Card Added",
-              "Your card was added and saved securely. You'll never need to re-enter it when paying for a ride.",
-              [{ text: "OK", onPress: navigateBack }]
-            );
-            setTimeout(navigateBack, 100);
+            setVerified(true);
           } else {
             Alert.alert(
               "Card not added",
