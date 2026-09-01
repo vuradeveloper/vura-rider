@@ -1,4 +1,4 @@
-import { disconnectSocket, getSocket } from "@/lib/socket";
+import { disconnectSocket, getSocket, getConnectedSocket } from "@/lib/socket";
 import { fetchRoute } from "@/lib/route";
 import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
@@ -482,6 +482,9 @@ export default function Track() {
       }
 
       // 1. Initial State: Searching (~15s so the rider can edit/pickup/stops)
+      // If a real socket is connected, wait for the driver to accept via the
+      // socket (ride:accepted). If no socket, fall back to the demo simulation
+      // auto-accept after 15s.
       setStatus("searching");
       // Mark the ride active in the store so the floating "Go Back To Ride"
       // banner shows on every screen, even during the demo simulation.
@@ -496,29 +499,45 @@ export default function Track() {
       driverLocRef.current = null;
       demoPhaseRef.current = "searching";
 
-      await new Promise((resolve) => setTimeout(resolve, 15000));
-      if (demoCancelledRef.current) return;
+      const connectedSocket = getConnectedSocket();
+      if (connectedSocket) {
+        // Wait up to 60s for the real ride:accepted event, then proceed with
+        // the demo simulation (route fetching, animation).
+        const accepted = await new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 60000);
+          connectedSocket.once("ride:accepted", () => {
+            clearTimeout(timer);
+            resolve(true);
+          });
+        });
+        if (!accepted || demoCancelledRef.current) return;
+        // Driver info was already set by the socket handler — skip the fake
+        // driver setup below and go straight to route fetching.
+      } else {
+        // No real socket — auto-accept a fake driver after 15s (old behaviour).
+        await new Promise((resolve) => setTimeout(resolve, 15000));
+        if (demoCancelledRef.current) return;
 
-      // 2. Driver Found: Status "accepted"
-      setStatus("accepted");
-      await updateDbStatus("accepted");
-      setDriver({
-        name: "Sipho Khumalo",
-        rating: 4.87,
-        vehicle: "White Toyota Corolla",
-        license_plate: "VURA 123 GP",
-      });
-      // Keep the store in sync — the restore check reads this when returning
-      // from a minimized ride and needs the real status, not "searching".
-      useAppStore.getState().setActiveRide({
-        id: "demo",
-        status: "accepted",
-        driver_name: "Sipho Khumalo",
-        driver_license_plate: "VURA 123 GP",
-        vehicle_make: "Toyota",
-        vehicle_model: "Corolla",
-        vehicle_color: "White",
-      } as any);
+        setStatus("accepted");
+        await updateDbStatus("accepted");
+        setDriver({
+          name: "Sipho Khumalo",
+          rating: 4.87,
+          vehicle: "White Toyota Corolla",
+          license_plate: "VURA 123 GP",
+        });
+        // Keep the store in sync — the restore check reads this when returning
+        // from a minimized ride and needs the real status, not "searching".
+        useAppStore.getState().setActiveRide({
+          id: "demo",
+          status: "accepted",
+          driver_name: "Sipho Khumalo",
+          driver_license_plate: "VURA 123 GP",
+          vehicle_make: "Toyota",
+          vehicle_model: "Corolla",
+          vehicle_color: "White",
+        } as any);
+      }
 
       const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
       const [endLat, endLng] = dropoffCoord ?? [
