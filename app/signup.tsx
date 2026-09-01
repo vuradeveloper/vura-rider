@@ -13,10 +13,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { Picker } from "@react-native-picker/picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { register, useAuth, type Role } from "@/lib/auth";
 import { countries } from "@/lib/countries";
+import CountrySelect from "@/components/CountrySelect";
 
 export default function Signup() {
   const router = useRouter();
@@ -223,23 +223,10 @@ export default function Signup() {
                       Phone
                     </Text>
                     <View className="mt-1 flex-row gap-2">
-                      <View className="w-20 rounded-lg bg-secondary">
-                        <Picker
-                          selectedValue={countryCode}
-                          onValueChange={setCountryCode}
-                          style={{ height: 44 }}
-                        >
-                          {countries
-                            .sort((a, b) => a.name.localeCompare(b.name))
-                            .map((c) => (
-                              <Picker.Item
-                                key={c.code}
-                                label={`${c.flag} ${c.dial_code}`}
-                                value={c.dial_code}
-                              />
-                            ))}
-                        </Picker>
-                      </View>
+                      <CountrySelect
+                        value={countryCode}
+                        onChange={setCountryCode}
+                      />
                       <TextInput
                         value={phone}
                         onChangeText={setPhone}
