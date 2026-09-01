@@ -38,7 +38,7 @@ const app = express();
 const server = http.createServer(app);
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081").split(",");
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081,http://localhost:8082,http://localhost:19006").split(",");
 
 // ── Middleware ──
 
