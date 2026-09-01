@@ -393,6 +393,31 @@ export function setupSocketHandlers(io: SocketIOServer) {
       } catch (err: any) { console.error("Driver location error:", err); }
     });
 
+    // ── Driver: online/offline status ──
+    socket.on("driver:online", async (data) => {
+      try {
+        const { online } = data || {};
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+        // Auto-create driver_profiles if missing (first time going online).
+        const existing = await queryOne<{ id: string }>(
+          "SELECT id FROM driver_profiles WHERE user_id = $1",
+          [dbUserId]
+        ).catch(() => null);
+        if (!existing) {
+          await execute(
+            `INSERT INTO driver_profiles (user_id, is_online) VALUES ($1, $2)`,
+            [dbUserId, online === true]
+          );
+        } else {
+          await execute(
+            `UPDATE driver_profiles SET is_online = $1, updated_at = NOW() WHERE user_id = $2`,
+            [online === true, dbUserId]
+          );
+        }
+      } catch (err: any) { console.error("Driver online error:", err); }
+    });
+
     // ── Driver: accept ride request ──
     socket.on("driver:ride:accept", async (data) => {
       try {
