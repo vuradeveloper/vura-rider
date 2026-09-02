@@ -53,6 +53,20 @@ export function setupSocketHandlers(io: SocketIOServer) {
       return undefined;
     };
 
+    // Broadcast the number of riders currently waiting (rides in "searching"
+    // status) to all online drivers so they can see how many ride requests
+    // are pending.
+    const broadcastRiderQueue = async () => {
+      try {
+        const count = await queryOne<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM rides WHERE status = 'searching'"
+        );
+        io.to("drivers").emit("ride:queue", { count: count?.count ?? 0 });
+      } catch (e) {
+        console.warn("Failed to broadcast rider queue:", e);
+      }
+    };
+
     // Ensure the chat messages table exists (best-effort; created on boot too).
     const ensureChatTable = async () => {
       await execute(
@@ -159,6 +173,8 @@ export function setupSocketHandlers(io: SocketIOServer) {
           } catch (e) {
             console.warn("Failed to notify driver:", e);
           }
+          // Update the visible rider-request count for online drivers.
+          await broadcastRiderQueue();
         })();
       } catch (err: any) {
         console.error("Ride request error:", err);
@@ -415,6 +431,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
             [online === true, dbUserId]
           );
         }
+        // Join/leave the drivers room so we can broadcast queue counts.
+        if (online === true) {
+          socket.join("drivers");
+          await broadcastRiderQueue();
+        } else {
+          socket.leave("drivers");
+        }
       } catch (err: any) { console.error("Driver online error:", err); }
     });
 
@@ -448,6 +471,8 @@ export function setupSocketHandlers(io: SocketIOServer) {
           driver_license_plate: driver?.license_plate,
         });
         socket.emit("ride:accepted:ack", { success: true, rideId });
+        // A ride was taken — refresh the rider-request count for drivers.
+        await broadcastRiderQueue();
       } catch (err: any) { console.error("Driver accept error:", err); }
     });
 
