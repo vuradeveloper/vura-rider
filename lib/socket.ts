@@ -75,11 +75,12 @@ export interface ClientToServerEvents {
     destinationAddress: string;
     destinationLat: number;
     destinationLng: number;
-    waypoints: Array<{ address: string; lat: number; lng: number }>;
+    waypoints: { address: string; lat: number; lng: number }[];
     tier?: string;
     scheduledAt?: string;
     paymentMethod?: string;
     paymentReference?: string;
+    fare?: number;
   }) => void;
   "passenger:ride:cancel": (data: { rideId: string; reason: string }) => void;
   "passenger:ride:update_pickup": (data: {

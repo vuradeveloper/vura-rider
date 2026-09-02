@@ -339,7 +339,7 @@ export default function Track() {
       const t = 0.08;
       const lat = from.lat + (driverLoc.lat - from.lat) * t;
       const lng = from.lng + (driverLoc.lng - from.lng) * t;
-      return { lat, lng, bearing: computeBearing(from, { latitude: driverLoc.lat, longitude: driverLoc.lng }) || 0 };
+      return { lat, lng, bearing: computeBearing({ latitude: from.lat, longitude: from.lng }, { latitude: driverLoc.lat, longitude: driverLoc.lng }) || 0 };
     });
   }, [driverLoc, status, pickupCoord]);
 

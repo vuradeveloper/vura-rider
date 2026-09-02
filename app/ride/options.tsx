@@ -37,6 +37,8 @@ const tiers = [
     icon: "people" as const,
     multiplier: 1,
     etaOffset: 0,
+    category: "popular",
+    cap: "Compact",
   },
   {
     id: "x",
@@ -46,6 +48,19 @@ const tiers = [
     multiplier: 1.3,
     etaOffset: 1,
     badge: "Popular",
+    category: "popular",
+    cap: "Compact",
+  },
+  {
+    id: "go-priority",
+    name: "VuraGo Priority",
+    desc: "Faster pickup",
+    icon: "flash-outline" as const,
+    multiplier: 1.2,
+    etaOffset: 0,
+    badge: "Popular",
+    category: "popular",
+    cap: "Compact",
   },
   {
     id: "electric",
@@ -55,6 +70,18 @@ const tiers = [
     multiplier: 1.5,
     etaOffset: 2,
     badge: "Green",
+    category: "popular",
+    cap: "Quads",
+  },
+  {
+    id: "wait-save",
+    name: "Wait & Save",
+    desc: "Get a cheaper ride by waiting a little longer",
+    icon: "time-outline" as const,
+    multiplier: 0.8,
+    etaOffset: 4,
+    category: "popular",
+    cap: "Compact",
   },
   {
     id: "lux",
@@ -63,6 +90,28 @@ const tiers = [
     icon: "diamond" as const,
     multiplier: 2,
     etaOffset: 3,
+    category: "premium",
+    cap: "Sedan",
+  },
+  {
+    id: "black",
+    name: "Black",
+    desc: "High end cars with top-rated drivers",
+    icon: "diamond" as const,
+    multiplier: 2.5,
+    etaOffset: 2,
+    category: "premium",
+    cap: "Sedan",
+  },
+  {
+    id: "van",
+    name: "Van",
+    desc: "High end cars for 7 with top-rated drivers",
+    icon: "people" as const,
+    multiplier: 3,
+    etaOffset: 8,
+    category: "premium",
+    cap: "SUV",
   },
 ];
 
@@ -196,10 +245,10 @@ export default function RideOptions() {
   const priced = useMemo(
     () =>
       tiers.map((t) => {
-        const fare = totalKm != null ? estimateFare(totalKm, t.multiplier) : null;
         const eta =
           totalKm != null ? estimateEtaMins(totalKm) + t.etaOffset : null;
-        return { ...t, fare, eta };
+        // All fares fixed at R0.20 for now (demo pricing).
+        return { ...t, fare: 0.2, eta };
       }),
     [totalKm]
   );
@@ -309,46 +358,62 @@ export default function RideOptions() {
           Recommended for your trip
         </Text>
 
-        <ScrollView className="flex-1 gap-y-2" showsVerticalScrollIndicator={false}>
-          {priced.map((r) => {
-            const active = selected === r.id;
+        <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+          {(["popular", "premium"] as const).map((cat) => {
+            const items = priced.filter((t) => t.category === cat);
+            if (items.length === 0) return null;
             return (
-              <TouchableOpacity
-                key={r.id}
-                onPress={() => setSelected(r.id)}
-                className={`w-full flex-row items-center gap-3 rounded-2xl border px-3.5 py-3 mb-2 ${active ? "border-primary bg-accent" : "border-border bg-surface"}`}
-              >
-                <View
-                  className={`w-12 h-12 rounded-xl items-center justify-center ${active ? "bg-primary" : "bg-secondary"}`}
-                >
-                  <Ionicons
-                    name={r.icon}
-                    size={20}
-                    color={active ? "#fff" : "#2e1e1a"}
-                  />
-                </View>
-                <View className="flex-1">
-                  <View className="flex-row items-center gap-2">
-                    <Text className="text-sm font-bold text-foreground">
-                      {r.name}
-                    </Text>
-                    {r.badge && (
-                      <View className="rounded-md bg-primary/10 px-2 py-0.5">
-                        <Text className="text-[10px] font-bold text-primary uppercase">
-                          {r.badge}
+              <View key={cat} className="mb-4">
+                <Text className="text-sm font-bold text-foreground uppercase tracking-wider mb-2 ml-1">
+                  {cat === "popular" ? "Popular" : "Premium"}
+                </Text>
+                {items.map((r) => {
+                  const active = selected === r.id;
+                  return (
+                    <TouchableOpacity
+                      key={r.id}
+                      onPress={() => setSelected(r.id)}
+                      className={`w-full flex-row items-center gap-3 rounded-2xl border px-3.5 py-3 mb-2 ${active ? "border-primary bg-accent" : "border-border bg-surface"}`}
+                    >
+                      <View
+                        className={`w-12 h-12 rounded-xl items-center justify-center ${active ? "bg-primary" : "bg-secondary"}`}
+                      >
+                        <Ionicons
+                          name={r.icon}
+                          size={20}
+                          color={active ? "#fff" : "#2e1e1a"}
+                        />
+                      </View>
+                      <View className="flex-1">
+                        <View className="flex-row items-center gap-2">
+                          <Text className="text-sm font-bold text-foreground">
+                            {r.name}
+                          </Text>
+                          {r.badge && (
+                            <View className="rounded-md bg-primary/10 px-2 py-0.5">
+                              <Text className="text-[10px] font-bold text-primary uppercase">
+                                {r.badge}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text className="text-xs text-muted-foreground">
+                          {r.eta != null
+                            ? `${r.eta} min`
+                            : ""}
+                          {r.cap ? ` · ${r.cap}` : ""}
+                        </Text>
+                        <Text className="text-[10px] text-muted-foreground">
+                          {r.desc}
                         </Text>
                       </View>
-                    )}
-                  </View>
-                  <Text className="text-xs text-muted-foreground">
-                    {r.desc}
-                    {r.eta != null ? ` · ${r.eta} min` : ""}
-                  </Text>
-                </View>
-                <Text className="text-sm font-extrabold text-foreground">
-                  {r.fare != null ? formatCurrency(r.fare) : "—"}
-                </Text>
-              </TouchableOpacity>
+                      <Text className="text-sm font-extrabold text-foreground">
+                        {r.fare != null ? formatCurrency(r.fare) : "—"}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             );
           })}
         </ScrollView>
