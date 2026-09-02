@@ -513,29 +513,11 @@ export default function Track() {
         // Driver info was already set by the socket handler — skip the fake
         // driver setup below and go straight to route fetching.
       } else {
-        // No real socket — auto-accept a fake driver after 15s (old behaviour).
-        await new Promise((resolve) => setTimeout(resolve, 15000));
-        if (demoCancelledRef.current) return;
-
-        setStatus("accepted");
-        await updateDbStatus("accepted");
-        setDriver({
-          name: "Sipho Khumalo",
-          rating: 4.87,
-          vehicle: "White Toyota Corolla",
-          license_plate: "VURA 123 GP",
-        });
-        // Keep the store in sync — the restore check reads this when returning
-        // from a minimized ride and needs the real status, not "searching".
-        useAppStore.getState().setActiveRide({
-          id: "demo",
-          status: "accepted",
-          driver_name: "Sipho Khumalo",
-          driver_license_plate: "VURA 123 GP",
-          vehicle_make: "Toyota",
-          vehicle_model: "Corolla",
-          vehicle_color: "White",
-        } as any);
+        // No real socket — this means the server is unreachable or the user
+        // is offline. Wait for a real driver by keeping the "searching" state
+        // indefinitely. The socket effect below will emit a ride request and
+        // eventually land a real driver when the connection is restored.
+        await new Promise(() => {}); // never resolves — stays searching
       }
 
       // A driver has been found (demo) — charge the rider's card now.
