@@ -113,6 +113,7 @@ export default function Track() {
   const [pickupCoord, setPickupCoord] = useState<[number, number] | null>(null);
   const [dropoffCoord, setDropoffCoord] = useState<[number, number] | null>(null);
   const [driverLoc, setDriverLoc] = useState<DriverLoc | null>(null);
+  const [myCarLoc, setMyCarLoc] = useState<{ lat: number; lng: number; bearing: number } | null>(null);
   const [nearbyCars, setNearbyCars] = useState<NearbyCar[]>([]);
 
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
@@ -319,6 +320,29 @@ export default function Track() {
     driverLocRef.current = driverLoc;
   }, [driverLoc]);
 
+  // Rider car converges toward the driver car simultaneously: as the driver
+  // moves along its route to the pickup, the rider's own car marker glides
+  // toward the driver so both vehicles approach each other at the same time,
+  // each keeping its own rotation/heading.
+  useEffect(() => {
+    if (!driverLoc) return;
+    if (status !== "accepted" && status !== "driver_arrived" && status !== "in_progress") return;
+    setMyCarLoc((prev) => {
+      const from = prev
+        ? { lat: prev.lat, lng: prev.lng }
+        : pickupCoord
+          ? { lat: pickupCoord[0], lng: pickupCoord[1] }
+          : null;
+      if (!from) return prev;
+      // Move a fixed fraction of the remaining distance each driver tick so
+      // both cars converge instead of one teleporting to the other.
+      const t = 0.08;
+      const lat = from.lat + (driverLoc.lat - from.lat) * t;
+      const lng = from.lng + (driverLoc.lng - from.lng) * t;
+      return { lat, lng, bearing: computeBearing(from, { latitude: driverLoc.lat, longitude: driverLoc.lng }) || 0 };
+    });
+  }, [driverLoc, status, pickupCoord]);
+
   // Keep a live ref of the pickup so the demo uses the latest one even if it
   // changes during the 45s "searching" phase.
   useEffect(() => {
@@ -496,6 +520,7 @@ export default function Track() {
       setDriver(null);
       setDriverLoc(null);
       driverLocRef.current = null;
+      setMyCarLoc(null);
       demoPhaseRef.current = "searching";
 
       const connectedSocket = getConnectedSocket();
@@ -1135,6 +1160,14 @@ export default function Track() {
               image={CAR_LOCATOR_IMG}
               rotation={(driverLoc.bearing + 90) % 360}
               title="Driver"
+            />
+          )}
+          {myCarLoc && (
+            <Marker
+              coordinate={{ latitude: myCarLoc.lat, longitude: myCarLoc.lng }}
+              image={CAR_LOCATOR_IMG}
+              rotation={(myCarLoc.bearing + 90) % 360}
+              title="You"
             />
           )}
           {staticRoute.length > 1 && (
