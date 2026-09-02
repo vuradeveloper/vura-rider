@@ -25,6 +25,7 @@ import notificationsRouter from "./routes/notifications";
 import affiliatesRouter from "./routes/affiliates";
 import payLaterRouter from "./routes/payLater";
 import routeRouter from "./routes/route";
+import emailRouter from "./routes/email";
 import shareRouter, { sharePage } from "./routes/share";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 
@@ -106,6 +107,7 @@ app.use("/api/notifications", notificationsRouter);
 app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);
+app.use("/api/email", emailRouter);
 
 // ── Public share tracking page ──
 app.get("/share/:token", sharePage);
