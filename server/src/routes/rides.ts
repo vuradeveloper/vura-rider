@@ -81,11 +81,17 @@ router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              rat.score AS rating_score, rat.comment AS rating_comment
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+       LEFT JOIN LATERAL (
+         SELECT score, comment FROM ratings
+         WHERE ride_id = r.id AND driver_id = r.driver_id
+         LIMIT 1
+       ) rat ON true
        WHERE r.passenger_id = $1 OR r.driver_id = $1
        ORDER BY r.created_at DESC
        LIMIT $2 OFFSET $3`,
