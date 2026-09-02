@@ -57,7 +57,7 @@ function createCachedTileLayer(tpl,opts){
       return img;
     }
   });
-  return new CacheLayer(tpl,{maxZoom:19,subdomains:opts&&opts.subdomains||'abc',detectRetina:opts&&opts.detectRetina||false,maxNativeZoom:opts&&opts.maxNativeZoom||19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'});
+  return new CacheLayer(tpl,{maxZoom:16,subdomains:opts&&opts.subdomains||'',detectRetina:opts&&opts.detectRetina||false,maxNativeZoom:opts&&opts.maxNativeZoom||16,attribution:'&copy; <a href="https://www.esri.com/">Esri</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'});
 }
 `;
 
@@ -117,9 +117,9 @@ const MAP_BODY_JS = `
   function init(region){
     if(map) return;
     var latD=region.latitudeDelta||0.05, lngD=region.longitudeDelta||0.05;
-    var zoom=Math.max(10, Math.min(18, Math.round(Math.log2(360/Math.max(latD,lngD)))));
+    var zoom=Math.max(10, Math.min(18, Math.round(Math.log2(360/Math.max(latD,lngD)))+1));
     map=L.map('map',{zoomControl:true,attributionControl:true}).setView([region.latitude,region.longitude],zoom);
-    createCachedTileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{subdomains:'abc',detectRetina:false,maxNativeZoom:19}).addTo(map);
+    createCachedTileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{subdomains:'',detectRetina:false,maxNativeZoom:16}).addTo(map);
     map.on('move',function(){ if(!map)return; var c=map.getCenter(),b=map.getBounds(); post({type:'regionChange',latitude:c.lat,longitude:c.lng,latitudeDelta:Math.abs(b.getNorth()-b.getSouth()),longitudeDelta:Math.abs(b.getEast()-b.getWest())}); });
     map.on('moveend',function(){ if(!map)return; var c=map.getCenter(),b=map.getBounds(); post({type:'regionChangeComplete',latitude:c.lat,longitude:c.lng,latitudeDelta:Math.abs(b.getNorth()-b.getSouth()),longitudeDelta:Math.abs(b.getEast()-b.getWest())}); });
     setTimeout(function(){ if(map) map.invalidateSize(); }, 50);
@@ -176,7 +176,7 @@ const MAP_BODY_JS = `
   function animateToRegion(region,duration){
     if(!map) return;
     var latD=region.latitudeDelta||0.02, lngD=region.longitudeDelta||0.02;
-    var zoom=Math.max(10,Math.min(18,Math.round(Math.log2(360/Math.max(latD,lngD)))));
+    var zoom=Math.max(10,Math.min(18,Math.round(Math.log2(360/Math.max(latD,lngD)))+1));
     map.setView([region.latitude,region.longitude],zoom,{animate:true,duration:(duration||300)/1000});
   }
 

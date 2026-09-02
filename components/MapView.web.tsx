@@ -117,7 +117,7 @@ function createCachedTileLayer(L: any, tpl: string, opts: any = {}) {
     subdomains: opts.subdomains || "abc",
     detectRetina: opts.detectRetina || false,
     maxNativeZoom: opts.maxNativeZoom || 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    attribution: '&copy; <a href="https://www.esri.com/">Esri</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   });
 }
 
@@ -353,7 +353,7 @@ const MapView = forwardRef<any, any>((props, ref) => {
       const lngD = initialRegion.longitudeDelta || 0.05;
       const zoom = Math.max(
         10,
-        Math.min(18, Math.round(Math.log2(360 / Math.max(latD, lngD))))
+        Math.min(18, Math.round(Math.log2(360 / Math.max(latD, lngD))) + 1)
       );
       const map = L.map(containerRef.current, {
         zoomControl: true,
@@ -361,8 +361,8 @@ const MapView = forwardRef<any, any>((props, ref) => {
       }).setView([initialRegion.latitude, initialRegion.longitude], zoom);
       createCachedTileLayer(
         L,
-        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        { subdomains: "abc", detectRetina: true, maxNativeZoom: 19 }
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        { subdomains: "", detectRetina: false, maxNativeZoom: 16 }
       ).addTo(map);
 
       map.on("move", () => {
