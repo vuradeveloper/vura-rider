@@ -254,6 +254,14 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
         [charge.success ? "completed" : "failed", JSON.stringify(charge), reference]
       ).catch(() => {});
 
+      // Record the charged fare on the ride so drivers see the correct earnings.
+      if (charge.success && rideId) {
+        await execute(
+          `UPDATE rides SET estimated_fare = $1, actual_fare = $1, payment_status = 'paid', payment_method = 'card', updated_at = NOW() WHERE id = $2`,
+          [amount, rideId]
+        ).catch(() => {});
+      }
+
       res.json({
         reference,
         live: paymentsMode() === "live",

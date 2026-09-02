@@ -522,7 +522,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
         const ride = await queryOne<{ id: string; driver_id: string; fare: number }>(
-          "SELECT id, driver_id, fare FROM rides WHERE id = $1 AND driver_id = $2",
+          "SELECT id, driver_id, COALESCE(actual_fare, estimated_fare) AS fare FROM rides WHERE id = $1 AND driver_id = $2",
           [rideId, dbUserId]
         );
         if (!ride) return;
