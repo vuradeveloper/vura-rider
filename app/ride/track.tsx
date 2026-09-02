@@ -443,7 +443,6 @@ export default function Track() {
               demoPhaseRef.current = "arrived";
               setStatus("driver_arrived");
               await updateDbStatus("driver_arrived");
-              chargeCardOnPickup();
               await new Promise((resolve) => setTimeout(resolve, 20000));
               if (demoCancelledRef.current) return;
               setStatus("in_progress");
@@ -539,6 +538,9 @@ export default function Track() {
         } as any);
       }
 
+      // A driver has been found (demo) — charge the rider's card now.
+      chargeCardOnPickup();
+
       const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
       const [endLat, endLng] = dropoffCoord ?? [
         baseLat + (Math.random() - 0.5) * 0.04,
@@ -585,7 +587,6 @@ export default function Track() {
         vehicle_model: "Corolla",
         vehicle_color: "White",
       } as any);
-      chargeCardOnPickup();
       await new Promise((resolve) => setTimeout(resolve, 20000));
       if (demoCancelledRef.current) return;
 
@@ -756,6 +757,9 @@ export default function Track() {
             setRideId(data.id);
             rideIdRef.current = data.id;
           }
+          // A driver has been found — charge the rider's card now (deduct only
+          // after a driver is found, not at booking).
+          chargeCardOnPickup();
           const driverData = {
             name: data.driver_name || data.driver?.name || "Unknown Driver",
             vehicle:
@@ -791,8 +795,6 @@ export default function Track() {
           if (active) {
             useAppStore.getState().setActiveRide({ ...active, status: "driver_arrived" });
           }
-          // Charge the rider's card now that the driver has arrived.
-          chargeCardOnPickup();
         });
 
         socket.on("ride:started", () => {
@@ -999,17 +1001,28 @@ export default function Track() {
    *  Called from the ride:driver:arrived socket handler. */
   const chargeCardOnPickup = async () => {
     // Never charge twice for the same ride — the demo simulation and the real
-    // socket ride:driver:arrived event can both call this.
+    // socket event can both call this. The flag also persists to AsyncStorage
+    // so minimizing/returning to the ride doesn't cause a double charge.
     if (chargeFiredRef.current) return;
-    chargeFiredRef.current = true;
     const pm = await AsyncStorage.getItem("vura.ride.payment");
     if (pm !== "card") return;
     const rideId = rideIdRef.current;
+    if (rideId) {
+      const charged = await AsyncStorage.getItem(`vura.ride.charged.${rideId}`);
+      if (charged === "1") {
+        chargeFiredRef.current = true;
+        return;
+      }
+    }
+    chargeFiredRef.current = true;
     const fareStr = await AsyncStorage.getItem("vura.ride.fare");
     const fare = parseFloat(fareStr || "0.2") || 0.2;
     try {
       const result = await initiatePaystackPayment(fare, rideId ?? undefined);
       if (result.mock || result.status === "success") {
+        if (rideId) {
+          await AsyncStorage.setItem(`vura.ride.charged.${rideId}`, "1");
+        }
         Alert.alert("Payment", `R${fare.toFixed(2)} charged from your saved card.`);
         return;
       }
