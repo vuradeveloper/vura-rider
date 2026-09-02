@@ -108,6 +108,25 @@ router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// GET /api/rides/available — Rides still searching for a driver (driver-side poll)
+router.get("/available", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const rows = await query<any>(
+      `SELECT r.*,
+              u.full_name AS passenger_name, u.phone AS passenger_phone
+       FROM rides r
+       LEFT JOIN users u ON u.id = r.passenger_id
+       WHERE r.status = 'searching'
+       ORDER BY r.created_at ASC
+       LIMIT 20`
+    );
+    res.json({ rides: (rows || []).map((row) => mapRide(row)) });
+  } catch (err: any) {
+    console.error("Available rides error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/rides/:id — Get specific ride details
 router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
