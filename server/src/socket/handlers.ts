@@ -145,31 +145,37 @@ export function setupSocketHandlers(io: SocketIOServer) {
         socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
         if (ride) socket.join(`ride:${ride.id}`);
 
-        // ── Notify a nearby driver about the new ride ──
-        // Find an online driver and emit ride:request so they can accept.
+        // ── Notify nearby drivers about the new ride ──
+        // Find all online drivers and emit ride:request to each one so the
+        // first to accept wins.
         (async () => {
           try {
-            const driver = await queryOne<{ id: string; firebase_uid: string }>(
+            const drivers = await query<{ id: string; firebase_uid: string }>(
               `SELECT u.id, u.firebase_uid FROM users u
                JOIN driver_profiles dp ON dp.user_id = u.id
-               WHERE u.role = 'driver' AND dp.is_online = true
-               ORDER BY dp.updated_at DESC LIMIT 1`
+               WHERE u.role = 'driver' AND dp.is_online = true`
             );
-            if (driver?.firebase_uid) {
-              io.to(`user:${driver.firebase_uid}`).emit("ride:request", {
-                id: ride?.id,
-                pickupAddress,
-                pickupLat,
-                pickupLng,
-                destinationAddress,
-                destinationLat,
-                destinationLng,
-                fare: 0,
-                paymentMethod: paymentMethod || "cash",
-                riderName: "Rider",
-                riderRating: 5,
-              });
+            const payload = {
+              id: ride?.id,
+              pickupAddress,
+              pickupLat,
+              pickupLng,
+              destinationAddress,
+              destinationLat,
+              destinationLng,
+              fare: 0,
+              paymentMethod: paymentMethod || "cash",
+              riderName: "Rider",
+              riderRating: 5,
+            };
+            for (const driver of drivers || []) {
+              if (driver?.firebase_uid) {
+                io.to(`user:${driver.firebase_uid}`).emit("ride:request", payload);
+              }
             }
+            // Fallback: broadcast to the drivers room so any online driver
+            // socket that is connected but missed the direct emit still gets it.
+            io.to("drivers").emit("ride:request", payload);
           } catch (e) {
             console.warn("Failed to notify driver:", e);
           }
