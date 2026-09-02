@@ -907,6 +907,7 @@ export default function Track() {
             })),
             paymentMethod: paymentMethodRef || undefined,
             paymentReference,
+            fare,
           });
         };
 

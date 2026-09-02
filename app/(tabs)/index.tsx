@@ -275,7 +275,7 @@ export default function Home() {
               WebView's direct ancestor with overflow+borderRadius is a known
               cause of a blank/white WebView on Android. The outer card above
               still clips the corners of the whole card (map + footer). */}
-          <View style={{ height: 306 }}>
+          <View style={{ height: 460 }}>
             {coords && mapRegion ? (
               <MapView
                 style={{ flex: 1 }}

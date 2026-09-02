@@ -57,7 +57,7 @@ function createCachedTileLayer(tpl,opts){
       return img;
     }
   });
-  return new CacheLayer(tpl,{maxZoom:16,subdomains:opts&&opts.subdomains||'',detectRetina:opts&&opts.detectRetina||false,maxNativeZoom:opts&&opts.maxNativeZoom||16,attribution:'&copy; <a href="https://www.esri.com/">Esri</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'});
+  return new CacheLayer(tpl,{maxZoom:19,subdomains:opts&&opts.subdomains||'abc',detectRetina:opts&&opts.detectRetina||false,maxNativeZoom:opts&&opts.maxNativeZoom||19,className:opts&&opts.className||'',attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'});
 }
 `;
 
@@ -119,7 +119,7 @@ const MAP_BODY_JS = `
     var latD=region.latitudeDelta||0.05, lngD=region.longitudeDelta||0.05;
     var zoom=Math.max(10, Math.min(18, Math.round(Math.log2(360/Math.max(latD,lngD)))+1));
     map=L.map('map',{zoomControl:true,attributionControl:true}).setView([region.latitude,region.longitude],zoom);
-    createCachedTileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{subdomains:'',detectRetina:false,maxNativeZoom:16}).addTo(map);
+    createCachedTileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{subdomains:'abc',detectRetina:false,maxNativeZoom:19,className:'tile-grayscale'}).addTo(map);
     map.on('move',function(){ if(!map)return; var c=map.getCenter(),b=map.getBounds(); post({type:'regionChange',latitude:c.lat,longitude:c.lng,latitudeDelta:Math.abs(b.getNorth()-b.getSouth()),longitudeDelta:Math.abs(b.getEast()-b.getWest())}); });
     map.on('moveend',function(){ if(!map)return; var c=map.getCenter(),b=map.getBounds(); post({type:'regionChangeComplete',latitude:c.lat,longitude:c.lng,latitudeDelta:Math.abs(b.getNorth()-b.getSouth()),longitudeDelta:Math.abs(b.getEast()-b.getWest())}); });
     setTimeout(function(){ if(map) map.invalidateSize(); }, 50);
@@ -236,6 +236,7 @@ const MARKER_STYLES = `
 .ent-sel-m{background:transparent;border:0}
 .ent-sel-m>div{width:16px;height:16px;background:#22c55e;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.4)}
 .leaflet-container{background:#f8f9fa}
+.tile-grayscale{filter:grayscale(1) contrast(1.08) brightness(1.02)}
 `;
 
 // CDN fallbacks used only if the bundled Leaflet copy fails to evaluate.

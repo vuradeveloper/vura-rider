@@ -83,7 +83,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
     // ── Passenger: request ride ──
     socket.on("passenger:ride:request", async (data) => {
       try {
-        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference } = data;
+        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare } = data;
         let dbUserId = await getDbUserId();
 
         if (!dbUserId) {
@@ -128,10 +128,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
         }
 
         const ride = await queryOne<any>(
-          `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching')
+          `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8)
            RETURNING *`,
-          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng]
+          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null]
         );
 
         // Link the successful payment to this ride so it can be refunded on cancel.
@@ -163,7 +163,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
               destinationAddress,
               destinationLat,
               destinationLng,
-              fare: 0,
+              fare: fare != null ? Number(fare) : 0,
               paymentMethod: paymentMethod || "cash",
               riderName: "Rider",
               riderRating: 5,

@@ -117,7 +117,8 @@ function createCachedTileLayer(L: any, tpl: string, opts: any = {}) {
     subdomains: opts.subdomains || "abc",
     detectRetina: opts.detectRetina || false,
     maxNativeZoom: opts.maxNativeZoom || 19,
-    attribution: '&copy; <a href="https://www.esri.com/">Esri</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    className: opts.className || "",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   });
 }
 
@@ -180,6 +181,7 @@ function injectStylesOnce() {
 .ent-sel-m{background:transparent;border:0}
 .ent-sel-m>div{width:16px;height:16px;background:#22c55e;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.4)}
 .leaflet-container{background:#f8f9fa}
+.tile-grayscale{filter:grayscale(1) contrast(1.08) brightness(1.02)}
 
 `;
   document.head.appendChild(style);
@@ -361,8 +363,8 @@ const MapView = forwardRef<any, any>((props, ref) => {
       }).setView([initialRegion.latitude, initialRegion.longitude], zoom);
       createCachedTileLayer(
         L,
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-        { subdomains: "", detectRetina: false, maxNativeZoom: 16 }
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        { subdomains: "abc", detectRetina: false, maxNativeZoom: 19, className: "tile-grayscale" }
       ).addTo(map);
 
       map.on("move", () => {
