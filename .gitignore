@@ -46,3 +46,5 @@ deploy/production.env
 # generated native folders
 /ios
 /android
+
+server/dev-server.log
