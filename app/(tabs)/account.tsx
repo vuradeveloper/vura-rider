@@ -142,8 +142,7 @@ export default function Account() {
     .toUpperCase();
 
   const isVerified = Boolean(
-    user.idNumber &&
-      (user.role === "driver" ? user.licenseDocumentName : user.idDocumentName)
+    user.role === "driver" ? user.licenseDocumentName : user.idDocumentName
   );
 
   async function signOut() {

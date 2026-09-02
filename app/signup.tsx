@@ -15,14 +15,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { register, useAuth, type Role } from "@/lib/auth";
-import { countries } from "@/lib/countries";
 import CountrySelect from "@/components/CountrySelect";
+import { sendVerificationEmail } from "@/lib/email";
 
 export default function Signup() {
   const router = useRouter();
   const { refresh } = useAuth();
   const role: Role = "rider";
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -32,10 +32,12 @@ export default function Signup() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [dob, setDob] = useState("");
-  const [idNumber, setIdNumber] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailFailed, setEmailFailed] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpError, setOtpError] = useState("");
+
   const [refCode, setRefCode] = useState("");
 
   useEffect(() => {
@@ -46,9 +48,9 @@ export default function Signup() {
       .catch(() => undefined);
   }, []);
 
-  async function submitStep1() {
+  async function submitDetails() {
     setError("");
-    if (!name || !email || !pwd) {
+    if (!name.trim() || !email.trim() || !pwd) {
       setError("Please fill in all required fields.");
       return;
     }
@@ -56,7 +58,52 @@ export default function Signup() {
       setError("Password must be at least 6 characters.");
       return;
     }
+    if (phone.replace(/\D/g, "").length < 9) {
+      setError("Enter a valid phone number.");
+      return;
+    }
+    setStep(2);
+    await triggerEmailSend();
+  }
+
+  async function triggerEmailSend() {
+    setSendingEmail(true);
+    setOtpError("");
+    setEmailFailed(false);
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    setGeneratedCode(code);
+
+    try {
+      const res = await sendVerificationEmail({ email: email.trim(), code });
+      if (res.success) {
+        setEmailFailed(false);
+      } else {
+        setEmailFailed(true);
+      }
+    } catch {
+      setEmailFailed(true);
+    } finally {
+      setSendingEmail(false);
+      setStep(3);
+    }
+  }
+
+  function submitOtp() {
+    const trimmed = otp.trim();
+    if (trimmed === generatedCode) {
+      setOtpError("");
+      createAccount();
+    } else if (!generatedCode) {
+      setOtpError("No code was generated. Please go back and try again.");
+    } else {
+      setOtpError("Invalid verification code. Please try again.");
+    }
+  }
+
+  async function createAccount() {
     setLoading(true);
+    setError("");
     try {
       await register(email, pwd, role, {
         full_name: name,
@@ -100,35 +147,12 @@ export default function Signup() {
     );
   }
 
-  async function submitPersonalInfo() {
-    setError("");
-    setLoading(true);
-    try {
-      // The Firebase account is already created in step 1,
-      // update the stored user with personal info
-      const { setUser } = await import("@/lib/auth");
-      await setUser({
-        uid: "",
-        name: `${firstName} ${lastName}`,
-        email,
-        phone: `${countryCode} ${phone}`,
-        role,
-        idNumber,
-      });
-      refresh();
-      router.replace("/");
-    } catch (err: any) {
-      setError(err.message || "Failed to save details.");
-    }
-    setLoading(false);
-  }
-
   return (
     <SafeAreaView className="flex-1 bg-background">
       <View className="px-5 pt-3 pb-3 flex-row items-center justify-between border-b border-border">
         <TouchableOpacity
           onPress={() => {
-            if (step > 1) setStep((s) => (s - 1) as any);
+            if (step > 1) setStep((s) => Math.max(1, (s - 1)) as 1 | 2 | 3);
             else router.back();
           }}
           className="w-9 h-9 rounded-full bg-secondary items-center justify-center"
@@ -140,7 +164,7 @@ export default function Signup() {
       </View>
 
       <View className="flex-row gap-2 px-5 py-2">
-        {[1, 2].map((s) => (
+        {[1, 2, 3].map((s) => (
           <View
             key={s}
             className={`h-1 flex-1 rounded-full ${step >= s ? "bg-primary" : "bg-secondary"}`}
@@ -277,7 +301,7 @@ export default function Signup() {
                   ) : null}
 
                   <TouchableOpacity
-                    onPress={submitStep1}
+                    onPress={submitDetails}
                     disabled={loading}
                     className={`mt-6 w-full rounded-2xl py-4 items-center ${loading ? "bg-primary/50" : "bg-primary"}`}
                   >
@@ -285,7 +309,7 @@ export default function Signup() {
                       <ActivityIndicator color="#fff" />
                     ) : (
                       <Text className="text-sm font-bold text-primary-foreground">
-                        Create account
+                        Continue
                       </Text>
                     )}
                   </TouchableOpacity>
@@ -308,84 +332,87 @@ export default function Signup() {
           )}
 
           {step === 2 && (
-            <View className="px-5 pt-4 pb-6">
-              <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8 gap-y-5">
-                <View>
-                  <Text className="text-xl font-extrabold text-foreground">
-                    Personal information
-                  </Text>
-                  <Text className="text-xs text-muted-foreground mt-1">
-                    Only your first name and vehicle details are visible to clients during the booking.
-                  </Text>
+            <View className="px-5 pt-4 pb-6 flex-1 justify-center">
+              <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8 items-center">
+                <View className="h-12 w-12 rounded-2xl bg-primary/10 items-center justify-center mb-4">
+                  <Ionicons name="shield-checkmark" size={24} color="#E5483D" />
                 </View>
+                <Text className="text-2xl font-extrabold text-foreground">Security Check</Text>
+                <Text className="text-sm text-muted-foreground mt-1 mb-8 text-center">
+                  Verify you are not a robot to receive your email code.
+                </Text>
+
+                {sendingEmail ? (
+                  <View className="flex-row items-center gap-2">
+                    <ActivityIndicator color="#E5483D" />
+                    <Text className="text-sm text-muted-foreground">Sending verification email...</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={triggerEmailSend}
+                    className="w-full rounded-2xl bg-primary py-4 items-center"
+                  >
+                    <Text className="text-sm font-bold text-primary-foreground">
+                      Send verification code
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          )}
+
+          {step === 3 && (
+            <View className="px-5 pt-4 pb-6">
+              <View className="bg-surface border border-border rounded-[1.5rem] p-6 pb-8">
+                <Text className="text-2xl font-extrabold text-foreground">Verify your email</Text>
+                <Text className="text-sm text-muted-foreground mt-1 mb-5">
+                  We sent a verification code to <Text className="font-bold">{email}</Text>
+                </Text>
+                {emailFailed && (
+                  <View className="mb-4 rounded-xl bg-secondary border border-primary/20 p-3">
+                    <Text className="text-xs font-semibold">
+                      Email delivery is unavailable. Your code is{" "}
+                      <Text className="font-extrabold">{generatedCode}</Text>
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setOtp(generatedCode)}
+                      className="mt-2 rounded-lg bg-primary/10 py-2 items-center"
+                    >
+                      <Text className="text-xs font-bold text-primary">Tap to auto-fill code</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 <View className="gap-y-4">
                   <View>
                     <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
-                      First name *
+                      Verification Code
                     </Text>
                     <TextInput
-                      value={firstName}
-                      onChangeText={setFirstName}
-                      placeholder="First name"
+                      value={otp}
+                      onChangeText={(t) => { setOtp(t.replace(/\D/g, "").slice(0, 6)); setOtpError(""); }}
+                      placeholder="000000"
                       placeholderTextColor="#80716b"
-                      className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
+                      maxLength={6}
+                      keyboardType="number-pad"
+                      className="mt-1 w-full rounded-xl bg-secondary px-3 py-4 text-center text-2xl font-extrabold tracking-widest text-foreground"
                     />
-                  </View>
-                  <View>
-                    <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
-                      Last name *
-                    </Text>
-                    <TextInput
-                      value={lastName}
-                      onChangeText={setLastName}
-                      placeholder="Last name"
-                      placeholderTextColor="#80716b"
-                      className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
-                    />
-                  </View>
-                  <View>
-                    <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
-                      Date of Birth *
-                    </Text>
-                    <TextInput
-                      value={dob}
-                      onChangeText={setDob}
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor="#80716b"
-                      className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
-                    />
-                  </View>
-                  <View>
-                    <Text className="text-[11px] font-bold text-muted-foreground ml-1 uppercase">
-                      ID Number or Passport Number *
-                    </Text>
-                    <TextInput
-                      value={idNumber}
-                      onChangeText={setIdNumber}
-                      placeholder="Enter your ID or passport number"
-                      placeholderTextColor="#80716b"
-                      className="mt-1 w-full rounded-xl bg-secondary px-3 py-3 text-sm font-medium text-foreground"
-                    />
-                    <Text className="text-[10px] text-muted-foreground mt-1 ml-1">
-                      Your ID number is used for identity verification purposes.
-                    </Text>
                   </View>
 
-                  {error ? (
-                    <Text className="text-xs text-red-500 font-semibold">{error}</Text>
+                  {otpError ? (
+                    <Text className="text-xs text-red-500 font-semibold text-center">{otpError}</Text>
                   ) : null}
 
                   <TouchableOpacity
-                    onPress={submitPersonalInfo}
-                    disabled={loading}
-                    className={`mt-6 w-full rounded-2xl py-4 items-center ${loading ? "bg-primary/50" : "bg-primary"}`}
+                    onPress={submitOtp}
+                    disabled={otp.length < 4 || loading}
+                    className={`mt-6 w-full rounded-2xl py-4 items-center ${otp.length < 4 || loading ? "bg-primary/50" : "bg-primary"}`}
                   >
                     {loading ? (
                       <ActivityIndicator color="#fff" />
                     ) : (
                       <Text className="text-sm font-bold text-primary-foreground">
-                        Complete setup
+                        Verify & Create Account
                       </Text>
                     )}
                   </TouchableOpacity>

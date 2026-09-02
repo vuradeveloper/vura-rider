@@ -6,7 +6,6 @@ export interface UpdateProfileInput {
   full_name?: string;
   email?: string;
   phone?: string;
-  id_number?: string;
 }
 
 export const updateProfile = async (data: UpdateProfileInput) =>

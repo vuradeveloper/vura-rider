@@ -24,7 +24,6 @@ export default function SettingsPage() {
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
   const [phone, setPhone] = useState(user?.phone || "");
-  const [idNumber, setIdNumber] = useState(user?.idNumber || "");
   const [docName, setDocName] = useState(
     (user?.role === "driver" ? user?.licenseDocumentName : user?.idDocumentName) || ""
   );
@@ -39,7 +38,6 @@ export default function SettingsPage() {
       setName(user.name || "");
       setEmail(user.email || "");
       setPhone(user.phone || "");
-      setIdNumber(user.idNumber || "");
       setDocName(
         (user.role === "driver" ? user.licenseDocumentName : user.idDocumentName) || ""
       );
@@ -50,9 +48,8 @@ export default function SettingsPage() {
 
   const isDriver = user.role === "driver";
   let progress = 0;
-  if (idNumber) progress += 50;
   if (docName) progress += 50;
-  const isVerified = progress === 100;
+  const isVerified = progress >= 50;
 
   async function handleSave() {
     setSaving(true);
@@ -67,7 +64,6 @@ export default function SettingsPage() {
         full_name: name,
         email,
         phone,
-        id_number: idNumber,
       });
 
       await setUser({
@@ -76,7 +72,6 @@ export default function SettingsPage() {
         email,
         phone,
         photoURL,
-        idNumber,
         ...(isDriver ? { licenseDocumentName: docName } : { idDocumentName: docName }),
       });
       refresh();
@@ -216,17 +211,6 @@ export default function SettingsPage() {
               value={phone}
               onChangeText={setPhone}
               keyboardType="phone-pad"
-              className="w-full rounded-xl border border-border bg-surface px-4 py-3.5 text-sm font-semibold text-foreground"
-            />
-          </View>
-
-          <View className="gap-y-1">
-            <Text className="text-xs font-bold text-muted-foreground ml-1">ID Number</Text>
-            <TextInput
-              value={idNumber}
-              onChangeText={setIdNumber}
-              placeholder="Enter your ID Number"
-              placeholderTextColor="#80716b"
               className="w-full rounded-xl border border-border bg-surface px-4 py-3.5 text-sm font-semibold text-foreground"
             />
           </View>

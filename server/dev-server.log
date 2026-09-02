@@ -1,0 +1,1081 @@
+
+> vura-rider-backend@1.0.0 dev
+> tsx watch src/index.ts
+
+╔═══════════════════════════════════════╗
+║       Vura Rider Backend Server       ║
+╚═══════════════════════════════════════╝
+✗ PostgreSQL connection failed: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async testConnection (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:49:5)
+    at async start (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\index.ts:149:23) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+⚠ DB connection failed — server will still start but DB features won't work
+✓ Firebase Admin SDK initialized
+✓ Server running on http://localhost:3000
+✓ Allowed origins: http://localhost:19006, http://localhost:8081, http://localhost:8082
+✓ Environment: development
+(node:15076) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[0mPOST /api/email/send-verification [32m200[0m 1506.934 ms - 16[0m
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mPOST /api/email/send-verification [32m200[0m 1690.505 ms - 16[0m
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mGET / [32m200[0m 35.738 ms - 46[0m
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+User sync error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async queryOne (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:36:18)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\users.ts:14:22) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mPOST /api/users/sync [31m500[0m 10885.933 ms - 59[0m
+User sync error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async queryOne (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:36:18)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\users.ts:14:22) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mPOST /api/users/sync [31m500[0m 10993.078 ms - 59[0m
+Get searches error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async execute (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:41:18)
+    at async ensureTable (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\search.ts:9:3)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\search.ts:25:5) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mGET /api/searches [31m500[0m 11106.938 ms - 59[0m
+User sync error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async queryOne (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:36:18)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\users.ts:14:22) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mPOST /api/users/sync [31m500[0m 14578.790 ms - 59[0m
+Get searches error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async execute (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:41:18)
+    at async ensureTable (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\search.ts:9:3)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\search.ts:25:5) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mGET /api/searches [31m500[0m 10011.896 ms - 59[0m
+User sync error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async queryOne (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:36:18)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\users.ts:14:22) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mPOST /api/users/sync [31m500[0m 10020.129 ms - 59[0m
+User sync error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async queryOne (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:36:18)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\users.ts:14:22) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mPOST /api/users/sync [31m500[0m 10028.138 ms - 59[0m
+Active ride error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async queryOne (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:36:18)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\rides.ts:29:18) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mGET /api/rides/me/active [31m500[0m 10049.111 ms - 59[0m
+⚠ route_cache table init failed (routing still works in-memory): Connection terminated due to connection timeout
+Nearby drivers error: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async <anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\routes\drivers.ts:63:21) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[0mGET /api/drivers/nearby?lat=-26.184061862879492&lng=28.007223009756665&radius=10 [31m500[0m 10016.844 ms - 59[0m
+⚠ route_cache read failed: Connection terminated due to connection timeout
+⚠ route_cache read failed: Connection terminated due to connection timeout
+⚠ route_cache read failed: Connection terminated due to connection timeout
+⚠ route_cache read failed: Connection terminated due to connection timeout
+⚠ route_cache read failed: Connection terminated due to connection timeout
+[0mGET /api/route?points=28.00597365291276%2C-26.182025462137798%3B28.00044437765595%2C-26.18307538968133&overview=full [32m200[0m 21533.633 ms - 772[0m
+[0mGET /api/route?points=28.013241056432236%2C-26.183763164130305%3B28.003140722671816%2C-26.19321923929166&overview=full [32m200[0m 12211.069 ms - 1938[0m
+[0mGET /api/route?points=28.00604698845403%2C-26.190869508804333%3B28.00507444910848%2C-26.179850528071682&overview=full [32m200[0m 12211.788 ms - 1713[0m
+[0mGET /api/route?points=27.99836063623542%2C-26.187710060038395%3B27.992497495654128%2C-26.18912074460356&overview=full [32m200[0m 12225.377 ms - 1142[0m
+[0mGET /api/route?points=28.000599762409617%2C-26.181982063405275%3B27.995746493179528%2C-26.177227714730645&overview=full [32m200[0m 21674.862 ms - 1291[0m
+⚠ route_cache table init failed (routing still works in-memory): Connection terminated due to connection timeout
+[0mPOST /api/email/send-verification [32m200[0m 1323.908 ms - 16[0m
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+7:45:51 PM [tsx] change in ./src\routes\users.ts Restarting...
+╔═══════════════════════════════════════╗
+║       Vura Rider Backend Server       ║
+╚═══════════════════════════════════════╝
+7:46:01 PM [tsx] change in ./src\routes\users.ts Restarting...
+╔═══════════════════════════════════════╗
+║       Vura Rider Backend Server       ║
+╚═══════════════════════════════════════╝
+✗ PostgreSQL connection failed: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async testConnection (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:49:5)
+    at async start (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\index.ts:149:23) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+⚠ DB connection failed — server will still start but DB features won't work
+✓ Firebase Admin SDK initialized
+✓ Server running on http://localhost:3000
+✓ Allowed origins: http://localhost:19006, http://localhost:8081, http://localhost:8082
+✓ Environment: development
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\config\database.ts:31:18)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\src\services\SchedulingService.ts:17:15) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}

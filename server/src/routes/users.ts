@@ -68,7 +68,7 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
 // PUT /api/users/profile — Update user profile
 router.put("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { full_name, email, phone, id_number } = req.body;
+    const { full_name, email, phone } = req.body;
     const firebaseUid = req.userId!;
 
     const updates: string[] = [];
@@ -78,7 +78,6 @@ router.put("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
     if (full_name !== undefined) { updates.push(`full_name = $${idx}`); params.push(full_name); idx++; }
     if (email !== undefined) { updates.push(`email = $${idx}`); params.push(email); idx++; }
     if (phone !== undefined) { updates.push(`phone = $${idx}`); params.push(phone); idx++; }
-    if (id_number !== undefined) { updates.push(`id_number = $${idx}`); params.push(id_number); idx++; }
     updates.push(`updated_at = NOW()`);
 
     params.push(firebaseUid);
