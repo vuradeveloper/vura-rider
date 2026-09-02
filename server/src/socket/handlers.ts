@@ -453,8 +453,8 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const { rideId } = data;
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
-        const ride = await queryOne<{ id: string; passenger_id: string; status: string }>(
-          "SELECT id, passenger_id, status FROM rides WHERE id = $1 AND status = 'searching'",
+        const ride = await queryOne<{ id: string; passenger_id: string; status: string; estimated_fare: number | null }>(
+          "SELECT id, passenger_id, status, estimated_fare FROM rides WHERE id = $1 AND status = 'searching'",
           [rideId]
         );
         if (!ride) {
@@ -475,6 +475,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
           vehicle_make: driver?.vehicle_make,
           vehicle_model: driver?.vehicle_model,
           driver_license_plate: driver?.license_plate,
+          fare: ride?.estimated_fare ?? null,
         });
         socket.emit("ride:accepted:ack", { success: true, rideId });
         // A ride was taken — refresh the rider-request count for drivers.

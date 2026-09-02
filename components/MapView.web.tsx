@@ -355,7 +355,7 @@ const MapView = forwardRef<any, any>((props, ref) => {
       const lngD = initialRegion.longitudeDelta || 0.05;
       const zoom = Math.max(
         10,
-        Math.min(18, Math.round(Math.log2(360 / Math.max(latD, lngD))) + 1)
+        Math.min(18, Math.round(Math.log2(360 / Math.max(latD, lngD))) + 3)
       );
       const map = L.map(containerRef.current, {
         zoomControl: true,
