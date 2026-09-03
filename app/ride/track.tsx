@@ -554,9 +554,11 @@ export default function Track() {
         baseLng + (Math.random() - 0.5) * 0.04,
       ];
 
-      // Simulate a starting position for the driver (~2-3km away)
+      // Simulate a starting position for the driver (~2-3km away) and show the
+      // car immediately so the rider sees it moving right away.
       const startLat = baseLat + (Math.random() - 0.5) * 0.04;
       const startLng = baseLng + (Math.random() - 0.5) * 0.04;
+      setDriverLoc({ lat: startLat, lng: startLng, bearing: 0 });
 
       // Fetch route from driver start to pickup (no waypoints for pickup leg)
       const routeToPickup = await fetchRoute([startLat, startLng], [baseLat, baseLng]);
