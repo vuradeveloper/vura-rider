@@ -149,16 +149,27 @@ export async function getSocket(): Promise<TypedSocket> {
     // connection is reliable on web and mobile.
     transports: ["websocket", "polling"],
     autoConnect: true,
-    reconnection: true,
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
+    reconnection: false,
   }) as TypedSocket;
 
   socket.on("connect", () => notifyListeners(true));
 
   socket.on("disconnect", () => notifyListeners(false));
-  socket.on("connect_error", () => notifyListeners(false));
+
+  // Refresh the Firebase token and re-auth whenever the socket fails to
+  // connect — the previous token may have expired (Firebase ID tokens last
+  // ~1 hour), which silently rejects the socket and stops ride matching.
+  socket.on("connect_error", async () => {
+    notifyListeners(false);
+    if (!auth.currentUser) return;
+    try {
+      const freshToken = await auth.currentUser.getIdToken(true);
+      socket!.auth = { token: freshToken };
+      socket!.connect();
+    } catch {
+      // session expired — leave disconnected
+    }
+  });
 
   return socket;
 }

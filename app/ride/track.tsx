@@ -523,7 +523,17 @@ export default function Track() {
       setMyCarLoc(null);
       demoPhaseRef.current = "searching";
 
-      const connectedSocket = getConnectedSocket();
+      // Wait for the socket to become available (it may still be connecting or
+      // reconnecting after a token refresh). Never show a fake driver — keep
+      // searching until a real driver accepts.
+      let connectedSocket = getConnectedSocket();
+      const socketDeadline = Date.now() + 45000;
+      while (!connectedSocket && Date.now() < socketDeadline && !demoCancelledRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        connectedSocket = getConnectedSocket();
+      }
+      if (demoCancelledRef.current) return;
+
       if (connectedSocket) {
         // Wait up to 60s for the real ride:accepted event, then proceed with
         // the demo simulation (route fetching, animation).
@@ -538,11 +548,13 @@ export default function Track() {
         // Driver info was already set by the socket handler — skip the fake
         // driver setup below and go straight to route fetching.
       } else {
-        // No real socket — this means the server is unreachable or the user
-        // is offline. Wait for a real driver by keeping the "searching" state
-        // indefinitely. The socket effect below will emit a ride request and
-        // eventually land a real driver when the connection is restored.
-        await new Promise(() => {}); // never resolves — stays searching
+        // No socket could connect — keep searching. The socket effect will
+        // emit a ride request and eventually land a real driver when the
+        // connection is restored.
+        while (!demoCancelledRef.current) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        return;
       }
 
       // A driver has been found (demo) — charge the rider's card now.
