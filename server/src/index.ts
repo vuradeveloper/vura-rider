@@ -59,10 +59,11 @@ app.use(express.urlencoded({ extended: true }));
 // Logging
 app.use(morgan(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
 
-// Rate limiting
+// Rate limiting — generous limits so the driver's polling (every 15s) and
+// socket polling-transport don't 429 the client.
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "100", 10),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "300", 10),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later" },
