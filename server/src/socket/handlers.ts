@@ -527,9 +527,18 @@ export function setupSocketHandlers(io: SocketIOServer) {
         );
         if (!ride) return;
         await execute(
-          "UPDATE rides SET status = 'completed', completed_at = NOW() WHERE id = $1",
-          [rideId]
+          "UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2",
+          [ride.fare, rideId]
         );
+        // Record the driver's earnings so the wallet / pending-earnings
+        // endpoint shows the real amount the driver earned from this ride.
+        try {
+          await execute(
+            `INSERT INTO driver_earnings (driver_id, ride_id, gross_amount, fee, net_amount)
+             VALUES ($1, $2, $3, 0, $3)`,
+            [dbUserId, rideId, ride.fare || 0]
+          );
+        } catch {}
         io.to(`ride:${rideId}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
       } catch (err: any) { console.error("Driver complete error:", err); }
     });
