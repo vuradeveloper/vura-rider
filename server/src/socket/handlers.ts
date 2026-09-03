@@ -1,7 +1,16 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { getAuth } from "../config/firebase";
 import { query, queryOne, execute } from "../config/database";
-import { refundTransaction } from "../services/paystackPayment";
+import { refundTransaction, preauthorizeRideCard, getDefaultCardToken } from "../services/paystackPayment";
+import { sendPushToUser } from "../services/push";
+
+// Push a ride milestone to a user's registered devices. firebaseUid is the
+// riders/driver Firebase account id (stored on users.firebase_uid).
+function notifyUser(firebaseUid: string | null | undefined, title: string, body: string, data?: Record<string, unknown>) {
+  if (!firebaseUid) return;
+  Promise.resolve(sendPushToUser(firebaseUid, { title, body, data }))
+    .catch((err) => console.warn("push:", err?.message));
+}
 
 interface AuthSocket extends Socket {
   userId?: string;
@@ -106,6 +115,42 @@ export function setupSocketHandlers(io: SocketIOServer) {
           throw new Error("Passenger account not synced with database yet. Try again in a moment.");
         }
 
+        // ── Pre-booking funds check ──
+        // Before ANY driver is notified, verify the rider can cover the fare with
+        // their default saved card. On decline we abort booking entirely and the
+        // ride row is NOT created, so drivers are NEVER told about a rider that
+        // cannot pay.
+        if (paymentMethod === "card" && fare != null) {
+          const amountRands = Number(fare);
+          if (amountRands > 0) {
+            const card = await getDefaultCardToken(dbUserId);
+            if (!card) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason: "no_payment_method",
+                message: "Add a payment card before booking so we can verify you can pay.",
+              });
+              return;
+            }
+            const rider = await queryOne<{ email: string }>(
+              "SELECT email FROM users WHERE id = $1", [dbUserId]
+            ).catch(() => null);
+            const pre = await preauthorizeRideCard({
+              amountRands: amountRands,
+              email: rider?.email || "rider@vura.com",
+              authorizationCode: card.transaction_index,
+            });
+            if (!pre.ok) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason: pre.reason || "declined",
+                message: pre.message || "Add another card or top up first.",
+              });
+              return;
+            }
+          }
+        }
+
         // ── Card payment check ──
         // The rider books with "card" but the charge happens later, when the
         // driver arrives at pickup. So we no longer require a completed payment
@@ -199,6 +244,22 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         // Tell the rider instantly — no waiting on the refund API.
         io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
+
+        // Also broadcast to every online driver so pending Accept/Decline
+        // cards for this ride disappear immediately (drivers not yet joined
+        // to the ride room still see the request card).
+        io.to("drivers").emit("ride:cancelled", { rideId, reason });
+
+        // Push "ride cancelled" to the assigned driver (and any driver watching).
+        (async () => {
+          const drv = await queryOne<{ firebase_uid: string }>(
+            "SELECT u.firebase_uid FROM rides r LEFT JOIN users u ON u.id = r.driver_id WHERE r.id = $1",
+            [rideId]
+          ).catch(() => null);
+          if (drv?.firebase_uid) {
+            notifyUser(drv.firebase_uid, "Ride cancelled", "The rider cancelled this ride.", { ride_id: rideId });
+          }
+        })();
 
         // ── Auto-refund (async, non-blocking) ──
         // If the rider cancels, refund the card payment taken at pickup. This
@@ -477,6 +538,18 @@ export function setupSocketHandlers(io: SocketIOServer) {
           driver_license_plate: driver?.license_plate,
           fare: ride?.estimated_fare ?? null,
         });
+        // Push "driver found" to the rider's devices.
+        (async () => {
+          const passenger = await queryOne<{ firebase_uid: string }>(
+            "SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]
+          ).catch(() => null);
+          notifyUser(
+            passenger?.firebase_uid,
+            "Driver found",
+            `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`,
+            { ride_id: rideId }
+          );
+        })();
         socket.emit("ride:accepted:ack", { success: true, rideId });
         // A ride was taken — refresh the rider-request count for drivers.
         await broadcastRiderQueue();
@@ -496,6 +569,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
         if (!ride) return;
         await execute("UPDATE rides SET status = 'driver_arrived' WHERE id = $1", [rideId]);
         io.to(`ride:${rideId}`).emit("ride:driver:arrived");
+        // Push "driver arrived" to the rider.
+        (async () => {
+          const p = await queryOne<{ firebase_uid: string }>(
+            "SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]
+          ).catch(() => null);
+          notifyUser(p?.firebase_uid, "Driver arrived", "Your driver has arrived at the pickup point.", { ride_id: rideId });
+        })();
       } catch (err: any) { console.error("Driver start error:", err); }
     });
 
@@ -540,6 +620,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
           );
         } catch {}
         io.to(`ride:${rideId}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
+        // Push "arrived at destination" to the rider.
+        (async () => {
+          const p = await queryOne<{ firebase_uid: string }>(
+            "SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]
+          ).catch(() => null);
+          notifyUser(p?.firebase_uid, "Ride complete", "You've arrived at your destination. Thanks for riding with Vura!", { ride_id: rideId });
+        })();
       } catch (err: any) { console.error("Driver complete error:", err); }
     });
 

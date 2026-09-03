@@ -761,7 +761,7 @@ export default function Track() {
               status: "searching",
             } as any);
           } else {
-            setError(data.reason || "Could not request ride");
+            setError(data.message || data.reason || "Could not request ride");
           }
         });
 

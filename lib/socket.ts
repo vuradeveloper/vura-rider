@@ -10,6 +10,7 @@ export interface ServerToClientEvents {
     success: boolean;
     rideId?: string;
     reason?: string;
+    message?: string;
   }) => void;
   "ride:no:drivers": () => void;
   "ride:expired": () => void;
