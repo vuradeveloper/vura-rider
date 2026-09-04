@@ -4,6 +4,15 @@ exports.setupSocketHandlers = setupSocketHandlers;
 const firebase_1 = require("../config/firebase");
 const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
+const push_1 = require("../services/push");
+// Push a ride milestone to a user's registered devices. firebaseUid is the
+// riders/driver Firebase account id (stored on users.firebase_uid).
+function notifyUser(firebaseUid, title, body, data) {
+    if (!firebaseUid)
+        return;
+    Promise.resolve((0, push_1.sendPushToUser)(firebaseUid, { title, body, data }))
+        .catch((err) => console.warn("push:", err?.message));
+}
 function setupSocketHandlers(io) {
     // Auth middleware
     io.use(async (socket, next) => {
@@ -66,7 +75,7 @@ function setupSocketHandlers(io) {
         // ── Passenger: request ride ──
         socket.on("passenger:ride:request", async (data) => {
             try {
-                const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference } = data;
+                const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare } = data;
                 let dbUserId = await getDbUserId();
                 if (!dbUserId) {
                     // For testing and race condition safety, use the first available passenger or auto-insert a placeholder
@@ -81,6 +90,39 @@ function setupSocketHandlers(io) {
                 }
                 if (!dbUserId) {
                     throw new Error("Passenger account not synced with database yet. Try again in a moment.");
+                }
+                // ── Pre-booking funds check ──
+                // Before ANY driver is notified, verify the rider can cover the fare with
+                // their default saved card. On decline we abort booking entirely and the
+                // ride row is NOT created, so drivers are NEVER told about a rider that
+                // cannot pay.
+                if (paymentMethod === "card" && fare != null) {
+                    const amountRands = Number(fare);
+                    if (amountRands > 0) {
+                        const card = await (0, paystackPayment_1.getDefaultCardToken)(dbUserId);
+                        if (!card) {
+                            socket.emit("ride:requested:ack", {
+                                success: false,
+                                reason: "no_payment_method",
+                                message: "Add a payment card before booking so we can verify you can pay.",
+                            });
+                            return;
+                        }
+                        const rider = await (0, database_1.queryOne)("SELECT email FROM users WHERE id = $1", [dbUserId]).catch(() => null);
+                        const pre = await (0, paystackPayment_1.preauthorizeRideCard)({
+                            amountRands: amountRands,
+                            email: rider?.email || "rider@vura.com",
+                            authorizationCode: card.transaction_index,
+                        });
+                        if (!pre.ok) {
+                            socket.emit("ride:requested:ack", {
+                                success: false,
+                                reason: pre.reason || "declined",
+                                message: pre.message || "Add another card or top up first.",
+                            });
+                            return;
+                        }
+                    }
                 }
                 // ── Card payment check ──
                 // The rider books with "card" but the charge happens later, when the
@@ -98,9 +140,9 @@ function setupSocketHandlers(io) {
                         return;
                     }
                 }
-                const ride = await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching')
-           RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng]);
+                const ride = await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8)
+           RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null]);
                 // Link the successful payment to this ride so it can be refunded on cancel.
                 if (paymentReference) {
                     await (0, database_1.execute)("UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2", [ride?.id, paymentReference]).catch(() => { });
@@ -108,29 +150,35 @@ function setupSocketHandlers(io) {
                 socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
                 if (ride)
                     socket.join(`ride:${ride.id}`);
-                // ── Notify a nearby driver about the new ride ──
-                // Find an online driver and emit ride:request so they can accept.
+                // ── Notify nearby drivers about the new ride ──
+                // Find all online drivers and emit ride:request to each one so the
+                // first to accept wins.
                 (async () => {
                     try {
-                        const driver = await (0, database_1.queryOne)(`SELECT u.id, u.firebase_uid FROM users u
+                        const drivers = await (0, database_1.query)(`SELECT u.id, u.firebase_uid FROM users u
                JOIN driver_profiles dp ON dp.user_id = u.id
-               WHERE u.role = 'driver' AND dp.is_online = true
-               ORDER BY dp.updated_at DESC LIMIT 1`);
-                        if (driver?.firebase_uid) {
-                            io.to(`user:${driver.firebase_uid}`).emit("ride:request", {
-                                id: ride?.id,
-                                pickupAddress,
-                                pickupLat,
-                                pickupLng,
-                                destinationAddress,
-                                destinationLat,
-                                destinationLng,
-                                fare: 0,
-                                paymentMethod: paymentMethod || "cash",
-                                riderName: "Rider",
-                                riderRating: 5,
-                            });
+               WHERE u.role = 'driver' AND dp.is_online = true`);
+                        const payload = {
+                            id: ride?.id,
+                            pickupAddress,
+                            pickupLat,
+                            pickupLng,
+                            destinationAddress,
+                            destinationLat,
+                            destinationLng,
+                            fare: fare != null ? Number(fare) : 0,
+                            paymentMethod: paymentMethod || "cash",
+                            riderName: "Rider",
+                            riderRating: 5,
+                        };
+                        for (const driver of drivers || []) {
+                            if (driver?.firebase_uid) {
+                                io.to(`user:${driver.firebase_uid}`).emit("ride:request", payload);
+                            }
                         }
+                        // Fallback: broadcast to the drivers room so any online driver
+                        // socket that is connected but missed the direct emit still gets it.
+                        io.to("drivers").emit("ride:request", payload);
                     }
                     catch (e) {
                         console.warn("Failed to notify driver:", e);
@@ -151,6 +199,17 @@ function setupSocketHandlers(io) {
                 await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3", [socket.userId, reason, rideId]);
                 // Tell the rider instantly — no waiting on the refund API.
                 io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
+                // Also broadcast to every online driver so pending Accept/Decline
+                // cards for this ride disappear immediately (drivers not yet joined
+                // to the ride room still see the request card).
+                io.to("drivers").emit("ride:cancelled", { rideId, reason });
+                // Push "ride cancelled" to the assigned driver (and any driver watching).
+                (async () => {
+                    const drv = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r LEFT JOIN users u ON u.id = r.driver_id WHERE r.id = $1", [rideId]).catch(() => null);
+                    if (drv?.firebase_uid) {
+                        notifyUser(drv.firebase_uid, "Ride cancelled", "The rider cancelled this ride.", { ride_id: rideId });
+                    }
+                })();
                 // ── Auto-refund (async, non-blocking) ──
                 // If the rider cancels, refund the card payment taken at pickup. This
                 // runs in the background so the cancel is instant for the rider.
@@ -344,9 +403,10 @@ function setupSocketHandlers(io) {
                 if (!dbUserId)
                     return;
                 // Auto-create driver_profiles if missing (first time going online).
-                const existing = await (0, database_1.queryOne)("SELECT id FROM driver_profiles WHERE user_id = $1", [dbUserId]).catch(() => null);
+                const existing = await (0, database_1.queryOne)("SELECT id, verification_status FROM driver_profiles WHERE user_id = $1", [dbUserId]).catch(() => null);
                 if (!existing) {
-                    await (0, database_1.execute)(`INSERT INTO driver_profiles (user_id, is_online) VALUES ($1, $2)`, [dbUserId, online === true]);
+                    await (0, database_1.execute)(`INSERT INTO driver_profiles (user_id, is_online, verification_status)
+             VALUES ($1, $2, 'approved')`, [dbUserId, online === true]);
                 }
                 else {
                     await (0, database_1.execute)(`UPDATE driver_profiles SET is_online = $1, updated_at = NOW() WHERE user_id = $2`, [online === true, dbUserId]);
@@ -371,7 +431,7 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status FROM rides WHERE id = $1 AND status = 'searching'", [rideId]);
+                const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status, estimated_fare FROM rides WHERE id = $1 AND status = 'searching'", [rideId]);
                 if (!ride) {
                     socket.emit("ride:accepted:ack", { success: false, error: "Ride no longer available" });
                     return;
@@ -387,7 +447,13 @@ function setupSocketHandlers(io) {
                     vehicle_make: driver?.vehicle_make,
                     vehicle_model: driver?.vehicle_model,
                     driver_license_plate: driver?.license_plate,
+                    fare: ride?.estimated_fare ?? null,
                 });
+                // Push "driver found" to the rider's devices.
+                (async () => {
+                    const passenger = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null);
+                    notifyUser(passenger?.firebase_uid, "Driver found", `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`, { ride_id: rideId });
+                })();
                 socket.emit("ride:accepted:ack", { success: true, rideId });
                 // A ride was taken — refresh the rider-request count for drivers.
                 await broadcastRiderQueue();
@@ -408,6 +474,11 @@ function setupSocketHandlers(io) {
                     return;
                 await (0, database_1.execute)("UPDATE rides SET status = 'driver_arrived' WHERE id = $1", [rideId]);
                 io.to(`ride:${rideId}`).emit("ride:driver:arrived");
+                // Push "driver arrived" to the rider.
+                (async () => {
+                    const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
+                    notifyUser(p?.firebase_uid, "Driver arrived", "Your driver has arrived at the pickup point.", { ride_id: rideId });
+                })();
             }
             catch (err) {
                 console.error("Driver start error:", err);
@@ -437,11 +508,23 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                const ride = await (0, database_1.queryOne)("SELECT id, driver_id, fare FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
+                const ride = await (0, database_1.queryOne)("SELECT id, driver_id, COALESCE(actual_fare, estimated_fare) AS fare FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
                 if (!ride)
                     return;
-                await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW() WHERE id = $1", [rideId]);
+                await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2", [ride.fare, rideId]);
+                // Record the driver's earnings so the wallet / pending-earnings
+                // endpoint shows the real amount the driver earned from this ride.
+                try {
+                    await (0, database_1.execute)(`INSERT INTO driver_earnings (driver_id, ride_id, gross_amount, fee, net_amount)
+             VALUES ($1, $2, $3, 0, $3)`, [dbUserId, rideId, ride.fare || 0]);
+                }
+                catch { }
                 io.to(`ride:${rideId}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
+                // Push "arrived at destination" to the rider.
+                (async () => {
+                    const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
+                    notifyUser(p?.firebase_uid, "Ride complete", "You've arrived at your destination. Thanks for riding with Vura!", { ride_id: rideId });
+                })();
             }
             catch (err) {
                 console.error("Driver complete error:", err);

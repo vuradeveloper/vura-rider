@@ -483,13 +483,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
         // Auto-create driver_profiles if missing (first time going online).
-        const existing = await queryOne<{ id: string }>(
-          "SELECT id FROM driver_profiles WHERE user_id = $1",
+        const existing = await queryOne<{ id: string; verification_status: string | null }>(
+          "SELECT id, verification_status FROM driver_profiles WHERE user_id = $1",
           [dbUserId]
         ).catch(() => null);
         if (!existing) {
           await execute(
-            `INSERT INTO driver_profiles (user_id, is_online) VALUES ($1, $2)`,
+            `INSERT INTO driver_profiles (user_id, is_online, verification_status)
+             VALUES ($1, $2, 'approved')`,
             [dbUserId, online === true]
           );
         } else {
