@@ -115,39 +115,31 @@ export function setupSocketHandlers(io: SocketIOServer) {
           throw new Error("Passenger account not synced with database yet. Try again in a moment.");
         }
 
-        // ── Pre-booking funds check ──
-        // Before ANY driver is notified, verify the rider can cover the fare with
-        // their default saved card. On decline we abort booking entirely and the
-        // ride row is NOT created, so drivers are NEVER told about a rider that
-        // cannot pay.
+        // ── Pre-booking payment (best-effort, non-blocking) ──
+        // Ride creation is NEVER blocked by payment so riders can always find
+        // a driver. If they have a saved card we pre-authorize it as a safety
+        // check; if the check fails (no card, decline) we still create the
+        // ride — the real charge happens at pickup. This guarantees drivers
+        // always see booking requests.
         if (paymentMethod === "card" && fare != null) {
           const amountRands = Number(fare);
           if (amountRands > 0) {
-            const card = await getDefaultCardToken(dbUserId);
-            if (!card) {
-              socket.emit("ride:requested:ack", {
-                success: false,
-                reason: "no_payment_method",
-                message: "Add a payment card before booking so we can verify you can pay.",
-              });
-              return;
+            try {
+              const card = await getDefaultCardToken(dbUserId);
+              if (card) {
+                const rider = await queryOne<{ email: string }>(
+                  "SELECT email FROM users WHERE id = $1", [dbUserId]
+                ).catch(() => null);
+                await preauthorizeRideCard({
+                  amountRands: amountRands,
+                  email: rider?.email || "rider@vura.com",
+                  authorizationCode: card.transaction_index,
+                }).catch(() => {});
+              }
+            } catch (e) {
+              console.warn("Pre-booking card check skipped (non-blocking):", (e as Error)?.message);
             }
-            const rider = await queryOne<{ email: string }>(
-              "SELECT email FROM users WHERE id = $1", [dbUserId]
-            ).catch(() => null);
-            const pre = await preauthorizeRideCard({
-              amountRands: amountRands,
-              email: rider?.email || "rider@vura.com",
-              authorizationCode: card.transaction_index,
-            });
-            if (!pre.ok) {
-              socket.emit("ride:requested:ack", {
-                success: false,
-                reason: pre.reason || "declined",
-                message: pre.message || "Add another card or top up first.",
-              });
-              return;
-            }
+            // IMPORTANT: never abort ride creation here.
           }
         }
 
