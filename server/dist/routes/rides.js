@@ -93,14 +93,18 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
     }
 });
 // GET /api/rides/available — Rides still searching for a driver (driver-side poll)
-router.get("/available", auth_1.requireAuth, async (req, res) => {
+router.get("/available", auth_1.requireAuth, async (_req, res) => {
     try {
+        // Newest first so a fresh booking is NEVER hidden behind old stale
+        // "searching" rides that nobody accepted. Only show rides younger than
+        // 30 minutes so abandoned/stuck requests drop out automatically.
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
        WHERE r.status = 'searching'
-       ORDER BY r.created_at ASC
+         AND r.created_at > NOW() - INTERVAL '30 minutes'
+       ORDER BY r.created_at DESC
        LIMIT 20`);
         res.json({ rides: (rows || []).map((row) => mapRide(row)) });
     }
