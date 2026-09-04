@@ -1,0 +1,52 @@
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\config\database.js:32:20)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\services\SchedulingService.js:18:17) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\config\database.js:32:20)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\services\SchedulingService.js:18:17) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\config\database.js:32:20)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\services\SchedulingService.js:18:17) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}
+[Scheduler] Failed to process due scheduled rides: Error: Connection terminated due to connection timeout
+    at C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async query (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\config\database.js:32:20)
+    at async processDueScheduledRides (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\dist\services\SchedulingService.js:18:17) {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\client.js:199:73)
+      at Object.onceWrapper (node:events:622:28)
+      at Connection.emit (node:events:508:28)
+      at Socket.<anonymous> (C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\server\node_modules\pg\lib\connection.js:63:12)
+      at Socket.emit (node:events:508:28)
+      at TCP.<anonymous> (node:net:346:12)
+}

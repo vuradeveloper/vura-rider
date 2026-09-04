@@ -42,8 +42,19 @@ router.get("/", auth_1.requireAuth, async (req, res) => {
               COALESCE(SUM(actual_fare - COALESCE(platform_fee, 0)), 0)::float AS net
        FROM rides WHERE driver_id = $1 AND status = 'completed' AND created_at >= ${dateFilter}
        GROUP BY DATE(created_at) ORDER BY date DESC`, [user.id]);
+        let lastWeekNet = null;
+        if (period === "week") {
+            const lastWeek = await (0, database_1.queryOne)(`SELECT COALESCE(SUM(actual_fare - COALESCE(platform_fee, 0)), 0)::float AS net
+         FROM rides WHERE driver_id = $1 AND status = 'completed'
+         AND created_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
+         AND created_at < DATE_TRUNC('week', CURRENT_DATE)`, [user.id]);
+            lastWeekNet = lastWeek?.net ?? null;
+        }
         res.json({
-            totals: totals || { rides: 0, gross: 0, fee: 0, net: 0 },
+            totals: {
+                ...(totals || { rides: 0, gross: 0, fee: 0, net: 0 }),
+                lastWeekNet,
+            },
             breakdown: breakdown || [],
         });
     }

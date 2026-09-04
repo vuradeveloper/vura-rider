@@ -1,6 +1,6 @@
-import { Router, Response } from "express";
+import { Response, Router } from "express";
+import { execute, query, queryOne } from "../config/database";
 import { AuthRequest, requireAuth } from "../middleware/auth";
-import { execute } from "../config/database";
 
 const router = Router();
 
@@ -47,6 +47,49 @@ router.post("/register", requireAuth, async (req: AuthRequest, res: Response) =>
       console.error("Push token error:", err);
       res.status(500).json({ error: err.message });
     }
+  }
+});
+
+// GET /api/notifications/history — Ride-activity notifications for the user's
+// in-app notification center (both riders and drivers). Sources are the user's rides.
+router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) { res.json({ notifications: [] }); return; }
+    const rows = await query<any>(
+      `SELECT r.id, r.status, r.pickup_address, r.destination_address, r.estimated_fare, r.actual_fare, r.created_at,
+              u.full_name AS driver_name
+       FROM rides r
+       LEFT JOIN users u ON u.id = r.driver_id
+       WHERE r.passenger_id = $1 OR r.driver_id = $1
+       ORDER BY r.created_at DESC
+       LIMIT 50`,
+      [user.id]
+    ).catch(() => []);
+    const labels: Record<string, string> = {
+      searching: "Searching for your driver",
+      accepted: "Driver found",
+      driver_arrived: "Driver arrived",
+      in_progress: "Ride in progress",
+      completed: "Ride completed",
+      cancelled: "Ride cancelled",
+      expired: "Ride expired",
+    };
+    const notifications = (rows || []).map((r: any) => ({
+      id: r.id,
+      type: r.status,
+      title: labels[r.status] || r.status.replace(/_/g, " "),
+      body: `${r.pickup_address || "Pickup"} to ${r.destination_address || "Destination"}` + (r.driver_name ? ` · ${r.driver_name}` : ""),
+      rideId: r.id,
+      createdAt: r.created_at,
+    }));
+    res.json({ notifications });
+  } catch (err: any) {
+    console.error("Notifications history error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 

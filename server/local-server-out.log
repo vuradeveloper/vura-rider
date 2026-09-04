@@ -1,0 +1,13 @@
+╔═══════════════════════════════════════╗
+║       Vura Rider Backend Server       ║
+╚═══════════════════════════════════════╝
+✓ PostgreSQL connected successfully (394ms)
+✓ Schema bootstrapped
+✓ Schema up to date
+✓ Firebase Admin SDK initialized
+✓ Server running on http://localhost:3000
+✓ Allowed origins: http://localhost:19006, http://localhost:8081, http://localhost:8082
+✓ Environment: development
+[0mGET /health [32m200[0m 46.300 ms - 54[0m
+[0mPOST /api/payments/methods [33m401[0m 6.798 ms - 51[0m
+[0mPOST /api/payments/methods [33m401[0m 1.132 ms - 51[0m

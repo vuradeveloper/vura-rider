@@ -207,6 +207,10 @@ router.post("/initiate", auth_1.requireAuth, async (req, res) => {
             });
             await (0, database_1.execute)(`UPDATE payments SET status = $1, raw_response = $2, updated_at = NOW()
          WHERE reference = $3`, [charge.success ? "completed" : "failed", JSON.stringify(charge), reference]).catch(() => { });
+            // Record the charged fare on the ride so drivers see the correct earnings.
+            if (charge.success && rideId) {
+                await (0, database_1.execute)(`UPDATE rides SET estimated_fare = $1, actual_fare = $1, payment_status = 'paid', payment_method = 'card', updated_at = NOW() WHERE id = $2`, [amount, rideId]).catch(() => { });
+            }
             res.json({
                 reference,
                 live: (0, paystackPayment_1.paymentsMode)() === "live",

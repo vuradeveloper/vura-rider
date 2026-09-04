@@ -68,11 +68,17 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              rat.score AS rating_score, rat.comment AS rating_comment
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+       LEFT JOIN LATERAL (
+         SELECT score, comment FROM ratings
+         WHERE ride_id = r.id AND driver_id = r.driver_id
+         LIMIT 1
+       ) rat ON true
        WHERE r.passenger_id = $1 OR r.driver_id = $1
        ORDER BY r.created_at DESC
        LIMIT $2 OFFSET $3`, [user.id, limit, offset]);
@@ -83,6 +89,23 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
     }
     catch (err) {
         console.error("Ride history error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// GET /api/rides/available — Rides still searching for a driver (driver-side poll)
+router.get("/available", auth_1.requireAuth, async (req, res) => {
+    try {
+        const rows = await (0, database_1.query)(`SELECT r.*,
+              u.full_name AS passenger_name, u.phone AS passenger_phone
+       FROM rides r
+       LEFT JOIN users u ON u.id = r.passenger_id
+       WHERE r.status = 'searching'
+       ORDER BY r.created_at ASC
+       LIMIT 20`);
+        res.json({ rides: (rows || []).map((row) => mapRide(row)) });
+    }
+    catch (err) {
+        console.error("Available rides error:", err);
         res.status(500).json({ error: err.message });
     }
 });

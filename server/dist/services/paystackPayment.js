@@ -26,6 +26,39 @@
 //   PAYSTACK_CALLBACK_URL = redirect-back URL on this server, e.g.
 //                           https://ridevura.com/api/payments/return
 // ─────────────────────────────────────────────────────────────────────────────
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.paymentsMode = paymentsMode;
 exports.paystackConfig = paystackConfig;
@@ -33,6 +66,10 @@ exports.isPaystackConfigured = isPaystackConfigured;
 exports.initializeTransaction = initializeTransaction;
 exports.verifyTransaction = verifyTransaction;
 exports.chargeAuthorization = chargeAuthorization;
+exports.preauthorizeRideCard = preauthorizeRideCard;
+exports.getDefaultCardToken = getDefaultCardToken;
+exports.createTransferRecipient = createTransferRecipient;
+exports.transferFunds = transferFunds;
 exports.refundTransaction = refundTransaction;
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
 function paymentsMode() {
@@ -187,6 +224,147 @@ async function chargeAuthorization(input) {
         status,
         message: tx?.gateway_response || data?.message,
         amountChargedRands: tx?.amount ? tx.amount / 100 : input.amountRands,
+    };
+}
+/**
+ * Pre-authorizes/verifies that a rider's saved card can cover a ride BEFORE a
+ * driver is notified. It runs a full-fare charge against the tokenised card
+ * and immediately refunds it, returning success only if Paystack approved the
+ * amount. This is the "does the rider have enough balance / can they pay"
+ * gate that runs at ride request time — on decline the ride is NOT created and
+ * NO driver is notified.
+ *
+ * Returns:
+ *   { ok: true,  chargeReference, amountRands }   — card can cover the fare
+ *   { ok: false, reason: 'no_card' | 'declined' | 'error', message } — block booking
+ */
+async function preauthorizeRideCard(input) {
+    if (paymentsMode() === "mock") {
+        return { ok: true, message: "Mock pre-authorization approved", amountRands: input.amountRands };
+    }
+    if (!isPaystackConfigured()) {
+        return { ok: false, reason: "error", message: "Paystack is not configured." };
+    }
+    const reference = `VURAPRE${Date.now().toString(36).toUpperCase()}` +
+        `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    let charge;
+    try {
+        charge = await chargeAuthorization({
+            amountRands: input.amountRands,
+            reference,
+            email: input.email,
+            authorizationCode: input.authorizationCode,
+        });
+    }
+    catch (err) {
+        return { ok: false, reason: "error", message: err.message || "Could not verify your card." };
+    }
+    if (!charge.success) {
+        const msg = String(charge.message || "").toLowerCase();
+        if (msg.includes("fraud") || msg.includes("declined")) {
+            return {
+                ok: false,
+                reason: "declined",
+                message: "Your card was declined. Please add another card or top up before booking.",
+            };
+        }
+        if (msg.includes("insufficient")) {
+            return {
+                ok: false,
+                reason: "declined",
+                message: "Your card has insufficient funds for this ride. Add another card or top up first.",
+            };
+        }
+        return {
+            ok: false,
+            reason: "declined",
+            message: `Card payment was declined. ${charge.message || ""}`.trim(),
+        };
+    }
+    // Card can cover the fare — refund it immediately so the rider is not
+    // actually charged for the pre-check. The real charge happens at pickup.
+    try {
+        await refundTransaction(reference, input.amountRands);
+    }
+    catch (e) {
+        console.warn("Pre-authorization refund failed (auto-refund may lag a few days):", e);
+    }
+    return { ok: true, chargeReference: reference, amountRands: input.amountRands };
+}
+/**
+ * Resolves the user's default saved Paystack card token (authorization_code).
+ * Returns null when the user has no tokenised card on file.
+ */
+async function getDefaultCardToken(userId) {
+    const { queryOne } = await Promise.resolve().then(() => __importStar(require("../config/database")));
+    return await queryOne(`SELECT transaction_index, last4 FROM saved_cards
+     WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC LIMIT 1`, [userId]).catch(() => null);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// Paystack Transfers (driver payouts) — bank-account transfers only. Paystack
+// cannot "pay a card"; Transfers go to a driver's bank account.
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Resolves a bank account number/name via Paystack Transfers and creates (or
+ * returns) a transfer recipient for repeated payouts.
+ */
+async function createTransferRecipient(input) {
+    if (paymentsMode() === "mock") {
+        return {
+            recipient_code: `RCP_MOCK_${input.accountNumber.slice(-6)}`,
+            account_name: input.name,
+            bank_name: "Mock Bank",
+        };
+    }
+    if (!isPaystackConfigured()) {
+        throw new Error("Paystack is not configured.");
+    }
+    // Resolve the account name first so we can display + confirm it to the driver.
+    const resolved = await paystackFetch(`/bank/resolve?account_number=${encodeURIComponent(input.accountNumber)}&bank_code=${encodeURIComponent(input.bankCode)}`);
+    const recipient = await paystackFetch("/transferrecipient", {
+        method: "POST",
+        body: JSON.stringify({
+            type: "nuban",
+            name: resolved?.data?.account_name || input.name,
+            account_number: input.accountNumber,
+            bank_code: input.bankCode,
+            currency: "ZAR",
+        }),
+    });
+    return {
+        recipient_code: recipient?.data?.recipient_code || "",
+        account_name: resolved?.data?.account_name || input.name,
+        bank_name: recipient?.data?.details?.bank_name,
+    };
+}
+/**
+ * Initiates a Paystack bank transfer (payout) of amountRands to a recipient.
+ */
+async function transferFunds(input) {
+    if (paymentsMode() === "mock") {
+        return { success: true, transferCode: `TRF_MOCK`, reference: input.reference };
+    }
+    if (!isPaystackConfigured()) {
+        throw new Error("Paystack is not configured.");
+    }
+    const data = await paystackFetch("/transfer", {
+        method: "POST",
+        body: JSON.stringify({
+            source: "balance",
+            reason: input.reason || "Vura driver payout",
+            amount: Math.round(input.amountRands * 100),
+            reference: input.reference,
+            recipient: input.recipientCode,
+            currency: "ZAR",
+        }),
+    });
+    const status = String(data?.data?.status || "").toLowerCase();
+    return {
+        success: status !== "failed" && status !== "pending",
+        transferCode: data?.data?.transfer_code,
+        reference: data?.data?.reference || input.reference,
+        message: data?.message,
+        ...(data?.data ? { bank_name: data.data.bank_type } : {}),
     };
 }
 /**

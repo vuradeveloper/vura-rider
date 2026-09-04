@@ -1,8 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
+const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 // POST /api/notifications/register — Register push token
 router.post("/register", auth_1.requireAuth, async (req, res) => {
@@ -46,6 +46,46 @@ router.post("/register", auth_1.requireAuth, async (req, res) => {
             console.error("Push token error:", err);
             res.status(500).json({ error: err.message });
         }
+    }
+});
+// GET /api/notifications/history — Ride-activity notifications for the user's
+// in-app notification center (both riders and drivers). Sources are the user's rides.
+router.get("/history", auth_1.requireAuth, async (req, res) => {
+    try {
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!user) {
+            res.json({ notifications: [] });
+            return;
+        }
+        const rows = await (0, database_1.query)(`SELECT r.id, r.status, r.pickup_address, r.destination_address, r.estimated_fare, r.actual_fare, r.created_at,
+              u.full_name AS driver_name
+       FROM rides r
+       LEFT JOIN users u ON u.id = r.driver_id
+       WHERE r.passenger_id = $1 OR r.driver_id = $1
+       ORDER BY r.created_at DESC
+       LIMIT 50`, [user.id]).catch(() => []);
+        const labels = {
+            searching: "Searching for your driver",
+            accepted: "Driver found",
+            driver_arrived: "Driver arrived",
+            in_progress: "Ride in progress",
+            completed: "Ride completed",
+            cancelled: "Ride cancelled",
+            expired: "Ride expired",
+        };
+        const notifications = (rows || []).map((r) => ({
+            id: r.id,
+            type: r.status,
+            title: labels[r.status] || r.status.replace(/_/g, " "),
+            body: `${r.pickup_address || "Pickup"} to ${r.destination_address || "Destination"}` + (r.driver_name ? ` · ${r.driver_name}` : ""),
+            rideId: r.id,
+            createdAt: r.created_at,
+        }));
+        res.json({ notifications });
+    }
+    catch (err) {
+        console.error("Notifications history error:", err);
+        res.status(500).json({ error: err.message });
     }
 });
 exports.default = router;

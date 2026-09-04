@@ -124,5 +124,26 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// GET /api/drivers/me — Current driver's verification status + profile summary.
+// Used to gate "Go Online" in the driver app until their docs are approved.
+router.get("/me", auth_1.requireAuth, async (req, res) => {
+    try {
+        const user = await (0, database_1.queryOne)("SELECT id, license_document_name, id_document_name FROM users WHERE firebase_uid = $1 AND role = 'driver'", [req.userId]);
+        if (!user) {
+            res.status(403).json({ error: "Driver profile not found" });
+            return;
+        }
+        const profile = await (0, database_1.queryOne)("SELECT vehicle_make, vehicle_model, vehicle_color, license_plate, is_online, verification_status FROM driver_profiles WHERE user_id = $1", [user.id]).catch(() => null);
+        res.json({
+            verification: profile?.verification_status || (user.license_document_name || user.id_document_name ? "approved" : "pending"),
+            hasDocuments: Boolean(user.license_document_name || user.id_document_name),
+            profile: profile || null,
+        });
+    }
+    catch (err) {
+        console.error("Driver me error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
 exports.default = router;
 //# sourceMappingURL=drivers.js.map

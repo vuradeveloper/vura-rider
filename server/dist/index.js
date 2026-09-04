@@ -62,7 +62,9 @@ const notifications_1 = __importDefault(require("./routes/notifications"));
 const affiliates_1 = __importDefault(require("./routes/affiliates"));
 const payLater_1 = __importDefault(require("./routes/payLater"));
 const route_1 = __importDefault(require("./routes/route"));
+const email_1 = __importDefault(require("./routes/email"));
 const share_1 = __importStar(require("./routes/share"));
+const payouts_1 = __importDefault(require("./routes/payouts"));
 const SchedulingService_1 = require("./services/SchedulingService");
 // ── Socket handlers ──
 const handlers_1 = require("./socket/handlers");
@@ -86,10 +88,11 @@ app.use(express_1.default.json({ limit: "10mb" }));
 app.use(express_1.default.urlencoded({ extended: true }));
 // Logging
 app.use((0, morgan_1.default)(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
-// Rate limiting
+// Rate limiting — generous limits so the driver's polling (every 15s) and
+// socket polling-transport don't 429 the client.
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10),
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "100", 10),
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "300", 10),
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Too many requests, please try again later" },
@@ -127,9 +130,11 @@ app.use("/api/disputes", disputes_1.default);
 app.use("/api/split", splitFare_1.default);
 app.use("/api/tips", tips_1.default);
 app.use("/api/notifications", notifications_1.default);
+app.use("/api/payouts", payouts_1.default);
 app.use("/api/affiliates", affiliates_1.default);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", share_1.default);
+app.use("/api/email", email_1.default);
 // ── Public share tracking page ──
 app.get("/share/:token", share_1.sharePage);
 // ── Socket.IO ──
@@ -306,6 +311,20 @@ async function start() {
         ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'x',
         ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE
+      `);
+            // Driver verification status — gates "Go Online" until docs are approved.
+            await (0, database_2.execute)(`
+        ALTER TABLE driver_profiles
+        ADD COLUMN IF NOT EXISTS verification_status VARCHAR(20) DEFAULT 'pending'
+      `);
+            // Backfill: drivers who already uploaded ID/license docs become approved.
+            await (0, database_2.execute)(`
+        UPDATE driver_profiles dp
+        SET verification_status = 'approved'
+        FROM users u
+        WHERE dp.user_id = u.id
+          AND COALESCE(u.license_document_name, u.id_document_name) IS NOT NULL
+          AND dp.verification_status = 'pending'
       `);
             await (0, database_2.execute)(`
         CREATE TABLE IF NOT EXISTS chat_messages (

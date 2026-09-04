@@ -296,6 +296,20 @@ async function start() {
         ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'x',
         ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE
       `);
+      // Driver verification status — gates "Go Online" until docs are approved.
+      await execute(`
+        ALTER TABLE driver_profiles
+        ADD COLUMN IF NOT EXISTS verification_status VARCHAR(20) DEFAULT 'pending'
+      `);
+      // Backfill: drivers who already uploaded ID/license docs become approved.
+      await execute(`
+        UPDATE driver_profiles dp
+        SET verification_status = 'approved'
+        FROM users u
+        WHERE dp.user_id = u.id
+          AND COALESCE(u.license_document_name, u.id_document_name) IS NOT NULL
+          AND dp.verification_status = 'pending'
+      `);
       await execute(`
         CREATE TABLE IF NOT EXISTS chat_messages (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

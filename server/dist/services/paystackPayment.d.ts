@@ -60,6 +60,64 @@ export declare function chargeAuthorization(input: PaystackChargeInput): Promise
     amountChargedRands?: number;
 }>;
 /**
+ * Pre-authorizes/verifies that a rider's saved card can cover a ride BEFORE a
+ * driver is notified. It runs a full-fare charge against the tokenised card
+ * and immediately refunds it, returning success only if Paystack approved the
+ * amount. This is the "does the rider have enough balance / can they pay"
+ * gate that runs at ride request time — on decline the ride is NOT created and
+ * NO driver is notified.
+ *
+ * Returns:
+ *   { ok: true,  chargeReference, amountRands }   — card can cover the fare
+ *   { ok: false, reason: 'no_card' | 'declined' | 'error', message } — block booking
+ */
+export declare function preauthorizeRideCard(input: {
+    amountRands: number;
+    email: string;
+    authorizationCode: string;
+}): Promise<{
+    ok: boolean;
+    reason?: "no_card" | "declined" | "error";
+    message?: string;
+    chargeReference?: string;
+    amountRands?: number;
+}>;
+/**
+ * Resolves the user's default saved Paystack card token (authorization_code).
+ * Returns null when the user has no tokenised card on file.
+ */
+export declare function getDefaultCardToken(userId: string): Promise<{
+    transaction_index: string;
+    last4: string;
+} | null>;
+/**
+ * Resolves a bank account number/name via Paystack Transfers and creates (or
+ * returns) a transfer recipient for repeated payouts.
+ */
+export declare function createTransferRecipient(input: {
+    bankCode: string;
+    accountNumber: string;
+    name: string;
+}): Promise<{
+    recipient_code: string;
+    account_name: string;
+    bank_name?: string;
+}>;
+/**
+ * Initiates a Paystack bank transfer (payout) of amountRands to a recipient.
+ */
+export declare function transferFunds(input: {
+    recipientCode: string;
+    amountRands: number;
+    reference: string;
+    reason?: string;
+}): Promise<{
+    success: boolean;
+    transferCode?: string;
+    reference?: string;
+    message?: string;
+}>;
+/**
  * Refunds a Paystack transaction. amountRands is optional — Paystack refunds
  * the full amount when omitted.
  */
