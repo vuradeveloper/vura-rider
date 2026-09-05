@@ -180,10 +180,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
         const ride = await queryOne<any>(
-          `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8)
+          `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9)
            RETURNING *`,
-          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null]
+          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null]
         );
 
         // Link the successful card charge to this ride so it can be refunded on cancel.
@@ -617,7 +617,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
         const ride = await queryOne<{ id: string; driver_id: string; fare: number }>(
-          "SELECT id, driver_id, COALESCE(actual_fare, estimated_fare) AS fare FROM rides WHERE id = $1 AND driver_id = $2",
+          "SELECT id, driver_id, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2",
           [rideId, dbUserId]
         );
         if (!ride) return;

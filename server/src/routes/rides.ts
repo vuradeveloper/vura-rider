@@ -165,8 +165,9 @@ router.get("/:id/receipt", requireAuth, async (req: AuthRequest, res: Response) 
     const ride = await queryOne<any>(
       `SELECT r.id, r.id AS ride_id, r.pickup_address, r.destination_address,
               r.distance_km, r.duration_mins,
-              COALESCE(r.actual_fare, r.estimated_fare) AS fare,
+              COALESCE(NULLIF(r.actual_fare, 0), NULLIF(r.estimated_fare, 0), 0) AS fare,
               r.platform_fee AS ride_request_fee,
+              r.payment_method, r.payment_status,
               r.created_at, r.completed_at,
               d.full_name AS driver_name, d.phone AS driver_phone,
               dp.vehicle_make, dp.vehicle_model, dp.license_plate,
@@ -329,7 +330,10 @@ router.patch("/:id/status", requireAuth, async (req: AuthRequest, res: Response)
 
     if (status === "completed") {
       updates.push("completed_at = NOW()");
-      updates.push("actual_fare = COALESCE(estimated_fare, 0.20)");
+      // Never let a completed ride fall to R0. If the fare is 0/missing use
+      // the estimated fare; if that is also missing, default to the app's
+      // minimum demo fare (R0.20).
+      updates.push("actual_fare = GREATEST(COALESCE(NULLIF(estimated_fare, 0), 0.20), COALESCE(actual_fare, 0))");
     }
 
     await execute(

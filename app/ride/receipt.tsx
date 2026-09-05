@@ -12,7 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { getRideReceipt } from "@/services/RideService";
-import { submitTip, getTipSuggestions } from "@/services/TipService";
+import { submitTip, getTipSuggestions, getSavedCards } from "@/services/TipService";
 import { formatCurrency } from "@/lib/utils";
 import type { RideReceipt } from "@/lib/types";
 
@@ -26,6 +26,11 @@ export default function ReceiptScreen() {
   const [tipAmount, setTipAmount] = useState<number | null>(null);
   const [customTip, setCustomTip] = useState("");
   const [submittingTip, setSubmittingTip] = useState(false);
+  // Saved cards for tipping — shown only when the ride was paid in cash so the
+  // rider can pick which card the tip is charged to. For card-paid rides the
+  // same card is auto-used.
+  const [cards, setCards] = useState<Array<{ id: string; card_type?: string; last4?: string; is_default?: boolean }>>([]);
+  const [tipCardId, setTipCardId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!rideId) return;
@@ -33,6 +38,15 @@ export default function ReceiptScreen() {
       try {
         const { receipt: data } = await getRideReceipt(rideId);
         setReceipt(data);
+        // If the ride was paid by card, that card is used for tips automatically.
+        // Otherwise fetch the rider's cards so they can pick one to tip with.
+        if (data?.payment_method === "card") {
+          setTipCardId("__ride_card__");
+        } else {
+          const saved = await getSavedCards();
+          setCards(saved);
+          if (saved.length > 0) setTipCardId(saved[0].id);
+        }
       } catch (err: any) {
         setError(err.message || "Could not load receipt");
       } finally {
@@ -42,9 +56,29 @@ export default function ReceiptScreen() {
   }, [rideId]);
 
   async function handleTip(amount: number) {
+    if (!tipCardId || tipCardId === "__ride_card__") {
+      // For card-paid rides no selection is needed — the server auto-uses the
+      // rider's default (the same) card.
+      setSubmittingTip(true);
+      try {
+        await submitTip(rideId, amount);
+        setTipAmount(amount);
+        Alert.alert("Tip sent!", `Thank you! ${formatCurrency(amount)} tip has been sent to your driver.`);
+        setShowTip(false);
+      } catch (err: any) {
+        Alert.alert("Error", err.message || "Failed to send tip");
+      } finally {
+        setSubmittingTip(false);
+      }
+      return;
+    }
+    if (cards.length === 0) {
+      Alert.alert("No card", "Add a card first to tip your driver.");
+      return;
+    }
     setSubmittingTip(true);
     try {
-      await submitTip(rideId, amount);
+      await submitTip(rideId, amount, tipCardId);
       setTipAmount(amount);
       Alert.alert("Tip sent!", `Thank you! ${formatCurrency(amount)} tip has been sent to your driver.`);
       setShowTip(false);
@@ -251,6 +285,40 @@ export default function ReceiptScreen() {
                 <Text className="text-sm font-bold text-foreground mb-3">
                   Tip your driver
                 </Text>
+                {receipt.payment_method !== "card" && (
+                  <View className="mb-3">
+                    <Text className="text-xs font-bold text-muted-foreground mb-2">
+                      Pay tip with
+                    </Text>
+                    {cards.length === 0 ? (
+                      <View className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+                        <Text className="text-xs text-amber-800">
+                          No saved card yet. Add one in Account → Wallet to tip your driver.
+                        </Text>
+                      </View>
+                    ) : (
+                      <View className="gap-2">
+                        {cards.map((c) => (
+                          <TouchableOpacity
+                            key={c.id}
+                            onPress={() => setTipCardId(c.id)}
+                            className={`flex-row items-center justify-between rounded-xl border px-3 py-2.5 ${
+                              tipCardId === c.id ? "border-primary bg-primary/5" : "border-border bg-surface"
+                            }`}
+                          >
+                            <View className="flex-row items-center gap-2">
+                              <Ionicons name="card" size={16} color="#64748b" />
+                              <Text className="text-sm font-semibold text-foreground">
+                                •••• {c.last4}
+                              </Text>
+                            </View>
+                            <Text className="text-xs text-muted-foreground">{c.card_type || "card"}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                )}
                 <View className="flex-row flex-wrap gap-2 mb-3">
                   {tipSuggestions.map((opt) => (
                     <TouchableOpacity
