@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { getAuth } from "../config/firebase";
 import { query, queryOne, execute } from "../config/database";
-import { refundTransaction, preauthorizeRideCard, getDefaultCardToken } from "../services/paystackPayment";
+import { refundTransaction, chargeAuthorization, getDefaultCardToken } from "../services/paystackPayment";
 import { sendPushToUser } from "../services/push";
 
 // Push a ride milestone to a user's registered devices. firebaseUid is the
@@ -121,49 +121,64 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // check; if the check fails (no card, decline) we still create the
         // ride — the real charge happens at pickup. This guarantees drivers
         // always see booking requests.
+        let cardChargeRef: string | null = null;
         if (paymentMethod === "card" && fare != null) {
           const amountRands = Number(fare);
           if (amountRands > 0) {
-            try {
-              const card = await getDefaultCardToken(dbUserId);
-              if (card) {
-                const rider = await queryOne<{ email: string }>(
-                  "SELECT email FROM users WHERE id = $1", [dbUserId]
-                ).catch(() => null);
-                await preauthorizeRideCard({
-                  amountRands: amountRands,
-                  email: rider?.email || "rider@vura.com",
-                  authorizationCode: card.transaction_index,
-                }).catch(() => {});
-              }
-            } catch (e) {
-              console.warn("Pre-booking card check skipped (non-blocking):", (e as Error)?.message);
+            const card = await getDefaultCardToken(dbUserId);
+            if (!card) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason: "You need a saved card to book this ride. Please add a card before booking.",
+              });
+              return;
             }
-            // IMPORTANT: never abort ride creation here.
+            const rider = await queryOne<{ email: string }>(
+              "SELECT email FROM users WHERE id = $1", [dbUserId]
+            ).catch(() => null);
+            const reference =
+              `VURA${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+            let charge;
+            try {
+              charge = await chargeAuthorization({
+                amountRands,
+                reference,
+                email: rider?.email || "rider@vura.com",
+                authorizationCode: card.transaction_index,
+              });
+            } catch (err: any) {
+              charge = { success: false, message: err?.message || "Could not process your card." };
+            }
+            if (!charge?.success) {
+              const msg = String(charge?.message || "").toLowerCase();
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason: msg.includes("insufficient")
+                  ? "You do not have enough money on this card to cover the ride. Please top up or add another card."
+                  : `Your card payment was declined. ${charge?.message || ""}`.trim(),
+              });
+              return;
+            }
+            cardChargeRef = reference;
+            try {
+              await execute(`
+                CREATE TABLE IF NOT EXISTS payments (
+                  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                  user_id UUID, ride_id UUID,
+                  reference VARCHAR(100), amount NUMERIC(10,2),
+                  currency VARCHAR(3) DEFAULT 'ZAR', status VARCHAR(20),
+                  provider VARCHAR(20), raw_response JSONB,
+                  created_at TIMESTAMPTZ DEFAULT NOW(),
+                  updated_at TIMESTAMPTZ DEFAULT NOW()
+                )`);
+            } catch { /* already exists */ }
+            await execute(
+              `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+               VALUES ($1, NULL, $2, $3, 'ZAR', 'completed', 'paystack')`,
+              [dbUserId, reference, amountRands]
+            ).catch(() => {});
           }
         }
-
-        // ── Card payment check ──
-        // The rider books with "card" but the charge happens later, when the
-        // driver arrives at pickup. So we no longer require a completed payment
-        // upfront. If a paymentReference IS provided (e.g. from a hosted
-        // checkout), just link it to the ride below.
-        if (paymentMethod === "card" && paymentReference) {
-          const payment = await queryOne<{ id: string; status: string; user_id: string }>(
-            "SELECT id, status, user_id FROM payments WHERE reference = $1",
-            [paymentReference]
-          ).catch(() => null);
-
-          const ok = payment && payment.user_id === dbUserId;
-          if (!ok) {
-            socket.emit("ride:requested:ack", {
-              success: false,
-              reason: "Card payment could not be verified. Ride was not booked.",
-            });
-            return;
-          }
-        }
-
         const ride = await queryOne<any>(
           `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8)
@@ -171,7 +186,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
           [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null]
         );
 
-        // Link the successful payment to this ride so it can be refunded on cancel.
+        // Link the successful card charge to this ride so it can be refunded on cancel.
+        if (cardChargeRef) {
+          await execute(
+            "UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2",
+            [ride?.id, cardChargeRef]
+          ).catch(() => {});
+        }
+        // Backwards-compatible: also link any hosted-checkout reference provided.
         if (paymentReference) {
           await execute(
             "UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2",
@@ -273,7 +295,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
               "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
               [payment.id]
             ).catch(() => {});
-            io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "Your payment was refunded." });
+            io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "If your payment was taken, it is being refunded to the same account you paid from." });
           } catch (err) {
             console.error("Async refund error on cancel:", err);
           }

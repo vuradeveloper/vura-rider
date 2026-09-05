@@ -557,8 +557,6 @@ export default function Track() {
         return;
       }
 
-      // A driver has been found (demo) — charge the rider's card now.
-      chargeCardOnPickup();
 
       const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
       const [endLat, endLng] = dropoffCoord ?? [
@@ -754,6 +752,7 @@ export default function Track() {
           if (data.success) {
             setRideId(data.rideId ?? null);
             rideIdRef.current = data.rideId ?? null;
+            paymentConfirmedRef.current = true;
             // Immediately mark the ride active in the store so the floating
             // "Go Back To Ride" banner shows even while searching.
             useAppStore.getState().setActiveRide({
@@ -778,9 +777,8 @@ export default function Track() {
             setRideId(data.id);
             rideIdRef.current = data.id;
           }
-          // A driver has been found — charge the rider's card now (deduct only
-          // after a driver is found, not at booking).
-          chargeCardOnPickup();
+          // A driver has been found. The card charge already happened once at
+          // booking (see server "passenger:ride:request") — never charge again.
           const driverData = {
             name: data.driver_name || data.driver?.name || "Unknown Driver",
             vehicle:
@@ -951,9 +949,8 @@ export default function Track() {
         };
 
         if (paymentMethodRef === "card") {
-          // No upfront charge — just book the ride. The card is charged when
-          // the driver arrives at pickup (see ride:driver:arrived below).
-          paymentConfirmedRef.current = true;
+          // The card is charged once, at booking, by the server. This ride only
+          // proceeds (finds a driver) after the server confirms the card charge.
           // Skip re-firing the ride request if returning to a minimized ride.
           if (!useAppStore.getState().rideMinimized) fireRequest();
         } else {
@@ -1565,6 +1562,10 @@ export default function Track() {
                 </TouchableOpacity>
               ))}
             </View>
+            <Text className="text-xs text-muted-foreground text-center mt-2 leading-relaxed">
+              If your payment was taken for this ride, it will be refunded to the same
+              account you paid with.
+            </Text>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
