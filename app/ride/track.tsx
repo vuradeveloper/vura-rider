@@ -491,12 +491,16 @@ export default function Track() {
               await updateDbStatus("completed");
               await new Promise((resolve) => setTimeout(resolve, 8000));
               if (demoCancelledRef.current) return;
+              // The trip is done — clear the minimized ride so the banner never lingers.
+              useAppStore.getState().resetRideState();
               setShowRating(true);
             } else if (demoPhaseRef.current === "to_dest") {
               setStatus("completed");
               await updateDbStatus("completed");
               await new Promise((resolve) => setTimeout(resolve, 8000));
               if (demoCancelledRef.current) return;
+              // The trip is done — clear the minimized ride so the banner never lingers.
+              useAppStore.getState().resetRideState();
               setShowRating(true);
             }
           };
@@ -648,6 +652,9 @@ export default function Track() {
       await updateDbStatus("completed");
       await new Promise((resolve) => setTimeout(resolve, 8000));
       if (demoCancelledRef.current) return;
+
+      // The trip is done — clear the minimized ride so the banner never lingers.
+      useAppStore.getState().resetRideState();
 
       // Show rating/receipt modal
       setShowRating(true);
@@ -852,7 +859,7 @@ export default function Track() {
           handleCompleted(data.riderTotal ?? data.fare ?? null);
 
           // Clear active ride in Zustand store
-          useAppStore.getState().setActiveRide(null);
+          useAppStore.getState().resetRideState();
         });
 
         socket.on("ride:cancelled", (data) => {
@@ -860,7 +867,7 @@ export default function Track() {
           setError(data.reason || "Ride cancelled");
 
           // Clear active ride in Zustand store
-          useAppStore.getState().setActiveRide(null);
+          useAppStore.getState().resetRideState();
         });
 
         socket.on("ride:refunded", (data) => {
@@ -982,6 +989,9 @@ export default function Track() {
   }, [isHistory]);
 
   async function handleCompleted(total: number | null) {
+    // Fully reset the ride + minimize state so the "Go Back To Ride" banner
+    // disappears immediately when the trip completes.
+    useAppStore.getState().resetRideState();
     queryClient.invalidateQueries({ queryKey: ["ride-history"] });
     const id = rideIdRef.current;
     const method = await AsyncStorage.getItem("vura.ride.payment");
@@ -1072,6 +1082,9 @@ export default function Track() {
     } catch {
       // ignore
     }
+    // Fully reset the ride + minimize state so the "Go Back To Ride" banner
+    // never lingers after the rider cancels.
+    useAppStore.getState().resetRideState();
     queryClient.invalidateQueries({ queryKey: ["ride-history"] });
     router.replace("/");
   }

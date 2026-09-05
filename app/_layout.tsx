@@ -11,6 +11,7 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { getActiveRide } from "@/services/RideService";
+import { getSocket } from "@/lib/socket";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,40 @@ function ActiveRideBanner() {
   const activeRide = useAppStore((s) => s.activeRide);
   const rideMinimized = useAppStore((s) => s.rideMinimized);
   const blink = useRef(new Animated.Value(1)).current;
+
+  // Global ride terminal-event guard. When the rider minimizes a ride (X) and
+  // leaves the ride screen, the track screen's socket listeners are detached,
+  // so a cancel/complete/expiry that arrives while they're elsewhere would
+  // leave the store's activeRide/rideMinimized set — and the "Go Back To Ride"
+  // banner would float forever. Listening here (app root) catches every
+  // terminal event on ANY screen and clears the ride state.
+  useEffect(() => {
+    if (!rideMinimized && !activeRide) return;
+    let socket: any = null;
+    let disposed = false;
+    (async () => {
+      try {
+        socket = await getSocket();
+        if (disposed) return;
+        const clear = () => useAppStore.getState().resetRideState();
+        socket.on("ride:cancelled", clear);
+        socket.on("ride:completed", clear);
+        socket.on("ride:expired", clear);
+        socket.on("ride:no:drivers", clear);
+      } catch {
+        // offline — nothing to listen for
+      }
+    })();
+    return () => {
+      disposed = true;
+      if (socket) {
+        socket.off("ride:cancelled");
+        socket.off("ride:completed");
+        socket.off("ride:expired");
+        socket.off("ride:no:drivers");
+      }
+    };
+  }, [rideMinimized, activeRide]);
 
   useEffect(() => {
     if (!rideMinimized || !activeRide) return;
