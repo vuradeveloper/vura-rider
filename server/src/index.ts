@@ -60,11 +60,14 @@ app.use(express.urlencoded({ extended: true }));
 // Logging
 app.use(morgan(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
 
-// Rate limiting — generous limits so the driver's polling (every 15s) and
-// socket polling-transport don't 429 the client.
+// Rate limiting — generous limits so the driver's high-frequency polling (1s
+// while online) and socket polling-transport don't 429 the client. The old
+// 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
+// which caused constant "Too many requests" errors and broke every other API
+// call (stats, earnings, wallet). 6000/15min = 400/min, plenty of headroom.
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "300", 10),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "6000", 10),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later" },

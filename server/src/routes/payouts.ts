@@ -127,21 +127,18 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
-    // Available balance = total net earnings not yet paid out.
+    // Available balance = what the driver actually earned on completed rides
+    // minus what has already been paid out in successful withdrawals. Mirrors
+    // the home-screen figure (rides.actual_fare) and the wallet endpoint so a
+    // driver can always cash out the real number they see on their dashboard.
     const earnings = await queryOne<{ total: number }>(
-      `SELECT COALESCE(SUM(de.net_amount), 0)::float AS total
-       FROM driver_earnings de
-       LEFT JOIN driver_earnings_paid dep ON dep.earning_id = de.id
-       WHERE de.driver_id = $1 AND dep.earning_id IS NULL`,
+      `SELECT
+         (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
+           WHERE driver_id = $1 AND status = 'completed')
+         - (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
+           WHERE driver_id = $1 AND status = 'success') AS total`,
       [user.id]
-    ).catch(async () => {
-      // Fallback if the tracking table doesn't exist: count all earnings.
-      const r = await queryOne<{ total: number }>(
-        "SELECT COALESCE(SUM(net_amount), 0)::float AS total FROM driver_earnings WHERE driver_id = $1",
-        [user.id]
-      );
-      return r || { total: 0 };
-    });
+    );
 
     const available = Number(earnings?.total || 0);
     if (amountRands > available) {
