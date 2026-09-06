@@ -74,4 +74,101 @@ router.delete("/", requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ── Mapbox-backed place search ──
+// GET /api/search?q=...&lat=...&lng=...&limit=8
+// Returns Google/Mapbox-quality place autocomplete (finds malls, landmarks,
+// businesses — not just roads). The Mapbox public token lives on the server,
+// never in the app. Falls back to OSM search if Mapbox is unset/unreachable.
+const MAPBOX_TOKEN = process.env.MAPBOX_PUBLIC_TOKEN || "";
+const MAPBOX_API = "https://api.mapbox.com";
+
+router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
+  const q = String(req.query.q || "").trim();
+  const lat = parseFloat(req.query.lat as string);
+  const lng = parseFloat(req.query.lng as string);
+  const limit = Math.min(10, parseInt(req.query.limit as string || "6", 10));
+  if (!q) { res.json({ features: [] }); return; }
+
+  try {
+    // Prefer Mapbox when a token exists.
+    if (MAPBOX_TOKEN) {
+      const proximity =
+        Number.isFinite(lat) && Number.isFinite(lng)
+          ? `&proximity=${lng},${lat}`
+          : "";
+      const url =
+        `${MAPBOX_API}/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}` +
+        `&limit=${limit}&country=za${proximity}&types=poi,address,locality,district,place`;
+      const upstream = await fetch(url, { headers: { "Accept-Encoding": "gzip" } });
+      if (!upstream.ok) throw new Error(`Mapbox geocode failed: ${upstream.status}`);
+      const data = (await upstream.json()) as any;
+      const features = (data?.features || []).map((f: any) => ({
+        name: f.text || f.place_name?.split(",")[0] || q,
+        address: String(f.place_name || "").split(",").slice(1).join(",").trim(),
+        lat: Number(f.center?.[1]),
+        lng: Number(f.center?.[0]),
+        type: f.place_type?.[0] || "place",
+      }));
+      res.json({ provider: "mapbox", results: features });
+      return;
+    }
+
+    // Fallback: OSM Nominatim (current behavior).
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=${limit}&q=${encodeURIComponent(q)}` +
+      (Number.isFinite(lat) && Number.isFinite(lng) ? `&lat=${lat}&lon=${lng}` : "");
+    const upstream = await fetch(url, { headers: { "User-Agent": "VuraRiderServer/1.0" } });
+    const data = (await upstream.json()) as any[];
+    const results = (Array.isArray(data) ? data : []).map((item: any) => ({
+      name: String(item.display_name || q).split(",")[0],
+      address: String(item.display_name || "").split(",").slice(1).join(",").trim(),
+      lat: parseFloat(item.lat),
+      lng: parseFloat(item.lon),
+      type: "osm",
+    }));
+    res.json({ provider: "nominatim", results });
+  } catch (err: any) {
+    console.error("Search geocode error:", err.message);
+    res.status(502).json({ error: "Search failed. Please try again." });
+  }
+});
+
+// GET /api/search/reverse?lat=..&lng=..
+// Reverse-geocodes a coordinate to a human address (Mapbox-first, OSM fallback).
+router.get("/reverse", requireAuth, async (req: AuthRequest, res: Response) => {
+  const lat = parseFloat(req.query.lat as string);
+  const lng = parseFloat(req.query.lng as string);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    res.status(400).json({ error: "lat and lng are required" });
+    return;
+  }
+  try {
+    if (MAPBOX_TOKEN) {
+      const url =
+        `${MAPBOX_API}/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${MAPBOX_TOKEN}` +
+        `&limit=1&types=poi,address,locality,district,place`;
+      const upstream = await fetch(url, { headers: { "Accept-Encoding": "gzip" } });
+      if (upstream.ok) {
+        const data = (await upstream.json()) as any;
+        const f = data?.features?.[0];
+        if (f?.place_name) {
+          res.json({ provider: "mapbox", name: f.text || f.place_name.split(",")[0], address: f.place_name });
+          return;
+        }
+      }
+    }
+    // Fallback: OSM reverse.
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+    const upstream = await fetch(url, { headers: { "User-Agent": "VuraRiderServer/1.0" } });
+    const d = (await upstream.json()) as any;
+    res.json({
+      provider: "nominatim",
+      name: d?.display_name?.split(",")[0] || "Current location",
+      address: d?.display_name || "Current location",
+    });
+  } catch (err: any) {
+    console.error("Reverse geocode error:", err.message);
+    res.status(502).json({ error: "Could not get address" });
+  }
+});
+
 export default router;

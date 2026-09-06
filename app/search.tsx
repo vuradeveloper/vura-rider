@@ -16,6 +16,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getRecentSearches, saveSearch, clearRecentSearches } from "@/services/SearchService";
 import type { RecentSearch, Waypoint } from "@/lib/types";
 import { haversineKm } from "@/lib/utils";
+import { apiFetch } from "@/lib/api";
 
 export default function Search() {
   const router = useRouter();
@@ -54,12 +55,11 @@ export default function Search() {
           "vura.ride.pickup",
           JSON.stringify([pos.coords.latitude, pos.coords.longitude])
         );
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`
-        );
-        const d = await res.json();
-        if (d && d.display_name) {
-          const label = d.display_name.split(",").slice(0, 2).join(", ");
+        const res = await apiFetch<{ name: string; address: string }>(
+          `/api/search/reverse?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`
+        ).catch(() => null);
+        if (res?.address) {
+          const label = res.address.split(",").slice(0, 2).join(", ");
           setPickup(label);
           await AsyncStorage.setItem("vura.ride.pickup.address", label);
         } else {
@@ -110,12 +110,38 @@ export default function Search() {
   };
 
   const fetchGeocoders = async (term: string, lat?: number, lon?: number, bounded = false) => {
-    const box = 0.35; // ~40km box for the strict "near pickup" pass
+    // PRIMARY: Mapbox-backed search proxy on our server (key hidden server-side).
+    // Returns used-friendly results and finds POIs malls/landmarks (the OSM
+    // stack below misses these).
+    try {
+      const params = new URLSearchParams({ q: term });
+      if (lat != null && lon != null) params.set("lat", String(lat));
+      if (lon != null) params.set("lng", String(lon));
+      params.set("limit", bounded ? "6" : "8");
+      if (bounded && lat != null && lon != null) {
+        const box = 0.35;
+        params.set("bbox", `${lon - box},${lat - box},${lon + box},${lat + box}`);
+      }
+      const res = await apiFetch<{ results: any[] }>(
+        `/api/search/geocode?${params.toString()}`
+      );
+      if (Array.isArray(res?.results) && res.results.length > 0) {
+        return res.results.map((r: any) => ({
+          name: r.name,
+          addr: r.address || "",
+          lat: Number(r.lat),
+          lon: Number(r.lng),
+        }));
+      }
+    } catch {
+      // fall through to OSM
+    }
 
+    // FALLBACK: OSM + Photon (legacy code path).
+    const box = 0.35; // ~40km box for the strict "near pickup" pass
     const photonUrl = bounded
       ? `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8&bbox=${lon! - box},${lat! - box},${lon! + box},${lat! + box}`
       : `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8${lat != null ? `&lat=${lat}&lon=${lon}` : ""}`;
-
     const nominatimUrl = bounded
       ? `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1&viewbox=${lon! - box},${lat! - box},${lon! + box},${lat! + box}&bounded=1`
       : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1${
@@ -125,7 +151,6 @@ export default function Search() {
     const photonPromise = fetch(photonUrl)
       .then((r) => r.json())
       .catch(() => ({ features: [] }));
-
     const nominatimPromise = fetch(nominatimUrl, {
       headers: { "User-Agent": "VuraRiderApp/1.0" },
     })
@@ -161,26 +186,32 @@ export default function Search() {
     const query = `[out:json][timeout:8];(nwr["name"~"${safe}",i](${lat - pad},${lon - pad},${lat + pad},${lon + pad}););out center 12;`;
     for (const base of mirrors) {
       try {
-        const res = await fetch(`${base}?data=${encodeURIComponent(query)}`, {
-          signal: AbortSignal.timeout(9000),
-        });
-        if (!res.ok) continue;
-        const data = await res.json();
-        if (data?.elements?.length) {
-          return data.elements
-            .map((e: any) => {
-              const t = e.tags || {};
-              const eLat = e.lat ?? e.center?.lat;
-              const eLon = e.lon ?? e.center?.lon;
-              if (eLat == null || eLon == null) return null;
-              return {
-                name: t.name || term,
-                addr: t["addr:city"] || "Nearby place on map",
-                lat: eLat,
-                lon: eLon,
-              };
-            })
-            .filter(Boolean);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 9000);
+        try {
+          const res = await fetch(`${base}?data=${encodeURIComponent(query)}`, {
+            signal: controller.signal,
+          });
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (data?.elements?.length) {
+            return data.elements
+              .map((e: any) => {
+                const t = e.tags || {};
+                const eLat = e.lat ?? e.center?.lat;
+                const eLon = e.lon ?? e.center?.lon;
+                if (eLat == null || eLon == null) return null;
+                return {
+                  name: t.name || term,
+                  addr: t["addr:city"] || "Nearby place on map",
+                  lat: eLat,
+                  lon: eLon,
+                };
+              })
+              .filter(Boolean);
+          }
+        } finally {
+          clearTimeout(timer);
         }
       } catch {
         // try the next mirror
