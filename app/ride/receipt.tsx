@@ -99,7 +99,12 @@ export default function ReceiptScreen() {
     <SafeAreaView className="flex-1 bg-background">
       <View className="bg-primary px-5 pt-4 pb-8 rounded-b-[2rem] relative">
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => {
+            // Uber-style: the receipt is the end of a ride. Go straight home —
+            // router.back() stalls when the receipt was opened directly (e.g. by
+            // the unrated-ride re-prompt), leaving no history to go "back" to.
+            router.replace("/");
+          }}
           className="absolute top-4 left-4 w-9 h-9 rounded-full bg-white/20 items-center justify-center"
         >
           <Ionicons name="arrow-back" size={16} color="#fff" />
