@@ -16,12 +16,13 @@ export interface EnrollInput {
     accountNumber: string;
     cardToken?: string;
     identityFingerprint?: string;
+    deviceId?: string;
 }
 export declare function enrollPayLater(dbUserId: string, input: EnrollInput): Promise<{
     account: any;
     mandate: {
         token: string;
-        bankVerified: boolean;
+        bankVerified: true;
     };
     card: {
         verified: true;

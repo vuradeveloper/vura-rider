@@ -7,6 +7,9 @@ const router = (0, express_1.Router)();
 // self-hosted OSRM/Valhalla instance in production for the best speed.
 const UPSTREAM = process.env.ROUTE_PROVIDER_URL?.replace(/\/+$/, "") ||
     "https://router.project-osrm.org";
+// Mapbox Directions API (used first when a public token is configured so both
+// apps share ONE authoritative route). Falls back to OSRM when unset/failing.
+const MAPBOX_TOKEN = process.env.MAPBOX_PUBLIC_TOKEN || "";
 const ROUTE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MEMORY_CACHE_MAX = 500;
 const UPSTREAM_TIMEOUT_MS = 8000;
@@ -82,6 +85,37 @@ async function saveToDb(key, value) {
     }
 }
 async function fetchUpstream(points, overview) {
+    // Primary: Mapbox Directions — returns the same OSRM-style shape the app
+    // parses (geometry.coordinates as [lng,lat], distance, duration).
+    if (MAPBOX_TOKEN) {
+        try {
+            const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${points}.json?` +
+                `access_token=${MAPBOX_TOKEN}&geometries=geojson&overview=${overview}&steps=false`;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+            try {
+                const res = await fetch(url, { headers: { "Accept-Encoding": "gzip" }, signal: controller.signal });
+                if (res.ok) {
+                    const data = (await res.json());
+                    const route = data?.routes?.[0];
+                    if (route && Array.isArray(route?.geometry?.coordinates)) {
+                        return {
+                            coords: route.geometry.coordinates,
+                            distance: route.distance ?? 0,
+                            duration: route.duration ?? 0,
+                        };
+                    }
+                }
+            }
+            finally {
+                clearTimeout(timer);
+            }
+        }
+        catch {
+            // fall through to OSRM
+        }
+    }
+    // Fallback: OSRM
     const url = `${UPSTREAM}/route/v1/driving/${points}?geometries=geojson&overview=${overview}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);

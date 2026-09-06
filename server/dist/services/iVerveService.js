@@ -10,6 +10,7 @@ exports.paymentsMode = paymentsMode;
 exports.createMandate = createMandate;
 exports.validateCardHold = validateCardHold;
 exports.collectMandate = collectMandate;
+exports.collectCard = collectCard;
 function paymentsMode() {
     return process.env.PAYMENTS_MODE === "live" ? "live" : "mock";
 }
@@ -41,5 +42,14 @@ async function collectMandate(mandateToken, amount, reference) {
         return { success: false, error: "Mock collection failed (insufficient funds)" };
     }
     return { success: true, reference: randomId("mock-collect") };
+}
+// Fallback collection from a saved card token when the mandate (debit order)
+// fails. Raises recovery before an account is frozen/blacklisted.
+async function collectCard(cardToken, amount, reference) {
+    requireMock();
+    if (process.env.PAYMENTS_MOCK_FAIL_COLLECT === "1") {
+        return { success: false, error: "Mock card collection failed" };
+    }
+    return { success: true, reference: randomId("mock-card-collect") };
 }
 //# sourceMappingURL=iVerveService.js.map

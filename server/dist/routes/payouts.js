@@ -121,15 +121,15 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             res.status(401).json({ error: "User not found" });
             return;
         }
-        // Available balance = total net earnings not yet paid out.
-        const earnings = await (0, database_1.queryOne)(`SELECT COALESCE(SUM(de.net_amount), 0)::float AS total
-       FROM driver_earnings de
-       LEFT JOIN driver_earnings_paid dep ON dep.earning_id = de.id
-       WHERE de.driver_id = $1 AND dep.earning_id IS NULL`, [user.id]).catch(async () => {
-            // Fallback if the tracking table doesn't exist: count all earnings.
-            const r = await (0, database_1.queryOne)("SELECT COALESCE(SUM(net_amount), 0)::float AS total FROM driver_earnings WHERE driver_id = $1", [user.id]);
-            return r || { total: 0 };
-        });
+        // Available balance = what the driver actually earned on completed rides
+        // minus what has already been paid out in successful withdrawals. Mirrors
+        // the home-screen figure (rides.actual_fare) and the wallet endpoint so a
+        // driver can always cash out the real number they see on their dashboard.
+        const earnings = await (0, database_1.queryOne)(`SELECT
+         (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
+           WHERE driver_id = $1 AND status = 'completed')
+         - (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
+           WHERE driver_id = $1 AND status = 'success') AS total`, [user.id]);
         const available = Number(earnings?.total || 0);
         if (amountRands > available) {
             res.status(400).json({ error: `Insufficient balance. You have R${available.toFixed(2)} available to cash out.` });

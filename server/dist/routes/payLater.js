@@ -34,7 +34,7 @@ router.get("/status", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
 // POST /api/payments/pay-later/enroll — mandate + card validation + account
 router.post("/enroll", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
     try {
-        const { accountHolder, bankCode, accountNumber, cardToken, identityFingerprint } = req.body;
+        const { accountHolder, bankCode, accountNumber, cardToken, identityFingerprint, deviceId } = req.body;
         if (!accountHolder || !bankCode || !accountNumber) {
             res
                 .status(400)
@@ -47,6 +47,7 @@ router.post("/enroll", auth_1.requireAuth, resolveDbUserId, async (req, res) => 
             accountNumber,
             cardToken,
             identityFingerprint,
+            deviceId,
         });
         res.status(201).json(result);
     }

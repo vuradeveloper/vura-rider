@@ -3,25 +3,104 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
+const paystackPayment_1 = require("../services/paystackPayment");
 const router = (0, express_1.Router)();
-// POST /api/tips — Submit a tip
+// POST /api/tips — Give a real tip to the driver.
+//
+// Actually charges the rider's saved card via Paystack (default card, or the
+// card the rider selected with `paymentMethodId`), adds the tip to the ride's
+// fare, and credits the driver's earnings so the money reaches the driver side.
 router.post("/", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
-        const { rideId, amount } = req.body;
-        if (!rideId || !amount || amount <= 0) {
+        const { rideId, amount, paymentMethodId } = req.body;
+        const tip = Number(amount);
+        if (!rideId || !tip || tip <= 0) {
             res.status(400).json({ error: "Valid rideId and amount are required" });
             return;
         }
-        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
+        const user = await (0, database_1.queryOne)("SELECT id, email FROM users WHERE firebase_uid = $1", [firebaseUid]);
         if (!user) {
             res.status(404).json({ error: "User not found" });
             return;
         }
-        // Add tip to actual_fare
-        await (0, database_1.execute)("UPDATE rides SET actual_fare = COALESCE(actual_fare, estimated_fare, 0) + $1 WHERE id = $2 AND passenger_id = $3", [amount, rideId, user.id]);
-        console.log(`💰 Tip of ${amount} on ride ${rideId} by ${firebaseUid}`);
-        res.json({ success: true, amount });
+        // Load the ride + its driver so the tip credits the correct driver.
+        const ride = await (0, database_1.queryOne)("SELECT id, driver_id, passenger_id FROM rides WHERE id = $1", [rideId]);
+        if (!ride || ride.passenger_id !== user.id) {
+            res.status(404).json({ error: "Ride not found" });
+            return;
+        }
+        // Pick the card: an explicitly selected payment method, else the default.
+        let authCode;
+        let cardLabel = "";
+        if (paymentMethodId) {
+            const card = await (0, database_1.queryOne)("SELECT transaction_index, last4, card_type FROM saved_cards WHERE id = $1 AND user_id = $2", [paymentMethodId, user.id]).catch(() => null);
+            if (card?.transaction_index) {
+                authCode = card.transaction_index;
+                cardLabel = card.card_type || "card";
+            }
+        }
+        if (!authCode) {
+            const def = await (0, paystackPayment_1.getDefaultCardToken)(user.id);
+            if (def)
+                authCode = def.transaction_index;
+        }
+        if (!authCode) {
+            res.status(400).json({
+                error: "No saved card available to tip with. If you paid cash, add a card first (Account → Wallet).",
+            });
+            return;
+        }
+        // Real Paystack charge.
+        const reference = `VURATIP${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+        let charge;
+        try {
+            charge = await (0, paystackPayment_1.chargeAuthorization)({
+                amountRands: tip,
+                reference,
+                email: user.email || "rider@vura.com",
+                authorizationCode: authCode,
+            });
+        }
+        catch (err) {
+            charge = { success: false, message: err?.message || "Could not process the tip payment." };
+        }
+        if (!charge?.success) {
+            const msg = String(charge?.message || "").toLowerCase();
+            res.status(400).json({
+                error: msg.includes("insufficient")
+                    ? "Your card does not have enough funds for this tip."
+                    : `Tip payment was declined. ${charge?.message || ""}`.trim(),
+            });
+            return;
+        }
+        // Add the tip to the fare.
+        await (0, database_1.execute)("UPDATE rides SET actual_fare = GREATEST(COALESCE(actual_fare, estimated_fare, 0), 0) + $1 WHERE id = $2", [tip, rideId]);
+        // Credit the driver's earnings so the money lands on the driver side.
+        if (ride.driver_id) {
+            try {
+                await (0, database_1.execute)(`INSERT INTO driver_earnings (driver_id, ride_id, gross_amount, fee, net_amount)
+           VALUES ($1, $2, $3, 0, $3)`, [ride.driver_id, rideId, tip]);
+            }
+            catch { /* table already has the row or optional */ }
+        }
+        // Record the payment so the rider has a transaction trail.
+        try {
+            await (0, database_1.execute)(`CREATE TABLE IF NOT EXISTS payments (
+          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+          user_id UUID, ride_id UUID,
+          reference VARCHAR(100), amount NUMERIC(10,2),
+          currency VARCHAR(3) DEFAULT 'ZAR', status VARCHAR(20),
+          provider VARCHAR(20), raw_response JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )`);
+            await (0, database_1.execute)(`INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+         VALUES ($1, $2, $3, $4, 'ZAR', 'completed', 'paystack')`, [user.id, rideId, reference, tip]).catch(() => { });
+        }
+        catch { /* optional */ }
+        console.log(`💳 Tip of R${tip} on ride ${rideId} (${reference}) — charged to card ${cardLabel || "default"}`);
+        res.json({ success: true, amount: tip, reference });
     }
     catch (err) {
         console.error("Tip error:", err);

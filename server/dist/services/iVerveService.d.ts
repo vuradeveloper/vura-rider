@@ -21,4 +21,5 @@ export interface CollectResult {
     error?: string;
 }
 export declare function collectMandate(mandateToken: string, amount: number, reference: string): Promise<CollectResult>;
+export declare function collectCard(cardToken: string, amount: number, reference: string): Promise<CollectResult>;
 //# sourceMappingURL=iVerveService.d.ts.map

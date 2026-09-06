@@ -75,7 +75,7 @@ function setupSocketHandlers(io) {
         // ── Passenger: request ride ──
         socket.on("passenger:ride:request", async (data) => {
             try {
-                const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare } = data;
+                const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId } = data;
                 let dbUserId = await getDbUserId();
                 if (!dbUserId) {
                     // For testing and race condition safety, use the first available passenger or auto-insert a placeholder
@@ -91,52 +91,123 @@ function setupSocketHandlers(io) {
                 if (!dbUserId) {
                     throw new Error("Passenger account not synced with database yet. Try again in a moment.");
                 }
+                // ── Fraud / abuse guard for Pay Later rides ──
+                // Server-authoritative, NEVER trust the client: the rider must have an
+                // active, non-frozen Pay Later account, the fare must fit the remaining
+                // credit, they must not be blacklisted, and they must be under the
+                // per-day / per-month velocity caps. Violations block the ride.
+                if (paymentMethod === "pay_later") {
+                    try {
+                        const acct = await (0, database_1.queryOne)(`SELECT id, status, credit_limit, outstanding, identity_fingerprint
+               FROM pay_later_accounts WHERE user_id = $1`, [dbUserId]);
+                        const available = acct
+                            ? Number(acct.credit_limit || 0) - Number(acct.outstanding || 0)
+                            : 0;
+                        if (!acct || acct.status !== "active" || available <= 0) {
+                            socket.emit("ride:requested:ack", {
+                                success: false,
+                                reason: "Pay Later is not active on your account or you have no remaining credit. Add a card or repay your balance first.",
+                            });
+                            return;
+                        }
+                        // Velocity caps — block rapid rebooking / farming.
+                        const { today = 0, month = 0 } = await (0, database_1.queryOne)(`SELECT
+                 COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int AS today,
+                 COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE))::int AS month
+               FROM rides
+               WHERE passenger_id = $1 AND payment_method = 'pay_later'`, [dbUserId]) || {};
+                        if ((today || 0) >= 2 || (month || 0) >= 8) {
+                            socket.emit("ride:requested:ack", {
+                                success: false,
+                                reason: "You've reached your Pay Later ride limit. Please repay or use another payment method.",
+                            });
+                            return;
+                        }
+                        const fareNum = Number(fare ?? 0);
+                        if (fareNum <= 0 || fareNum > available) {
+                            socket.emit("ride:requested:ack", {
+                                success: false,
+                                reason: `This ride (R${fareNum.toFixed(2)}) exceeds your available Pay Later credit (R${available.toFixed(2)}).`,
+                            });
+                            return;
+                        }
+                    }
+                    catch (e) {
+                        socket.emit("ride:requested:ack", {
+                            success: false,
+                            reason: "Pay Later could not be verified. Please try another payment method.",
+                        });
+                        return;
+                    }
+                }
                 // ── Pre-booking payment (best-effort, non-blocking) ──
                 // Ride creation is NEVER blocked by payment so riders can always find
                 // a driver. If they have a saved card we pre-authorize it as a safety
                 // check; if the check fails (no card, decline) we still create the
                 // ride — the real charge happens at pickup. This guarantees drivers
                 // always see booking requests.
+                let cardChargeRef = null;
                 if (paymentMethod === "card" && fare != null) {
                     const amountRands = Number(fare);
                     if (amountRands > 0) {
+                        const card = await (0, paystackPayment_1.getDefaultCardToken)(dbUserId);
+                        if (!card) {
+                            socket.emit("ride:requested:ack", {
+                                success: false,
+                                reason: "You need a saved card to book this ride. Please add a card before booking.",
+                            });
+                            return;
+                        }
+                        const rider = await (0, database_1.queryOne)("SELECT email FROM users WHERE id = $1", [dbUserId]).catch(() => null);
+                        const reference = `VURA${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+                        let charge;
                         try {
-                            const card = await (0, paystackPayment_1.getDefaultCardToken)(dbUserId);
-                            if (card) {
-                                const rider = await (0, database_1.queryOne)("SELECT email FROM users WHERE id = $1", [dbUserId]).catch(() => null);
-                                await (0, paystackPayment_1.preauthorizeRideCard)({
-                                    amountRands: amountRands,
-                                    email: rider?.email || "rider@vura.com",
-                                    authorizationCode: card.transaction_index,
-                                }).catch(() => { });
-                            }
+                            charge = await (0, paystackPayment_1.chargeAuthorization)({
+                                amountRands,
+                                reference,
+                                email: rider?.email || "rider@vura.com",
+                                authorizationCode: card.transaction_index,
+                            });
                         }
-                        catch (e) {
-                            console.warn("Pre-booking card check skipped (non-blocking):", e?.message);
+                        catch (err) {
+                            charge = { success: false, message: err?.message || "Could not process your card." };
                         }
-                        // IMPORTANT: never abort ride creation here.
+                        if (!charge?.success) {
+                            const msg = String(charge?.message || "").toLowerCase();
+                            socket.emit("ride:requested:ack", {
+                                success: false,
+                                reason: msg.includes("insufficient")
+                                    ? "You do not have enough money on this card to cover the ride. Please top up or add another card."
+                                    : `Your card payment was declined. ${charge?.message || ""}`.trim(),
+                            });
+                            return;
+                        }
+                        cardChargeRef = reference;
+                        try {
+                            await (0, database_1.execute)(`
+                CREATE TABLE IF NOT EXISTS payments (
+                  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                  user_id UUID, ride_id UUID,
+                  reference VARCHAR(100), amount NUMERIC(10,2),
+                  currency VARCHAR(3) DEFAULT 'ZAR', status VARCHAR(20),
+                  provider VARCHAR(20), raw_response JSONB,
+                  created_at TIMESTAMPTZ DEFAULT NOW(),
+                  updated_at TIMESTAMPTZ DEFAULT NOW()
+                )`);
+                        }
+                        catch { /* already exists */ }
+                        await (0, database_1.execute)(`INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+               VALUES ($1, NULL, $2, $3, 'ZAR', 'completed', 'paystack')`, [dbUserId, reference, amountRands]).catch(() => { });
                     }
                 }
-                // ── Card payment check ──
-                // The rider books with "card" but the charge happens later, when the
-                // driver arrives at pickup. So we no longer require a completed payment
-                // upfront. If a paymentReference IS provided (e.g. from a hosted
-                // checkout), just link it to the ride below.
-                if (paymentMethod === "card" && paymentReference) {
-                    const payment = await (0, database_1.queryOne)("SELECT id, status, user_id FROM payments WHERE reference = $1", [paymentReference]).catch(() => null);
-                    const ok = payment && payment.user_id === dbUserId;
-                    if (!ok) {
-                        socket.emit("ride:requested:ack", {
-                            success: false,
-                            reason: "Card payment could not be verified. Ride was not booked.",
-                        });
-                        return;
-                    }
+                const ride = await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
+           RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null]);
+                // Link the successful card charge to this ride so it can be refunded on cancel.
+                if (cardChargeRef) {
+                    await (0, database_1.execute)("UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2", [ride?.id, cardChargeRef]).catch(() => { });
                 }
-                const ride = await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8)
-           RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null]);
-                // Link the successful payment to this ride so it can be refunded on cancel.
+                // Backwards-compatible: also link any hosted-checkout reference provided.
                 if (paymentReference) {
                     await (0, database_1.execute)("UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2", [ride?.id, paymentReference]).catch(() => { });
                 }
@@ -219,7 +290,7 @@ function setupSocketHandlers(io) {
                             console.warn("Paystack refund failed on cancel:", e);
                         }
                         await (0, database_1.execute)("UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1", [payment.id]).catch(() => { });
-                        io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "Your payment was refunded." });
+                        io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "If your payment was taken, it is being refunded to the same account you paid from." });
                     }
                     catch (err) {
                         console.error("Async refund error on cancel:", err);
@@ -420,19 +491,36 @@ function setupSocketHandlers(io) {
         // ── Driver: accept ride request ──
         socket.on("driver:ride:accept", async (data) => {
             try {
-                const { rideId } = data;
+                const { rideId, deviceId } = data;
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status, estimated_fare FROM rides WHERE id = $1 AND status = 'searching'", [rideId]);
+                const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status, estimated_fare, device_id FROM rides WHERE id = $1 AND status = 'searching'", [rideId]);
                 if (!ride) {
                     socket.emit("ride:accepted:ack", { success: false, error: "Ride no longer available" });
                     return;
                 }
+                // ── Self-collusion guard ──
+                // Block a driver accepting their OWN ride request (same device = one
+                // person operating both rider + driver accounts to farm money/rewards).
+                if (ride.device_id && deviceId && ride.device_id === deviceId) {
+                    // Also check the driver's own device history — if this device has
+                    // ever been used to create a passenger ride, block.
+                    const driverDeviceUsedAsPassenger = await (0, database_1.queryOne)(`SELECT id FROM rides
+             WHERE passenger_id = $1 AND device_id = $2
+             LIMIT 1`, [ride.passenger_id, deviceId]).catch(() => null);
+                    if (driverDeviceUsedAsPassenger || ride.device_id === deviceId) {
+                        socket.emit("ride:accepted:ack", {
+                            success: false,
+                            error: "You cannot accept this ride from this device.",
+                        });
+                        return;
+                    }
+                }
                 await (0, database_1.execute)("UPDATE rides SET driver_id = $1, status = 'accepted' WHERE id = $2", [dbUserId, rideId]);
                 socket.join(`ride:${rideId}`);
                 // Notify the rider
-                const driver = await (0, database_1.queryOne)("SELECT u.full_name, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id WHERE u.id = $1", [dbUserId]);
+                const driver = await (0, database_1.queryOne)("SELECT u.full_name, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate, COALESCE(dp.rating_avg, 0) AS rating_avg FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id WHERE u.id = $1", [dbUserId]);
                 io.to(`ride:${rideId}`).emit("ride:accepted", {
                     id: rideId,
                     driver_name: driver?.full_name || "Driver",
@@ -441,6 +529,15 @@ function setupSocketHandlers(io) {
                     vehicle_model: driver?.vehicle_model,
                     driver_license_plate: driver?.license_plate,
                     fare: ride?.estimated_fare ?? null,
+                    // Include the driver's rating so the rider can see it on accept.
+                    driver: {
+                        name: driver?.full_name || "Driver",
+                        vehicle: [driver?.vehicle_color, driver?.vehicle_make, driver?.vehicle_model]
+                            .filter(Boolean)
+                            .join(" ") || null,
+                        license_plate: driver?.license_plate,
+                        rating: driver?.rating_avg ? Number(driver.rating_avg) : null,
+                    },
                 });
                 // Push "driver found" to the rider's devices.
                 (async () => {
@@ -501,7 +598,7 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                const ride = await (0, database_1.queryOne)("SELECT id, driver_id, COALESCE(actual_fare, estimated_fare) AS fare FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
+                const ride = await (0, database_1.queryOne)("SELECT id, driver_id, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
                 if (!ride)
                     return;
                 await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2", [ride.fare, rideId]);

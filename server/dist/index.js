@@ -88,11 +88,14 @@ app.use(express_1.default.json({ limit: "10mb" }));
 app.use(express_1.default.urlencoded({ extended: true }));
 // Logging
 app.use((0, morgan_1.default)(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
-// Rate limiting — generous limits so the driver's polling (every 15s) and
-// socket polling-transport don't 429 the client.
+// Rate limiting — generous limits so the driver's high-frequency polling (1s
+// while online) and socket polling-transport don't 429 the client. The old
+// 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
+// which caused constant "Too many requests" errors and broke every other API
+// call (stats, earnings, wallet). 6000/15min = 400/min, plenty of headroom.
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10),
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "300", 10),
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "6000", 10),
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Too many requests, please try again later" },
@@ -126,6 +129,9 @@ app.use("/api/drivers", drivers_1.default);
 app.use("/api/earnings", earnings_1.default);
 app.use("/api/safety", safety_1.default);
 app.use("/api/searches", search_1.default);
+// Alias so Mapbox geocode/reverse also answer at /api/search (no 's') — the
+// rider app calls /api/search/geocode + /api/search/reverse.
+app.use("/api/search", search_1.default);
 app.use("/api/disputes", disputes_1.default);
 app.use("/api/split", splitFare_1.default);
 app.use("/api/tips", tips_1.default);
@@ -310,7 +316,8 @@ async function start() {
         ALTER TABLE rides
         ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'x',
-        ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE
+        ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS device_id VARCHAR(100)
       `);
             // Driver verification status — gates "Go Online" until docs are approved.
             await (0, database_2.execute)(`
