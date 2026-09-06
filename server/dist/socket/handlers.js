@@ -454,6 +454,21 @@ function setupSocketHandlers(io) {
                current_heading = COALESCE($3, current_heading),
                updated_at = NOW()
            WHERE user_id = $4`, [lat, lng, heading ?? null, dbUserId]);
+                // Broadcast the driver's live position to the rider(s) of any ACTIVE
+                // ride this driver is on, so the rider's car follows the real driver
+                // (single source of truth — no per-app simulation).
+                const activeRide = await (0, database_1.queryOne)(`SELECT id FROM rides
+           WHERE driver_id = $1 AND status IN ('accepted','driver_arrived','in_progress')
+           ORDER BY created_at DESC LIMIT 1`, [dbUserId]).catch(() => null);
+                if (activeRide?.id) {
+                    io.to(`ride:${activeRide.id}`).emit("ride:driver:location", {
+                        rideId: activeRide.id,
+                        lat,
+                        lng,
+                        bearing: heading ?? 0,
+                        heading: heading ?? 0,
+                    });
+                }
             }
             catch (err) {
                 console.error("Driver location error:", err);
