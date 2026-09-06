@@ -58,6 +58,57 @@ function ActiveRideBanner() {
     };
   }, [rideMinimized, activeRide]);
 
+  // Background demo auto-complete. When a DEMO (simulated) ride is minimized
+  // with the X button, its simulation is paused in the track screen, so the
+  // ride can never reach "completed" and the banner would float forever. This
+  // advances the demo ride through its phases in the background (searching →
+  // accepted → driver_arrived → in_progress → completed) and finally clears
+  // the ride state, so the "Go Back To Ride" button disappears exactly when
+  // the ride is finished.
+  useEffect(() => {
+    if (!rideMinimized || !activeRide) return;
+    const saved = useAppStore.getState().savedDemoRide;
+    // Real (non-demo) rides are handled by the socket guard above.
+    if (!saved) return;
+    let disposed = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const scheduled: { atMs: number; status: string }[] = [
+      { atMs: 12000, status: "accepted" },
+      { atMs: 30000, status: "driver_arrived" },
+      { atMs: 60000, status: "in_progress" },
+      { atMs: 150000, status: "completed" },
+    ];
+    const startPhase = saved.phase || "to_pickup";
+    // If the demo car was already driving to the destination when minimized,
+    // we're close to the end — complete sooner.
+    let base = 0;
+    if (startPhase === "to_dest") base = 120000;
+    else if (startPhase === "arrived") base = 60000;
+    else if (startPhase === "searching") base = 0;
+    else base = 0;
+    for (const p of scheduled) {
+      if (p.status === "completed" || p.atMs >= base) {
+        timers.push(
+          setTimeout(() => {
+            if (disposed) return;
+            if (p.status === "completed") {
+              useAppStore.getState().resetRideState();
+            } else {
+              const cur = useAppStore.getState().activeRide;
+              if (cur && cur.status !== "completed" && cur.status !== "cancelled") {
+                useAppStore.getState().setActiveRide({ ...cur, status: p.status } as any);
+              }
+            }
+          }, Math.max(0, p.atMs - base))
+        );
+      }
+    }
+    return () => {
+      disposed = true;
+      timers.forEach(clearTimeout);
+    };
+  }, [rideMinimized, activeRide]);
+
   useEffect(() => {
     if (!rideMinimized || !activeRide) return;
     const loop = Animated.loop(

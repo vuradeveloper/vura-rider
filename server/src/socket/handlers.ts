@@ -541,7 +541,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         socket.join(`ride:${rideId}`);
         // Notify the rider
         const driver = await queryOne<any>(
-          "SELECT u.full_name, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id WHERE u.id = $1",
+          "SELECT u.full_name, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate, COALESCE(dp.rating_avg, 0) AS rating_avg FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id WHERE u.id = $1",
           [dbUserId]
         );
         io.to(`ride:${rideId}`).emit("ride:accepted", {
@@ -552,6 +552,16 @@ export function setupSocketHandlers(io: SocketIOServer) {
           vehicle_model: driver?.vehicle_model,
           driver_license_plate: driver?.license_plate,
           fare: ride?.estimated_fare ?? null,
+          // Include the driver's rating so the rider can see it on accept.
+          driver: {
+            name: driver?.full_name || "Driver",
+            vehicle:
+              [driver?.vehicle_color, driver?.vehicle_make, driver?.vehicle_model]
+                .filter(Boolean)
+                .join(" ") || null,
+            license_plate: driver?.license_plate,
+            rating: driver?.rating_avg ? Number(driver.rating_avg) : null,
+          },
         });
         // Push "driver found" to the rider's devices.
         (async () => {
