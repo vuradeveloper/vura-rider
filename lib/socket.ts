@@ -82,6 +82,7 @@ export interface ClientToServerEvents {
     paymentMethod?: string;
     paymentReference?: string;
     fare?: number;
+    deviceId?: string;
   }) => void;
   "passenger:ride:cancel": (data: { rideId: string; reason: string }) => void;
   "passenger:ride:update_pickup": (data: {

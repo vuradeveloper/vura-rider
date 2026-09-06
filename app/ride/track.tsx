@@ -7,6 +7,7 @@ import { payWithCash, payWithAffiliate, initiatePaystackPayment } from "@/servic
 import PaymentWebView from "@/components/PaymentWebView";
 import { getActiveRide, getRide, submitRating } from "@/services/RideService";
 import { submitTip, getTipSuggestions } from "@/services/TipService";
+import { getDeviceId } from "@/lib/device";
 import { shareTrip } from "@/services/SafetyService";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -936,7 +937,8 @@ export default function Track() {
         const fareStr = await AsyncStorage.getItem("vura.ride.fare");
         const fare = parseFloat(fareStr || "0.2") || 0.2;
 
-        const fireRequest = (paymentReference?: string) => {
+        const fireRequest = async (paymentReference?: string) => {
+          const deviceId = await getDeviceId().catch(() => "");
           socket!.emit("passenger:ride:request", {
             pickupAddress: pa || "Pickup",
             pickupLat: pickup[0],
@@ -952,6 +954,7 @@ export default function Track() {
             paymentMethod: paymentMethodRef || undefined,
             paymentReference,
             fare,
+            deviceId,
           });
         };
 
