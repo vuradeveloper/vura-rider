@@ -2,14 +2,14 @@ import "../global.css";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { View, Text, ActivityIndicator, AppState } from "react-native";
 import { useAuth } from "@/lib/auth";
 import { useAppStore } from "@/lib/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getActiveRide } from "@/services/RideService";
+import { getActiveRide, getRide, getRideHistory, submitRating } from "@/services/RideService";
 import { getSocket } from "@/lib/socket";
 
 const queryClient = new QueryClient();
@@ -211,6 +211,7 @@ function AuthGate() {
 
 function RootLayout() {
   const url = Linking.useURL();
+  const router = useRouter();
 
   // Capture referral/affiliate codes from deep links like vura-rider://r/VURA-CODE
   useEffect(() => {
@@ -241,6 +242,44 @@ function RootLayout() {
       responseListener.remove();
     };
   }, []);
+
+  // Uber-style forgotten-rating re-prompt: if the last completed ride was never
+  // rated, bring the rider to its receipt (which shows the rating/tip UI) when
+  // they open the app. Uses a short local dedupe so it doesn't nag repeatedly.
+  const unframedRatingRef = useRef<string | null>(null);
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await getRideHistory(1, 5);
+        const unrated = (res?.rides || []).find(
+          (r: any) => r.status === "completed" && !r.my_rating
+        );
+        const cached = await AsyncStorage.getItem(
+          "vura.ride.unrated-prompted"
+        );
+        if (unrated && unrated.id !== cached) {
+          await AsyncStorage.setItem(
+            "vura.ride.unrated-prompted",
+            unrated.id
+          );
+          if (unframedRatingRef.current !== unrated.id) {
+            unframedRatingRef.current = unrated.id;
+            router.replace(`/ride/receipt?rideId=${unrated.id}`);
+          }
+        }
+      } catch {
+        // offline / not signed in — skip
+      }
+    };
+    const launch = setTimeout(check, 2500);
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") check();
+    });
+    return () => {
+      clearTimeout(launch);
+      sub.remove();
+    };
+  }, [router]);
 
   return (
     <ErrorBoundary>

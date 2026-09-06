@@ -19,6 +19,11 @@ function mapRide(row) {
         my_rating: row.my_rating ?? null,
         rating_score: row.rating_score ?? null,
         rating_comment: row.rating_comment ?? null,
+        // The authoritative route the DRIVER is following (array of {lat,lng}),
+        // so the rider draws the EXACT same line — no per-app route mismatch.
+        route: Array.isArray(row.route_data)
+            ? row.route_data
+            : row.route_data?.coordinates ?? null,
     };
 }
 // GET /api/rides/me/active — Get current user's active ride
@@ -36,7 +41,8 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
               d.full_name AS driver_name, d.phone AS driver_phone,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
-              rat.score AS rating_score, rat.comment AS rating_comment
+              rat.score AS rating_score, rat.comment AS rating_comment,
+              r.route_data
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
        LEFT JOIN users d ON d.id = r.driver_id
@@ -122,7 +128,8 @@ router.get("/:id", auth_1.requireAuth, async (req, res) => {
               d.full_name AS driver_name, d.phone AS driver_phone,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
-              rat.score AS rating_score, rat.comment AS rating_comment
+              rat.score AS rating_score, rat.comment AS rating_comment,
+              r.route_data
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
        LEFT JOIN users d ON d.id = r.driver_id
@@ -299,5 +306,41 @@ router.patch("/:id/status", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// POST /api/rides/:id/route — The DRIVER saves the authoritative route line it
+// is following. The server stores it on the ride so the RIDER can draw the
+// EXACT same route (single source of truth — no more route mismatch between
+// driver and rider apps).
+router.post("/:id/route", auth_1.requireAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const route = req.body?.route;
+        if (!Array.isArray(route) || route.length < 2) {
+            res.status(400).json({ error: "route must be an array of {latitude,longitude}" });
+            return;
+        }
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!user) {
+            res.status(401).json({ error: "User not synced" });
+            return;
+        }
+        const ride = await (0, database_1.queryOne)(`UPDATE rides SET route_data = $1::jsonb, updated_at = NOW()
+       WHERE id = $2 AND driver_id = $3
+       RETURNING id`, [JSON.stringify(route), id, user.id]);
+        if (!ride) {
+            res.status(404).json({ error: "Ride not found or not your ride" });
+            return;
+        }
+        res.json({ success: true });
+    }
+    catch (err) {
+        console.error("Save route error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// Ensure the route_data column exists (idempotent migration).
+async function ensureRouteColumn() {
+    await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS route_data JSONB`).catch(() => { });
+}
+ensureRouteColumn();
 exports.default = router;
 //# sourceMappingURL=rides.js.map

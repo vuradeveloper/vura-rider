@@ -42,6 +42,9 @@ export interface RideWithDetails extends Ride {
   driver_lat: number | null;
   driver_lng: number | null;
   driver_heading: number | null;
+  // The authoritative route the driver is following (array of {latitude,longitude})
+  // — the rider draws this exact line so both sides match.
+  route?: { latitude: number; longitude: number }[] | null;
   my_rating?: number | null;
   rating_score?: number | null;
   rating_comment?: string | null;
