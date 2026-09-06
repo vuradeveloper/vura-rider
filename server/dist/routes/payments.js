@@ -501,17 +501,19 @@ router.get("/driver/earnings/pending", auth_1.requireAuth, async (req, res) => {
             return;
         }
         // Real available earnings for the driver: the sum of completed-ride fares
-        // paid BY CARD (cash rides are paid in hand — never withdrawable) minus
+        // (the same source the home screen uses — see /api/drivers/stats) minus
         // what has already been paid out in successful withdrawals. This keeps the
         // wallet in sync with the dashboard figure instead of showing R0 when the
-        // driver_earnings table wasn't populated for older rides.
+        // driver_earnings table wasn't populated for older rides (or when demo
+        // rides were booked as cash — cash is still earned and shown on the
+        // dashboard, so it must appear in the wallet too).
         const earnings = await (0, database_1.queryOne)(`SELECT
          (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
-           WHERE driver_id = $1 AND status = 'completed' AND payment_method = 'card')
+           WHERE driver_id = $1 AND status = 'completed')
          - (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
            WHERE driver_id = $1 AND status = 'success') AS total_earnings,
          (SELECT COUNT(*)::int FROM rides
-           WHERE driver_id = $1 AND status = 'completed' AND payment_method = 'card') AS total_rides`, [user.id]);
+           WHERE driver_id = $1 AND status = 'completed') AS total_rides`, [user.id]);
         res.json(earnings || { total_rides: 0, total_earnings: 0 });
     }
     catch (err) {
