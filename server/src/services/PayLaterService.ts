@@ -113,6 +113,7 @@ export interface EnrollInput {
   accountNumber: string;
   cardToken?: string;
   identityFingerprint?: string;
+  deviceId?: string;
 }
 
 export async function enrollPayLater(dbUserId: string, input: EnrollInput) {
@@ -126,7 +127,13 @@ export async function enrollPayLater(dbUserId: string, input: EnrollInput) {
 
   const fingerprint = (
     input.identityFingerprint ||
-    `${input.accountNumber}|${user.phone || user.email || ""}`
+    // Normalize the account-holder name + account + device → a unique, harder
+    // to forge identity fingerprint. Lowercased + whitespace-collapsed so the
+    // same person opening multiple accounts with case/space variations is
+    // caught as the SAME identity.
+    [input.accountHolder || "", input.accountNumber || "", input.deviceId || user.phone || user.email || ""]
+      .map((v) => String(v).toLowerCase().replace(/\s+/g, " "))
+      .join("|")
   ).toLowerCase();
 
   const blacklisted = await queryOne<{ id: string }>(
@@ -162,6 +169,17 @@ export async function enrollPayLater(dbUserId: string, input: EnrollInput) {
     bankCode: input.bankCode,
     accountNumber: input.accountNumber,
   });
+
+  // ⚠️ Anti-fraud: the bank account MUST be verified by the provider before any
+  // credit is granted. In mock mode this is always true; live mode requires a
+  // real (name-matching) bank verification so a random account number cannot
+  // be used to open a Pay Later line.
+  if (!mandate.bankVerified) {
+    throw new Error(
+      "Your bank account could not be verified. Confirm the account holder name matches your ID and try again."
+    );
+  }
+
   const cardHold = input.cardToken
     ? await iVerve.validateCardHold(input.cardToken)
     : { verified: true, holdReference: "no-card-on-file" };
@@ -359,6 +377,38 @@ export async function runMonthlyCollection(): Promise<CollectionSummary> {
       fare,
       `PL-${ride.id}`
     );
+
+    // ── Card fallback ──
+    // If the debit-order (mandate) fails, try the rider's saved card before
+    // marking the attempt failed. This raises recovery rate and only freezes /
+    // blacklists accounts that truly can't pay by ANY instrument.
+    if (!result.success && account.card_token) {
+      const cardRef = `PLC-${ride.id}-${attemptNumber}`;
+      const cardResult = await iVerve.collectCard(account.card_token, fare, cardRef).catch(() => ({
+        success: false,
+        error: "card collection unavailable",
+      }));
+      if (cardResult.success) {
+        await execute(
+          "UPDATE rides SET payment_status = 'paid', due_at = NULL WHERE id = $1",
+          [ride.id]
+        );
+        await execute(
+          `UPDATE pay_later_accounts
+           SET outstanding = GREATEST(outstanding - $1, 0), updated_at = NOW()
+           WHERE user_id = $2`,
+          [fare, ride.passenger_id]
+        );
+        await execute(
+          `INSERT INTO payment_collections (rider_id, ride_id, amount, attempt_number, result, provider)\n           VALUES ($1, $2, $3, $4, 'success', 'card')`,
+          [ride.passenger_id, ride.id, fare, attemptNumber]
+        );
+        summary.attempted++;
+        summary.succeeded++;
+        summary.details.push({ rideId: ride.id, attempt: attemptNumber, result: "success", overdue: false });
+        continue;
+      }
+    }
 
     summary.attempted++;
 

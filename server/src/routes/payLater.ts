@@ -61,7 +61,7 @@ router.post(
   resolveDbUserId,
   async (req: PayLaterRequest, res: Response) => {
     try {
-      const { accountHolder, bankCode, accountNumber, cardToken, identityFingerprint } = req.body;
+      const { accountHolder, bankCode, accountNumber, cardToken, identityFingerprint, deviceId } = req.body;
       if (!accountHolder || !bankCode || !accountNumber) {
         res
           .status(400)
@@ -74,6 +74,7 @@ router.post(
         accountNumber,
         cardToken,
         identityFingerprint,
+        deviceId,
       });
       res.status(201).json(result);
     } catch (err: any) {

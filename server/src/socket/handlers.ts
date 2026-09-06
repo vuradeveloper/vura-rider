@@ -92,7 +92,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
     // ── Passenger: request ride ──
     socket.on("passenger:ride:request", async (data) => {
       try {
-        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare } = data;
+        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId } = data;
         let dbUserId = await getDbUserId();
 
         if (!dbUserId) {
@@ -113,6 +113,62 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         if (!dbUserId) {
           throw new Error("Passenger account not synced with database yet. Try again in a moment.");
+        }
+
+        // ── Fraud / abuse guard for Pay Later rides ──
+        // Server-authoritative, NEVER trust the client: the rider must have an
+        // active, non-frozen Pay Later account, the fare must fit the remaining
+        // credit, they must not be blacklisted, and they must be under the
+        // per-day / per-month velocity caps. Violations block the ride.
+        if (paymentMethod === "pay_later") {
+          try {
+            const acct = await queryOne<any>(
+              `SELECT id, status, credit_limit, outstanding, identity_fingerprint
+               FROM pay_later_accounts WHERE user_id = $1`,
+              [dbUserId]
+            );
+            const available = acct
+              ? Number(acct.credit_limit || 0) - Number(acct.outstanding || 0)
+              : 0;
+            if (!acct || acct.status !== "active" || available <= 0) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason:
+                  "Pay Later is not active on your account or you have no remaining credit. Add a card or repay your balance first.",
+              });
+              return;
+            }
+            // Velocity caps — block rapid rebooking / farming.
+            const { today = 0, month = 0 } = await queryOne<any>(
+              `SELECT
+                 COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int AS today,
+                 COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE))::int AS month
+               FROM rides
+               WHERE passenger_id = $1 AND payment_method = 'pay_later'`,
+              [dbUserId]
+            ) || {};
+            if ((today || 0) >= 2 || (month || 0) >= 8) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason: "You've reached your Pay Later ride limit. Please repay or use another payment method.",
+              });
+              return;
+            }
+            const fareNum = Number(fare ?? 0);
+            if (fareNum <= 0 || fareNum > available) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason: `This ride (R${fareNum.toFixed(2)}) exceeds your available Pay Later credit (R${available.toFixed(2)}).`,
+              });
+              return;
+            }
+          } catch (e: any) {
+            socket.emit("ride:requested:ack", {
+              success: false,
+              reason: "Pay Later could not be verified. Please try another payment method.",
+            });
+            return;
+          }
         }
 
         // ── Pre-booking payment (best-effort, non-blocking) ──
@@ -180,10 +236,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
         const ride = await queryOne<any>(
-          `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9)
+          `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
            RETURNING *`,
-          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null]
+          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null]
         );
 
         // Link the successful card charge to this ride so it can be refunded on cancel.
@@ -526,16 +582,36 @@ export function setupSocketHandlers(io: SocketIOServer) {
     // ── Driver: accept ride request ──
     socket.on("driver:ride:accept", async (data) => {
       try {
-        const { rideId } = data;
+        const { rideId, deviceId } = data;
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
-        const ride = await queryOne<{ id: string; passenger_id: string; status: string; estimated_fare: number | null }>(
-          "SELECT id, passenger_id, status, estimated_fare FROM rides WHERE id = $1 AND status = 'searching'",
+        const ride = await queryOne<{ id: string; passenger_id: string; status: string; estimated_fare: number | null; device_id?: string | null }>(
+          "SELECT id, passenger_id, status, estimated_fare, device_id FROM rides WHERE id = $1 AND status = 'searching'",
           [rideId]
         );
         if (!ride) {
           socket.emit("ride:accepted:ack", { success: false, error: "Ride no longer available" });
           return;
+        }
+        // ── Self-collusion guard ──
+        // Block a driver accepting their OWN ride request (same device = one
+        // person operating both rider + driver accounts to farm money/rewards).
+        if (ride.device_id && deviceId && ride.device_id === deviceId) {
+          // Also check the driver's own device history — if this device has
+          // ever been used to create a passenger ride, block.
+          const driverDeviceUsedAsPassenger = await queryOne<{ id: string }>(
+            `SELECT id FROM rides
+             WHERE passenger_id = $1 AND device_id = $2
+             LIMIT 1`,
+            [ride.passenger_id, deviceId]
+          ).catch(() => null);
+          if (driverDeviceUsedAsPassenger || ride.device_id === deviceId) {
+            socket.emit("ride:accepted:ack", {
+              success: false,
+              error: "You cannot accept this ride from this device.",
+            });
+            return;
+          }
         }
         await execute("UPDATE rides SET driver_id = $1, status = 'accepted' WHERE id = $2", [dbUserId, rideId]);
         socket.join(`ride:${rideId}`);

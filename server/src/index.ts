@@ -297,7 +297,8 @@ async function start() {
         ALTER TABLE rides
         ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'x',
-        ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE
+        ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS device_id VARCHAR(100)
       `);
       // Driver verification status — gates "Go Online" until docs are approved.
       await execute(`

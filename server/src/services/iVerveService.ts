@@ -72,3 +72,17 @@ export async function collectMandate(
   }
   return { success: true, reference: randomId("mock-collect") };
 }
+
+// Fallback collection from a saved card token when the mandate (debit order)
+// fails. Raises recovery before an account is frozen/blacklisted.
+export async function collectCard(
+  cardToken: string,
+  amount: number,
+  reference: string
+): Promise<CollectResult> {
+  requireMock();
+  if (process.env.PAYMENTS_MOCK_FAIL_COLLECT === "1") {
+    return { success: false, error: "Mock card collection failed" };
+  }
+  return { success: true, reference: randomId("mock-card-collect") };
+}
