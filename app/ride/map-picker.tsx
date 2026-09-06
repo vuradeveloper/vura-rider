@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
@@ -14,6 +15,7 @@ import MapView, { Marker } from "@/components/MapView";
 import * as Location from "expo-location";
 import { updateRidePickup } from "@/services/RideService";
 import { getSocket } from "@/lib/socket";
+import { apiFetch } from "@/lib/api";
 
 interface Entrance {
   name: string;
@@ -64,6 +66,8 @@ export default function MapPicker() {
   const rideId = (params.rideId as string) || "";
   const type = (params.type as "pickup" | "dropoff" | "stop") || "pickup";
   const entranceSelect = params.entranceSelect === "true";
+  const dropPin = params.dropPin === "1";
+  const suggestName = (params.suggestName as string) || "";
   const mallLat = params.lat ? parseFloat(params.lat as string) : null;
   const mallLon = params.lon ? parseFloat(params.lon as string) : null;
   const mallName = (params.name as string) || "";
@@ -74,6 +78,9 @@ export default function MapPicker() {
   const [locating, setLocating] = useState(false);
   const [initialCoords, setInitialCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [communityName, setCommunityName] = useState(suggestName);
+  const [savedCommunity, setSavedCommunity] = useState(false);
+  const [savingCommunity, setSavingCommunity] = useState(false);
 
   // Entrance selector state
   const [entrances, setEntrances] = useState<Entrance[]>([]);
@@ -303,6 +310,33 @@ export default function MapPicker() {
       latitudeDelta: 0.015,
       longitudeDelta: 0.015,
     }, 300);
+  };
+
+  // Saves the dropped pin as a community place so every rider can find it.
+  const handleSaveCommunity = async () => {
+    if (!region) return;
+    const clean = communityName.trim();
+    if (!clean || clean.length < 2) {
+      setCommunityName(suggestName);
+      return;
+    }
+    setSavingCommunity(true);
+    try {
+      await apiFetch("/api/search/community", {
+        method: "POST",
+        body: JSON.stringify({
+          name: clean,
+          address: address,
+          lat: region.latitude,
+          lng: region.longitude,
+        }),
+      });
+      setSavedCommunity(true);
+    } catch {
+      setSavedCommunity(false);
+    } finally {
+      setSavingCommunity(false);
+    }
   };
 
   // Confirms selection and saves to async storage
@@ -564,6 +598,42 @@ export default function MapPicker() {
               <Text className="text-xs text-muted-foreground mt-0.5" numberOfLines={1}>
                 {address}
               </Text>
+            </View>
+          </View>
+        )}
+
+        {dropPin && (
+          <View className="mb-4 rounded-2xl border border-emerald-500/40 bg-emerald-50/10 p-3">
+            <Text className="text-xs font-bold text-foreground mb-1">
+              🗂️ Save this place for everyone
+            </Text>
+            <Text className="text-[10px] text-muted-foreground mb-2">
+              New buildings (like student accommodation) aren't on any map yet. Name it —
+              the next rider searching it will find it instantly.
+            </Text>
+            <View className="flex-row items-center gap-2">
+              <TextInput
+                value={communityName}
+                onChangeText={setCommunityName}
+                placeholder="e.g. Horizon Heights"
+                placeholderTextColor="#80716b"
+                className="flex-1 bg-secondary rounded-xl px-3 py-2.5 text-sm text-foreground"
+              />
+              <TouchableOpacity
+                onPress={handleSaveCommunity}
+                disabled={savingCommunity || savedCommunity}
+                className={`px-4 py-2.5 rounded-xl ${
+                  savedCommunity ? "bg-emerald-600" : "bg-primary"
+                } items-center justify-center`}
+              >
+                {savingCommunity ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text className="text-xs font-bold text-white">
+                    {savedCommunity ? "Saved ✓" : "Save"}
+                  </Text>
+                )}
+              </TouchableOpacity>
             </View>
           </View>
         )}

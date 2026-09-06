@@ -238,4 +238,89 @@ router.get("/reverse", auth_1.requireAuth, async (req, res) => {
     }
 });
 exports.default = router;
+// ─────────────────────────────────────────────────────────────────────────────
+//  Community Places — user-added places ("drop a pin + name it") so new
+//  buildings / student accommodation that aren't in any map database become
+//  searchable by EVERY rider. This is the "Wikipedia for our map" layer.
+// ─────────────────────────────────────────────────────────────────────────────
+async function ensureCommunityTable() {
+    await (0, database_1.execute)(`
+    CREATE TABLE IF NOT EXISTS community_places (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      address TEXT,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      created_by UUID REFERENCES users(id),
+      uses_count INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (name, lat, lng)
+    )
+  `);
+}
+// GET /api/search/community?q=..&lat=..&lng=.. — community places (local-first).
+router.get("/community", auth_1.requireAuth, async (req, res) => {
+    try {
+        await ensureCommunityTable();
+        const q = String(req.query.q || "").trim().toLowerCase();
+        const lat = parseFloat(req.query.lat);
+        const lng = parseFloat(req.query.lng);
+        const limit = Math.min(20, parseInt(req.query.limit || "10", 10));
+        let rows = [];
+        if (q.length >= 2) {
+            rows = await (0, database_1.query)(`SELECT name, address, lat, lng, uses_count
+         FROM community_places
+         WHERE lower(name) LIKE $1 OR lower(address) LIKE $1
+         ORDER BY uses_count DESC, created_at DESC
+         LIMIT $2`, [`%${q}%`, limit]);
+        }
+        else {
+            // No query: return most-used community places (for the "Popular near you" strip).
+            rows = await (0, database_1.query)(`SELECT name, address, lat, lng, uses_count
+         FROM community_places
+         ORDER BY uses_count DESC, created_at DESC
+         LIMIT $2`, [limit]);
+        }
+        // If we have a location, sort by distance so local places rank first.
+        if (Number.isFinite(lat) && Number.isFinite(lng) && rows.length > 1) {
+            rows = [...rows].sort((a, b) => {
+                const da = Math.hypot(a.lat - lat, a.lng - lng);
+                const db = Math.hypot(b.lat - lat, b.lng - lng);
+                return da - db;
+            });
+        }
+        res.json({ provider: "community", results: rows });
+    }
+    catch (err) {
+        console.error("Community search error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// POST /api/search/community — rider names a dropped pin; upsert by (name, lat, lng).
+router.post("/community", auth_1.requireAuth, async (req, res) => {
+    try {
+        await ensureCommunityTable();
+        const { name, address, lat, lng } = req.body;
+        const cleanName = String(name || "").trim().slice(0, 255);
+        if (!cleanName || !Number.isFinite(parseFloat(lat)) || !Number.isFinite(parseFloat(lng))) {
+            res.status(400).json({ error: "name, lat and lng are required" });
+            return;
+        }
+        const firebaseUid = req.userId;
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
+        await (0, database_1.execute)(`INSERT INTO community_places (name, address, lat, lng, created_by, uses_count)
+       VALUES ($1, $2, $3, $4, $5, 1)
+       ON CONFLICT (name, lat, lng) DO UPDATE
+         SET address = EXCLUDED.address, uses_count = community_places.uses_count + 1`, [cleanName, String(address || "").slice(0, 500), parseFloat(lat), parseFloat(lng), user?.id]);
+        res.status(201).json({ success: true, name: cleanName });
+    }
+    catch (err) {
+        if (err.code === "42P01") {
+            res.status(201).json({ success: true });
+            return;
+        }
+        console.error("Save community place error:", err);
+        res.status(400).json({ error: err.message });
+    }
+});
 //# sourceMappingURL=search.js.map

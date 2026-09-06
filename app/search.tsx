@@ -109,6 +109,28 @@ export default function Search() {
     return merged;
   };
 
+  const fetchCommunity = async (term: string) => {
+    try {
+      const params = new URLSearchParams({ q: term });
+      if (gpsCoords) {
+        params.set("lat", String(gpsCoords.lat));
+        params.set("lng", String(gpsCoords.lng));
+      }
+      const res = await apiFetch<{ results: any[] }>(
+        `/api/search/community?${params.toString()}`
+      );
+      return (res?.results || []).map((r: any) => ({
+        name: r.name,
+        addr: r.address || "Community place",
+        lat: Number(r.lat),
+        lon: Number(r.lng),
+        community: true,
+      }));
+    } catch {
+      return [];
+    }
+  };
+
   const fetchGeocoders = async (term: string, lat?: number, lon?: number, bounded = false) => {
     // PRIMARY: Mapbox-backed search proxy on our server (key hidden server-side).
     // Returns used-friendly results and finds POIs malls/landmarks (the OSM
@@ -252,6 +274,15 @@ export default function Search() {
         let merged: any[] = [];
         const all: any[] = [];
         const seenAll = new Set<string>();
+        // Community places first — local, user-confirmed (finds new buildings).
+        const community = await fetchCommunity(q);
+        community.forEach((r: any) => {
+          const k = `${r.lat.toFixed(4)},${r.lon.toFixed(4)}`;
+          if (!seenAll.has(k)) {
+            seenAll.add(k);
+            all.push(r);
+          }
+        });
         for (const term of [...new Set(candidates)]) {
           const res = await fetchGeocoders(term, bias?.lat, bias?.lon);
           res.forEach((r: any) => {
@@ -382,6 +413,15 @@ export default function Search() {
     : recentSearches.length > 0
       ? recentSearches.slice(0, 2).map((s) => ({ name: s.name, addr: s.addr, lat: s.lat, lon: s.lng }))
       : defaultSuggestions;
+
+  const activeQueryText =
+    activeInput === "pickup"
+      ? pickup
+      : activeInput === "stop" && activeStopIndex !== null
+        ? waypoints[activeStopIndex]?.address || ""
+        : dropoff;
+
+  const isDropPinSuggest = !results.length && !loading && activeQueryText.trim().length >= 2;
 
   const addStopField = () => {
     if (waypoints.length < 5) {
@@ -538,7 +578,7 @@ export default function Search() {
 
         {/* Set Location on Map Option */}
         <TouchableOpacity
-          onPress={() => router.push({ pathname: "/ride/map-picker", params: { type: activeInput } })}
+          onPress={() => router.push({ pathname: "/ride/map-picker", params: { type: activeInput, dropPin: "1" } })}
           className="flex-row items-center gap-3 py-3.5 border-b border-border"
         >
           <View className="w-10 h-10 rounded-full bg-primary/10 items-center justify-center">
@@ -554,6 +594,26 @@ export default function Search() {
           </View>
           <Ionicons name="chevron-forward" size={16} color="#80716b" />
         </TouchableOpacity>
+
+        {isDropPinSuggest && (
+          <TouchableOpacity
+            onPress={() => router.push({ pathname: "/ride/map-picker", params: { type: activeInput, dropPin: "1", suggestName: activeQueryText.trim() } })}
+            className="flex-row items-center gap-3 py-3.5 border-b border-border"
+          >
+            <View className="w-10 h-10 rounded-full bg-secondary items-center justify-center">
+              <Ionicons name="location-outline" size={18} color="#166534" />
+            </View>
+            <View className="flex-1">
+              <Text className="text-sm font-bold text-foreground">
+                Can't find it? Drop a pin + name it
+              </Text>
+              <Text className="text-xs text-muted-foreground">
+                "Horizon Heights" not showing? Place the pin, name it — it's saved for everyone
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#80716b" />
+          </TouchableOpacity>
+        )}
 
         {loading && (
           <ActivityIndicator size="small" color="#e04e2f" style={{ marginVertical: 16 }} />
