@@ -67,9 +67,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "5a86fb93-18a4-4948-8c57-8e3e00f08024"
+        "projectId": "0a711fbe-6adf-44ea-8f9c-9f5eccfda8fb"
       }
     },
-    "owner": "vura-build"
+    "owner": "makhavhu"
   }
 }
