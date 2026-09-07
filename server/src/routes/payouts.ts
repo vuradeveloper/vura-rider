@@ -6,7 +6,7 @@ import { createTransferRecipient, transferFunds, paymentsMode } from "../service
 const router = Router();
 
 // Ensure the payouts table exists.
-async function ensurePayoutsTable() {
+export async function ensurePayoutsTable() {
   try {
     await execute(`
       CREATE TABLE IF NOT EXISTS payouts (
@@ -219,5 +219,10 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     res.status(500).json({ error: err.message });
   }
 });
+
+// Create the payouts table at server startup (not just on first withdrawal) so
+// ANY query that joins/subqueries payouts (e.g. the wallet pending-earnings
+// endpoint) never 500s on a missing table.
+ensurePayoutsTable();
 
 export default router;

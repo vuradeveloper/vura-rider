@@ -4,6 +4,7 @@ const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
+const payouts_1 = require("./payouts");
 const router = (0, express_1.Router)();
 // Ensure the payments table exists (one-time, per server)
 async function ensurePaymentsTable() {
@@ -507,6 +508,10 @@ router.get("/driver/earnings/pending", auth_1.requireAuth, async (req, res) => {
         // driver_earnings table wasn't populated for older rides (or when demo
         // rides were booked as cash — cash is still earned and shown on the
         // dashboard, so it must appear in the wallet too).
+        // Ensure the payouts table exists — if it's missing the subquery below
+        // would 500 ("relation payouts does not exist") and the app falls back to
+        // showing R0.00 instead of the real balance.
+        await (0, payouts_1.ensurePayoutsTable)();
         const earnings = await (0, database_1.queryOne)(`SELECT
          (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
            WHERE driver_id = $1 AND status = 'completed')

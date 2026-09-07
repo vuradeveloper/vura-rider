@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.ensurePayoutsTable = ensurePayoutsTable;
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
@@ -194,5 +195,9 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// Create the payouts table at server startup (not just on first withdrawal) so
+// ANY query that joins/subqueries payouts (e.g. the wallet pending-earnings
+// endpoint) never 500s on a missing table.
+ensurePayoutsTable();
 exports.default = router;
 //# sourceMappingURL=payouts.js.map

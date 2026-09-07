@@ -8,6 +8,7 @@ import {
   refundTransaction,
   paymentsMode,
 } from "../services/paystackPayment";
+import { ensurePayoutsTable } from "./payouts";
 
 const router = Router();
 
@@ -604,6 +605,10 @@ router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res
     // driver_earnings table wasn't populated for older rides (or when demo
     // rides were booked as cash — cash is still earned and shown on the
     // dashboard, so it must appear in the wallet too).
+    // Ensure the payouts table exists — if it's missing the subquery below
+    // would 500 ("relation payouts does not exist") and the app falls back to
+    // showing R0.00 instead of the real balance.
+    await ensurePayoutsTable();
     const earnings = await queryOne(
       `SELECT
          (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
