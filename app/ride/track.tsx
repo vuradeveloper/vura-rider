@@ -355,6 +355,9 @@ export default function Track() {
   // re-target the car without stopping the simulation.
   const startDemoAnimation = (points: { latitude: number; longitude: number }[], startStep = 0) => {
     if (points.length < 2) return;
+    // A real driver is streaming its live position — never override it with a
+    // local demo simulation (single source of truth: the driver's own sim).
+    if (hasRealDriverLocRef.current) return;
     demoRouteRef.current = points;
     demoStepRef.current = startStep;
     const idx = Math.min(startStep, points.length - 1);
@@ -550,8 +553,47 @@ export default function Track() {
           });
         });
         if (!accepted || demoCancelledRef.current) return;
-        // Driver info was already set by the socket handler — skip the fake
-        // driver setup below and go straight to route fetching.
+        // A REAL driver accepted over the socket — mirror the driver's own
+        // simulation exactly (driver-published route + live positions) instead
+        // of running a separate local demo car. From here the socket's
+        // `ride:driver:location` events are the single source of truth for
+        // where the car is.
+        try {
+          const { ride } = await getActiveRide();
+          if (ride) {
+            if (ride.id) {
+              setRideId(ride.id);
+              rideIdRef.current = ride.id;
+            }
+            // Draw the exact route the DRIVER is following (route_data).
+            if (Array.isArray(ride.route) && ride.route.length > 1) {
+              setStaticRoute(ride.route);
+              setDenseRoute(ride.route);
+              setRouteCoords(ride.route);
+              demoRouteRef.current = ride.route;
+            }
+            // Put the car where the driver actually is right now.
+            if (ride.driver_lat != null && ride.driver_lng != null) {
+              const liveLoc = {
+                lat: Number(ride.driver_lat),
+                lng: Number(ride.driver_lng),
+                bearing: Number(ride.driver_heading ?? 0) || 0,
+              };
+              setDriverLoc(liveLoc);
+              driverLocRef.current = liveLoc;
+            }
+            if (ride.status === "in_progress") {
+              demoPhaseRef.current = "to_dest";
+            } else {
+              demoPhaseRef.current = "to_pickup";
+            }
+          }
+        } catch (e) {
+          console.error("Failed to load real ride route:", e);
+        }
+        // No local demo simulation — live `ride:driver:location` + status
+        // events drive the car from here.
+        return;
       } else {
         // No socket could connect — keep searching. The socket effect will
         // emit a ride request and eventually land a real driver when the
@@ -563,7 +605,9 @@ export default function Track() {
       }
 
 
-      const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
+      const base = pickupCoordRef.current ?? pickupCoord;
+      if (!base) return;
+      const [baseLat, baseLng] = base as [number, number];
       const [endLat, endLng] = dropoffCoord ?? [
         baseLat + (Math.random() - 0.5) * 0.04,
         baseLng + (Math.random() - 0.5) * 0.04,
@@ -667,6 +711,7 @@ export default function Track() {
   // moving and the green line + pickup marker reflect the new location.
   useEffect(() => {
     if (isHistory) return;
+    if (hasRealDriverLocRef.current) return;
     if (demoPhaseRef.current !== "to_pickup") return;
     if (!pickupCoord) return;
     const cur = driverLocRef.current;
@@ -818,6 +863,18 @@ export default function Track() {
 
         socket.on("ride:driver:arrived", () => {
           setStatus("driver_arrived");
+          // Refresh the route line from the driver's published data (new leg
+          // may have been posted since the driver reached the pickup).
+          getActiveRide()
+            .then(({ ride }) => {
+              if (ride && Array.isArray(ride.route) && ride.route.length > 1) {
+                setStaticRoute(ride.route);
+                setDenseRoute(ride.route);
+                setRouteCoords(ride.route);
+                demoRouteRef.current = ride.route;
+              }
+            })
+            .catch(() => {});
           const active = useAppStore.getState().activeRide;
           if (active) {
             useAppStore.getState().setActiveRide({ ...active, status: "driver_arrived" });
@@ -826,6 +883,18 @@ export default function Track() {
 
         socket.on("ride:started", () => {
           setStatus("in_progress");
+          // Trip leg changed (pickup → destination) — reload the driver's
+          // route so the rider draws the exact same new line.
+          getActiveRide()
+            .then(({ ride }) => {
+              if (ride && Array.isArray(ride.route) && ride.route.length > 1) {
+                setStaticRoute(ride.route);
+                setDenseRoute(ride.route);
+                setRouteCoords(ride.route);
+                demoRouteRef.current = ride.route;
+              }
+            })
+            .catch(() => {});
           const active = useAppStore.getState().activeRide;
           if (active) {
             useAppStore.getState().setActiveRide({ ...active, status: "in_progress" });
@@ -837,6 +906,12 @@ export default function Track() {
         socket.on("ride:driver:location", (data) => {
           if (data?.lat != null && data?.lng != null) {
             hasRealDriverLocRef.current = true;
+            // Real driver positions are authoritative — stop any local demo
+            // animation so it can't fight the live stream.
+            if (demoAnimIntervalRef.current) {
+              clearInterval(demoAnimIntervalRef.current);
+              demoAnimIntervalRef.current = null;
+            }
             const bearing = data.bearing ?? data.heading ?? 0;
             setCarBearing(bearing);
             setDriverLoc({ lat: data.lat, lng: data.lng, bearing });
@@ -850,6 +925,21 @@ export default function Track() {
                 driver_lng: data.lng,
                 driver_heading: bearing,
               });
+            }
+
+            // First real fix: if we don't yet have the driver-published route,
+            // fetch it so the rider draws the EXACT same line as the driver.
+            if (demoRouteRef.current.length < 2) {
+              getActiveRide()
+                .then(({ ride }) => {
+                  if (ride && Array.isArray(ride.route) && ride.route.length > 1) {
+                    setStaticRoute(ride.route);
+                    setDenseRoute(ride.route);
+                    setRouteCoords(ride.route);
+                    demoRouteRef.current = ride.route;
+                  }
+                })
+                .catch(() => {});
             }
           }
         });
@@ -922,6 +1012,44 @@ export default function Track() {
                 license_plate: ride.driver_license_plate,
                 rating: ride.rating_score ?? null,
               });
+            }
+            // ── Resume the EXACT driver route + live position (Uber/Bolt style) ──
+            // The driver publishes its route + location to the server; the rider
+            // draws that same line and places the car where the driver ACTUALLY
+            // is right now — not a stale local simulation.
+            if (Array.isArray(ride.route) && ride.route.length > 1) {
+              setStaticRoute(ride.route);
+              demoRouteRef.current = ride.route;
+            }
+            if (ride.driver_lat != null && ride.driver_lng != null) {
+              const liveLoc = {
+                lat: Number(ride.driver_lat),
+                lng: Number(ride.driver_lng),
+                bearing: Number(ride.driver_heading ?? 0) || 0,
+              };
+              setDriverLoc(liveLoc);
+              driverLocRef.current = liveLoc;
+              // Match the car to that position on the route line.
+              const nearest = demoRouteRef.current.reduce(
+                (best: any, pt: any, i: number) => {
+                  const d = Math.hypot(
+                    pt.latitude - liveLoc.lat,
+                    pt.longitude - liveLoc.lng
+                  );
+                  return !best || d < best.d ? { d, i } : best;
+                },
+                null
+              );
+              if (nearest) {
+                demoStepRef.current = nearest.i;
+                setCarBearing(liveLoc.bearing);
+              }
+            }
+            // Record which ride phase the server says we're in.
+            if (ride.status === "accepted" || ride.status === "driver_arrived") {
+              demoPhaseRef.current = "to_pickup";
+            } else if (ride.status === "in_progress") {
+              demoPhaseRef.current = "to_dest";
             }
           } else {
             setError("Missing pickup/destination. Please search again.");
