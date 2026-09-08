@@ -186,8 +186,10 @@ function AuthGate() {
 
   // Restore the rider's active ride on app launch (it's per-account on the
   // server), so closing/reopening the app still shows the live trip and the
-  // "Go Back To Ride" banner. Clears the in-memory demo snapshot since we now
-  // have the authoritative state from the DB.
+  // "Back to ride" pill. But NEVER resurrect an ancient/stale ride — a stuck
+  // "driver_arrived"/"in_progress" from an hour+ ago (crash, forgot to finish,
+  // demo test) would otherwise show "Trip in progress" on EVERY login with no
+  // way to clear it. Anything older than this is treated as dead.
   useEffect(() => {
     if (loading || !user) return;
     let cancelled = false;
@@ -195,7 +197,15 @@ function AuthGate() {
       try {
         const { ride } = await getActiveRide();
         if (cancelled) return;
-        if (ride) {
+        if (ride && ride.id) {
+          const created = ride.created_at ? new Date(ride.created_at).getTime() : Date.now();
+          const ageMin = (Date.now() - created) / 60000;
+          if (ageMin > 240) {
+            // Stale ride from an old session — do NOT restore it. Clear any
+            // lingering minimized/pill state so the home screen is clean.
+            useAppStore.getState().resetRideState();
+            return;
+          }
           useAppStore.getState().setActiveRide(ride as any);
           useAppStore.getState().setSavedDemoRide(null);
           // Keep minimized state so the banner shows even right after launch.

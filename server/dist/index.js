@@ -49,7 +49,7 @@ const database_1 = require("./config/database");
 const firebase_1 = require("./config/firebase");
 // ── Import routes ──
 const users_1 = __importDefault(require("./routes/users"));
-const rides_1 = __importDefault(require("./routes/rides"));
+const rides_1 = __importStar(require("./routes/rides"));
 const payments_1 = __importDefault(require("./routes/payments"));
 const drivers_1 = __importDefault(require("./routes/drivers"));
 const earnings_1 = __importDefault(require("./routes/earnings"));
@@ -176,6 +176,18 @@ global.__vuraIo = io;
 // (first import ~15s after boot, then every 6h) so buildings that get named on
 // OSM over time automatically become searchable in the app.
 (0, OsmPlaceSyncService_1.startOsmPlaceSync)();
+// Clean up rides stuck in an "active" state for hours (crash / forgotten demo
+// ride) — without this a stuck "driver_arrived" ride surfaces as "Trip in
+// progress" on every login.
+setTimeout(() => {
+    (0, rides_1.cleanupStaleRides)().then((n) => {
+        if (n > 0)
+            console.log(`[StaleRides] expired ${n} stale ride(s) on boot`);
+    });
+}, 5000);
+setInterval(() => {
+    (0, rides_1.cleanupStaleRides)().catch(() => { });
+}, 15 * 60 * 1000);
 // ── 404 handler ──
 app.use((_req, res) => {
     res.status(404).json({ error: "Route not found" });

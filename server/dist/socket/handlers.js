@@ -84,6 +84,7 @@ function setupSocketHandlers(io) {
            LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
            WHERE r.passenger_id = $1
              AND r.status IN ('accepted','driver_arrived','in_progress')
+             AND r.created_at > NOW() - INTERVAL '240 minutes'
            ORDER BY r.created_at DESC LIMIT 1`, [dbUserId]);
                 if (active?.id) {
                     socket.join(`ride:${active.id}`);

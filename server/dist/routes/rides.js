@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.cleanupStaleRides = cleanupStaleRides;
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
@@ -81,6 +82,12 @@ function mapRide(row) {
             : row.route_data?.coordinates ?? null,
     };
 }
+// A ride is only "active" if it was created recently. If the app/server crashed
+// mid-ride (or a demo/test ride was never finished), a stuck "driver_arrived"
+// or "in_progress" row would otherwise be returned FOREVER and every login would
+// show "Trip in progress" → "Back to ride". We treat anything older than this as
+// dead so a fresh login never resurrects an ancient ride.
+const ACTIVE_RIDE_MAX_AGE_MINUTES = 240; // 4 hours
 // GET /api/rides/me/active — Get current user's active ride
 router.get("/me/active", auth_1.requireAuth, async (req, res) => {
     try {
@@ -103,7 +110,9 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
        LEFT JOIN ratings rat ON rat.ride_id = r.id AND rat.passenger_id = $2
-       WHERE ${column} = $1 AND r.status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
+       WHERE ${column} = $1
+         AND r.status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
+         AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
        ORDER BY r.created_at DESC LIMIT 1`, [user.id, user.id]);
         res.json({ ride: mapRide(ride) });
     }
@@ -112,6 +121,21 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// Periodically clean up rides stuck in "active" states past their freshness
+// window so they can never show up as "Trip in progress" / be accepted again.
+async function cleanupStaleRides() {
+    try {
+        const res = await (0, database_1.execute)(`UPDATE rides
+         SET status = 'expired', updated_at = NOW()
+       WHERE status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
+         AND created_at < NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'`);
+        return res?.rowCount ?? 0;
+    }
+    catch (err) {
+        console.error("cleanupStaleRides error:", err.message);
+        return 0;
+    }
+}
 // GET /api/rides/history — Get ride history with pagination
 router.get("/history", auth_1.requireAuth, async (req, res) => {
     try {

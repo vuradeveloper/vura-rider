@@ -12,7 +12,7 @@ import { getFirebaseApp } from "./config/firebase";
 
 // ── Import routes ──
 import usersRouter from "./routes/users";
-import ridesRouter from "./routes/rides";
+import ridesRouter, { cleanupStaleRides } from "./routes/rides";
 import paymentsRouter from "./routes/payments";
 import driversRouter from "./routes/drivers";
 import earningsRouter from "./routes/earnings";
@@ -156,6 +156,18 @@ startScheduler(io);
 // (first import ~15s after boot, then every 6h) so buildings that get named on
 // OSM over time automatically become searchable in the app.
 startOsmPlaceSync();
+
+// Clean up rides stuck in an "active" state for hours (crash / forgotten demo
+// ride) — without this a stuck "driver_arrived" ride surfaces as "Trip in
+// progress" on every login.
+setTimeout(() => {
+  cleanupStaleRides().then((n) => {
+    if (n > 0) console.log(`[StaleRides] expired ${n} stale ride(s) on boot`);
+  });
+}, 5000);
+setInterval(() => {
+  cleanupStaleRides().catch(() => {});
+}, 15 * 60 * 1000);
 
 export { io };
 
