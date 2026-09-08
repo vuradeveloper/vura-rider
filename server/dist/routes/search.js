@@ -90,7 +90,9 @@ router.get("/geocode", auth_1.requireAuth, async (req, res) => {
         return;
     }
     try {
-        const raw = (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
+        const base = (process.env.NOMINATIM_URL?.replace(/\/+$/, "") ||
+            "https://nominatim.openstreetmap.org");
+        const raw = (await fetch(`${base}/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
             (Number.isFinite(lat) && Number.isFinite(lng) ? `&lat=${lat}&lon=${lng}` : ""), { headers: { "User-Agent": "VuraRiderServer/1.0" } })
             .then((r) => (r.ok ? r.json() : []))
             .catch(() => []));
@@ -118,7 +120,9 @@ router.get("/reverse", auth_1.requireAuth, async (req, res) => {
         return;
     }
     try {
-        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+        const base = (process.env.NOMINATIM_URL?.replace(/\/+$/, "") ||
+            "https://nominatim.openstreetmap.org");
+        const url = `${base}/reverse?format=json&lat=${lat}&lon=${lng}`;
         const upstream = await fetch(url, { headers: { "User-Agent": "VuraRiderServer/1.0" } });
         const d = (await upstream.json());
         res.json({

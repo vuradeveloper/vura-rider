@@ -324,6 +324,10 @@ function RootLayout() {
           <Stack.Screen name="ride/fare-split" />
           <Stack.Screen name="ride/schedule" />
           <Stack.Screen
+            name="notifications"
+            options={{ presentation: "card" }}
+          />
+          <Stack.Screen
             name="wallet"
             options={{ presentation: "card" }}
           />

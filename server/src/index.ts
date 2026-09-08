@@ -28,6 +28,7 @@ import routeRouter from "./routes/route";
 import emailRouter from "./routes/email";
 import shareRouter, { sharePage } from "./routes/share";
 import payoutsRouter from "./routes/payouts";
+import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOsmPlaceSync, syncOsmPlaces, getOsmSyncStatus } from "./services/OsmPlaceSyncService";
 
@@ -126,6 +127,7 @@ app.use("/api/split", splitFareRouter);
 app.use("/api/tips", tipsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/payouts", payoutsRouter);
+app.use("/api/admin", adminRouter);
 app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);

@@ -65,6 +65,7 @@ const route_1 = __importDefault(require("./routes/route"));
 const email_1 = __importDefault(require("./routes/email"));
 const share_1 = __importStar(require("./routes/share"));
 const payouts_1 = __importDefault(require("./routes/payouts"));
+const admin_1 = __importDefault(require("./routes/admin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const OsmPlaceSyncService_1 = require("./services/OsmPlaceSyncService");
 // ── Socket handlers ──
@@ -151,6 +152,7 @@ app.use("/api/split", splitFare_1.default);
 app.use("/api/tips", tips_1.default);
 app.use("/api/notifications", notifications_1.default);
 app.use("/api/payouts", payouts_1.default);
+app.use("/api/admin", admin_1.default);
 app.use("/api/affiliates", affiliates_1.default);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", share_1.default);
