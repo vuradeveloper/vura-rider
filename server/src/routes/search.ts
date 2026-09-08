@@ -74,128 +74,35 @@ router.delete("/", requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// ── Mapbox-backed place search ──
-// GET /api/search?q=...&lat=...&lng=...&limit=8
-// Returns Google/Mapbox-quality place autocomplete (finds malls, landmarks,
-// businesses — not just roads). The Mapbox public token lives on the server,
-// never in the app. Falls back to OSM search if Mapbox is unset/unreachable.
-const MAPBOX_TOKEN = process.env.MAPBOX_PUBLIC_TOKEN || "";
-const MAPBOX_API = "https://api.mapbox.com";
+// ── OpenStreetMap (Nominatim) place search ──
+// GET /api/search/geocode?q=...&lat=...&lng=...&limit=6
+// Free, keyless place autocomplete from OpenStreetMap.
 
 router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || "").trim();
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
   const limit = Math.min(10, parseInt(req.query.limit as string || "6", 10));
-  if (!q) { res.json({ features: [] }); return; }
+  if (!q) { res.json({ results: [] }); return; }
 
   try {
-    const proximity =
-      Number.isFinite(lat) && Number.isFinite(lng)
-        ? `&proximity=${lng},${lat}`
-        : "";
+    const raw = (await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
+        (Number.isFinite(lat) && Number.isFinite(lng) ? `&lat=${lat}&lon=${lng}` : ""),
+      { headers: { "User-Agent": "VuraRiderServer/1.0" } }
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => [])) as any[];
 
-    // Fetch Mapbox (when a token exists) AND OSM Nominatim in parallel, then
-    // merge + score them so the best real place wins.
-    // (Mapbox alone often misses SA place/POI names like "Campus Square",
-    // returning only fuzzy street-name matches — OSM fills that gap.)
-    const [mapboxData, osmData] = await Promise.all([
-      MAPBOX_TOKEN
-        ? fetch(
-            `${MAPBOX_API}/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}` +
-              `&limit=${Math.min(10, limit + 4)}&country=za${proximity}&types=poi,address,locality,district,place`,
-            { headers: { "Accept-Encoding": "gzip" } }
-          )
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null)
-        : Promise.resolve(null),
-      fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
-          (Number.isFinite(lat) && Number.isFinite(lng) ? `&lat=${lat}&lon=${lng}` : ""),
-        { headers: { "User-Agent": "VuraRiderServer/1.0" } }
-      )
-        .then((r) => (r.ok ? r.json() : []))
-        .catch(() => []),
-    ]);
-
-    const tokens = q
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((t) => t.length > 1);
-
-    // Score: full-query prefix best, then ALL tokens present, then ANY token,
-    // then proximity bonus so local SA places outrank overseas look-alikes.
-    const haversineKm = (a: number, b: number) => {
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return 0;
-      const R = 6371;
-      const dLat = ((a - lat) * Math.PI) / 180;
-      const dLng = ((b - lng) * Math.PI) / 180;
-      const s1 = Math.sin(dLat / 2) ** 2;
-      const s2 =
-        Math.sin(dLng / 2) ** 2 *
-        Math.cos((lat * Math.PI) / 180) *
-        Math.cos((a * Math.PI) / 180);
-      return 2 * R * Math.asin(Math.sqrt(s1 + s2));
-    };
-
-    const scoreResult = (name: string, addr: string, rlat?: number, rlng?: number): number => {
-      const hay = `${name} ${addr}`.toLowerCase();
-      if (!hay) return 0;
-      const ql = q.toLowerCase();
-      let s = 0;
-      if (hay.startsWith(ql)) s += 5;
-      if (hay.includes(ql)) s += 4;
-      const all = tokens.length > 0 && tokens.every((t) => hay.includes(t));
-      const any = tokens.some((t) => hay.includes(t));
-      if (all) s += 3;
-      else if (any) s += 1;
-      // Everything else equal, being close to the user tips the ranking.
-      if (rlat != null && rlng != null) {
-        const dist = haversineKm(rlat, rlng);
-        if (dist < 50) s += 6; // same city
-        else if (dist < 250) s += 4;
-        else if (dist < 900) s += 2; // same country-ish
-        else if (dist < 3000) s += 1; // same continent
-      }
-      return s;
-    };
-
-    const merged = new Map<string, any>();
-    const add = (item: any) => {
-      if (item.lat == null || item.lng == null) return;
-      const key = `${item.lat.toFixed(4)},${item.lng.toFixed(4)}`;
-      const s = scoreResult(item.name, item.address, item.lat, item.lng);
-      const existing = merged.get(key);
-      if (!existing || existing._score < s) merged.set(key, { ...item, _score: s });
-    };
-
-    const mbData = mapboxData as { features?: any[] } | null;
-    const mapboxFeatures = (Array.isArray(mbData?.features) ? mbData!.features : []).map(
-      (f: any) => ({
-        name: f.text || f.place_name?.split(",")[0] || q,
-        address: String(f.place_name || "").split(",").slice(1).join(",").trim(),
-        lat: Number(f.center?.[1]),
-        lng: Number(f.center?.[0]),
-        type: f.place_type?.[0] || "place",
-      })
-    );
-    mapboxFeatures.forEach(add);
-
-    const osmResults = (Array.isArray(osmData) ? osmData : []).map((item: any) => ({
+    const results = (Array.isArray(raw) ? raw : []).map((item: any) => ({
       name: String(item.display_name || q).split(",")[0],
       address: String(item.display_name || "").split(",").slice(1).join(",").trim(),
       lat: parseFloat(item.lat),
       lng: parseFloat(item.lon),
       type: "osm",
-    }));
-    osmResults.forEach(add);
+    })).slice(0, limit);
 
-    const results = Array.from(merged.values())
-      .sort((a, b) => b._score - a._score)
-      .slice(0, limit)
-      .map(({ _score, ...rest }: any) => rest);
-
-    res.json({ provider: MAPBOX_TOKEN ? "mapbox+osm" : "nominatim", results });
+    res.json({ provider: "nominatim", results });
   } catch (err: any) {
     console.error("Search geocode error:", err.message);
     res.status(502).json({ error: "Search failed. Please try again." });
@@ -203,7 +110,7 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
 });
 
 // GET /api/search/reverse?lat=..&lng=..
-// Reverse-geocodes a coordinate to a human address (Mapbox-first, OSM fallback).
+// Reverse-geocodes a coordinate to a human address via OSM Nominatim.
 router.get("/reverse", requireAuth, async (req: AuthRequest, res: Response) => {
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
@@ -212,21 +119,6 @@ router.get("/reverse", requireAuth, async (req: AuthRequest, res: Response) => {
     return;
   }
   try {
-    if (MAPBOX_TOKEN) {
-      const url =
-        `${MAPBOX_API}/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${MAPBOX_TOKEN}` +
-        `&limit=1&types=poi,address,locality,district,place`;
-      const upstream = await fetch(url, { headers: { "Accept-Encoding": "gzip" } });
-      if (upstream.ok) {
-        const data = (await upstream.json()) as any;
-        const f = data?.features?.[0];
-        if (f?.place_name) {
-          res.json({ provider: "mapbox", name: f.text || f.place_name.split(",")[0], address: f.place_name });
-          return;
-        }
-      }
-    }
-    // Fallback: OSM reverse.
     const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
     const upstream = await fetch(url, { headers: { "User-Agent": "VuraRiderServer/1.0" } });
     const d = (await upstream.json()) as any;

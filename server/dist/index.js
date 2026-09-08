@@ -129,7 +129,7 @@ app.use("/api/drivers", drivers_1.default);
 app.use("/api/earnings", earnings_1.default);
 app.use("/api/safety", safety_1.default);
 app.use("/api/searches", search_1.default);
-// Alias so Mapbox geocode/reverse also answer at /api/search (no 's') — the
+// Alias so search also answers at /api/search (no 's') — the
 // rider app calls /api/search/geocode + /api/search/reverse.
 app.use("/api/search", search_1.default);
 app.use("/api/disputes", disputes_1.default);

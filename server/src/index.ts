@@ -105,7 +105,7 @@ app.use("/api/drivers", driversRouter);
 app.use("/api/earnings", earningsRouter);
 app.use("/api/safety", safetyRouter);
 app.use("/api/searches", searchRouter);
-// Alias so Mapbox geocode/reverse also answer at /api/search (no 's') — the
+// Alias so search also answers at /api/search (no 's') — the
 // rider app calls /api/search/geocode + /api/search/reverse.
 app.use("/api/search", searchRouter);
 app.use("/api/disputes", disputesRouter);
