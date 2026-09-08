@@ -157,7 +157,7 @@ export default function Track() {
   // pickup/dropoff/waypoint state updates — which re-run the demo effect and
   // fire its cleanup — do NOT cancel an in-flight simulation.
   const demoCancelledRef = useRef(false);
-  const demoAnimIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const demoAnimIntervalRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   // Prevents chargeCardOnPickup from firing more than once per ride, even if
   // both the demo simulation AND a real socket event trigger it.
   const chargeFiredRef = useRef(false);
@@ -321,6 +321,47 @@ export default function Track() {
     driverLocRef.current = driverLoc;
   }, [driverLoc]);
 
+  // ── Smooth driver-car glide ──
+  // The socket delivers a fresh driver fix about once per second. Without
+  // interpolation the car would visibly jump between fixes. This tiny loop
+  // eases the displayed marker toward the latest target every frame (60fps)
+  // so the driver's car moves buttery-smooth even at 1 fix/sec. The demo
+  // animation path sets driverTargetRef = null and drives the marker itself.
+  const driverTargetRef = useRef<DriverLoc | null>(null);
+  useEffect(() => {
+    let raf: number | null = null;
+    const shortest = (from: number, to: number) => {
+      let d = (to - from) % 360;
+      if (d > 180) d -= 360;
+      if (d < -180) d += 360;
+      return d;
+    };
+    const loop = () => {
+      const t = driverTargetRef.current;
+      const cur = driverLocRef.current;
+      if (t) {
+        if (!cur) {
+          driverLocRef.current = t;
+          setDriverLoc(t);
+        } else {
+          const k = 0.18;
+          const lat = cur.lat + (t.lat - cur.lat) * k;
+          const lng = cur.lng + (t.lng - cur.lng) * k;
+          const tb = t.bearing ?? cur.bearing ?? 0;
+          const nb = cur.bearing != null ? cur.bearing + shortest(cur.bearing, tb) * 0.18 : tb;
+          const next = { lat, lng, bearing: nb };
+          driverLocRef.current = next;
+          setDriverLoc(next);
+        }
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => {
+      if (raf != null) cancelAnimationFrame(raf);
+    };
+  }, []);
+
   // Rider car converges toward the driver car simultaneously: as the driver
   // moves along its route to the pickup, the rider's own car marker glides
   // toward the driver so both vehicles approach each other at the same time,
@@ -335,9 +376,9 @@ export default function Track() {
           ? { lat: pickupCoord[0], lng: pickupCoord[1] }
           : null;
       if (!from) return prev;
-      // Move a fixed fraction of the remaining distance each driver tick so
-      // both cars converge instead of one teleporting to the other.
-      const t = 0.08;
+      // Move a small fraction of the remaining distance each frame (continuous,
+      // smooth convergence — the driver marker now glides too).
+      const t = 0.02;
       const lat = from.lat + (driverLoc.lat - from.lat) * t;
       const lng = from.lng + (driverLoc.lng - from.lng) * t;
       return { lat, lng, bearing: computeBearing({ latitude: from.lat, longitude: from.lng }, { latitude: driverLoc.lat, longitude: driverLoc.lng }) || 0 };
@@ -355,49 +396,69 @@ export default function Track() {
   // re-target the car without stopping the simulation.
   const startDemoAnimation = (points: { latitude: number; longitude: number }[], startStep = 0) => {
     if (points.length < 2) return;
-    // A real driver is streaming its live position — never override it with a
+    // A real driver is streaming its live position - never override it with a
     // local demo simulation (single source of truth: the driver's own sim).
     if (hasRealDriverLocRef.current) return;
     demoRouteRef.current = points;
     demoStepRef.current = startStep;
+    driverTargetRef.current = null; // glide layer steps aside; demo drives the marker itself
     const idx = Math.min(startStep, points.length - 1);
-    const startBearing = computeBearing(points[idx], points[Math.min(idx + 1, points.length - 1)] || points[idx]);
     setDenseRoute(points);
     setRouteCoords(points);
-    setDriverLoc({
-      lat: points[idx].latitude,
-      lng: points[idx].longitude,
-      bearing: Number.isFinite(startBearing) ? startBearing : 0,
-    });
-    driverLocRef.current = { lat: points[idx].latitude, lng: points[idx].longitude, bearing: Number.isFinite(startBearing) ? startBearing : 0 };
-    if (demoAnimIntervalRef.current) clearInterval(demoAnimIntervalRef.current);
-    demoAnimIntervalRef.current = setInterval(() => {
-    const route = demoRouteRef.current;
-    const step = demoStepRef.current;
-    // Skip past any duplicate/zero-length points so the car never stalls on a
-    // single spot — find the next point that is actually different.
-    let next = step;
-    while (next < route.length - 1 && route[next].latitude === route[next + 1].latitude && route[next].longitude === route[next + 1].longitude) {
-      next++;
-    }
-    if (next < route.length - 1) {
-      const cur = route[next];
-      const nxt = route[next + 1];
-      const bearing = computeBearing(cur, nxt);
-      setCarBearing(Number.isFinite(bearing) ? bearing : 0);
-      setDriverLoc({ lat: nxt.latitude, lng: nxt.longitude, bearing: Number.isFinite(bearing) ? bearing : 0 });
-      driverLocRef.current = { lat: nxt.latitude, lng: nxt.longitude, bearing: Number.isFinite(bearing) ? bearing : 0 };
-      demoStepRef.current = next + 1;
-    } else {
-        if (demoAnimIntervalRef.current) {
-          clearInterval(demoAnimIntervalRef.current);
-          demoAnimIntervalRef.current = null;
-        }
-        const done = demoOnDoneRef.current;
-        demoOnDoneRef.current = null;
-        if (done) done();
+    const startBearing = computeBearing(points[idx], points[Math.min(idx + 1, points.length - 1)] || points[idx]);
+    const startPos = { lat: points[idx].latitude, lng: points[idx].longitude, bearing: Number.isFinite(startBearing) ? startBearing : 0 };
+    setDriverLoc(startPos);
+    driverLocRef.current = startPos;
+
+    if (demoAnimIntervalRef.current) cancelAnimationFrame(demoAnimIntervalRef.current);
+    const STEP_MS = 140;
+    const ease = (v: number) => (v < 0.5 ? 2 * v * v : 1 - Math.pow(-2 * v + 2, 2) / 2);
+    const shortest = (from: number, to: number) => {
+      let d = (to - from) % 360; if (d > 180) d -= 360; if (d < -180) d += 360; return d;
+    };
+    let segStart = performance.now();
+    let prevBearing = Number.isFinite(startBearing) ? startBearing : 0;
+
+    const loop = (now: number) => {
+      const route = demoRouteRef.current;
+      const step = demoStepRef.current;
+      // Skip duplicate/zero-length points so the car never stalls on one spot.
+      let advance = 0;
+      while (
+        step + advance < route.length - 1 &&
+        route[step + advance].latitude === route[step + advance + 1].latitude &&
+        route[step + advance].longitude === route[step + advance + 1].longitude
+      ) {
+        advance++;
       }
-    }, 250);
+      const cur = route[step + advance];
+      const nxt = route[Math.min(step + advance + 1, route.length - 1)];
+      const rawProgress = Math.min(1, (now - segStart) / STEP_MS);
+      const progress = ease(rawProgress);
+      const lat = cur.latitude + (nxt.latitude - cur.latitude) * progress;
+      const lng = cur.longitude + (nxt.longitude - cur.longitude) * progress;
+      const targetBearing = computeBearing(cur, nxt);
+      prevBearing += shortest(prevBearing, Number.isFinite(targetBearing) ? targetBearing : prevBearing) * 0.18;
+      const pos = { lat, lng, bearing: prevBearing };
+      setDriverLoc(pos);
+      driverLocRef.current = pos;
+
+      if (rawProgress >= 1) {
+        demoStepRef.current = step + advance + 1;
+        segStart = performance.now();
+        setCarBearing(prevBearing);
+        if (demoStepRef.current >= route.length - 1) {
+          if (demoAnimIntervalRef.current) cancelAnimationFrame(demoAnimIntervalRef.current);
+          demoAnimIntervalRef.current = null;
+          const done = demoOnDoneRef.current;
+          demoOnDoneRef.current = null;
+          if (done) done();
+          return;
+        }
+      }
+      demoAnimIntervalRef.current = requestAnimationFrame(loop);
+    };
+    demoAnimIntervalRef.current = requestAnimationFrame(loop);
   };
 
   // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
@@ -482,7 +543,7 @@ export default function Track() {
               if (demoCancelledRef.current) return;
               const denseDest = densifyRoute(
                 routeToDest.length > 1 ? routeToDest : [[baseLat, baseLng], [endLat, endLng]].map((c) => ({ latitude: c[0], longitude: c[1] })),
-                60
+                20
               );
               demoPhaseRef.current = "to_dest";
               await new Promise<void>((resolve) => {
@@ -630,7 +691,7 @@ export default function Track() {
               latitude: c[0],
               longitude: c[1],
             })),
-        60
+        20
       );
 
       // 3. Glide to pickup — this leg is re-routable when the rider changes
@@ -681,7 +742,7 @@ export default function Track() {
               latitude: c[0],
               longitude: c[1],
             })),
-        60
+        20
       );
 
       // 5. Glide to destination
@@ -727,7 +788,7 @@ export default function Track() {
               latitude: c[0],
               longitude: c[1],
             })),
-        60
+        20
       );
       startDemoAnimation(dense);
     })();
@@ -741,7 +802,7 @@ export default function Track() {
     return () => {
       demoCancelledRef.current = true;
       if (demoAnimIntervalRef.current) {
-        clearInterval(demoAnimIntervalRef.current);
+        cancelAnimationFrame(demoAnimIntervalRef.current);
         demoAnimIntervalRef.current = null;
       }
     };
@@ -823,7 +884,7 @@ export default function Track() {
                   lng: Number(ride.driver_lng),
                   bearing: Number(ride.driver_heading ??  0) ||  0,
                 };
-                setDriverLoc(liveLoc); driverLocRef.current = liveLoc;
+                setDriverLoc(liveLoc); driverLocRef.current = liveLoc; driverTargetRef.current = liveLoc;
               }
             }
           } catch (e: any) {
@@ -939,12 +1000,14 @@ export default function Track() {
             // Real driver positions are authoritative — stop any local demo
             // animation so it can't fight the live stream.
             if (demoAnimIntervalRef.current) {
-              clearInterval(demoAnimIntervalRef.current);
+              cancelAnimationFrame(demoAnimIntervalRef.current);
               demoAnimIntervalRef.current = null;
             }
             const bearing = data.bearing ?? data.heading ?? 0;
             setCarBearing(bearing);
-            setDriverLoc({ lat: data.lat, lng: data.lng, bearing });
+            // Feed the glide layer with the latest authoritative fix — the marker
+            // eases toward it every frame (no more 1/sec teleport-jumps).
+            driverTargetRef.current = { lat: data.lat, lng: data.lng, bearing };
 
             // Sync location to Zustand store
             const active = useAppStore.getState().activeRide;
@@ -1059,6 +1122,7 @@ export default function Track() {
               };
               setDriverLoc(liveLoc);
               driverLocRef.current = liveLoc;
+              driverTargetRef.current = liveLoc;
               // Match the car to that position on the route line.
               const nearest = demoRouteRef.current.reduce(
                 (best: any, pt: any, i: number) => {
