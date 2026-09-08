@@ -66,6 +66,7 @@ const email_1 = __importDefault(require("./routes/email"));
 const share_1 = __importStar(require("./routes/share"));
 const payouts_1 = __importDefault(require("./routes/payouts"));
 const SchedulingService_1 = require("./services/SchedulingService");
+const OsmPlaceSyncService_1 = require("./services/OsmPlaceSyncService");
 // ── Socket handlers ──
 const handlers_1 = require("./socket/handlers");
 const database_2 = require("./config/database");
@@ -116,6 +117,19 @@ app.use("/api/route", routeLimiter, route_1.default);
 app.get("/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+// OSM places auto-sync status + manual trigger (admin/debug aid).
+app.get("/api/osm-places/status", (_req, res) => {
+    res.json({ ...(0, OsmPlaceSyncService_1.getOsmSyncStatus)(), area: "Johannesburg metro", intervalH: 6 });
+});
+app.post("/api/osm-places/sync", async (_req, res) => {
+    try {
+        const result = await (0, OsmPlaceSyncService_1.syncOsmPlaces)();
+        res.json(result);
+    }
+    catch (err) {
+        res.status(502).json({ error: err?.message || "Sync failed" });
+    }
+});
 // Root endpoint for load balancer health checks
 app.get("/", (_req, res) => {
     res.json({ status: "ok", service: "vura-rider-backend" });
@@ -155,6 +169,10 @@ exports.io = io;
 (0, handlers_1.setupSocketHandlers)(io);
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 (0, SchedulingService_1.startScheduler)(io);
+// Auto-sync new/updated named places from OpenStreetMap into community_places
+// (first import ~15s after boot, then every 6h) so buildings that get named on
+// OSM over time automatically become searchable in the app.
+(0, OsmPlaceSyncService_1.startOsmPlaceSync)();
 // ── 404 handler ──
 app.use((_req, res) => {
     res.status(404).json({ error: "Route not found" });

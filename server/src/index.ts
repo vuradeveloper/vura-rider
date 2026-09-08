@@ -29,6 +29,7 @@ import emailRouter from "./routes/email";
 import shareRouter, { sharePage } from "./routes/share";
 import payoutsRouter from "./routes/payouts";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
+import { startOsmPlaceSync, syncOsmPlaces, getOsmSyncStatus } from "./services/OsmPlaceSyncService";
 
 // ── Socket handlers ──
 import { setupSocketHandlers } from "./socket/handlers";
@@ -91,6 +92,18 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// OSM places auto-sync status + manual trigger (admin/debug aid).
+app.get("/api/osm-places/status", (_req, res) => {
+  res.json({ ...getOsmSyncStatus(), area: "Johannesburg metro", intervalH: 6 });
+});
+app.post("/api/osm-places/sync", async (_req, res) => {
+  try {
+    const result = await syncOsmPlaces();
+    res.json(result);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || "Sync failed" });
+  }
+});
 // Root endpoint for load balancer health checks
 app.get("/", (_req, res) => {
   res.json({ status: "ok", service: "vura-rider-backend" });
@@ -134,6 +147,11 @@ setupSocketHandlers(io);
 
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 startScheduler(io);
+
+// Auto-sync new/updated named places from OpenStreetMap into community_places
+// (first import ~15s after boot, then every 6h) so buildings that get named on
+// OSM over time automatically become searchable in the app.
+startOsmPlaceSync();
 
 export { io };
 

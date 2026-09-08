@@ -1,0 +1,1 @@
+{"version":3,"file":"OsmPlaceSyncService.d.ts","sourceRoot":"","sources":["../../src/services/OsmPlaceSyncService.ts"],"names":[],"mappings":"AAqLA,wBAAsB,aAAa,IAAI,OAAO,CAAC;IAAE,KAAK,EAAE,MAAM,CAAC;IAAC,KAAK,EAAE,MAAM,CAAA;CAAE,CAAC,CAsE/E;AAED,wBAAgB,iBAAiB,IAAI,MAAM,CAAC,OAAO,CAUlD;AAED,wBAAgB,gBAAgB,SAK/B;AAED,wBAAgB,gBAAgB;;;;;EAO/B"}
