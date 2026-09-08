@@ -109,19 +109,19 @@ export default function Account() {
   const isDriver = user?.role === "driver";
 
   const driverStatsQuery = useQuery<DriverStats>({
-    queryKey: ["driver-stats"],
+    queryKey: ["driver-stats", user?.uid ?? "anon"],
     queryFn: getDriverStats,
     enabled: isDriver && !!user,
   });
 
   const historyQuery = useQuery({
-    queryKey: ["ride-history"],
+    queryKey: ["ride-history", user?.uid ?? "anon"],
     queryFn: () => getRideHistory(1, 1),
     enabled: !isDriver && !!user,
   });
 
   const cardsQuery = useQuery<SavedCard[]>({
-    queryKey: ["saved-cards"],
+    queryKey: ["saved-cards", user?.uid ?? "anon"],
     queryFn: getSavedCards,
     enabled: !!user,
   });

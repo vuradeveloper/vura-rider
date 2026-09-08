@@ -88,7 +88,7 @@ export default function Activity() {
   const isDriver = user?.role === "driver";
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
-    queryKey: ["ride-history"],
+    queryKey: ["ride-history", user?.uid ?? "anon"],
     queryFn: () => getRideHistory(1, 30),
   });
 

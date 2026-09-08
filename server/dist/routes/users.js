@@ -41,6 +41,18 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
                 await (0, database_1.execute)(`UPDATE users SET ${updates.join(", ")} WHERE firebase_uid = $${idx}`, params);
             }
             const user = await (0, database_1.queryOne)("SELECT id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name, created_at FROM users WHERE firebase_uid = $1", [firebaseUid]);
+            // Existing user may have picked up a referral code since their first login
+            // (e.g. tapped an invite link after registering). Claim it now — the claim
+            // is idempotent, so it's a safe no-op if they've already been referred.
+            if (user?.id && referralCode) {
+                try {
+                    await (0, AffiliateService_1.ensureAffiliateTables)();
+                    await (0, AffiliateService_1.claimReferral)(user.id, String(referralCode));
+                }
+                catch (err) {
+                    console.warn("Referral claim skipped:", err.message);
+                }
+            }
             res.json({ user });
         }
         else {

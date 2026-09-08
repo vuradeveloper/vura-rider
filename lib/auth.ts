@@ -226,7 +226,22 @@ export async function login(email: string, password: string, role: Role) {
   const cred = await signInWithEmailAndPassword(auth, email, password);
   const token = await cred.user.getIdToken();
 
-  const { user: dbUser } = await syncWithBackend(token, { role });
+  // Pass along any pending referral code with the first login so the invitation
+  // is claimed even if the account already existed when the link was opened.
+  let referralCode: string | undefined;
+  try {
+    referralCode = (await AsyncStorage.getItem("vura.referral.code")) || undefined;
+  } catch {
+    referralCode = undefined;
+  }
+
+  const { user: dbUser } = await syncWithBackend(token, { role, referralCode });
+
+  if (referralCode) {
+    try {
+      await AsyncStorage.removeItem("vura.referral.code");
+    } catch {}
+  }
 
   const authUser: AuthUser = {
     uid: cred.user.uid,

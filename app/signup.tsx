@@ -131,8 +131,9 @@ export default function Signup() {
       } else {
         setError(err.message || "Signup failed. Please try again.");
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   async function showReferralInfo() {
@@ -401,6 +402,10 @@ export default function Signup() {
 
                   {otpError ? (
                     <Text className="text-xs text-red-500 font-semibold text-center">{otpError}</Text>
+                  ) : null}
+
+                  {error ? (
+                    <Text className="text-xs text-red-500 font-semibold text-center">{error}</Text>
                   ) : null}
 
                   <TouchableOpacity
