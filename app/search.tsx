@@ -455,7 +455,10 @@ export default function Search() {
         ? waypoints[activeStopIndex]?.address || ""
         : dropoff;
 
-  const isDropPinSuggest = !results.length && !loading && activeQueryText.trim().length >= 2;
+  // Show the "drop a pin + name it" option whenever the rider is typing a
+  // location (>=2 chars) — EVEN if matches exist below. Many buildings aren't
+  // on OSM, so this option must never disappear once results appear.
+  const isDropPinSuggest = !loading && activeQueryText.trim().length >= 2;
 
   const addStopField = () => {
     if (waypoints.length < 5) {
