@@ -102,7 +102,7 @@ function getSpeedForProgress(pct: number) {
 export default function Track() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { rideId: rideIdParam } = useLocalSearchParams<{ rideId?: string }>();
+  const { rideId: rideIdParam, live: liveParam } = useLocalSearchParams<{ rideId?: string; live?: string }>();
 
   const [rideId, setRideId] = useState<string | null>(rideIdParam ?? null);
   const [status, setStatus] = useState<RideStatus>("searching");
@@ -138,7 +138,7 @@ export default function Track() {
   const statusRef = useRef<RideStatus>("searching");
   const [tierName, setTierName] = useState("VuraGo");
   const mapRef = useRef<any>(null);
-  const isHistory = !!rideIdParam;
+  const isHistory = !!rideIdParam && liveParam !== "1";
   const demoRanRef = useRef(false);
   const prevPickupRef = useRef<[number, number] | null>(null);
 
@@ -800,6 +800,36 @@ export default function Track() {
         });
 
         socket.emit("passenger:connect");
+
+        // Resuming from the "Back to ride" pill / a killed-and-reopened app —
+        // pull the driver's published route + current position immediately so we
+        // paint the exact same line and car right away (the socket keeps them live).
+        if (useAppStore.getState().activeRide?.id) {
+
+          try {
+            const { ride } = await getActiveRide();
+            if (ride) {
+              if (ride.id) {
+                setRideId(ride.id); rideIdRef.current = ride.id;
+              }
+              if (ride.status) setStatus(ride.status as any);
+              if (Array.isArray(ride.route) && ride.route.length >  1) {
+                setStaticRoute(ride.route); setDenseRoute(ride.route); setRouteCoords(ride.route); demoRouteRef.current = ride.route;
+
+              }
+              if (ride.driver_lat != null && ride.driver_lng != null) {
+                const liveLoc = {
+                  lat: Number(ride.driver_lat),
+                  lng: Number(ride.driver_lng),
+                  bearing: Number(ride.driver_heading ??  0) ||  0,
+                };
+                setDriverLoc(liveLoc); driverLocRef.current = liveLoc;
+              }
+            }
+          } catch (e: any) {
+            console.error("[Track] Resume ride refresh error:", e.message || e);
+          }
+        }
 
         socket.on("ride:requested:ack", (data) => {
           if (data.success) {

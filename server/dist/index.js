@@ -167,6 +167,9 @@ const io = new socket_io_1.Server(server, {
 });
 exports.io = io;
 (0, handlers_1.setupSocketHandlers)(io);
+// Expose the socket server so REST routes (e.g. ride car-sim broadcast) can emit
+// to ride rooms without a circular import.
+global.__vuraIo = io;
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 (0, SchedulingService_1.startScheduler)(io);
 // Auto-sync new/updated named places from OpenStreetMap into community_places

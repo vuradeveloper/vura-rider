@@ -5,6 +5,64 @@ import { settleFirstRide } from "../services/AffiliateService";
 
 const router = Router();
 
+// ── Server-side car simulation ──
+// The driver app animates its car locally while open; when it's backgrounded/killed
+// the phone pauses its timers, so no `driver:location` events reach the rider. This
+// server mirror keeps the car moving (and the rider seeing the SAME route + car) even
+// when the driver's app is closed. It steps along the driver-published route,and
+// broadcasts to the ride room every tick.
+const rideSimTimers = new Map<string, ReturnType<typeof setInterval>>();
+const RIDE_SIM_STEP_MS = 900;
+const RIDE_SIM_STEPS_PER_TICK = 6;
+
+function getSimBearing(sLat: number, sLng: number, dLat: number, dLng: number) {
+  const toRad = (v: number) => (v * Math.PI) / 180;
+  const y = Math.sin(toRad(dLng - sLng)) * Math.cos(toRad(dLat));
+  const x = Math.cos(toRad(sLat)) * Math.sin(toRad(dLat)) - Math.sin(toRad(sLat)) * Math.cos(toRad(dLat)) * Math.cos(toRad(dLng - sLng));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function startServerRideSim(rideId: string, route: { latitude: number; longitude: number }[]) {
+  if (!Array.isArray(route) || route.length < 2) return;
+  const prev = rideSimTimers.get(rideId); if (prev) clearInterval(prev);
+  let step = 0;
+  const tick = setInterval(() => {
+    (async () => {
+      try {
+        step = Math.min(step + RIDE_SIM_STEPS_PER_TICK, route.length - 1);
+        const cur = route[step];
+        const nxt = route[Math.min(step +  1, route.length -  1)];
+        if (!cur) return;
+        const bearing = nxt ? getSimBearing(cur.latitude, cur.longitude, nxt.latitude, nxt.longitude) :  0;
+        await execute(
+          `UPDATE driver_profiles dp SET current_lat = $1, current_lng = $2, current_heading = $3
+           FROM rides r WHERE r.id = $4 AND r.driver_id = dp.user_id`,
+          [cur.latitude, cur.longitude, bearing, rideId]
+        ).catch(() => {});
+        const ride = await queryOne<{ status: string }>("SELECT status FROM rides WHERE id = $1", [rideId]).catch(() => null);
+        if (!ride || ["cancelled", "completed", "expired"].includes(ride.status) || step >= route.length -  1) {
+          clearInterval(tick);
+          rideSimTimers.delete(rideId);
+          return;
+        }
+        const io = (global as any).__vuraIo as
+          | { to: (room: string) => { emit: (ev: string, ...args: any[]) => void } }
+          | undefined;
+        io?.to(`ride:${rideId}`).emit("ride:driver:location", {
+          rideId: rideId,
+          lat: cur.latitude,
+          lng: cur.longitude,
+          bearing,
+          heading: bearing,
+        });
+      } catch (err: any) {
+        // transient DB/broadcast errors — keep pacing the sim
+      }
+    })();
+  }, RIDE_SIM_STEP_MS);
+  rideSimTimers.set(rideId, tick);
+}
+
 // Helper: map DB ride row to app-friendly format
 function mapRide(row: any) {
   if (!row) return null;
@@ -384,6 +442,11 @@ router.post("/:id/route", requireAuth, async (req: AuthRequest, res: Response) =
       [JSON.stringify(route), id, user.id]
     );
     if (!ride) { res.status(404).json({ error: "Ride not found or not your ride" }); return; }
+    // Start (or restart) the server-side car sim so the rider keeps seeing the
+    // driver's car move even when the driver's app is closed/backgrounded.
+
+    startServerRideSim(String(id), route);
+
     res.json({ success: true });
   } catch (err: any) {
     console.error("Save route error:", err);

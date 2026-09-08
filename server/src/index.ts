@@ -145,6 +145,10 @@ const io = new SocketIOServer(server, {
 
 setupSocketHandlers(io);
 
+// Expose the socket server so REST routes (e.g. ride car-sim broadcast) can emit
+// to ride rooms without a circular import.
+(global as any).__vuraIo = io;
+
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 startScheduler(io);
 

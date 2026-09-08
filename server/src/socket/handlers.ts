@@ -89,6 +89,38 @@ export function setupSocketHandlers(io: SocketIOServer) {
       ).catch((err) => console.warn("chat_messages table init warning:", err.message));
     };
 
+    // ── Passenger: (re)connect — rejoin active ride room + current driver position ──
+    socket.on("passenger:connect", async () => {
+      try {
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+        const active = await queryOne<any>(
+          `SELECT r.id, r.status,
+                  dp.current_lat, dp.current_lng, dp.current_heading
+           FROM rides r
+           LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+           WHERE r.passenger_id = $1
+             AND r.status IN ('accepted','driver_arrived','in_progress')
+           ORDER BY r.created_at DESC LIMIT 1`,
+          [dbUserId]
+        );
+        if (active?.id) {
+          socket.join(`ride:${active.id}`);
+          if (active.current_lat != null && active.current_lng != null) {
+            socket.emit("ride:driver:location", {
+              rideId: active.id,
+              lat: Number(active.current_lat),
+              lng: Number(active.current_lng),
+              bearing: Number(active.current_heading ?? 0) || 0,
+              heading: Number(active.current_heading ?? 0) || 0,
+            });
+          }
+        }
+      } catch (err: any) {
+        console.error("passenger:connect error:", err.message);
+      }
+    });
+
     // ── Passenger: request ride ──
     socket.on("passenger:ride:request", async (data) => {
       try {

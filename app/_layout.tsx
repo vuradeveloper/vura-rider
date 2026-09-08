@@ -3,7 +3,8 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { View, Text, ActivityIndicator, AppState } from "react-native";
+import { View, Text, ActivityIndicator, TouchableOpacity, AppState } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/lib/auth";
 import { useAppStore } from "@/lib/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -107,30 +108,42 @@ function ActiveRideBanner() {
     };
   }, [rideMinimized, activeRide]);
 
-    // Status-driven auto-return: no floating button. When the rider leaves the
-  // ride screen (X -> minimized) and later brings the app back to foreground
-  // while the ride is STILL ACTIVE, return them to the ride screen. When the
-  // ride completes/cancels, the socket/demo effect above has already cleared
-  // state, so nothing appears and the app correctly stays on the home page.
-  useEffect(() => {
-    if (!rideMinimized || !activeRide) return;
-    const active = ["searching", "accepted", "driver_arrived", "in_progress"].includes(activeRide.status);
-    if (!active) return;
-    const sub = AppState.addEventListener("change", (st) => {
-      if (st !== "active") return;
-      const cur = useAppStore.getState();
-      const activeNow = ["searching", "accepted", "driver_arrived", "in_progress"].includes(cur.activeRide?.status || "");
-      if (cur.rideMinimized && cur.activeRide && activeNow) {
-        const saved = cur.savedDemoRide;
-        if (saved) router.replace("/ride/track");
-        else if (cur.activeRide.id) router.replace(`/ride/track?rideId=${cur.activeRide.id}`);
-        else router.replace("/ride/track");
-      }
-    });
-    return () => sub.remove();
-  }, [rideMinimized, activeRide]);
+  if (!rideMinimized || !activeRide?.id) return null;
+  const activeStatus = ["searching", "accepted", "driver_arrived", "in_progress"].includes(activeRide.status);
+  if (!activeStatus) return null;
+  const saved = useAppStore.getState().savedDemoRide;
 
-  return null;
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        if (saved) router.replace("/ride/track");
+        else router.replace(`/ride/track?rideId=${activeRide.id}&live=1`);
+      }}
+      style={{
+        position: "absolute",
+        bottom: 96,
+        alignSelf: "center",
+        zIndex: 1000,
+        backgroundColor: "#e04e2f",
+        paddingHorizontal: 18,
+        paddingVertical: 10,
+        borderRadius: 999,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        shadowColor: "#000",
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 8,
+      }}
+    >
+      <Ionicons name="car-sport" size={16} color="#fff" />
+      <Text style={{ color: "#fff", fontWeight: "800", fontSize: 13 }}>
+        Back to ride
+      </Text>
+    </TouchableOpacity>
+  );
 }
 
 function AuthGate() {
@@ -264,7 +277,8 @@ function RootLayout() {
           );
           if (unframedRatingRef.current !== unrated.id) {
             unframedRatingRef.current = unrated.id;
-            router.replace(`/ride/receipt?rideId=${unrated.id}`);
+            // (Auto-redirect to the Receipt on app open removed — the rating/tip prompt
+            //  still lives inside the receipt/history flow where it belongs.)
           }
         }
       } catch {
@@ -284,6 +298,7 @@ function RootLayout() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
+        <View style={{ flex: 1 }}>
         <StatusBar style="auto" />
         <AuthGate />
         <Stack screenOptions={{ headerShown: false }}>
@@ -341,6 +356,7 @@ function RootLayout() {
           <Stack.Screen name="+not-found" />
         </Stack>
         <ActiveRideBanner />
+        </View>
       </QueryClientProvider>
     </ErrorBoundary>
   );
