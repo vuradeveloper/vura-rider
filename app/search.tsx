@@ -25,6 +25,7 @@ export default function Search() {
   const [pickup, setPickup] = useState("Locating...");
   const [dropoff, setDropoff] = useState("");
   const [results, setResults] = useState<any[]>([]);
+  const [radiusNote, setRadiusNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [entranceModal, setEntranceModal] = useState<{
     s: any;
@@ -320,13 +321,46 @@ export default function Search() {
           merged = await overpassSearch(words.slice(0, 2).join(" ") || q, bias.lat, bias.lon);
         }
 
-        // Nearest first so local (e.g. South African) results surface on top.
+        // ── Progressive radius: surface the NEAREST matches first ──
+        // Start with a small radius around the pickup. If nothing matches that
+        // name nearby, open up the search to the next radius band (5 → 10 → 25
+        // → 50 → 100 → 250 km), and keep expanding until at least one place
+        // with that name is found. Community places (user-confirmed pins) are
+        // always shown first — they're local by definition.
         if (bias && merged.length > 0) {
-          merged = [...merged].sort((a: any, b: any) => {
-            const da = haversineKm(bias!.lat, bias!.lon, a.lat, a.lon);
-            const db = haversineKm(bias!.lat, bias!.lon, b.lat, b.lon);
-            return da - db;
-          });
+          const withDist: any[] = merged.map((r: any) => ({
+            ...r,
+            _dist: haversineKm(bias!.lat, bias!.lon, Number(r.lat ?? r.latitude ?? 0), Number(r.lon ?? r.longitude ?? 0)),
+          }));
+          const community = withDist.filter((r: any) => r.community);
+          const others = withDist.filter((r: any) => !r.community);
+
+          // Radius bands in km. Pick the first band that yields at least one hit.
+          const RADII = [5, 10, 25, 50, 100, 250];
+          let band = RADII[0];
+          let within = others.filter((r: any) => r._dist <= band);
+          for (const r of RADII.slice(1)) {
+            if (within.length > 0) break;
+            band = r;
+            within = others.filter((x: any) => x._dist <= r);
+          }
+          // If even the widest band is empty, fall back to all matches (so
+          // far-away destinations / other cities still work), sorted nearest.
+          if (within.length === 0) within = others;
+
+          merged = [...community, ...within]
+            .sort((a: any, b: any) => a._dist - b._dist)
+            .map(({ _dist, ...rest }: any) => rest);
+
+          setRadiusNote(
+            community.length > 0 && others.length === 0
+              ? "Community places near you"
+              : within.length === others.length && others.length > 0
+                ? "Showing places anywhere"
+                : `Showing places within ${band} km`
+          );
+        } else {
+          setRadiusNote(null);
         }
 
         setResults(merged.slice(0, 9));
@@ -617,6 +651,15 @@ export default function Search() {
 
         {loading && (
           <ActivityIndicator size="small" color="#e04e2f" style={{ marginVertical: 16 }} />
+        )}
+
+        {radiusNote && results.length > 0 && (
+          <View className="flex-row items-center gap-1 px-1 py-1.5">
+            <Ionicons name="location" size={12} color="#80716b" />
+            <Text className="text-[11px] font-semibold text-muted-foreground">
+              {radiusNote}
+            </Text>
+          </View>
         )}
 
         {displayResults.map((s, i) => {
