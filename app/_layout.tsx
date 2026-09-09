@@ -12,6 +12,7 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getActiveRide, getRide, getRideHistory, submitRating } from "@/services/RideService";
 import { getSocket } from "@/lib/socket";
+import { persistActiveRide, loadActiveRideSnapshot } from "@/lib/store";
 
 const queryClient = new QueryClient();
 
@@ -190,34 +191,79 @@ function AuthGate() {
   // "driver_arrived"/"in_progress" from an hour+ ago (crash, forgot to finish,
   // demo test) would otherwise show "Trip in progress" on EVERY login with no
   // way to clear it. Anything older than this is treated as dead.
+  const restoreActiveRideRef = useRef<(() => Promise<void>) | null>(null);
+  restoreActiveRideRef.current = async () => {
+    try {
+      const { ride } = await getActiveRide();
+      if (ride && ride.id) {
+        const created = ride.created_at ? new Date(ride.created_at).getTime() : Date.now();
+        const ageMin = (Date.now() - created) / 60000;
+        if (ageMin > 240) {
+          // Stale ride from an old session — do NOT restore it. Clear any
+          // lingering minimized/pill state so the home screen is clean.
+          useAppStore.getState().resetRideState();
+          return;
+        }
+        useAppStore.getState().setActiveRide(ride as any);
+        useAppStore.getState().setSavedDemoRide(null);
+        // Keep minimized state so the banner shows even right after launch.
+        useAppStore.getState().setRideMinimized(true);
+        await persistActiveRide(ride as any);
+
+        // Auto-resume into the live trip (mirror the driver app). If we're
+        // already on the track screen, don't re-navigate (would double-mount).
+        const onTrack = segments[0] === "ride" && segments[1] === "track";
+        if (!onTrack) {
+          router.replace(`/ride/track?rideId=${ride.id}&live=1`);
+        }
+      } else {
+        // No server-active ride, but the OS may have remembered one locally
+        // (e.g. app was killed right after booking). Restore from the saved
+        // snapshot so the trip isn't silently lost on relaunch.
+        const saved = await loadActiveRideSnapshot();
+        if (saved?.id) {
+          const created = saved.created_at ? new Date(saved.created_at).getTime() : Date.now();
+          const ageMin = (Date.now() - created) / 60000;
+          if (ageMin > 240) {
+            useAppStore.getState().resetRideState();
+            return;
+          }
+          useAppStore.getState().setActiveRide(saved as any);
+          useAppStore.getState().setSavedDemoRide(null);
+          useAppStore.getState().setRideMinimized(true);
+          const onTrack2 = segments[0] === "ride" && segments[1] === "track";
+          if (!onTrack2) {
+            router.replace(`/ride/track?rideId=${saved.id}&live=1`);
+          }
+        }
+      }
+    } catch {
+      // ignore — no active ride or offline
+    }
+  };
+
   useEffect(() => {
     if (loading || !user) return;
     let cancelled = false;
     (async () => {
-      try {
-        const { ride } = await getActiveRide();
-        if (cancelled) return;
-        if (ride && ride.id) {
-          const created = ride.created_at ? new Date(ride.created_at).getTime() : Date.now();
-          const ageMin = (Date.now() - created) / 60000;
-          if (ageMin > 240) {
-            // Stale ride from an old session — do NOT restore it. Clear any
-            // lingering minimized/pill state so the home screen is clean.
-            useAppStore.getState().resetRideState();
-            return;
-          }
-          useAppStore.getState().setActiveRide(ride as any);
-          useAppStore.getState().setSavedDemoRide(null);
-          // Keep minimized state so the banner shows even right after launch.
-          useAppStore.getState().setRideMinimized(true);
-        }
-      } catch {
-        // ignore — no active ride or offline
-      }
+      await restoreActiveRideRef.current?.();
     })();
     return () => {
       cancelled = true;
     };
+  }, [user, loading]);
+
+  // When the app returns to the foreground (rider was backgrounded to use the
+  // driver's app), re-verify and auto-resume the live trip — same as a cold
+  // start. The driver app does this on launch; the rider must too.
+  useEffect(() => {
+    if (loading || !user) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        restoreActiveRideRef.current?.();
+      }
+    });
+    return () => sub.remove();
   }, [user, loading]);
 
   if (loading) {

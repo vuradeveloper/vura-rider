@@ -1,5 +1,47 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import type { RideWithDetails, Waypoint, NearbyDriver, EmergencyContact, ScheduledRide } from "./types";
+
+// ── Active-ride persistence (mirrors the driver app) ──
+// The driver survives app kills/backgrounds because it saves the ride request
+// to AsyncStorage and auto-resumes on launch. The rider must do the same, or
+// switching to the driver app (which backgrounds the rider) loses the trip.
+const ACTIVE_RIDE_KEY = "vura.ride.active";
+
+function isActiveStatus(status?: string): boolean {
+  return !!status && ["searching", "accepted", "driver_arrived", "in_progress"].includes(status);
+}
+
+export async function persistActiveRide(ride: RideWithDetails | null): Promise<void> {
+  try {
+    if (ride?.id && isActiveStatus(ride.status)) {
+      await AsyncStorage.setItem(ACTIVE_RIDE_KEY, JSON.stringify(ride));
+    } else {
+      await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+    }
+  } catch {
+    // best-effort — never block the UI on storage
+  }
+}
+
+export async function loadActiveRideSnapshot(): Promise<RideWithDetails | null> {
+  try {
+    const raw = await AsyncStorage.getItem(ACTIVE_RIDE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as RideWithDetails;
+    return parsed?.id && isActiveStatus(parsed.status) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearActiveRideSnapshot(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 interface UserProfile {
   uid: string;
@@ -75,7 +117,10 @@ export const useAppStore = create<AppState>()((set) => ({
   savedDemoRide: null,
 
   setUser: (user) => set({ user }),
-  setActiveRide: (activeRide) => set({ activeRide }),
+  setActiveRide: (activeRide) => {
+    set({ activeRide });
+    persistActiveRide(activeRide);
+  },
   setRideMinimized: (rideMinimized) => set({ rideMinimized }),
   setSavedDemoRide: (savedDemoRide) => set({ savedDemoRide }),
   setPickup: (pickup, pickupAddress) => set({ pickup, pickupAddress }),
@@ -89,7 +134,7 @@ export const useAppStore = create<AppState>()((set) => ({
   setEmergencyContacts: (emergencyContacts) => set({ emergencyContacts }),
   setSplitFareId: (splitFareId) => set({ splitFareId }),
   setTripSharing: (isSharingTrip, shareToken = null) => set({ isSharingTrip, shareToken }),
-  resetRideState: () =>
+  resetRideState: () => {
     set({
       activeRide: null,
       rideMinimized: false,
@@ -103,5 +148,7 @@ export const useAppStore = create<AppState>()((set) => ({
       splitFareId: null,
       isSharingTrip: false,
       shareToken: null,
-    }),
+    });
+    clearActiveRideSnapshot();
+  },
 }));
