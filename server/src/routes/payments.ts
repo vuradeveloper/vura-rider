@@ -599,12 +599,12 @@ router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res
     if (!user) { res.json({ total_rides: 0, total_earnings: 0 }); return; }
 
     // Real available earnings for the driver: the sum of completed-ride fares
-    // (the same source the home screen uses — see /api/drivers/stats) minus
-    // what has already been paid out in successful withdrawals. This keeps the
-    // wallet in sync with the dashboard figure instead of showing R0 when the
-    // driver_earnings table wasn't populated for older rides (or when demo
-    // rides were booked as cash — cash is still earned and shown on the
-    // dashboard, so it must appear in the wallet too).
+    // that were NOT paid in cash. Cash rides are excluded because the driver
+    // already received that money by hand at the end of the trip — including
+    // them in the wallet would let the driver withdraw the same amount twice
+    // (once in cash + once via payout). Card / affiliate / pay-later rides flow
+    // through Vura, so their fares are the true withdrawable balance.
+    //
     // Ensure the payouts table exists — if it's missing the subquery below
     // would 500 ("relation payouts does not exist") and the app falls back to
     // showing R0.00 instead of the real balance.
@@ -612,11 +612,13 @@ router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res
     const earnings = await queryOne(
       `SELECT
          (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
-           WHERE driver_id = $1 AND status = 'completed')
+           WHERE driver_id = $1 AND status = 'completed'
+             AND COALESCE(payment_method, '') <> 'cash')
          - (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
            WHERE driver_id = $1 AND status = 'success') AS total_earnings,
          (SELECT COUNT(*)::int FROM rides
-           WHERE driver_id = $1 AND status = 'completed') AS total_rides`,
+           WHERE driver_id = $1 AND status = 'completed'
+             AND COALESCE(payment_method, '') <> 'cash') AS total_rides`,
       [user.id]
     );
 
