@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import { getScheduledRides, cancelScheduledRide } from "@/services/SchedulingService";
 import { useAppStore } from "@/lib/store";
@@ -156,11 +157,35 @@ export default function ScheduledRidesScreen() {
               </View>
 
               {r.driver_name && (
-                <View className="mt-3 flex-row items-center gap-2 border-t border-border pt-3">
-                  <Ionicons name="person" size={14} color="#80716b" />
-                  <Text className="text-xs text-muted-foreground">
-                    Driver: {r.driver_name}
-                  </Text>
+                <View className="mt-3 rounded-xl bg-secondary px-3 py-2.5 flex-row items-center gap-2">
+                  <View className="w-7 h-7 rounded-full bg-primary items-center justify-center">
+                    <Ionicons name="person" size={14} color="#fff" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-xs font-bold text-foreground">
+                      {r.driver_name}
+                    </Text>
+                    <Text className="text-[10px] text-muted-foreground" numberOfLines={1}>
+                      {[
+                        r.vehicle_color,
+                        r.vehicle_make,
+                        r.vehicle_model,
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || (r.license_plate ? "Private car" : "Vehicle")}
+                      {r.license_plate ? ` · ${r.license_plate}` : ""}
+                    </Text>
+                  </View>
+                  {r.driver_phone && (
+                    <TouchableOpacity
+                      onPress={() => Linking.openURL(`tel:${r.driver_phone}`)}
+                      className="rounded-full bg-primary px-3 py-1.5"
+                    >
+                      <Text className="text-[10px] font-bold text-primary-foreground">
+                        Call
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               )}
             </View>

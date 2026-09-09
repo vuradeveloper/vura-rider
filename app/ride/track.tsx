@@ -9,6 +9,7 @@ import { getActiveRide, getRide, submitRating } from "@/services/RideService";
 import { submitTip, getTipSuggestions } from "@/services/TipService";
 import { getDeviceId } from "@/lib/device";
 import { shareTrip } from "@/services/SafetyService";
+import { buzzArrival, buzzMilestone } from "@/lib/haptics";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
@@ -954,6 +955,8 @@ export default function Track() {
 
         socket.on("ride:driver:arrived", () => {
           setStatus("driver_arrived");
+          // Buzz the rider's phone — the driver tapped "I've arrived".
+          buzzArrival();
           // Refresh the route line from the driver's published data (new leg
           // may have been posted since the driver reached the pickup).
           getActiveRide()

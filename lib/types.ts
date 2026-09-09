@@ -187,10 +187,17 @@ export interface ScheduledRide {
   destination_lng: number;
   waypoints: Waypoint[] | null;
   scheduled_at: string;
-  status: "scheduled" | "searching" | "pending" | "accepted" | "in_progress" | "completed" | "cancelled";
+  status: "scheduled" | "searching" | "pending" | "accepted" | "driver_arrived" | "in_progress" | "completed" | "cancelled";
   tier: string;
   driver_id: string | null;
   driver_name: string | null;
+  driver_phone: string | null;
+  vehicle_make: string | null;
+  vehicle_model: string | null;
+  vehicle_color: string | null;
+  license_plate: string | null;
+  is_scheduled?: boolean;
+  route?: { latitude: number; longitude: number }[] | null;
   created_at: string;
 }
 

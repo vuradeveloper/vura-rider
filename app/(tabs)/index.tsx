@@ -9,6 +9,7 @@ import type { RecentSearch, ScheduledRide } from "@/lib/types";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import * as Location from "expo-location";
+import * as Linking from "expo-linking";
 import { Link, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -376,12 +377,13 @@ export default function Home() {
             </View>
             <View className="gap-y-3">
               {scheduledRides.slice(0, 4).map((r) => {
-                const active = r.status !== "scheduled";
+                const live = ["accepted", "driver_arrived", "in_progress"].includes(r.status);
+                const searching = r.status === "searching";
                 return (
                   <TouchableOpacity
                     key={r.id}
                     onPress={() => {
-                      if (active) {
+                      if (r.status !== "scheduled") {
                         router.push({
                           pathname: "/ride/track",
                           params: { rideId: r.id, live: "1" },
@@ -396,20 +398,28 @@ export default function Home() {
                       <View className="flex-row items-center gap-1.5">
                         <View
                           className={`w-2 h-2 rounded-full ${
-                            active
-                              ? "bg-blue-500"
-                              : r.status === "scheduled"
-                                ? "bg-amber-500"
-                                : "bg-emerald-500"
+                            live
+                              ? "bg-emerald-500"
+                              : searching
+                                ? "bg-blue-500"
+                                : r.status === "scheduled"
+                                  ? "bg-amber-500"
+                                  : "bg-amber-500"
                           }`}
                         />
                         <Text className="text-xs font-bold text-foreground capitalize">
-                          {active
-                            ? "Finding your driver"
-                            : `Picks you up ${scheduleCountdown(r.scheduled_at)}`}
+                          {live
+                            ? r.status === "driver_arrived"
+                              ? "Your driver has arrived"
+                              : r.status === "in_progress"
+                                ? "Trip in progress"
+                                : "Your driver is on the way"
+                            : searching
+                              ? "Finding your driver"
+                              : `Picks you up ${scheduleCountdown(r.scheduled_at)}`}
                         </Text>
                       </View>
-                      {active && (
+                      {r.status !== "scheduled" && (
                         <View className="rounded-full bg-primary px-3 py-1">
                           <Text className="text-[10px] font-bold text-primary-foreground">
                             View ride
@@ -442,6 +452,39 @@ export default function Home() {
                         {r.destination_address}
                       </Text>
                     </View>
+
+                    {r.driver_name && (
+                      <View className="mt-3 rounded-xl bg-secondary px-3 py-2.5 flex-row items-center gap-2">
+                        <View className="w-7 h-7 rounded-full bg-primary items-center justify-center">
+                          <Ionicons name="person" size={14} color="#fff" />
+                        </View>
+                        <View className="flex-1">
+                          <Text className="text-xs font-bold text-foreground">
+                            {r.driver_name}
+                          </Text>
+                          <Text className="text-[10px] text-muted-foreground" numberOfLines={1}>
+                            {[
+                              r.vehicle_color,
+                              r.vehicle_make,
+                              r.vehicle_model,
+                            ]
+                              .filter(Boolean)
+                              .join(" ") || (r.license_plate ? "Private car" : "Vehicle")}
+                            {r.license_plate ? ` · ${r.license_plate}` : ""}
+                          </Text>
+                        </View>
+                        {r.driver_phone && (
+                          <TouchableOpacity
+                            onPress={() => Linking.openURL(`tel:${r.driver_phone}`)}
+                            className="rounded-full bg-primary px-3 py-1.5"
+                          >
+                            <Text className="text-[10px] font-bold text-primary-foreground">
+                              Call
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    )}
                   </TouchableOpacity>
                 );
               })}

@@ -636,8 +636,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const { rideId, deviceId } = data;
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
-        const ride = await queryOne<{ id: string; passenger_id: string; status: string; estimated_fare: number | null; device_id?: string | null }>(
-          "SELECT id, passenger_id, status, estimated_fare, device_id FROM rides WHERE id = $1 AND status = 'searching'",
+        // Allow accepting both live 'searching' rides AND upcoming 'scheduled'
+        // rides so a driver can pre-claim a booking BEFORE the pickup time.
+        const ride = await queryOne<{ id: string; passenger_id: string; status: string; estimated_fare: number | null; device_id?: string | null; scheduled_at?: Date }>(
+          "SELECT id, passenger_id, status, estimated_fare, device_id, scheduled_at FROM rides WHERE id = $1 AND status IN ('searching','scheduled')",
           [rideId]
         );
         if (!ride) {
@@ -679,6 +681,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
           vehicle_model: driver?.vehicle_model,
           driver_license_plate: driver?.license_plate,
           fare: ride?.estimated_fare ?? null,
+          scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined,
           // Include the driver's rating so the rider can see it on accept.
           driver: {
             name: driver?.full_name || "Driver",
@@ -695,11 +698,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
           const passenger = await queryOne<{ firebase_uid: string }>(
             "SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]
           ).catch(() => null);
+          const isScheduled = (ride?.status ?? "") === "scheduled";
           notifyUser(
             passenger?.firebase_uid,
-            "Driver found",
-            `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`,
-            { ride_id: rideId }
+            isScheduled ? "Driver assigned" : "Driver found",
+            isScheduled
+              ? `${driver?.full_name || "Your driver"} is confirmed for your scheduled ride. They'll pick you up at the booked time.`
+              : `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`,
+            { ride_id: rideId, scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined }
           );
         })();
         socket.emit("ride:accepted:ack", { success: true, rideId });

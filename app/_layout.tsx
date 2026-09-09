@@ -13,6 +13,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getActiveRide, getRide, getRideHistory, submitRating } from "@/services/RideService";
 import { getSocket } from "@/lib/socket";
 import { persistActiveRide, loadActiveRideSnapshot } from "@/lib/store";
+import { buzzArrival, buzzMilestone } from "@/lib/haptics";
 
 const queryClient = new QueryClient();
 
@@ -39,8 +40,23 @@ function ActiveRideBanner() {
         socket = await getSocket();
         if (disposed) return;
         const clear = () => useAppStore.getState().resetRideState();
+        // Phone vibration on ride milestones (works on ANY screen, not just
+        // the track screen). The driver tapping "I've arrived" emits
+        // 'ride:driver:arrived' — buzz the rider's phone strongly.
+        socket.on("ride:driver:arrived", () => {
+          buzzArrival();
+        });
+        socket.on("ride:accepted", () => {
+          buzzMilestone();
+        });
+        socket.on("ride:started", () => {
+          buzzMilestone();
+        });
+        socket.on("ride:completed", () => {
+          buzzMilestone();
+          clear();
+        });
         socket.on("ride:cancelled", clear);
-        socket.on("ride:completed", clear);
         socket.on("ride:expired", clear);
         socket.on("ride:no:drivers", clear);
       } catch {
@@ -50,8 +66,11 @@ function ActiveRideBanner() {
     return () => {
       disposed = true;
       if (socket) {
-        socket.off("ride:cancelled");
+        socket.off("ride:driver:arrived");
+        socket.off("ride:accepted");
+        socket.off("ride:started");
         socket.off("ride:completed");
+        socket.off("ride:cancelled");
         socket.off("ride:expired");
         socket.off("ride:no:drivers");
       }

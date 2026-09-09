@@ -204,14 +204,19 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
     // Newest first so a fresh booking is NEVER hidden behind old stale
     // "searching" rides that nobody accepted. Only show rides younger than
     // 30 minutes so abandoned/stuck requests drop out automatically.
+    // Also surfaces upcoming SCHEDULED rides so drivers can accept them
+    // BEFORE the pickup time (driver pre-accept). Drivers see them with a
+    // "Scheduled" badge and can claim them early — driver:ride:accept
+    // accepts status 'scheduled' (see socket handlers).
     const rows = await query<any>(
       `SELECT r.*,
-              u.full_name AS passenger_name, u.phone AS passenger_phone
+              u.full_name AS passenger_name, u.phone AS passenger_phone,
+              CASE WHEN r.status = 'scheduled' THEN TRUE ELSE FALSE END AS is_scheduled
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
-       WHERE r.status = 'searching'
-         AND r.created_at > NOW() - INTERVAL '30 minutes'
-       ORDER BY r.created_at DESC
+       WHERE (r.status = 'searching' AND r.created_at > NOW() - INTERVAL '30 minutes')
+          OR (r.status = 'scheduled' AND r.scheduled_at > NOW())
+       ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END, r.created_at DESC
        LIMIT 20`
     );
     res.json({ rides: (rows || []).map((row) => mapRide(row)) });
@@ -231,11 +236,19 @@ router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) =>
     );
     if (!user) { res.json({ rides: [] }); return; }
 
+    // Return rides that are still upcoming OR already in the live pipeline
+    // (searching / accepted / driver_arrived / in_progress) so the ride never
+    // "disappears" from the rider's side once the pickup time comes. Include
+    // driver name + phone + car details so the rider sees WHO is coming.
     const rides = await query(
-      `SELECT r.*, d.full_name AS driver_name
+      `SELECT r.*,
+              d.full_name AS driver_name, d.phone AS driver_phone,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
-       WHERE r.passenger_id = $1 AND r.status = 'scheduled' AND r.scheduled_at > NOW()
+       LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+       WHERE r.passenger_id = $1
+         AND r.status IN ('scheduled','searching','accepted','driver_arrived','in_progress')
        ORDER BY r.scheduled_at ASC`,
       [user.id]
     );
