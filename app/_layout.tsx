@@ -303,14 +303,21 @@ function RootLayout() {
 
     // Listen for user interactions with notifications (e.g. tapping)
     const responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
-      console.log("Notification response received:", response);
+      const data = response?.notification?.request?.content?.data as
+        | { ride_id?: string; rideId?: string }
+        | undefined;
+      const rideId = data?.ride_id || data?.rideId;
+      if (rideId) {
+        // Tapping a ride push deep-links the rider into the live trip.
+        router.replace(`/ride/track?rideId=${rideId}&live=1`);
+      }
     });
 
     return () => {
       notificationListener.remove();
       responseListener.remove();
     };
-  }, []);
+  }, [router]);
 
   // Uber-style forgotten-rating re-prompt: if the last completed ride was never
   // rated, bring the rider to its receipt (which shows the rating/tip UI) when
