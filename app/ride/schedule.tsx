@@ -6,12 +6,12 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Picker } from "@react-native-picker/picker";
 import { formatCurrency, estimateFare } from "@/lib/utils";
 import { scheduleRide } from "@/services/SchedulingService";
 import { useAppStore } from "@/lib/store";
@@ -33,16 +33,40 @@ function dateKey(d: Date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// Now + 1h, rounded up to the nearest 15-minute slot.
+// Smart default: now + 1h, rounded up to the nearest 5 minutes (any time is allowed).
 function defaultTime() {
   const t = new Date(Date.now() + 3600000);
-  let m = Math.ceil(t.getMinutes() / 15) * 15;
-  let h = t.getHours();
-  if (m >= 60) {
-    m = 0;
-    h += 1;
-  }
-  return `${pad(h % 24)}:${pad(m)}`;
+  const m = Math.ceil(t.getMinutes() / 5) * 5;
+  const h = m >= 60 ? t.getHours() + 1 : t.getHours();
+  return `${pad(h % 24)}:${pad(m % 60)}`;
+}
+
+// Preset labels + offsets relative to "now". Tapping a preset sets timeStr (and keeps
+// the selected date = today if it's a "today" preset).
+function presetsForToday(): { label: string; minutes: number }[] {
+  return [
+    { label: "In 30 min", minutes: 30 },
+    { label: "In 1 hour", minutes: 60 },
+    { label: "In 2 hours", minutes: 120 },
+    { label: "In 4 hours", minutes: 240 },
+    { label: "Tonight 8 PM", minutes: 0 }, // handled specially
+  ];
+}
+
+// Parses "HH:MM" → minutes since midnight.
+function parseTime(str: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(str.trim());
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+  return h * 60 + mm;
+}
+
+function formatMinutes(minutes: number): string {
+  const h = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  return `${pad(h)}:${pad(m)}`;
 }
 
 export default function ScheduleRideScreen() {
@@ -65,14 +89,6 @@ export default function ScheduleRideScreen() {
     return out;
   }, []);
   const [dateIndex, setDateIndex] = useState(0);
-
-  const timeOptions = useMemo(() => {
-    const out: string[] = [];
-    for (let h = 0; h < 24; h++) {
-      for (let m = 0; m < 60; m += 15) out.push(`${pad(h)}:${pad(m)}`);
-    }
-    return out;
-  }, []);
 
   const selectedDate = dateOptions[dateIndex];
 
@@ -204,22 +220,70 @@ export default function ScheduleRideScreen() {
           </ScrollView>
         </View>
 
-        <View className="rounded-xl bg-surface border border-border p-4 mb-4">
+        <View className="rounded-xl bg-surface border border-border p-4 mb-6">
           <Text className="text-xs font-bold text-muted-foreground uppercase mb-3">
             Pickup time
           </Text>
-          <View className="rounded-xl bg-secondary overflow-hidden">
-            <Picker
-              selectedValue={timeStr}
-              onValueChange={(v) => setTimeStr(String(v))}
-              style={{ height: 120 }}
-              itemStyle={{ fontSize: 16, fontWeight: "600" }}
-            >
-              {timeOptions.map((t) => (
-                <Picker.Item key={t} label={t} value={t} />
-              ))}
-            </Picker>
+
+          {/* Quick presets */}
+          <View className="flex-row flex-wrap gap-2 mb-3">
+            {presetsForToday().map((p) => {
+              const mins = p.minutes === 0 ? 20 * 60 : p.minutes;
+              const target = formatMinutes(mins);
+              const active = timeStr === target;
+              return (
+                <TouchableOpacity
+                  key={p.label}
+                  onPress={() => {
+                    setDateIndex(0); // presets are all "today"
+                    setTimeStr(target);
+                  }}
+                  className={`rounded-full px-3 py-2 ${active ? "bg-primary" : "bg-secondary"}`}
+                >
+                  <Text className={`text-xs font-bold ${active ? "text-primary-foreground" : "text-foreground"}`}>
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
+
+          {/* Hour/minute steppers + manual input */}
+          <View className="flex-row items-center gap-3">
+            <TouchableOpacity
+              onPress={() => {
+                const t = parseTime(timeStr) ?? 0;
+                setTimeStr(formatMinutes((t - 5 + 1440) % 1440));
+              }}
+              className="w-12 h-12 rounded-xl bg-secondary items-center justify-center"
+            >
+              <Ionicons name="remove" size={22} color="#2e1e1a" />
+            </TouchableOpacity>
+            <TextInput
+              value={timeStr}
+              onChangeText={(t) => {
+                const clean = t.replace(/[^0-9:]/g, "").slice(0, 5);
+                setTimeStr(clean);
+              }}
+              onBlur={() => {
+                const parsed = parseTime(timeStr);
+                if (parsed == null) setTimeStr(defaultTime());
+                else setTimeStr(formatMinutes(parsed));
+              }}
+              keyboardType="numbers-and-punctuation"
+              className="flex-1 rounded-xl bg-secondary px-4 py-3 text-center text-xl font-extrabold tracking-widest text-foreground"
+            />
+            <TouchableOpacity
+              onPress={() => {
+                const t = parseTime(timeStr) ?? 0;
+                setTimeStr(formatMinutes((t + 5) % 1440));
+              }}
+              className="w-12 h-12 rounded-xl bg-secondary items-center justify-center"
+            >
+              <Ionicons name="add" size={22} color="#2e1e1a" />
+            </TouchableOpacity>
+          </View>
+
           {chosen && (
             <Text className="text-xs text-muted-foreground mt-2">
               {chosen.toLocaleDateString("en-ZA", {
