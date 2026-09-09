@@ -221,6 +221,32 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
   }
 });
 
+// GET /api/rides/scheduled — Get upcoming scheduled rides
+router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const firebaseUid = req.userId!;
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [firebaseUid]
+    );
+    if (!user) { res.json({ rides: [] }); return; }
+
+    const rides = await query(
+      `SELECT r.*, d.full_name AS driver_name
+       FROM rides r
+       LEFT JOIN users d ON d.id = r.driver_id
+       WHERE r.passenger_id = $1 AND r.status = 'scheduled' AND r.scheduled_at > NOW()
+       ORDER BY r.scheduled_at ASC`,
+      [user.id]
+    );
+
+    res.json({ rides: rides.map(mapRide) });
+  } catch (err: any) {
+    console.error("Scheduled rides error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/rides/:id — Get specific ride details
 router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -310,32 +336,6 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
     res.status(201).json({ ride: mapRide(ride) });
   } catch (err: any) {
     console.error("Schedule ride error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/rides/scheduled — Get upcoming scheduled rides
-router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const firebaseUid = req.userId!;
-    const user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1",
-      [firebaseUid]
-    );
-    if (!user) { res.json({ rides: [] }); return; }
-
-    const rides = await query(
-      `SELECT r.*, d.full_name AS driver_name
-       FROM rides r
-       LEFT JOIN users d ON d.id = r.driver_id
-       WHERE r.passenger_id = $1 AND r.status = 'scheduled' AND r.scheduled_at > NOW()
-       ORDER BY r.scheduled_at ASC`,
-      [user.id]
-    );
-
-    res.json({ rides: rides.map(mapRide) });
-  } catch (err: any) {
-    console.error("Scheduled rides error:", err);
     res.status(500).json({ error: err.message });
   }
 });

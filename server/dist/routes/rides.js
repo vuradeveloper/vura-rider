@@ -198,6 +198,27 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// GET /api/rides/scheduled — Get upcoming scheduled rides
+router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
+    try {
+        const firebaseUid = req.userId;
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
+        if (!user) {
+            res.json({ rides: [] });
+            return;
+        }
+        const rides = await (0, database_1.query)(`SELECT r.*, d.full_name AS driver_name
+       FROM rides r
+       LEFT JOIN users d ON d.id = r.driver_id
+       WHERE r.passenger_id = $1 AND r.status = 'scheduled' AND r.scheduled_at > NOW()
+       ORDER BY r.scheduled_at ASC`, [user.id]);
+        res.json({ rides: rides.map(mapRide) });
+    }
+    catch (err) {
+        console.error("Scheduled rides error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
 // GET /api/rides/:id — Get specific ride details
 router.get("/:id", auth_1.requireAuth, async (req, res) => {
     try {
@@ -279,27 +300,6 @@ router.post("/schedule", auth_1.requireAuth, async (req, res) => {
     }
     catch (err) {
         console.error("Schedule ride error:", err);
-        res.status(500).json({ error: err.message });
-    }
-});
-// GET /api/rides/scheduled — Get upcoming scheduled rides
-router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
-    try {
-        const firebaseUid = req.userId;
-        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
-        if (!user) {
-            res.json({ rides: [] });
-            return;
-        }
-        const rides = await (0, database_1.query)(`SELECT r.*, d.full_name AS driver_name
-       FROM rides r
-       LEFT JOIN users d ON d.id = r.driver_id
-       WHERE r.passenger_id = $1 AND r.status = 'scheduled' AND r.scheduled_at > NOW()
-       ORDER BY r.scheduled_at ASC`, [user.id]);
-        res.json({ rides: rides.map(mapRide) });
-    }
-    catch (err) {
-        console.error("Scheduled rides error:", err);
         res.status(500).json({ error: err.message });
     }
 });
