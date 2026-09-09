@@ -4,13 +4,15 @@ import { fetchRoute } from "@/lib/route";
 import { estimateEtaMins, haversineKm } from "@/lib/utils";
 import { getNearbyDrivers } from "@/services/DriverService";
 import { getRecentSearches } from "@/services/SearchService";
-import type { RecentSearch } from "@/lib/types";
+import { getScheduledRides } from "@/services/SchedulingService";
+import type { RecentSearch, ScheduledRide } from "@/lib/types";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import * as Location from "expo-location";
 import { Link, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -23,6 +25,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 // silently fail in production APKs).
 import { CAR_LOCATOR_DATA_URL } from "@/lib/carIcon";
 const CAR_ICON = CAR_LOCATOR_DATA_URL;
+
+function scheduleCountdown(scheduledAt: string): string {
+  const diff = new Date(scheduledAt).getTime() - Date.now();
+  if (diff <= 0) return "Now";
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "in <1m";
+  if (mins < 60) return `in ${mins}m`;
+  const h = Math.floor(mins / 60);
+  return `in ${h}h ${String(mins % 60).padStart(2, "0")}m`;
+}
 
 type RoamingCar = {
   id: number;
@@ -41,9 +53,38 @@ export default function Home() {
   const [roamingCars, setRoamingCars] = useState<RoamingCar[]>([]);
   const roamingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
+  const [scheduledRides, setScheduledRides] = useState<ScheduledRide[]>([]);
+  const [, setTick] = useState(0); // re-render each second for live countdown
 
   useEffect(() => {
     getRecentSearches().then(setRecentSearches);
+  }, []);
+
+  // Scheduled rides: load on mount + refresh every 30s so a ride that is about
+  // to be auto-booked (flips to "searching" 15 min before pickup) shows up and
+  // gains a "View ride" button automatically.
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const { rides } = await getScheduledRides();
+        if (active) setScheduledRides(rides);
+      } catch {
+        // offline / not signed in — keep whatever we have
+      }
+    };
+    load();
+    const timer = setInterval(load, 30000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // 1-second ticker so the scheduled pickup countdowns are real-time.
+  useEffect(() => {
+    const t = setInterval(() => setTick((v) => v + 1), 1000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -180,24 +221,10 @@ export default function Home() {
   return (
     <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-        {/* Hero greeting */}
-        <View className="bg-primary px-5 pt-4 pb-10 rounded-b-[2rem] relative overflow-hidden">
-          <View className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/10" />
-          <View className="absolute right-12 top-20 h-24 w-24 rounded-full bg-white/10" />
-          <View className="flex-row items-center justify-between">
-            <View>
-              <Text className="text-xs text-white/80">Good morning,</Text>
-              <Text className="text-2xl font-bold text-white">
-                {user.name}
-              </Text>
-            </View>
-            <TouchableOpacity className="w-10 h-10 rounded-full bg-white/15 items-center justify-center">
-              <Ionicons name="notifications" size={20} color="#fff" />
-            </TouchableOpacity>
-          </View>
-
+        {/* Where to? search — at the very top */}
+        <View className="px-5 pt-4">
           <Link href="/search" asChild>
-            <TouchableOpacity className="mt-6 flex-row items-center gap-3 rounded-2xl bg-surface px-4 py-3.5">
+            <TouchableOpacity className="flex-row items-center gap-3 rounded-2xl bg-white border border-gray-100 px-4 py-4 shadow-sm">
               <Ionicons name="search" size={20} color="#e04e2f" />
               <Text className="text-sm font-medium text-muted-foreground flex-1">
                 Where to?
@@ -212,31 +239,34 @@ export default function Home() {
           </Link>
         </View>
 
-        {/* Upcoming trips card */}
-        <View className="px-5 -mt-4">
-          <View className="bg-white border border-gray-100/80 rounded-2xl p-4.5 flex-row items-center justify-between shadow-sm">
-            <View className="flex-1">
-              <Text className="text-base font-extrabold text-foreground">
-                You have no upcoming trips
-              </Text>
-              <Link href="/search" asChild>
-                <TouchableOpacity className="flex-row items-center mt-1">
-                  <Text className="text-xs font-bold text-muted-foreground">
-                    Reserve your trip
-                  </Text>
-                  <Ionicons name="arrow-forward" size={13} color="#80716b" className="ml-1" />
-                </TouchableOpacity>
-              </Link>
-            </View>
-            <View className="w-12 h-12 bg-gray-50 rounded-xl items-center justify-center border border-gray-100">
-              <Ionicons name="calendar-outline" size={24} color="#dc2626" />
+        {/* Upcoming trips — only shown when there are none; scheduled rides get
+            their own section below the map so this never duplicates them. */}
+        {scheduledRides.length === 0 && (
+          <View className="px-5 mt-4">
+            <View className="bg-white border border-gray-100/80 rounded-2xl p-4.5 flex-row items-center justify-between shadow-sm">
+              <View className="flex-1">
+                <Text className="text-base font-extrabold text-foreground">
+                  You have no upcoming trips
+                </Text>
+                <Link href="/search" asChild>
+                  <TouchableOpacity className="flex-row items-center mt-1">
+                    <Text className="text-xs font-bold text-muted-foreground">
+                      Reserve your trip
+                    </Text>
+                    <Ionicons name="arrow-forward" size={13} color="#80716b" className="ml-1" />
+                  </TouchableOpacity>
+                </Link>
+              </View>
+              <View className="w-12 h-12 bg-gray-50 rounded-xl items-center justify-center border border-gray-100">
+                <Ionicons name="calendar-outline" size={24} color="#dc2626" />
+              </View>
             </View>
           </View>
-        </View>
+        )}
 
         {/* Recent searches */}
         {recentSearches.length > 0 && (
-          <View className="px-5 mt-6">
+          <View className="px-5 mt-4">
             <View className="flex-row items-center justify-between mb-3">
               <Text className="text-sm font-bold text-foreground">
                 Recent searches
@@ -328,6 +358,96 @@ export default function Home() {
             </View>
           </View>
         </View>
+
+        {/* Upcoming scheduled rides — live countdown to pickup */}
+        {scheduledRides.length > 0 && (
+          <View className="px-5 mt-6">
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-sm font-bold text-foreground">
+                Scheduled rides
+              </Text>
+              <Link href="/scheduled-rides" asChild>
+                <TouchableOpacity>
+                  <Text className="text-xs font-semibold text-primary">
+                    See all
+                  </Text>
+                </TouchableOpacity>
+              </Link>
+            </View>
+            <View className="gap-y-3">
+              {scheduledRides.slice(0, 4).map((r) => {
+                const active = r.status !== "scheduled";
+                return (
+                  <TouchableOpacity
+                    key={r.id}
+                    onPress={() => {
+                      if (active) {
+                        router.push({
+                          pathname: "/ride/track",
+                          params: { rideId: r.id, live: "1" },
+                        });
+                      } else {
+                        router.push("/scheduled-rides");
+                      }
+                    }}
+                    className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm active:opacity-80"
+                  >
+                    <View className="flex-row items-center justify-between mb-2">
+                      <View className="flex-row items-center gap-1.5">
+                        <View
+                          className={`w-2 h-2 rounded-full ${
+                            active
+                              ? "bg-blue-500"
+                              : r.status === "scheduled"
+                                ? "bg-amber-500"
+                                : "bg-emerald-500"
+                          }`}
+                        />
+                        <Text className="text-xs font-bold text-foreground capitalize">
+                          {active
+                            ? "Finding your driver"
+                            : `Picks you up ${scheduleCountdown(r.scheduled_at)}`}
+                        </Text>
+                      </View>
+                      {active && (
+                        <View className="rounded-full bg-primary px-3 py-1">
+                          <Text className="text-[10px] font-bold text-primary-foreground">
+                            View ride
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text className="text-xs text-muted-foreground mb-2">
+                      {new Date(r.scheduled_at).toLocaleString("en-ZA", {
+                        weekday: "short",
+                        day: "numeric",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Text>
+                    <View className="flex-row items-start gap-2 mb-1.5">
+                      <View className="w-4 items-center pt-1">
+                        <View className="w-2 h-2 rounded-full bg-foreground" />
+                      </View>
+                      <Text className="text-sm text-foreground flex-1" numberOfLines={1}>
+                        {r.pickup_address}
+                      </Text>
+                    </View>
+                    <View className="flex-row items-start gap-2">
+                      <View className="w-4 items-center pt-0.5">
+                        <View className="w-2 h-2 rounded-md bg-primary" />
+                      </View>
+                      <Text className="text-sm text-foreground flex-1" numberOfLines={1}>
+                        {r.destination_address}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
 
         <View className="h-6" />
       </ScrollView>
