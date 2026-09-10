@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
+import * as Updates from "expo-updates";
 import { useAuth, setUser, deleteAccount } from "@/lib/auth";
 import { updateProfile, uploadProfilePhoto } from "@/services/UserService";
 
@@ -32,6 +33,7 @@ export default function SettingsPage() {
   const [deletePwd, setDeletePwd] = useState("");
   const [showDeleteInput, setShowDeleteInput] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -80,6 +82,30 @@ export default function SettingsPage() {
       Alert.alert("Error", err.message || "Failed to save changes.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleCheckForUpdates() {
+    setCheckingUpdate(true);
+    try {
+      const update = await Updates.checkForUpdateAsync();
+      if (!update.isAvailable) {
+        Alert.alert("Up to date", "You're running the latest version.");
+        return;
+      }
+      await Updates.fetchUpdateAsync();
+      Alert.alert(
+        "Update ready",
+        "A new version was downloaded. The app will now restart to apply it.",
+        [{ text: "Restart", onPress: () => Updates.reloadAsync() }]
+      );
+    } catch (e: any) {
+      Alert.alert(
+        "Couldn't check for updates",
+        e?.message || "Please try again later."
+      );
+    } finally {
+      setCheckingUpdate(false);
     }
   }
 
@@ -267,6 +293,23 @@ export default function SettingsPage() {
           <Text className="text-sm font-bold text-foreground">
             Change Password
           </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={handleCheckForUpdates}
+          disabled={checkingUpdate}
+          className={`mt-4 w-full flex-row items-center justify-center gap-2 rounded-xl border border-border bg-surface py-4 ${checkingUpdate ? "opacity-60" : ""}`}
+        >
+          {checkingUpdate ? (
+            <ActivityIndicator color="#e04e2f" />
+          ) : (
+            <>
+              <Ionicons name="refresh" size={16} color="#e04e2f" />
+              <Text className="text-sm font-bold text-foreground">
+                Check for Updates
+              </Text>
+            </>
+          )}
         </TouchableOpacity>
 
         <View className="mt-10 mb-8 border-t border-border pt-6">
