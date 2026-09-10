@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "678275862018",
+    "project_id": "vura-f667d",
+    "storage_bucket": "vura-f667d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:678275862018:android:04706a847d8e60e6d2e11b",
+        "android_client_info": {
+          "package_name": "app.vura.driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDqzBZrOrRBFztpiNkhZIFEfHwrKs7PtRY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:678275862018:android:d057dd29809f4988d2e11b",
+        "android_client_info": {
+          "package_name": "com.nhlanhlanb.vurarider"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDqzBZrOrRBFztpiNkhZIFEfHwrKs7PtRY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

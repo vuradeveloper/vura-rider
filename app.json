@@ -38,6 +38,7 @@
         "android.permission.USE_FINGERPRINT"
       ],
       "package": "com.nhlanhlanb.vurarider",
+      "googleServicesFile": "./google-services.json",
       "enableProguardInReleaseBuilds": true,
       "runtimeVersion": {
         "policy": "appVersion"
