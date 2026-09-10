@@ -844,6 +844,48 @@ export default function Track() {
     })();
   }, [isHistory, rideIdParam]);
 
+// Apply a ride fetched from the REST API to the live UI. Used by the socket
+  // reconnect re-sync and the searching poll fallback so a driver accept is
+  // NEVER missed (the socket ride:accepted broadcast can be lost when the socket
+  // reconnects mid-search — the server only re-joins the rider on
+  // passenger:connect, which the app re-emits on every reconnect).
+  const applyRideFromApi = (ride: any) => {
+    if (!ride?.id) return;
+    setRideId(ride.id);
+    rideIdRef.current = ride.id;
+    if (ride.status) setStatus(ride.status as any);
+    if (ride.driver_name) {
+      setDriver({
+        name: ride.driver_name,
+        vehicle:
+          [ride.vehicle_color, ride.vehicle_make, ride.vehicle_model]
+            .filter(Boolean)
+            .join(" ") || null,
+        license_plate: ride.driver_license_plate,
+        rating: ride.rating_score ?? null,
+      });
+    }
+    if (Array.isArray(ride.route) && ride.route.length > 1) {
+      setStaticRoute(ride.route);
+      setDenseRoute(ride.route);
+      setRouteCoords(ride.route);
+      demoRouteRef.current = ride.route;
+    }
+    if (ride.driver_lat != null && ride.driver_lng != null) {
+      const liveLoc = {
+        lat: Number(ride.driver_lat),
+        lng: Number(ride.driver_lng),
+        bearing: Number(ride.driver_heading ?? 0) || 0,
+      };
+      setDriverLoc(liveLoc);
+      driverLocRef.current = liveLoc;
+      driverTargetRef.current = liveLoc;
+    }
+    if (ride.status === "in_progress") demoPhaseRef.current = "to_dest";
+    else if (ride.status === "accepted" || ride.status === "driver_arrived")
+      demoPhaseRef.current = "to_pickup";
+    useAppStore.getState().setActiveRide(ride as any);
+  };
   // ── Live mode: connect socket + request a ride ──
   useEffect(() => {
     if (isHistory) return;
@@ -859,6 +901,28 @@ export default function Track() {
           // Transport hiccup (e.g. websocket upgrade blocked) — socket.io keeps
           // retrying with the polling fallback, so don't flash a scary banner.
           console.warn("[Track] Socket connect_error (retrying)");
+        });
+// Re-sync after a reconnect: rejoin the ride room + pull the latest
+        // ride state so a driver accept that happened while the socket was
+        // down is never missed (the server rejoins the rider on
+        // passenger:connect — including rides still in 'searching').
+        socket.on("connect", () => {
+          socket!.emit("passenger:connect");
+          const activeRide = useAppStore.getState().activeRide;
+          if (activeRide?.id) {
+            getActiveRide()
+              .then(({ ride }: any) => {
+                if (
+                  ride?.id &&
+                  ["accepted", "driver_arrived", "in_progress"].includes(
+                    ride.status
+                  )
+                ) {
+                  applyRideFromApi(ride);
+                }
+              })
+              .catch(() => {});
+          }
         });
 
         socket.emit("passenger:connect");
@@ -1211,8 +1275,41 @@ export default function Track() {
         socket.off("ride:cancelled");
         socket.off("ride:refunded");
         socket.off("ride:pickup:updated");
+        socket.off("connect");
         socket.off("connect_error");
       }
+    };
+  }, [isHistory]);
+// ── Searching fallback poll ──
+  // The socket is the primary signal for a driver accept, but a reconnect
+  // mid-search can deliver the ride:accepted broadcast to a socket that is no
+  // longer in the ride room. Poll the REST API while still in "searching" so
+  // the rider ALWAYS picks up the accepted driver, even if the socket event is
+  // missed entirely.
+  useEffect(() => {
+    if (isHistory) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const { ride } = await getActiveRide();
+        if (cancelled || !ride?.id) return;
+        if (["accepted", "driver_arrived", "in_progress"].includes(ride.status)) {
+          if (statusRef.current === "searching") {
+            applyRideFromApi(ride);
+          }
+          return; // ride moved past searching — the socket drives from here
+        }
+      } catch {
+        // offline / not signed in — keep polling
+      }
+      if (!cancelled) timer = setTimeout(poll, 4000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [isHistory]);
 

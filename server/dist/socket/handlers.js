@@ -73,6 +73,11 @@ function setupSocketHandlers(io) {
          )`).catch((err) => console.warn("chat_messages table init warning:", err.message));
         };
         // ── Passenger: (re)connect — rejoin active ride room + current driver position ──
+        // IMPORTANT: also rejoin rides still in 'searching'/'scheduled'. If the rider's
+        // socket reconnects mid-search (network blip, app backgrounded, token refresh),
+        // the room membership from passenger:ride:request is lost — without this, the
+        // rider would NEVER receive the ride:accepted broadcast and would stay stuck on
+        // "Finding your driver" forever.
         socket.on("passenger:connect", async () => {
             try {
                 const dbUserId = await getDbUserId();
@@ -83,7 +88,7 @@ function setupSocketHandlers(io) {
            FROM rides r
            LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
            WHERE r.passenger_id = $1
-             AND r.status IN ('accepted','driver_arrived','in_progress')
+             AND r.status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
              AND r.created_at > NOW() - INTERVAL '240 minutes'
            ORDER BY r.created_at DESC LIMIT 1`, [dbUserId]);
                 if (active?.id) {
@@ -602,6 +607,12 @@ function setupSocketHandlers(io) {
             }
             catch (err) {
                 console.error("Driver accept error:", err);
+                // Surface the failure to the driver app (it would otherwise navigate to a
+                // fake trip while the ride stays 'searching' and the rider never gets found).
+                try {
+                    socket.emit("ride:accepted:ack", { success: false, error: "Could not accept this ride right now. Please try again." });
+                }
+                catch { /* socket already gone */ }
             }
         });
         // ── Driver: start trip (arrived at pickup) ──

@@ -151,7 +151,15 @@ export async function getSocket(): Promise<TypedSocket> {
     // connection is reliable on web and mobile.
     transports: ["websocket", "polling"],
     autoConnect: true,
-    reconnection: false,
+    // Auto-reconnect so a socket drop while the app is backgrounded (e.g.
+    // switching to the driver app) does NOT silently end ride matching. The
+    // track screen re-emits passenger:connect on every reconnect, and the
+    // server rejoins rides still in 'searching', so ride:accepted is never
+    // lost to a dead socket.
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
   }) as TypedSocket;
 
   socket.on("connect", () => notifyListeners(true));
