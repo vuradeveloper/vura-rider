@@ -29,10 +29,19 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.USE_BIOMETRIC",
         "android.permission.USE_FINGERPRINT"
       ],
       "package": "com.nhlanhlanb.vurarider",
-      "enableProguardInReleaseBuilds": true
+      "enableProguardInReleaseBuilds": true,
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "web": {
       "bundler": "metro",
@@ -70,6 +79,9 @@
         "projectId": "d9c6b3d9-c35d-4b75-a67e-b2da09e8738b"
       }
     },
-    "owner": "makhavurr"
+    "owner": "makhavurr",
+    "updates": {
+      "url": "https://u.expo.dev/d9c6b3d9-c35d-4b75-a67e-b2da09e8738b"
+    }
   }
 }

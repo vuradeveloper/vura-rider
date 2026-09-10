@@ -17,7 +17,8 @@
         "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "vura-a272c.firebasestorage.app",
         "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "117456561164",
         "EXPO_PUBLIC_FIREBASE_APP_ID": "1:117456561164:web:8406918a7420b82e0b3a29"
-      }
+      },
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",
@@ -32,7 +33,8 @@
         "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "vura-a272c.firebasestorage.app",
         "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "117456561164",
         "EXPO_PUBLIC_FIREBASE_APP_ID": "1:117456561164:web:8406918a7420b82e0b3a29"
-      }
+      },
+      "channel": "preview"
     },
     "production": {
       "android": {
@@ -46,7 +48,8 @@
         "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "vura-a272c.firebasestorage.app",
         "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "117456561164",
         "EXPO_PUBLIC_FIREBASE_APP_ID": "1:117456561164:web:8406918a7420b82e0b3a29"
-      }
+      },
+      "channel": "production"
     }
   },
   "submit": {
