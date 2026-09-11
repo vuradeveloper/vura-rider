@@ -46,6 +46,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.isExpoPushToken = isExpoPushToken;
 exports.sendPushToUser = sendPushToUser;
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+// The Expo Push API requires auth via a Bearer token (an Expo account access token).
+// Without this the endpoint returns 401 and pushes are silently dropped — this is
+// why notifications never arrived even though the apps registered tokens.
+const EXPO_ACCESS_TOKEN = process.env.EXPO_ACCESS_TOKEN || "";
 function isExpoPushToken(token) {
     return /^ExponentPushToken\[[a-zA-Z0-9-]+\]$/.test(token.trim());
 }
@@ -85,7 +89,7 @@ async function sendPushToUser(firebaseUid, notification) {
             .map((t) => t.token)
             .filter((t) => t && isExpoPushToken(t));
         if (validTokens.length === 0) {
-            await logPush(notification.data?.ride_id ?? "", firebaseUid, "none");
+            await logPush(notification.data?.ride_id ?? "", firebaseUid, "none", "no tokens");
             return 0;
         }
         const messages = validTokens.map((token) => ({
@@ -95,9 +99,19 @@ async function sendPushToUser(firebaseUid, notification) {
             body: notification.body,
             data: notification.data || {},
         }));
+        const headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        };
+        // The classic Expo push endpoint accepts unauthenticated sends for
+        // ExponentPushToken. If an access token is configured (recommended for
+        // higher rate limits) attach it; otherwise still attempt the send.
+        if (EXPO_ACCESS_TOKEN) {
+            headers["Authorization"] = `Bearer ${EXPO_ACCESS_TOKEN}`;
+        }
         const res = await fetch(EXPO_PUSH_URL, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            headers,
             body: JSON.stringify(messages),
         });
         const json = (await res.json().catch(() => ({})));

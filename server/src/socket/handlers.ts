@@ -3,6 +3,7 @@ import { getAuth } from "../config/firebase";
 import { query, queryOne, execute } from "../config/database";
 import { refundTransaction, chargeAuthorization, getDefaultCardToken } from "../services/paystackPayment";
 import { sendPushToUser } from "../services/push";
+import { markDriverLivePing, stopServerRideSim, syncSimToDriver } from "../services/rideSim";
 
 // Push a ride milestone to a user's registered devices. firebaseUid is the
 // riders/driver Firebase account id (stored on users.firebase_uid).
@@ -349,6 +350,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
           "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3",
           [socket.userId, reason, rideId]
         );
+        stopServerRideSim(rideId);
 
         // Tell the rider instantly — no waiting on the refund API.
         io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
@@ -591,6 +593,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           [dbUserId]
         ).catch(() => null);
         if (activeRide?.id) {
+          // The driver app is live — tell the server sim to back off so the rider
+          // sees ONE car (the driver's real position), not a sim fighting it.
+          markDriverLivePing(activeRide.id);
+          syncSimToDriver(activeRide.id, Number(lat), Number(lng));
           io.to(`ride:${activeRide.id}`).emit("ride:driver:location", {
             rideId: activeRide.id,
             lat,
@@ -780,6 +786,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
           "UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2",
           [ride.fare, rideId]
         );
+        stopServerRideSim(rideId);
         // Record the driver's earnings so the wallet / pending-earnings
         // endpoint shows the real amount the driver earned from this ride.
         try {

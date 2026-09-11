@@ -1280,51 +1280,105 @@ export default function Track() {
       }
     };
   }, [isHistory]);
-// ── Searching fallback poll ──
-  // The socket is the primary signal for a driver accept, but a reconnect
-  // mid-search can deliver the ride:accepted broadcast to a socket that is no
-  // longer in the ride room. Poll the REST API while still in "searching" so
-  // the rider ALWAYS picks up the accepted driver, even if the socket event is
-  // missed entirely.
+// ── Continuous ride-sync poll ──
+  // The socket is the primary signal for ride state transitions, but a reconnect
+  // or backgrounded app can miss ANY broadcast (ride:accepted, ride:driver:arrived,
+  // ride:started, ride:completed, ride:cancelled). Poll the REST API for the WHOLE
+  // ride lifecycle so the rider NEVER gets stuck:
+  //   * searching   → pick up a driver accept the socket missed
+  //   * accepted → in_progress → keep refreshing route + position + terminal state
+  //   * completed/cancelled/expired → transition the UI even without the socket event
   useEffect(() => {
     if (isHistory) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let terminalHandled = false;
     const poll = async () => {
-      if (cancelled) return;
+      if (cancelled || terminalHandled) return;
+      const st = statusRef.current;
       try {
         const { ride } = await getActiveRide();
-        if (!cancelled && ride?.id && ["accepted", "driver_arrived", "in_progress"].includes(ride.status)) {
-          if (statusRef.current === "searching") {
-            applyRideFromApi(ride);
-          }
-          return; // ride moved past searching — the socket drives from here
-        }
+        let active = ride;
         // Fallback for dual-role accounts: /me/active may return null until the
         // server fix deploys (role-based column pick). /api/rides/scheduled lists
-        // the rider's active rides too — use it to pick up an accepted driver.
-        if (!ride?.id) {
+        // the rider's active rides too — use it when /me/active comes up empty.
+        if (!active?.id) {
           const sched = await apiFetch<{ rides: any[] }>("/api/rides/scheduled").catch(() => null);
-          if (!cancelled && sched?.rides) {
-            const active = sched.rides.find((r) =>
-              ["accepted", "driver_arrived", "in_progress"].includes(r.status)
+          if (sched?.rides) {
+            const found = sched.rides.find((r) =>
+              ["searching", "accepted", "driver_arrived", "in_progress", "completed", "cancelled", "expired"].includes(r.status)
             );
-            if (active) {
-              if (statusRef.current === "searching") applyRideFromApi(active);
-              return;
+            if (found) active = found;
+          }
+        }
+
+        if (active?.id) {
+          const rs = String(active.status || "");
+          // Ride is no longer active — transition the UI so the rider never
+          // stays frozen on the map after the driver finishes/cancels.
+          if (["completed", "cancelled", "expired"].includes(rs)) {
+            if (rs === "completed") {
+              terminalHandled = true;
+              setStatus("completed");
+              setFare(active.fare ?? null);
+              handleCompleted(active.fare ?? null);
+              useAppStore.getState().resetRideState();
+            } else if (rs === "cancelled") {
+              terminalHandled = true;
+              setStatus("cancelled");
+              setError(active.cancel_reason || "Ride cancelled");
+              useAppStore.getState().resetRideState();
+            } else {
+              terminalHandled = true;
+              setStatus("cancelled");
+              setError("No drivers accepted your request. Please try again.");
+              useAppStore.getState().resetRideState();
+            }
+            return;
+          }
+
+          // Searching → a driver accept the socket missed.
+          if (st === "searching" && ["accepted", "driver_arrived", "in_progress"].includes(rs)) {
+            applyRideFromApi(active);
+            // Keep polling so terminal state (completed/cancelled) is still caught.
+            terminalHandled = false;
+          } else if (["accepted", "driver_arrived", "in_progress"].includes(rs)) {
+            // Ride is live — keep the UI fresh (route line + driver position)
+            // even if some socket events were lost along the way.
+            if (Array.isArray(active.route) && active.route.length > 1) {
+              setStaticRoute(active.route);
+              setDenseRoute(active.route);
+              setRouteCoords(active.route);
+              demoRouteRef.current = active.route;
+            }
+            if (active.driver_lat != null && active.driver_lng != null) {
+              const liveLoc = {
+                lat: Number(active.driver_lat),
+                lng: Number(active.driver_lng),
+                bearing: Number(active.driver_heading ?? 0) || 0,
+              };
+              setDriverLoc(liveLoc);
+              driverLocRef.current = liveLoc;
+              driverTargetRef.current = liveLoc;
+            }
+            if (rs !== st && ["driver_arrived", "in_progress"].includes(rs)) {
+              setStatus(rs as any);
             }
           }
         }
       } catch {
         // offline / not signed in — keep polling
       }
-      if (!cancelled) timer = setTimeout(poll, 4000);
+      // Poll fast while searching, slower once a driver is found.
+      const delay = ["accepted", "driver_arrived", "in_progress"].includes(statusRef.current) ? 6000 : 3000;
+      if (!cancelled) timer = setTimeout(poll, delay);
     };
-    timer = setTimeout(poll, 3000);
+    timer = setTimeout(poll, 2500);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHistory]);
 
   async function handleCompleted(total: number | null) {

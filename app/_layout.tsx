@@ -231,7 +231,8 @@ function AuthGate() {
 
         // Auto-resume into the live trip (mirror the driver app). If we're
         // already on the track screen, don't re-navigate (would double-mount).
-        const onTrack = segments[0] === "ride" && segments[1] === "track";
+        const seg = segments as readonly string[];
+        const onTrack = seg[0] === "ride" && seg[1] === "track";
         if (!onTrack) {
           router.replace(`/ride/track?rideId=${ride.id}&live=1`);
         }
@@ -250,7 +251,8 @@ function AuthGate() {
           useAppStore.getState().setActiveRide(saved as any);
           useAppStore.getState().setSavedDemoRide(null);
           useAppStore.getState().setRideMinimized(true);
-          const onTrack2 = segments[0] === "ride" && segments[1] === "track";
+          const seg2 = segments as readonly string[];
+          const onTrack2 = seg2[0] === "ride" && seg2[1] === "track";
           if (!onTrack2) {
             router.replace(`/ride/track?rideId=${saved.id}&live=1`);
           }

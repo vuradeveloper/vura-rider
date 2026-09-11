@@ -5,6 +5,7 @@ const firebase_1 = require("../config/firebase");
 const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
 const push_1 = require("../services/push");
+const rideSim_1 = require("../services/rideSim");
 // Push a ride milestone to a user's registered devices. firebaseUid is the
 // riders/driver Firebase account id (stored on users.firebase_uid).
 function notifyUser(firebaseUid, title, body, data) {
@@ -297,6 +298,7 @@ function setupSocketHandlers(io) {
             try {
                 const { rideId, reason } = data;
                 await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3", [socket.userId, reason, rideId]);
+                (0, rideSim_1.stopServerRideSim)(rideId);
                 // Tell the rider instantly — no waiting on the refund API.
                 io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
                 // Also broadcast to every online driver so pending Accept/Decline
@@ -497,6 +499,10 @@ function setupSocketHandlers(io) {
            WHERE driver_id = $1 AND status IN ('accepted','driver_arrived','in_progress')
            ORDER BY created_at DESC LIMIT 1`, [dbUserId]).catch(() => null);
                 if (activeRide?.id) {
+                    // The driver app is live — tell the server sim to back off so the rider
+                    // sees ONE car (the driver's real position), not a sim fighting it.
+                    (0, rideSim_1.markDriverLivePing)(activeRide.id);
+                    (0, rideSim_1.syncSimToDriver)(activeRide.id, Number(lat), Number(lng));
                     io.to(`ride:${activeRide.id}`).emit("ride:driver:location", {
                         rideId: activeRide.id,
                         lat,
@@ -665,6 +671,7 @@ function setupSocketHandlers(io) {
                 if (!ride)
                     return;
                 await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2", [ride.fare, rideId]);
+                (0, rideSim_1.stopServerRideSim)(rideId);
                 // Record the driver's earnings so the wallet / pending-earnings
                 // endpoint shows the real amount the driver earned from this ride.
                 try {

@@ -10,6 +10,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+// The Expo Push API requires auth via a Bearer token (an Expo account access token).
+// Without this the endpoint returns 401 and pushes are silently dropped — this is
+// why notifications never arrived even though the apps registered tokens.
+const EXPO_ACCESS_TOKEN = process.env.EXPO_ACCESS_TOKEN || "";
 
 export interface PushNotification {
   title: string;
@@ -75,7 +79,7 @@ export async function sendPushToUser(
       .filter((t) => t && isExpoPushToken(t));
 
     if (validTokens.length === 0) {
-      await logPush(notification.data?.ride_id as string ?? "", firebaseUid, "none");
+      await logPush(notification.data?.ride_id as string ?? "", firebaseUid, "none", "no tokens");
       return 0;
     }
 
@@ -87,9 +91,20 @@ export async function sendPushToUser(
       data: notification.data || {},
     }));
 
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    };
+    // The classic Expo push endpoint accepts unauthenticated sends for
+    // ExponentPushToken. If an access token is configured (recommended for
+    // higher rate limits) attach it; otherwise still attempt the send.
+    if (EXPO_ACCESS_TOKEN) {
+      headers["Authorization"] = `Bearer ${EXPO_ACCESS_TOKEN}`;
+    }
+
     const res = await fetch(EXPO_PUSH_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      headers,
       body: JSON.stringify(messages),
     });
 

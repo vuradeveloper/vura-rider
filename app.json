@@ -83,6 +83,9 @@
     "owner": "makhavurr",
     "updates": {
       "url": "https://u.expo.dev/d9c6b3d9-c35d-4b75-a67e-b2da09e8738b"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }
