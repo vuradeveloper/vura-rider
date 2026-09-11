@@ -1294,12 +1294,26 @@ export default function Track() {
       if (cancelled) return;
       try {
         const { ride } = await getActiveRide();
-        if (cancelled || !ride?.id) return;
-        if (["accepted", "driver_arrived", "in_progress"].includes(ride.status)) {
+        if (!cancelled && ride?.id && ["accepted", "driver_arrived", "in_progress"].includes(ride.status)) {
           if (statusRef.current === "searching") {
             applyRideFromApi(ride);
           }
           return; // ride moved past searching — the socket drives from here
+        }
+        // Fallback for dual-role accounts: /me/active may return null until the
+        // server fix deploys (role-based column pick). /api/rides/scheduled lists
+        // the rider's active rides too — use it to pick up an accepted driver.
+        if (!ride?.id) {
+          const sched = await apiFetch<{ rides: any[] }>("/api/rides/scheduled").catch(() => null);
+          if (!cancelled && sched?.rides) {
+            const active = sched.rides.find((r) =>
+              ["accepted", "driver_arrived", "in_progress"].includes(r.status)
+            );
+            if (active) {
+              if (statusRef.current === "searching") applyRideFromApi(active);
+              return;
+            }
+          }
         }
       } catch {
         // offline / not signed in — keep polling
@@ -1398,9 +1412,12 @@ export default function Track() {
     setShowCancel(false);
     try {
       const socket = await getSocket();
-      if (rideIdRef.current) {
+      // Use the authoritative real ride id — fall back to the store's active ride
+      // so a stale "demo"/empty rideIdRef can never block a real cancel.
+      const id = rideIdRef.current || useAppStore.getState().activeRide?.id;
+      if (id) {
         socket.emit("passenger:ride:cancel", {
-          rideId: rideIdRef.current,
+          rideId: id,
           reason,
         });
       }

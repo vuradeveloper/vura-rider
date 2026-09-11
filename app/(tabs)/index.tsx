@@ -69,7 +69,9 @@ export default function Home() {
     const load = async () => {
       try {
         const { rides } = await getScheduledRides();
-        if (active) setScheduledRides(rides);
+        // Never render cancelled rides — the server drops them too, but filter
+        // here so a just-cancelled ride leaves the home screen instantly.
+        if (active) setScheduledRides((rides || []).filter((r) => r.status !== "cancelled" && r.status !== "completed"));
       } catch {
         // offline / not signed in — keep whatever we have
       }

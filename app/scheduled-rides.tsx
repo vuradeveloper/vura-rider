@@ -29,8 +29,13 @@ export default function ScheduledRidesScreen() {
     setLoading(true);
     try {
       const { rides: data } = await getScheduledRides();
-      setRides(data);
-      useAppStore.getState().setScheduledRides(data);
+      // Hide any cancelled/completed/expired so a cancelled ride disappears
+      // immediately instead of lingering in the list.
+      const filtered = (data || []).filter(
+        (r) => r.status !== "cancelled" && r.status !== "completed"
+      );
+      setRides(filtered);
+      useAppStore.getState().setScheduledRides(filtered);
     } catch {
       setRides([]);
     } finally {

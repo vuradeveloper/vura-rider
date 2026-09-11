@@ -97,7 +97,11 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
             res.json({ ride: null });
             return;
         }
-        const column = user.role === "driver" ? "r.driver_id" : "r.passenger_id";
+        // A single account may be BOTH a rider AND a driver (both apps can share one
+        // login). We must NOT pick the column from role — otherwise a dual-role rider
+        // never finds their passenger rides here and stays stuck on "Finding your
+        // driver" even after a driver accepts. Look for the latest active ride where
+        // this user is passenger OR driver.
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
@@ -110,7 +114,7 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
        LEFT JOIN ratings rat ON rat.ride_id = r.id AND rat.passenger_id = $2
-       WHERE ${column} = $1
+       WHERE (r.passenger_id = $1 OR r.driver_id = $1)
          AND r.status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
          AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
        ORDER BY r.created_at DESC LIMIT 1`, [user.id, user.id]);
@@ -317,6 +321,9 @@ router.post("/schedule", auth_1.requireAuth, async (req, res) => {
     }
 });
 // POST /api/rides/scheduled/:id/cancel — Cancel a scheduled ride
+// Also accepts rides already in the live pipeline (searching/accepted/…) so the
+// rider can truly cancel a ride they no longer want — not just pre-booked ones.
+// The status filter intentionally mirrors the "scheduled section" statuses.
 router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
@@ -325,12 +332,18 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
             res.status(404).json({ error: "User not found" });
             return;
         }
-        const result = await (0, database_1.execute)(`UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = 'Scheduled ride cancelled by user', cancelled_at = NOW()
-       WHERE id = $2 AND passenger_id = $3 AND status = 'scheduled'`, [user.id, req.params.id, user.id]);
+        const result = await (0, database_1.execute)(`UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = 'Ride cancelled by user', cancelled_at = NOW()
+       WHERE id = $2 AND passenger_id = $3
+         AND status IN ('scheduled','searching','accepted','driver_arrived','in_progress')`, [user.id, req.params.id, user.id]);
         if (!result.rowCount) {
-            res.status(404).json({ error: "Scheduled ride not found" });
+            res.status(404).json({ error: "Ride not found or no longer active" });
             return;
         }
+        // Tell the rider + driver + any online driver instantly so the ride
+        // disappears everywhere (same broadcast the socket cancel does).
+        const io = global.__vuraIo;
+        io?.to(`ride:${req.params.id}`).emit("ride:cancelled", { reason: "Ride cancelled by user" });
+        io?.to("drivers").emit("ride:cancelled", { rideId: req.params.id, reason: "Ride cancelled by user" });
         res.json({ success: true });
     }
     catch (err) {
