@@ -23,15 +23,15 @@ PLATFORM="${PLATFORM:-node.js-22}"
 
 echo "=== 3/6 CREATE EB APP + ENV in $NEW_REGION ==="
 echo "Attaching EB CLI to this repo for region $NEW_REGION..."
-eb init --platform "$PLATFORM" "$APP_NAME" --region "$NEW_REGION" --force || {
+# NOTE: no --force (not supported by eb init); non-interactive when all args are given.
+eb init "$APP_NAME" --platform "$PLATFORM" --region "$NEW_REGION" </dev/tty || eb init --platform "$PLATFORM" --region "$NEW_REGION" </dev/tty || {
   echo "❌ eb init failed. Install EB CLI:  pip install awsebcli"
-  echo "   then: eb init --platform $PLATFORM $APP_NAME --region $NEW_REGION --force"
   exit 1
 }
 
 echo
 echo "Creating the environment (single instance; no load balancer)..."
-eb create "$ENV_NAME" --region "$NEW_REGION" --single --platform "$PLATFORM" --nogit \
+eb create "$ENV_NAME" --region "$NEW_REGION" --single --platform "$PLATFORM" \
   || { echo "⚠️ Environment may already exist — continuing to set env vars."; }
 
 echo
