@@ -41,6 +41,13 @@ import { execute } from "./config/database";
 const app = express();
 const server = http.createServer(app);
 
+// The app sits behind the AWS ALB / nginx which terminate TLS and forward
+// HTTP to this Node server. `trust proxy` makes Express read the forwarded
+// protocol/host headers so `req.protocol`/`req.get("host")` return the public
+// HTTPS values — otherwise generated absolute URLs (e.g. share links) wrongly
+// use "http://..." and time out in browsers (the site only answers on 443).
+app.set("trust proxy", true);
+
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081,http://localhost:8082,http://localhost:19006").split(",");
 

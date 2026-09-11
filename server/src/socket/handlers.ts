@@ -563,9 +563,30 @@ export function setupSocketHandlers(io: SocketIOServer) {
     });
 
     socket.on("share:generate", async (data) => {
-      const { rideId } = data;
-      const shareToken = Math.random().toString(36).substring(2, 15);
-      io.to(`ride:${rideId}`).emit("share:generated", { rideId, shareToken, shareUrl: `/share/${shareToken}` });
+      try {
+        const { rideId } = data;
+        if (!rideId) return;
+        const shareToken = Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+        // Persist the token so the public /share/:token page resolves it. If we
+        // only emit it, opening the link 404s because no safety_events row has
+        // the token (the shop side must be able to look it up).
+        await execute(
+          `CREATE TABLE IF NOT EXISTS safety_events (
+             id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+             ride_id UUID REFERENCES rides(id),
+             type VARCHAR(50) NOT NULL,
+             data JSONB,
+             created_at TIMESTAMPTZ DEFAULT NOW()
+           )`
+        ).catch(() => undefined);
+        await execute(
+          "INSERT INTO safety_events (ride_id, type, data) VALUES ($1, 'share_started', $2)",
+          [rideId, JSON.stringify({ shareToken, timestamp: new Date().toISOString() })]
+        ).catch(() => undefined);
+        io.to(`ride:${rideId}`).emit("share:generated", { rideId, shareToken, shareUrl: `/share/${shareToken}` });
+      } catch (err: any) {
+        console.error("share:generate error:", err?.message);
+      }
     });
 
     // ── Driver live location (persisted so public share pages can track it) ──

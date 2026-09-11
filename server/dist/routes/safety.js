@@ -98,7 +98,13 @@ router.post("/share", auth_1.requireAuth, async (req, res) => {
         const { rideId } = req.body;
         const shareToken = Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
         await (0, database_1.execute)("INSERT INTO safety_events (ride_id, type, data) VALUES ($1, 'share_started', $2)", [rideId, JSON.stringify({ shareToken, timestamp: new Date().toISOString() })]);
-        res.json({ shareToken, shareUrl: `${req.protocol}://${req.get("host")}/share/${shareToken}` });
+        // ALWAYS share an HTTPS link. Behind the AWS ALB / nginx, `req.protocol`
+        // resolves to "http" (the proxy talks HTTP to the app) unless `trust proxy`
+        // is enabled — and the public site only answers on port 443. An "http" share
+        // link would time out in the recipient's browser and never show the trip.
+        const host = req.get("host") || "api.ridevura.com";
+        const baseUrl = process.env.PUBLIC_BASE_URL || `https://${host}`;
+        res.json({ shareToken, shareUrl: `${baseUrl}/share/${shareToken}` });
     }
     catch (err) {
         res.status(500).json({ error: err.message });

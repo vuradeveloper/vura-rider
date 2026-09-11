@@ -1,12 +1,31 @@
 import { Router, Request, Response } from "express";
-import { query, queryOne } from "../config/database";
+import { query, queryOne, execute } from "../config/database";
 
 const router = Router();
+
+// Ensure safety tables exist (best-effort) — a share GET must not 500 if the
+// table hasn't been created yet (e.g. first share before any POST ran).
+async function ensureShareTables(): Promise<void> {
+  try {
+    await execute(
+      `CREATE TABLE IF NOT EXISTS safety_events (
+         id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+         ride_id UUID REFERENCES rides(id),
+         type VARCHAR(50) NOT NULL,
+         data JSONB,
+         created_at TIMESTAMPTZ DEFAULT NOW()
+       )`
+    ).catch(() => undefined);
+  } catch {
+    /* ignore */
+  }
+}
 
 // GET /api/share/:token — Public live-trip tracking data (no auth). The token
 // was stored in safety_events when the rider pressed "Share trip".
 router.get("/:token", async (req: Request, res: Response) => {
   try {
+    await ensureShareTables();
     const { token } = req.params;
     const evt = await queryOne<{ ride_id: string }>(
       `SELECT ride_id FROM safety_events
@@ -176,18 +195,29 @@ function sharePageHtml(token: string): string {
   function initMap(r){
     var hasPickup = r.pickup && r.pickup.length===2;
     var hasDrop = r.destination && r.destination.length===2;
-    if(!hasPickup) return;
-    PICKUP = r.pickup; DROPOFF = hasDrop ? r.destination : r.pickup;
-    var center = PICKUP;
+    var hasDriver = r.driverLat!=null && r.driverLng!=null;
+    // Center on pickup if we have it, else the driver's live location, else the
+    // destination — so the trip ALWAYS renders even mid-search / pre-driver.
+    var center = null;
+    if(hasPickup) center = r.pickup;
+    else if (hasDriver) center = [r.driverLat, r.driverLng];
+    else if (hasDrop) center = r.destination;
+    else return;
+    PICKUP = hasPickup ? r.pickup : center;
+    DROPOFF = hasDrop ? r.destination : r.pickup || center;
     map = L.map('map',{zoomControl:true,attributionControl:true}).setView([center[0],center[1]], 13);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
-    L.marker([PICKUP[0],PICKUP[1]],{icon:L.divIcon({html:'<div style="background:#22c55e;width:22px;height:22px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff">P</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map);
+    if(hasPickup){
+      L.marker([PICKUP[0],PICKUP[1]],{icon:L.divIcon({html:'<div style="background:#22c55e;width:22px;height:22px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff">P</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map);
+    }
     if(hasDrop && !(Math.abs(DROPOFF[0]-PICKUP[0])<1e-9 && Math.abs(DROPOFF[1]-PICKUP[1])<1e-9)){
       L.marker([DROPOFF[0],DROPOFF[1]],{icon:L.divIcon({html:'<div style="background:#ef4444;width:22px;height:22px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff">D</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map);
     }
-    carMarker = L.marker([PICKUP[0],PICKUP[1]],{icon:L.divIcon({html:'<div style="width:30px;height:30px;background:#1a1a1a;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.3)">🚗</div>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map);
-    // Fit both points
-    if(hasDrop){ try{ map.fitBounds(L.latLngBounds([PICKUP,DROPOFF]),{padding:[40,40]}); }catch(e){} }
+    carMarker = L.marker([center[0],center[1]],{icon:L.divIcon({html:'<div style="width:30px;height:30px;background:#1a1a1a;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.3)">🚗</div>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map);
+    // Fit both points after the car is placed
+    if(hasPickup && hasDrop){ try{ map.fitBounds(L.latLngBounds([PICKUP,DROPOFF]),{padding:[40,40]}); }catch(e){} }
+    else if (hasDriver){ try{ map.setView([r.driverLat,r.driverLng], 15); }catch(e){} }
+    if (hasDriver){ carMarker.setLatLng([r.driverLat,r.driverLng]); }
     loadRoute();
   }
 
@@ -218,18 +248,19 @@ function sharePageHtml(token: string): string {
     }
   }
 
-  var first = true;
+var first = true;
+  var failedCount = 0;
   function tick(){
     fetch('/api/share/'+token)
       .then(function(res){ if(!res.ok) throw new Error('nf'); return res.json(); })
       .then(function(data){
+        failedCount = 0;
         var r = data.ride;
         if(first){
           first = false;
           app.innerHTML = buildCard(r);
           initMap(r);
         } else {
-          // update status text + ended banner if changed
           var st = document.querySelector('.status');
           if(st && !r.sharingEnded){ st.innerHTML = '<span class="dot"></span><span>'+statusText(r.status)+'</span>'; }
           if(r.sharingEnded && !document.querySelector('.ended-banner')){
@@ -241,16 +272,15 @@ function sharePageHtml(token: string): string {
         updateCar(r);
       })
       .catch(function(){
-        if(first){
+        failedCount++;
+        if(first && failedCount >= 4){
           first = false;
           app.innerHTML = '<div class="err"><h2>This trip link isn\\'t available</h2><p>The share link may have expired or the trip has ended.</p></div>';
         }
       });
   }
 
-  tick();
-  setInterval(tick, 3000);
-})();
+
 </script>
 </body>
 </html>`;
