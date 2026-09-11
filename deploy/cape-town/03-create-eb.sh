@@ -4,15 +4,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Run inside a clone of the vura-rider repo on the machine that has the EB CLI
 # and AWS creds (AWS CloudShell is easiest). This creates a brand-new app +
-# environment named so api.ridevura.com can be pointed at it later.
-#
-# NOTE: The repo is a monorepo — EB deploys the ROOT (it zips the whole dir,
-# then .ebextensions/server-deploy.config installs ONLY server/node_modules and
-# runs `node dist/index.js` from server/). The root Procfile already does
-# `web: cd server && node dist/index.js`. Everything you need to deploy is
-# already committed (server/dist is tracked).
+# environment so api.ridevura.com can be pointed at it later.
+# ⚠️ The script auto-cds to the REPO ROOT (where Procfile + .ebextensions live)
+#    because that's what EB deploys. Run it from anywhere inside the clone.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+
+# Jump to the repo root (contains Procfile + .ebextensions) — EB needs this.
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$ROOT" ]; then echo "❌ Not inside a git clone. Run this from the vura-rider repo."; exit 1; fi
+cd "$ROOT"
+echo "EB project root: $ROOT"
 
 NEW_REGION="${NEW_REGION:-af-south-1}"
 APP_NAME="${APP_NAME:-vura-rider}"
@@ -20,7 +22,7 @@ ENV_NAME="${ENV_NAME:-vura-rider-prod-cape}"
 PLATFORM="${PLATFORM:-node.js-22}"
 
 echo "=== 3/6 CREATE EB APP + ENV in $NEW_REGION ==="
-echo "Resetting any old CloudShell EB pointer (so we attach to the new region)..."
+echo "Attaching EB CLI to this repo for region $NEW_REGION..."
 eb init --platform "$PLATFORM" "$APP_NAME" --region "$NEW_REGION" --force || {
   echo "❌ eb init failed. Install EB CLI:  pip install awsebcli"
   echo "   then: eb init --platform $PLATFORM $APP_NAME --region $NEW_REGION --force"
@@ -28,7 +30,7 @@ eb init --platform "$PLATFORM" "$APP_NAME" --region "$NEW_REGION" --force || {
 }
 
 echo
-echo "Creating the environment (single instance; no load balancer needed)..."
+echo "Creating the environment (single instance; no load balancer)..."
 eb create "$ENV_NAME" --region "$NEW_REGION" --single --platform "$PLATFORM" --nogit \
   || { echo "⚠️ Environment may already exist — continuing to set env vars."; }
 
@@ -60,6 +62,6 @@ echo "   • Replace PASTE_* above with the REAL values from deploy/production.e
 echo "     (or the old EB env → Configuration → Environment properties)."
 echo "   • GOOGLE_APPLICATION_CREDENTIALS points at a file — put the Firebase"
 echo "     service-account JSON on the new instance at /opt/vura-rider/service-account.json"
-echo "     (see deploy/cape-town/04-deploy.sh for the upload hook)."
+echo "     (see deploy/cape-town/04-deploy.sh for the upload steps)."
 echo
-echo "NEXT: ./04-deploy.sh  (deploy code + upload the Firebase service account)"
+echo "NEXT: bash deploy/cape-town/04-deploy.sh  (deploy code + upload Firebase key)"
