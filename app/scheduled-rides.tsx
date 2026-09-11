@@ -112,15 +112,14 @@ export default function ScheduledRidesScreen() {
               <View className="flex-row items-center justify-between mb-2">
                 <View className="flex-row items-center gap-1.5">
                   <View
-                    className={`w-2 h-2 rounded-full ${
-                      r.status === "scheduled"
+                    className={`w-2 h-2 rounded-full ${r.status === "scheduled"
                         ? "bg-amber-500"
                         : r.status === "searching"
                           ? "bg-blue-500"
                           : r.status === "accepted"
                             ? "bg-emerald-500"
                             : "bg-amber-500"
-                    }`}
+                      }`}
                   />
                   <Text className="text-xs font-bold text-foreground capitalize">
                     {r.status}
