@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Vura Rider",
-    "slug": "vura-rider",
+    "slug": "makhavhu",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -80,7 +80,6 @@
         "projectId": "ed31c62e-f459-43d5-bc27-d9407298848e"
       }
     },
-    "owner": "makhavhu",
     "updates": {
       "url": "https://u.expo.dev/ed31c62e-f459-43d5-bc27-d9407298848e"
     },
