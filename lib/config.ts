@@ -9,7 +9,9 @@ const allowHttp =
 
 export function getApiBaseUrl(): string {
   if (!apiBase) {
-    throw new Error("EXPO_PUBLIC_API_URL is required");
+    throw new Error(
+      "EXPO_PUBLIC_API_URL is required — set it in eas.json (or .env) and rebuild the app before installing"
+    );
   }
 
   if (process.env.NODE_ENV === "production" && !apiBase.startsWith("https://") && !allowHttp) {

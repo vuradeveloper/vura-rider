@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal, View, Text, TouchableOpacity, ActivityIndicator, Platform } from "react-native";
 import { WebView } from "react-native-webview";
+import { getApiUrl } from "@/lib/config";
 
 type Props = {
   visible: boolean;
@@ -15,10 +16,6 @@ type Props = {
    *  (Android blocks HTTPS→HTTP), the app eventually detects the success. */
   reference?: string;
 };
-
-const API_BASE_URL =
-  (typeof process !== "undefined" && (process as any).env?.EXPO_PUBLIC_API_URL) ||
-  "http://92.4.135.243";
 
 /** Web-only: opens the Paystack checkout in a new browser tab and shows a
  *  waiting screen since react-native-webview is unsupported on web. */
@@ -171,7 +168,7 @@ export default function PaymentWebView({
     const check = async () => {
       if (stoppedRef.current || reportedRef.current) return;
       try {
-        const res = await fetch(`${API_BASE_URL}/api/payments/verify?reference=${encodeURIComponent(reference!)}`);
+        const res = await fetch(getApiUrl(`/api/payments/verify?reference=${encodeURIComponent(reference!)}`));
         const data = await res.json();
         if (stoppedRef.current || reportedRef.current) return;
 
@@ -225,7 +222,7 @@ export default function PaymentWebView({
     const qIndex = url.indexOf("?");
     if (qIndex < 0) return;
     const query = url.substring(qIndex);
-    fetch(`${API_BASE_URL}/api/payments/return${query}`).catch((e: Error) =>
+    fetch(getApiUrl(`/api/payments/return${query}`)).catch((e: Error) =>
       console.warn("[PaymentWebView] return forward failed", e.message)
     );
   };
