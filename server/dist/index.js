@@ -65,6 +65,7 @@ const route_1 = __importDefault(require("./routes/route"));
 const email_1 = __importDefault(require("./routes/email"));
 const share_1 = __importStar(require("./routes/share"));
 const payouts_1 = __importDefault(require("./routes/payouts"));
+const documents_1 = __importDefault(require("./routes/documents"));
 const admin_1 = __importDefault(require("./routes/admin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const OsmPlaceSyncService_1 = require("./services/OsmPlaceSyncService");
@@ -162,6 +163,7 @@ app.use("/api/admin", admin_1.default);
 app.use("/api/affiliates", affiliates_1.default);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", share_1.default);
+app.use("/api/documents", documents_1.default);
 app.use("/api/email", email_1.default);
 // ── Public share tracking page ──
 app.get("/share/:token", share_1.sharePage);

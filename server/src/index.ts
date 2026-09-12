@@ -28,6 +28,7 @@ import routeRouter from "./routes/route";
 import emailRouter from "./routes/email";
 import shareRouter, { sharePage } from "./routes/share";
 import payoutsRouter from "./routes/payouts";
+import documentsRouter from "./routes/documents";
 import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOsmPlaceSync, syncOsmPlaces, getOsmSyncStatus } from "./services/OsmPlaceSyncService";
@@ -138,6 +139,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);
+app.use("/api/documents", documentsRouter);
 app.use("/api/email", emailRouter);
 
 // ── Public share tracking page ──
