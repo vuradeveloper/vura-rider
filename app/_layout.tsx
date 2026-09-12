@@ -14,8 +14,32 @@ import { getActiveRide, getRide, getRideHistory, submitRating } from "@/services
 import { getSocket } from "@/lib/socket";
 import { persistActiveRide, loadActiveRideSnapshot } from "@/lib/store";
 import { buzzArrival, buzzMilestone } from "@/lib/haptics";
+import * as Updates from "expo-updates";
 
 const queryClient = new QueryClient();
+
+// Auto-check for OTA updates silently at launch. When a bundle is available it's
+// downloaded and the app reloads to apply it — so fixes ship without anyone
+// needing a new APK or pressing the manual button in Settings.
+function UpdateChecker() {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const update = await Updates.checkForUpdateAsync();
+        if (cancelled || !update.isAvailable) return;
+        await Updates.fetchUpdateAsync();
+        if (!cancelled) Updates.reloadAsync();
+      } catch {
+        // Offline / no update server — never block the app.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return null;
+}
 
 // Floating "Go Back To Ride" pill shown on every screen while a ride is active
 // AND the rider left the ride screen with the X (rideMinimized). Once minimized,
@@ -384,6 +408,7 @@ function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <View style={{ flex: 1 }}>
         <StatusBar style="auto" />
+        <UpdateChecker />
         <AuthGate />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
