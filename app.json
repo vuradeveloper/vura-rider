@@ -77,12 +77,12 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "d9c6b3d9-c35d-4b75-a67e-b2da09e8738b"
+        "projectId": "ed31c62e-f459-43d5-bc27-d9407298848e"
       }
     },
-    "owner": "makhavurr",
+    "owner": "makhavhu",
     "updates": {
-      "url": "https://u.expo.dev/d9c6b3d9-c35d-4b75-a67e-b2da09e8738b"
+      "url": "https://u.expo.dev/ed31c62e-f459-43d5-bc27-d9407298848e"
     },
     "runtimeVersion": {
       "policy": "appVersion"
