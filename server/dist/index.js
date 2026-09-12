@@ -92,8 +92,9 @@ app.use((0, cors_1.default)({
     origin: allowedOrigins,
     credentials: true,
 }));
-// Body parsing
-app.use(express_1.default.json({ limit: "10mb" }));
+// Body parsing — 30MB so base64 document uploads (≤15MB binary → ~20MB)
+// fit without a 413. Regular API calls are tiny; the extra headroom is cheap.
+app.use(express_1.default.json({ limit: "30mb" }));
 app.use(express_1.default.urlencoded({ extended: true }));
 // Logging
 app.use((0, morgan_1.default)(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));

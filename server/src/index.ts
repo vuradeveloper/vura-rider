@@ -63,8 +63,9 @@ app.use(cors({
   credentials: true,
 }));
 
-// Body parsing
-app.use(express.json({ limit: "10mb" }));
+// Body parsing — 30MB so base64 document uploads (≤15MB binary → ~20MB)
+// fit without a 413. Regular API calls are tiny; the extra headroom is cheap.
+app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Logging
