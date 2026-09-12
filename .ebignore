@@ -1,0 +1,11 @@
+# EB ships ONLY what the API needs — not the Expo app.
+# Important: EB writes .ebignore-based zip of the repo; these rules pare it down.
+*
+!.gitignore
+!Procfile
+!.platform/
+!.platform/**/*
+!server/
+!server/**/*
+!server/node_modules/*
+server/node_modules/.cache/
