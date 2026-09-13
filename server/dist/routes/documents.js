@@ -86,6 +86,28 @@ router.post("/upload", roleGuard(["driver", "admin"]), async (req, res) => {
                 viewUrl: await (0, s3_1.getPresignedViewUrl)(uploaded.key),
             },
         });
+        // ── Persist the document name on the driver profile (best-effort).
+        // Without this, the "progress bar" in the driver app (which reads
+        // user.licenseDocumentName / idDocumentName / carscan_report_name) stays at
+        // 0% and the doc appears to vanish after the driver leaves the screen.
+        const dbName = String(fileName || "document").slice(0, 255);
+        try {
+            if (type === "drivers_license") {
+                await (0, database_1.query)("UPDATE users SET license_document_name = $2 WHERE id = $1", [dbUser.id, dbName]);
+            }
+            else if (type === "id_document") {
+                await (0, database_1.query)("UPDATE users SET id_document_name = $2 WHERE id = $1", [dbUser.id, dbName]);
+            }
+            else if (type === "carscan_report") {
+                const upsert = await (0, database_1.query)("UPDATE driver_profiles SET carscan_report_name = $2 WHERE user_id = $1 RETURNING id", [dbUser.id, dbName]);
+                if (upsert.length === 0) {
+                    await (0, database_1.query)("INSERT INTO driver_profiles (user_id, carscan_report_name) VALUES ($1, $2)", [dbUser.id, dbName]);
+                }
+            }
+        }
+        catch (err) {
+            console.error("Profile doc-name update failed (non-fatal):", err?.message || err);
+        }
     }
     catch (err) {
         res.status(500).json({ error: err?.message || "Upload failed" });
