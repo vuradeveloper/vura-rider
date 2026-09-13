@@ -110,6 +110,9 @@ function ActiveRideBanner() {
   // the ride is finished.
   useEffect(() => {
     if (!rideMinimized || !activeRide) return;
+    // ❌ SIMULATION DISABLED — no background demo auto-complete. Real rides are
+    // driven by real drivers + server events, and the socket guard above ends them.
+    return;
     const saved = useAppStore.getState().savedDemoRide;
     // Real (non-demo) rides are handled by the socket guard above.
     if (!saved) return;
@@ -121,7 +124,7 @@ function ActiveRideBanner() {
       { atMs: 60000, status: "in_progress" },
       { atMs: 150000, status: "completed" },
     ];
-    const startPhase = saved.phase || "to_pickup";
+    const startPhase = saved?.phase || "to_pickup";
     // If the demo car was already driving to the destination when minimized,
     // we're close to the end — complete sooner.
     let base = 0;

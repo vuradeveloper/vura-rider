@@ -464,6 +464,11 @@ export default function Track() {
 
   // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
   useEffect(() => {
+    // ❌ SIMULATION DISABLED (product decision): no local demo car. The rider's
+    // map shows the driver's REAL live position (`ride:driver:location` socket)
+    // and the route the driver publishes to the server — nothing moves unless
+    // the driver actually moves.
+    return;
     if (isHistory || !pickupCoord) return;
     // Never re-run once started — pickup updates should re-route the car, not
     // restart the whole simulation.
@@ -538,7 +543,9 @@ export default function Track() {
               setStatus("in_progress");
               await updateDbStatus("in_progress");
               // Fetch route to destination
-              const [baseLat, baseLng] = pickupCoordRef.current ?? pickupCoord;
+              const baseD = pickupCoordRef.current ?? pickupCoord;
+              if (!baseD) return;
+              const [baseLat, baseLng] = baseD as [number, number];
               const [endLat, endLng] = dropoffCoord ?? [baseLat + (Math.random() - 0.5) * 0.04, baseLng + (Math.random() - 0.5) * 0.04];
               const routeToDest = await fetchRoute([baseLat, baseLng], [endLat, endLng], waypoints);
               if (demoCancelledRef.current) return;
@@ -1633,19 +1640,8 @@ export default function Track() {
           // Ride" banner then shows on every screen until the ride ends.
           // Save the exact simulation state so returning resumes right where
           // the car was, continuing its motion (like Uber/Bolt).
-          const loc = driverLocRef.current;
-          useAppStore.getState().setSavedDemoRide({
-            status,
-            driver_name: driver?.name ?? null,
-            driver_license_plate: driver?.license_plate ?? null,
-            vehicle_make: driver?.vehicle?.includes("Toyota") ? "Toyota" : null,
-            vehicle_model: driver?.vehicle?.includes("Corolla") ? "Corolla" : null,
-            vehicle_color: driver?.vehicle?.includes("White") ? "White" : null,
-            driverLoc: loc ? { lat: loc.lat, lng: loc.lng, bearing: carBearing } : null,
-            route: demoRouteRef.current,
-            step: demoStepRef.current,
-            phase: demoPhaseRef.current,
-          });
+          // No simulation state to save — the server holds the real ride and the
+          // driver's live position. "Go Back To Ride" reconnects and resumes live.
           useAppStore.getState().setRideMinimized(true);
           router.replace("/");
         }}
