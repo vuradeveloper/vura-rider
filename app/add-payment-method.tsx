@@ -43,7 +43,7 @@ export default function AddPaymentMethod() {
     setIsStarting(true);
     try {
       const result = await registerPaystackCard();
-      if (result.mock) {
+      if (result.mock && !result.authorizationUrl) {
         Alert.alert(
           "Payments are in test mode",
           "Your server is in mock payment mode (PAYMENTS_MODE=mock). Fill in the PAYSTACK_* values in server/.env to go live.",

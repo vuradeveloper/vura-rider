@@ -651,10 +651,19 @@ function setupSocketHandlers(io) {
                     return;
                 await (0, database_1.execute)("UPDATE rides SET status = 'driver_arrived' WHERE id = $1", [rideId]);
                 io.to(`ride:${rideId}`).emit("ride:driver:arrived");
-                // Push "driver arrived" to the rider.
+                // Push "driver arrived" to the rider (with the driver's real name + car).
                 (async () => {
-                    const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
-                    notifyUser(p?.firebase_uid, "Driver arrived", "Your driver has arrived at the pickup point.", { ride_id: rideId });
+                    const p = await (0, database_1.queryOne)(`SELECT u.firebase_uid AS fb, du.full_name AS driver_name,
+                    dp.vehicle_color, dp.vehicle_make, dp.vehicle_model, dp.license_plate
+             FROM rides r
+             JOIN users u ON u.id = r.passenger_id
+             LEFT JOIN users du ON du.id = r.driver_id
+             LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+             WHERE r.id = $1`, [rideId]).catch(() => null);
+                    const who = [p?.driver_name, p?.vehicle_color, p?.vehicle_make, p?.vehicle_model]
+                        .filter(Boolean)
+                        .join(" ") || "Your driver";
+                    notifyUser(p?.fb, "Driver arrived", `${who} has arrived at your pickup point.`, { ride_id: rideId });
                 })();
             }
             catch (err) {

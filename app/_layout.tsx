@@ -15,6 +15,7 @@ import { getSocket } from "@/lib/socket";
 import { persistActiveRide, loadActiveRideSnapshot } from "@/lib/store";
 import { buzzArrival, buzzMilestone } from "@/lib/haptics";
 import * as Updates from "expo-updates";
+import * as Notifications from "expo-notifications";
 
 const queryClient = new QueryClient();
 
@@ -69,6 +70,18 @@ function ActiveRideBanner() {
         // 'ride:driver:arrived' — buzz the rider's phone strongly.
         socket.on("ride:driver:arrived", () => {
           buzzArrival();
+          // Gmail-style PHONE notification — fires a real system notification
+          // even if the remote push is delayed or the token isn't registered yet.
+          try {
+            Notifications.scheduleNotificationAsync({
+              content: {
+                title: "Your driver has arrived",
+                body: "Your driver is waiting at the pickup point.",
+                sound: "default",
+              },
+              trigger: null,
+            }).catch(() => {});
+          } catch {}
         });
         socket.on("ride:accepted", () => {
           buzzMilestone();

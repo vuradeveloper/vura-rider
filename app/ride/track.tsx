@@ -1,4 +1,4 @@
-import { disconnectSocket, getSocket, getConnectedSocket } from "@/lib/socket";
+﻿import { disconnectSocket, getSocket, getConnectedSocket } from "@/lib/socket";
 import { fetchRoute } from "@/lib/route";
 import type { RideStatus, Waypoint } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
@@ -34,7 +34,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-// ⚠️ Adjust these two imports to match where they actually live in your project.
+// âš ï¸ Adjust these two imports to match where they actually live in your project.
 import MapView, { Marker, Polyline } from "@/components/MapView";
 import { CAR_LOCATOR_DATA_URL } from "@/lib/carIcon";
 const CAR_LOCATOR_IMG = CAR_LOCATOR_DATA_URL;
@@ -51,7 +51,7 @@ type DriverLoc = { lat: number; lng: number; bearing: number };
 type NearbyCar = { id: string; lat: number; lng: number; angle: number };
 
 const STATUS_LABEL: Record<RideStatus, string> = {
-  searching: "Finding your driver…",
+  searching: "Finding your driverâ€¦",
   accepted: "Driver is on the way",
   driver_arrived: "Your driver has arrived",
   in_progress: "Trip in progress",
@@ -155,8 +155,8 @@ export default function Track() {
 
   // Cancellation for the demo simulation. Deliberately refs (not locals) and
   // set by a dedicated unmount-only effect so that re-renders caused by
-  // pickup/dropoff/waypoint state updates — which re-run the demo effect and
-  // fire its cleanup — do NOT cancel an in-flight simulation.
+  // pickup/dropoff/waypoint state updates â€” which re-run the demo effect and
+  // fire its cleanup â€” do NOT cancel an in-flight simulation.
   const demoCancelledRef = useRef(false);
   const demoAnimIntervalRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   // Prevents chargeCardOnPickup from firing more than once per ride, even if
@@ -199,7 +199,7 @@ export default function Track() {
     "My pickup location is wrong",
   ];
 
-  // ── Load addresses + coordinates (live request) ──
+  // â”€â”€ Load addresses + coordinates (live request) â”€â”€
   useEffect(() => {
     (async () => {
       const [pa, da, p, d, wp, tier] = await Promise.all([
@@ -226,8 +226,8 @@ export default function Track() {
     })();
   }, []);
 
-  // Draw the green route line (pickup → stops → destination) straight away so
-  // the path is visible while the app is still searching for a driver — same
+  // Draw the green route line (pickup â†’ stops â†’ destination) straight away so
+  // the path is visible while the app is still searching for a driver â€” same
   // line as shown on the options screen.
   useEffect(() => {
     if (!pickupCoord || !dropoffCoord) return;
@@ -322,69 +322,20 @@ export default function Track() {
     driverLocRef.current = driverLoc;
   }, [driverLoc]);
 
-  // ── Smooth driver-car glide ──
+  // â”€â”€ Smooth driver-car glide â”€â”€
   // The socket delivers a fresh driver fix about once per second. Without
   // interpolation the car would visibly jump between fixes. This tiny loop
   // eases the displayed marker toward the latest target every frame (60fps)
   // so the driver's car moves buttery-smooth even at 1 fix/sec. The demo
   // animation path sets driverTargetRef = null and drives the marker itself.
-  const driverTargetRef = useRef<DriverLoc | null>(null);
-  useEffect(() => {
-    let raf: number | null = null;
-    const shortest = (from: number, to: number) => {
-      let d = (to - from) % 360;
-      if (d > 180) d -= 360;
-      if (d < -180) d += 360;
-      return d;
-    };
-    const loop = () => {
-      const t = driverTargetRef.current;
-      const cur = driverLocRef.current;
-      if (t) {
-        if (!cur) {
-          driverLocRef.current = t;
-          setDriverLoc(t);
-        } else {
-          const k = 0.18;
-          const lat = cur.lat + (t.lat - cur.lat) * k;
-          const lng = cur.lng + (t.lng - cur.lng) * k;
-          const tb = t.bearing ?? cur.bearing ?? 0;
-          const nb = cur.bearing != null ? cur.bearing + shortest(cur.bearing, tb) * 0.18 : tb;
-          const next = { lat, lng, bearing: nb };
-          driverLocRef.current = next;
-          setDriverLoc(next);
-        }
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => {
-      if (raf != null) cancelAnimationFrame(raf);
-    };
-  }, []);
+  // NOTE: car-follow animation REMOVED — the driver car is placed exactly
+  // at the latest real ride:driver:location fix. Real position only.
 
   // Rider car converges toward the driver car simultaneously: as the driver
   // moves along its route to the pickup, the rider's own car marker glides
   // toward the driver so both vehicles approach each other at the same time,
   // each keeping its own rotation/heading.
-  useEffect(() => {
-    if (!driverLoc) return;
-    if (status !== "accepted" && status !== "driver_arrived" && status !== "in_progress") return;
-    setMyCarLoc((prev) => {
-      const from = prev
-        ? { lat: prev.lat, lng: prev.lng }
-        : pickupCoord
-          ? { lat: pickupCoord[0], lng: pickupCoord[1] }
-          : null;
-      if (!from) return prev;
-      // Move a small fraction of the remaining distance each frame (continuous,
-      // smooth convergence — the driver marker now glides too).
-      const t = 0.02;
-      const lat = from.lat + (driverLoc.lat - from.lat) * t;
-      const lng = from.lng + (driverLoc.lng - from.lng) * t;
-      return { lat, lng, bearing: computeBearing({ latitude: from.lat, longitude: from.lng }, { latitude: driverLoc.lat, longitude: driverLoc.lng }) || 0 };
-    });
-  }, [driverLoc, status, pickupCoord]);
+  // (rider-car convergence animation removed - the rider is shown by their real location)
 
   // Keep a live ref of the pickup so the demo uses the latest one even if it
   // changes during the 45s "searching" phase.
@@ -393,7 +344,7 @@ export default function Track() {
   }, [pickupCoord]);
 
   // Starts (or re-starts) the car glide along the given points. Safe to call
-  // repeatedly — it clears the previous interval, so a pickup update can
+  // repeatedly â€” it clears the previous interval, so a pickup update can
   // re-target the car without stopping the simulation.
   const startDemoAnimation = (points: { latitude: number; longitude: number }[], startStep = 0) => {
     if (points.length < 2) return;
@@ -402,7 +353,6 @@ export default function Track() {
     if (hasRealDriverLocRef.current) return;
     demoRouteRef.current = points;
     demoStepRef.current = startStep;
-    driverTargetRef.current = null; // glide layer steps aside; demo drives the marker itself
     const idx = Math.min(startStep, points.length - 1);
     setDenseRoute(points);
     setRouteCoords(points);
@@ -462,15 +412,15 @@ export default function Track() {
     demoAnimIntervalRef.current = requestAnimationFrame(loop);
   };
 
-  // ── DEMO ONLY: simulate a driver car until a real backend is wired up ──
+  // â”€â”€ DEMO ONLY: simulate a driver car until a real backend is wired up â”€â”€
   useEffect(() => {
-    // ❌ SIMULATION DISABLED (product decision): no local demo car. The rider's
+    // âŒ SIMULATION DISABLED (product decision): no local demo car. The rider's
     // map shows the driver's REAL live position (`ride:driver:location` socket)
-    // and the route the driver publishes to the server — nothing moves unless
+    // and the route the driver publishes to the server â€” nothing moves unless
     // the driver actually moves.
     return;
     if (isHistory || !pickupCoord) return;
-    // Never re-run once started — pickup updates should re-route the car, not
+    // Never re-run once started â€” pickup updates should re-route the car, not
     // restart the whole simulation.
     if (demoRanRef.current) return;
     demoRanRef.current = true;
@@ -529,7 +479,7 @@ export default function Track() {
         setRouteCoords(saved.route);
         startDemoAnimation(saved.route, saved.step);
         // Set up the phase continuation so the car doesn't stop at the end of
-        // the saved route — it continues to the next phase (to_dest, completed).
+        // the saved route â€” it continues to the next phase (to_dest, completed).
         const phase = saved.phase || "to_pickup";
         if (phase === "to_pickup" || phase === "to_dest") {
           demoOnDoneRef.current = async () => {
@@ -564,7 +514,7 @@ export default function Track() {
               await updateDbStatus("completed");
               await new Promise((resolve) => setTimeout(resolve, 8000));
               if (demoCancelledRef.current) return;
-              // The trip is done — clear the minimized ride so the banner never lingers.
+              // The trip is done â€” clear the minimized ride so the banner never lingers.
               useAppStore.getState().resetRideState();
               setShowRating(true);
             } else if (demoPhaseRef.current === "to_dest") {
@@ -572,7 +522,7 @@ export default function Track() {
               await updateDbStatus("completed");
               await new Promise((resolve) => setTimeout(resolve, 8000));
               if (demoCancelledRef.current) return;
-              // The trip is done — clear the minimized ride so the banner never lingers.
+              // The trip is done â€” clear the minimized ride so the banner never lingers.
               useAppStore.getState().resetRideState();
               setShowRating(true);
             }
@@ -601,7 +551,7 @@ export default function Track() {
       demoPhaseRef.current = "searching";
 
       // Wait for the socket to become available (it may still be connecting or
-      // reconnecting after a token refresh). Never show a fake driver — keep
+      // reconnecting after a token refresh). Never show a fake driver â€” keep
       // searching until a real driver accepts.
       let connectedSocket = getConnectedSocket();
       const socketDeadline = Date.now() + 45000;
@@ -622,7 +572,7 @@ export default function Track() {
           });
         });
         if (!accepted || demoCancelledRef.current) return;
-        // A REAL driver accepted over the socket — mirror the driver's own
+        // A REAL driver accepted over the socket â€” mirror the driver's own
         // simulation exactly (driver-published route + live positions) instead
         // of running a separate local demo car. From here the socket's
         // `ride:driver:location` events are the single source of truth for
@@ -660,11 +610,11 @@ export default function Track() {
         } catch (e) {
           console.error("Failed to load real ride route:", e);
         }
-        // No local demo simulation — live `ride:driver:location` + status
+        // No local demo simulation â€” live `ride:driver:location` + status
         // events drive the car from here.
         return;
       } else {
-        // No socket could connect — keep searching. The socket effect will
+        // No socket could connect â€” keep searching. The socket effect will
         // emit a ride request and eventually land a real driver when the
         // connection is restored.
         while (!demoCancelledRef.current) {
@@ -702,7 +652,7 @@ export default function Track() {
         20
       );
 
-      // 3. Glide to pickup — this leg is re-routable when the rider changes
+      // 3. Glide to pickup â€” this leg is re-routable when the rider changes
       // the pickup mid-trip (see the pickup-change effect below).
       demoPhaseRef.current = "to_pickup";
       await new Promise<void>((resolve) => {
@@ -767,7 +717,7 @@ export default function Track() {
       await new Promise((resolve) => setTimeout(resolve, 8000));
       if (demoCancelledRef.current) return;
 
-      // The trip is done — clear the minimized ride so the banner never lingers.
+      // The trip is done â€” clear the minimized ride so the banner never lingers.
       useAppStore.getState().resetRideState();
 
       // Show rating/receipt modal
@@ -816,7 +766,7 @@ export default function Track() {
     };
   }, []);
 
-  // ── History mode: just load the ride details, no socket ──
+  // â”€â”€ History mode: just load the ride details, no socket â”€â”€
   useEffect(() => {
     if (!isHistory || !rideIdParam) return;
     (async () => {
@@ -826,8 +776,8 @@ export default function Track() {
         setFare(ride.fare);
         setPickupAddr(ride.pickup_address);
         setDropoffAddr(ride.destination_address);
-        // ⚠️ Assumes your ride object carries lat/lng alongside the address
-        // fields — rename these if your API uses different keys.
+        // âš ï¸ Assumes your ride object carries lat/lng alongside the address
+        // fields â€” rename these if your API uses different keys.
         if (ride.pickup_lat != null && ride.pickup_lng != null) {
           setPickupCoord([ride.pickup_lat, ride.pickup_lng]);
         }
@@ -854,7 +804,7 @@ export default function Track() {
 // Apply a ride fetched from the REST API to the live UI. Used by the socket
   // reconnect re-sync and the searching poll fallback so a driver accept is
   // NEVER missed (the socket ride:accepted broadcast can be lost when the socket
-  // reconnects mid-search — the server only re-joins the rider on
+  // reconnects mid-search â€” the server only re-joins the rider on
   // passenger:connect, which the app re-emits on every reconnect).
   const applyRideFromApi = (ride: any) => {
     if (!ride?.id) return;
@@ -886,14 +836,13 @@ export default function Track() {
       };
       setDriverLoc(liveLoc);
       driverLocRef.current = liveLoc;
-      driverTargetRef.current = liveLoc;
     }
     if (ride.status === "in_progress") demoPhaseRef.current = "to_dest";
     else if (ride.status === "accepted" || ride.status === "driver_arrived")
       demoPhaseRef.current = "to_pickup";
     useAppStore.getState().setActiveRide(ride as any);
   };
-  // ── Live mode: connect socket + request a ride ──
+  // â”€â”€ Live mode: connect socket + request a ride â”€â”€
   useEffect(() => {
     if (isHistory) return;
     let socket: Awaited<ReturnType<typeof getSocket>> | null = null;
@@ -905,14 +854,14 @@ export default function Track() {
         if (!active || !socket) return;
 
         socket.on("connect_error", () => {
-          // Transport hiccup (e.g. websocket upgrade blocked) — socket.io keeps
+          // Transport hiccup (e.g. websocket upgrade blocked) â€” socket.io keeps
           // retrying with the polling fallback, so don't flash a scary banner.
           console.warn("[Track] Socket connect_error (retrying)");
         });
 // Re-sync after a reconnect: rejoin the ride room + pull the latest
         // ride state so a driver accept that happened while the socket was
         // down is never missed (the server rejoins the rider on
-        // passenger:connect — including rides still in 'searching').
+        // passenger:connect â€” including rides still in 'searching').
         socket.on("connect", () => {
           socket!.emit("passenger:connect");
           const activeRide = useAppStore.getState().activeRide;
@@ -934,7 +883,7 @@ export default function Track() {
 
         socket.emit("passenger:connect");
 
-        // Resuming from the "Back to ride" pill / a killed-and-reopened app —
+        // Resuming from the "Back to ride" pill / a killed-and-reopened app â€”
         // pull the driver's published route + current position immediately so we
         // paint the exact same line and car right away (the socket keeps them live).
         if (useAppStore.getState().activeRide?.id) {
@@ -956,7 +905,7 @@ export default function Track() {
                   lng: Number(ride.driver_lng),
                   bearing: Number(ride.driver_heading ??  0) ||  0,
                 };
-                setDriverLoc(liveLoc); driverLocRef.current = liveLoc; driverTargetRef.current = liveLoc;
+                setDriverLoc(liveLoc); driverLocRef.current = liveLoc;
               }
             }
           } catch (e: any) {
@@ -994,7 +943,7 @@ export default function Track() {
             rideIdRef.current = data.id;
           }
           // A driver has been found. The card charge already happened once at
-          // booking (see server "passenger:ride:request") — never charge again.
+          // booking (see server "passenger:ride:request") â€” never charge again.
           const driverData = {
             name: data.driver_name || data.driver?.name || "Unknown Driver",
             vehicle:
@@ -1026,7 +975,7 @@ export default function Track() {
 
         socket.on("ride:driver:arrived", () => {
           setStatus("driver_arrived");
-          // Buzz the rider's phone — the driver tapped "I've arrived".
+          // Buzz the rider's phone â€” the driver tapped "I've arrived".
           buzzArrival();
           // Refresh the route line from the driver's published data (new leg
           // may have been posted since the driver reached the pickup).
@@ -1048,7 +997,7 @@ export default function Track() {
 
         socket.on("ride:started", () => {
           setStatus("in_progress");
-          // Trip leg changed (pickup → destination) — reload the driver's
+          // Trip leg changed (pickup â†’ destination) â€” reload the driver's
           // route so the rider draws the exact same new line.
           getActiveRide()
             .then(({ ride }) => {
@@ -1066,12 +1015,12 @@ export default function Track() {
           }
         });
 
-        // ⚠️ Assumed event name/shape for live driver location updates —
+        // âš ï¸ Assumed event name/shape for live driver location updates â€”
         // rename to match whatever your driver app actually emits.
         socket.on("ride:driver:location", (data) => {
           if (data?.lat != null && data?.lng != null) {
             hasRealDriverLocRef.current = true;
-            // Real driver positions are authoritative — stop any local demo
+            // Real driver positions are authoritative â€” stop any local demo
             // animation so it can't fight the live stream.
             if (demoAnimIntervalRef.current) {
               cancelAnimationFrame(demoAnimIntervalRef.current);
@@ -1079,9 +1028,10 @@ export default function Track() {
             }
             const bearing = data.bearing ?? data.heading ?? 0;
             setCarBearing(bearing);
-            // Feed the glide layer with the latest authoritative fix — the marker
+            // Feed the glide layer with the latest authoritative fix â€” the marker
             // eases toward it every frame (no more 1/sec teleport-jumps).
-            driverTargetRef.current = { lat: data.lat, lng: data.lng, bearing };
+setDriverLoc({ lat: data.lat, lng: data.lng, bearing });
+driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
 
             // Sync location to Zustand store
             const active = useAppStore.getState().activeRide;
@@ -1129,7 +1079,7 @@ export default function Track() {
         });
 
         socket.on("ride:refunded", (data) => {
-          // Rider cancelled before pickup — the card pre-auth was refunded.
+          // Rider cancelled before pickup â€” the card pre-auth was refunded.
           Alert.alert(
             "Payment refunded",
             data?.note || "Your card payment has been refunded.",
@@ -1157,7 +1107,7 @@ export default function Track() {
         const dropoff = JSON.parse(d || "null");
 
         if (!pickup || !dropoff) {
-          // Maybe we already had an active ride — restore it
+          // Maybe we already had an active ride â€” restore it
           const { ride } = await getActiveRide();
           if (ride) {
             setRideId(ride.id);
@@ -1180,10 +1130,10 @@ export default function Track() {
                 rating: ride.rating_score ?? null,
               });
             }
-            // ── Resume the EXACT driver route + live position (Uber/Bolt style) ──
+            // â”€â”€ Resume the EXACT driver route + live position (Uber/Bolt style) â”€â”€
             // The driver publishes its route + location to the server; the rider
             // draws that same line and places the car where the driver ACTUALLY
-            // is right now — not a stale local simulation.
+            // is right now â€” not a stale local simulation.
             if (Array.isArray(ride.route) && ride.route.length > 1) {
               setStaticRoute(ride.route);
               demoRouteRef.current = ride.route;
@@ -1196,7 +1146,6 @@ export default function Track() {
               };
               setDriverLoc(liveLoc);
               driverLocRef.current = liveLoc;
-              driverTargetRef.current = liveLoc;
               // Match the car to that position on the route line.
               const nearest = demoRouteRef.current.reduce(
                 (best: any, pt: any, i: number) => {
@@ -1225,7 +1174,7 @@ export default function Track() {
           return;
         }
 
-        // ── Card payment: charge happens later, when the driver arrives at
+        // â”€â”€ Card payment: charge happens later, when the driver arrives at
         // pickup. The ride books immediately with the payment method "card",
         // and initiatePaystackPayment(fare, rideId) is called on
         // ride:driver:arrived. No charge is taken at booking time.
@@ -1287,14 +1236,14 @@ export default function Track() {
       }
     };
   }, [isHistory]);
-// ── Continuous ride-sync poll ──
+// â”€â”€ Continuous ride-sync poll â”€â”€
   // The socket is the primary signal for ride state transitions, but a reconnect
   // or backgrounded app can miss ANY broadcast (ride:accepted, ride:driver:arrived,
   // ride:started, ride:completed, ride:cancelled). Poll the REST API for the WHOLE
   // ride lifecycle so the rider NEVER gets stuck:
-  //   * searching   → pick up a driver accept the socket missed
-  //   * accepted → in_progress → keep refreshing route + position + terminal state
-  //   * completed/cancelled/expired → transition the UI even without the socket event
+  //   * searching   â†’ pick up a driver accept the socket missed
+  //   * accepted â†’ in_progress â†’ keep refreshing route + position + terminal state
+  //   * completed/cancelled/expired â†’ transition the UI even without the socket event
   useEffect(() => {
     if (isHistory) return;
     let cancelled = false;
@@ -1308,7 +1257,7 @@ export default function Track() {
         let active = ride;
         // Fallback for dual-role accounts: /me/active may return null until the
         // server fix deploys (role-based column pick). /api/rides/scheduled lists
-        // the rider's active rides too — use it when /me/active comes up empty.
+        // the rider's active rides too â€” use it when /me/active comes up empty.
         if (!active?.id) {
           const sched = await apiFetch<{ rides: any[] }>("/api/rides/scheduled").catch(() => null);
           if (sched?.rides) {
@@ -1321,7 +1270,7 @@ export default function Track() {
 
         if (active?.id) {
           const rs = String(active.status || "");
-          // Ride is no longer active — transition the UI so the rider never
+          // Ride is no longer active â€” transition the UI so the rider never
           // stays frozen on the map after the driver finishes/cancels.
           if (["completed", "cancelled", "expired"].includes(rs)) {
             if (rs === "completed") {
@@ -1344,13 +1293,13 @@ export default function Track() {
             return;
           }
 
-          // Searching → a driver accept the socket missed.
+          // Searching â†’ a driver accept the socket missed.
           if (st === "searching" && ["accepted", "driver_arrived", "in_progress"].includes(rs)) {
             applyRideFromApi(active);
             // Keep polling so terminal state (completed/cancelled) is still caught.
             terminalHandled = false;
           } else if (["accepted", "driver_arrived", "in_progress"].includes(rs)) {
-            // Ride is live — keep the UI fresh (route line + driver position)
+            // Ride is live â€” keep the UI fresh (route line + driver position)
             // even if some socket events were lost along the way.
             if (Array.isArray(active.route) && active.route.length > 1) {
               setStaticRoute(active.route);
@@ -1366,7 +1315,6 @@ export default function Track() {
               };
               setDriverLoc(liveLoc);
               driverLocRef.current = liveLoc;
-              driverTargetRef.current = liveLoc;
             }
             if (rs !== st && ["driver_arrived", "in_progress"].includes(rs)) {
               setStatus(rs as any);
@@ -1374,7 +1322,7 @@ export default function Track() {
           }
         }
       } catch {
-        // offline / not signed in — keep polling
+        // offline / not signed in â€” keep polling
       }
       // Poll fast while searching, slower once a driver is found.
       const delay = ["accepted", "driver_arrived", "in_progress"].includes(statusRef.current) ? 6000 : 3000;
@@ -1398,7 +1346,7 @@ export default function Track() {
     if (id) {
       try {
         if (method === "card") {
-          // Card was already charged (pre-auth) at booking — nothing more to do.
+          // Card was already charged (pre-auth) at booking â€” nothing more to do.
         } else if (method === "affiliate") {
           const res = await payWithAffiliate(id);
           if (!res.success) {
@@ -1429,7 +1377,7 @@ export default function Track() {
   /** Charge the rider's saved card when the driver arrives at pickup.
    *  Called from the ride:driver:arrived socket handler. */
   const chargeCardOnPickup = async () => {
-    // Never charge twice for the same ride — the demo simulation and the real
+    // Never charge twice for the same ride â€” the demo simulation and the real
     // socket event can both call this. The flag also persists to AsyncStorage
     // so minimizing/returning to the ride doesn't cause a double charge.
     if (chargeFiredRef.current) return;
@@ -1473,7 +1421,7 @@ export default function Track() {
     setShowCancel(false);
     try {
       const socket = await getSocket();
-      // Use the authoritative real ride id — fall back to the store's active ride
+      // Use the authoritative real ride id â€” fall back to the store's active ride
       // so a stale "demo"/empty rideIdRef can never block a real cancel.
       const id = rideIdRef.current || useAppStore.getState().activeRide?.id;
       if (id) {
@@ -1496,7 +1444,7 @@ export default function Track() {
     const id = rideIdRef.current;
     if (!id || rating === 0) return;
 
-    // Navigate immediately — rating/tip are best-effort and must never block
+    // Navigate immediately â€” rating/tip are best-effort and must never block
     // the user from leaving the screen (slow DB round-trips used to keep this
     // modal spinning for ages).
     const score = rating;
@@ -1636,11 +1584,11 @@ export default function Track() {
       {/* Floating Header Actions */}
       <TouchableOpacity
         onPress={() => {
-          // Leaving via the X minimizes the ride — the floating "Go Back To
+          // Leaving via the X minimizes the ride â€” the floating "Go Back To
           // Ride" banner then shows on every screen until the ride ends.
           // Save the exact simulation state so returning resumes right where
           // the car was, continuing its motion (like Uber/Bolt).
-          // No simulation state to save — the server holds the real ride and the
+          // No simulation state to save â€” the server holds the real ride and the
           // driver's live position. "Go Back To Ride" reconnects and resumes live.
           useAppStore.getState().setRideMinimized(true);
           router.replace("/");
@@ -1652,7 +1600,7 @@ export default function Track() {
 
       <View className="absolute top-12 left-1/2 -translate-x-1/2 rounded-full bg-foreground px-4 py-1.5 z-10 shadow-md">
         <Text className="text-xs font-bold text-background text-center">
-          {error ? "…" : STATUS_LABEL[status]}
+          {error ? "â€¦" : STATUS_LABEL[status]}
         </Text>
       </View>
 
@@ -2158,7 +2106,7 @@ export default function Track() {
                 Add a tip (optional)
               </Text>
               <Text className="text-xs text-muted-foreground mb-3">
-                Thank your driver — this goes directly to them.
+                Thank your driver â€” this goes directly to them.
               </Text>
               <View className="flex-row flex-wrap gap-2">
                 {tipSuggestions.map((opt) => {
@@ -2240,7 +2188,7 @@ export default function Track() {
         </View>
       </Modal>
 
-      {/* Paystack hosted checkout — only when the rider has no saved card */}
+      {/* Paystack hosted checkout â€” only when the rider has no saved card */}
       <PaymentWebView
         visible={paystackVisible}
         authorizationUrl={paystackUrl}
