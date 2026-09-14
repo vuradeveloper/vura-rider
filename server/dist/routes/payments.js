@@ -324,7 +324,7 @@ router.get("/verify", async (req, res) => {
                             }
                         }
                     }
-                    res.json({ status: success ? "completed" : "failed", reference });
+                    res.json({ status: success ? "completed" : String(verified?.status || "failed").toLowerCase(), reference, paystackStatus: verified?.status || null });
                     return;
                 }
             }

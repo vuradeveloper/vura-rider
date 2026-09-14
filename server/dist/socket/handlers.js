@@ -663,6 +663,8 @@ function setupSocketHandlers(io) {
                     const who = [p?.driver_name, p?.vehicle_color, p?.vehicle_make, p?.vehicle_model]
                         .filter(Boolean)
                         .join(" ") || "Your driver";
+                    if (p?.fb)
+                        io.to(`user:${p.fb}`).emit("ride:driver:arrived");
                     notifyUser(p?.fb, "Driver arrived", `${who} has arrived at your pickup point.`, { ride_id: rideId });
                 })();
             }
@@ -682,6 +684,13 @@ function setupSocketHandlers(io) {
                     return;
                 await (0, database_1.execute)("UPDATE rides SET status = 'in_progress' WHERE id = $1", [rideId]);
                 io.to(`ride:${rideId}`).emit("ride:started");
+                // Redundant delivery to the rider's personal room — survives the rider's
+                // ride-room membership being lost (e.g. backgrounded socket reconnect).
+                (async () => {
+                    const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
+                    if (p?.firebase_uid)
+                        io.to(`user:${p.firebase_uid}`).emit("ride:started");
+                })();
             }
             catch (err) {
                 console.error("Driver begin error:", err);
@@ -710,6 +719,8 @@ function setupSocketHandlers(io) {
                 // Push "arrived at destination" to the rider.
                 (async () => {
                     const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
+                    if (p?.firebase_uid)
+                        io.to(`user:${p.firebase_uid}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
                     notifyUser(p?.firebase_uid, "Ride complete", "You've arrived at your destination. Thanks for riding with Vura!", { ride_id: rideId });
                 })();
             }

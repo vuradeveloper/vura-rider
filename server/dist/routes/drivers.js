@@ -67,12 +67,17 @@ router.get("/nearby", async (req, res) => {
 router.patch("/profile", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
-        const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate } = req.body;
+        const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name } = req.body;
         const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
         if (!user) {
             res.status(404).json({ error: "User not found" });
             return;
         }
+        // Ensure the newer vehicle columns exist (safe on every call).
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_type VARCHAR(50)`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_vin VARCHAR(50)`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS odometer_km INTEGER`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS carscan_report_name VARCHAR(255)`).catch(() => { });
         const existing = await (0, database_1.queryOne)("SELECT id FROM driver_profiles WHERE user_id = $1", [user.id]);
         if (existing) {
             const updates = [];
@@ -108,19 +113,56 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
                 params.push(license_plate);
                 idx++;
             }
+            if (vehicle_type !== undefined) {
+                updates.push(`vehicle_type = $${idx}`);
+                params.push(vehicle_type);
+                idx++;
+            }
+            if (vehicle_vin !== undefined) {
+                updates.push(`vehicle_vin = $${idx}`);
+                params.push(vehicle_vin);
+                idx++;
+            }
+            if (odometer_km !== undefined) {
+                updates.push(`odometer_km = $${idx}`);
+                params.push(odometer_km);
+                idx++;
+            }
+            if (carscan_report_name !== undefined) {
+                updates.push(`carscan_report_name = $${idx}`);
+                params.push(carscan_report_name);
+                idx++;
+            }
             updates.push("updated_at = NOW()");
             params.push(existing.id);
             await (0, database_1.execute)(`UPDATE driver_profiles SET ${updates.join(", ")} WHERE id = $${idx}`, params);
         }
         else {
-            await (0, database_1.execute)(`INSERT INTO driver_profiles (user_id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, is_online)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true)`, [user.id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate]);
+            await (0, database_1.execute)(`INSERT INTO driver_profiles (user_id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, is_online)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)`, [user.id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name]);
         }
         const profile = await (0, database_1.queryOne)("SELECT * FROM driver_profiles WHERE user_id = $1", [user.id]);
         res.json(profile);
     }
     catch (err) {
         console.error("Driver profile update error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// GET /api/drivers/profile — Full driver profile row (vehicle details + license
+// number) so the driver app can re-hydrate the "Link Your Car" form after save.
+router.get("/profile", auth_1.requireAuth, async (req, res) => {
+    try {
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!user) {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
+        const profile = await (0, database_1.queryOne)("SELECT * FROM driver_profiles WHERE user_id = $1", [user.id]);
+        res.json({ profile: profile || null });
+    }
+    catch (err) {
+        console.error("Get driver profile error:", err);
         res.status(500).json({ error: err.message });
     }
 });
