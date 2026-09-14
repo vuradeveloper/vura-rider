@@ -179,7 +179,10 @@ export default function PaymentWebView({
           if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
           if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
           onDoneRef.current({ success: true, result: "completed" });
-        } else if (s === "failed" || s === "cancelled" || s === "declined" || s === "error") {
+        } else if (s && s !== "pending" && s !== "initiated" && s !== "processing" && s !== "") {
+          // Any terminal non-success status (failed, abandoned, declined, error…)
+          // ends the wait — and we pass the RAW Paystack status through so the
+          // alert can say exactly what happened.
           stoppedRef.current = true;
           reportedRef.current = true;
           if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);

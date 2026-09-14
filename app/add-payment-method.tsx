@@ -133,13 +133,15 @@ export default function AddPaymentMethod() {
             setVerified(true);
           } else {
             const why = result ? ` — Paystack said: ${String(result)}` : "";
+            const hint =
+              String(result) === "abandoned"
+                ? "The payment window was closed before a card was submitted. Tap Continue and complete the card form."
+                : ['failed', 'declined'].includes(String(result))
+                  ? "Check the card details and try again."
+                  : "Please try again.";
             Alert.alert(
               "Card not added",
-              `The payment page didn't complete${why}. No card was saved. ${
-                ['failed', 'declined'].includes(String(result))
-                  ? "Check the card details and try again."
-                  : "Please try again."
-              }`
+              `The payment page didn't complete${why}. No card was saved. ${hint}`
             );
           }
         }}

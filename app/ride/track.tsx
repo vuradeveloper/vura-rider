@@ -1268,6 +1268,17 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
           }
         }
 
+        if (!active?.id && rideIdRef.current) {
+          // The active-ride endpoint drops rides the moment they finish. If we
+          // know the ride id, fetch it directly — a completed ride means the trip
+          // ended and the rating page must appear even if the socket event was
+          // missed (backgrounded app, reconnect, etc.).
+          try {
+            const full = await getRide(rideIdRef.current);
+            if (full?.ride) active = full.ride as any;
+          } catch {}
+        }
+
         if (active?.id) {
           const rs = String(active.status || "");
           // Ride is no longer active â€” transition the UI so the rider never

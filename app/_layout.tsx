@@ -91,7 +91,14 @@ function ActiveRideBanner() {
         });
         socket.on("ride:completed", () => {
           buzzMilestone();
+          const st = useAppStore.getState();
+          const id = st.activeRide?.id;
+          const wasMinimized = st.rideMinimized;
           clear();
+          // If the rider left the ride screen, still take them to the Rating &
+          // Tips page instead of silently clearing (on the track screen the
+          // track's own handler shows the rating modal instead).
+          if (wasMinimized && id) router.replace(`/ride/receipt?rideId=${id}`);
         });
         socket.on("ride:cancelled", clear);
         socket.on("ride:expired", clear);
@@ -401,8 +408,9 @@ function RootLayout() {
           );
           if (unframedRatingRef.current !== unrated.id) {
             unframedRatingRef.current = unrated.id;
-            // (Auto-redirect to the Receipt on app open removed — the rating/tip prompt
-            //  still lives inside the receipt/history flow where it belongs.)
+            // The LAST ride ended and was never rated — take the rider straight
+            // to the Rating & Tips page as soon as they open the app.
+            router.replace(`/ride/receipt?rideId=${unrated.id}`);
           }
         }
       } catch {

@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { getRideReceipt } from "@/services/RideService";
+import { getRideReceipt, submitRating } from "@/services/RideService";
 import { submitTip, getTipSuggestions, getSavedCards } from "@/services/TipService";
 import { formatCurrency } from "@/lib/utils";
 import type { RideReceipt } from "@/lib/types";
@@ -31,6 +31,10 @@ export default function ReceiptScreen() {
   // same card is auto-used.
   const [cards, setCards] = useState<Array<{ id: string; card_type?: string; last4?: string; is_default?: boolean }>>([]);
   const [tipCardId, setTipCardId] = useState<string | null>(null);
+  const [rating, setRating] = useState(0);
+  const [ratingComment, setRatingComment] = useState("");
+  const [rated, setRated] = useState(false);
+  const [submittingRating, setSubmittingRating] = useState(false);
 
   useEffect(() => {
     if (!rideId) return;
@@ -86,6 +90,20 @@ export default function ReceiptScreen() {
       Alert.alert("Error", err.message || "Failed to send tip");
     } finally {
       setSubmittingTip(false);
+    }
+  }
+
+  async function handleSubmitRating() {
+    if (!rideId || rating === 0) return;
+    setSubmittingRating(true);
+    try {
+      await submitRating(rideId, rating, ratingComment.trim() || undefined);
+      setRated(true);
+      Alert.alert("Thank you!", "Your rating has been submitted.");
+    } catch (err: any) {
+      Alert.alert("Rating", err.message || "Could not submit your rating. Please try again.");
+    } finally {
+      setSubmittingRating(false);
     }
   }
 
@@ -173,6 +191,56 @@ export default function ReceiptScreen() {
                   </Text>
                 </View>
               </View>
+            </View>
+
+            <View className="rounded-xl bg-surface border border-border p-4 mb-4">
+              <Text className="text-xs font-bold text-muted-foreground uppercase mb-3">
+                {rated ? "Your Rating" : "Rate Your Driver"}
+              </Text>
+              {!rated ? (
+                <>
+                  <View className="flex-row justify-center gap-2 mb-3">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <TouchableOpacity key={star} onPress={() => setRating(star)} hitSlop={8}>
+                        <Ionicons
+                          name={star <= rating ? "star" : "star-outline"}
+                          size={32}
+                          color={star <= rating ? "#f5b301" : "#d8cbc4"}
+                        />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TextInput
+                    value={ratingComment}
+                    onChangeText={setRatingComment}
+                    placeholder="Share a comment (optional)"
+                    multiline
+                    className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm mb-3"
+                    style={{ minHeight: 64 }}
+                  />
+                  <TouchableOpacity
+                    onPress={handleSubmitRating}
+                    disabled={rating === 0 || submittingRating}
+                    className={`w-full rounded-xl bg-primary py-4 items-center ${rating === 0 || submittingRating ? "opacity-50" : ""}`}
+                  >
+                    {submittingRating ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text className="text-sm font-bold text-white">Submit Rating</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <View className="items-center py-2">
+                  <View className="flex-row gap-1 mb-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Ionicons key={star} name="star" size={20} color={star <= rating ? "#f5b301" : "#e8e0db"} />
+                    ))}
+                  </View>
+                  {ratingComment ? <Text className="text-xs text-muted-foreground text-center">{ratingComment}</Text> : null}
+                  <Text className="text-xs text-muted-foreground mt-2">Thanks for rating your driver!</Text>
+                </View>
+              )}
             </View>
 
             <View className="rounded-xl bg-surface border border-border p-4 mb-4">
