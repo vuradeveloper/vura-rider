@@ -1458,7 +1458,8 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
     submitRating(id, score, commentText).catch(() => {});
   }
 
-  const canCancel = status === "searching" || status === "accepted";
+  const canCancel =
+    status === "searching" || status === "accepted" || status === "driver_arrived";
   const canEditPickup =
     !isHistory &&
     ["searching", "accepted", "driver_arrived"].includes(status);

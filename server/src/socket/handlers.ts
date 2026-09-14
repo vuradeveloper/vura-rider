@@ -347,7 +347,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
       try {
         const { rideId, reason } = data;
         await execute(
-          "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3",
+          "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3 AND status IN ('searching','scheduled','accepted','driver_arrived')",
           [socket.userId, reason, rideId]
         );
         stopServerRideSim(rideId);

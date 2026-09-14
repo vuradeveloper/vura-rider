@@ -126,15 +126,20 @@ export default function AddPaymentMethod() {
         onClose={() => {
           setPaystackVisible(false);
         }}
-        onDone={({ success }) => {
+        onDone={({ success, result }) => {
           setPaystackVisible(false);
           if (success) {
             queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
             setVerified(true);
           } else {
+            const why = result ? ` — Paystack said: ${String(result)}` : "";
             Alert.alert(
               "Card not added",
-              "The payment page did not complete. No card was saved. Please try again."
+              `The payment page didn't complete${why}. No card was saved. ${
+                ['failed', 'declined'].includes(String(result))
+                  ? "Check the card details and try again."
+                  : "Please try again."
+              }`
             );
           }
         }}

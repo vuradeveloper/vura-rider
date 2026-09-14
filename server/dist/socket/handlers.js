@@ -297,7 +297,7 @@ function setupSocketHandlers(io) {
         socket.on("passenger:ride:cancel", async (data) => {
             try {
                 const { rideId, reason } = data;
-                await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3", [socket.userId, reason, rideId]);
+                await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3 AND status IN ('searching','scheduled','accepted','driver_arrived')", [socket.userId, reason, rideId]);
                 (0, rideSim_1.stopServerRideSim)(rideId);
                 // Tell the rider instantly — no waiting on the refund API.
                 io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
