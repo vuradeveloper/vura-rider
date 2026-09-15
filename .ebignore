@@ -5,6 +5,11 @@
 !Procfile
 !.platform/
 !.platform/**/*
+# CRITICAL: ship the EB hooks that npm-install the server deps on the instance.
+# Without this the deployed env has NO node_modules and the web process can't
+# start ("Cannot find module 'dotenv/config'").
+!.ebextensions/
+!.ebextensions/**/*
 !server/
 !server/**/*
 !server/node_modules/*
