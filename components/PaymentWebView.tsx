@@ -162,6 +162,10 @@ export default function PaymentWebView({
       if (!stoppedRef.current) {
         stoppedRef.current = true;
         setPollStatus("timeout");
+        if (!reportedRef.current) {
+          reportedRef.current = true;
+          onDoneRef.current({ success: false, result: "timeout" });
+        }
       }
     }, 60000);
 
@@ -276,6 +280,10 @@ export default function PaymentWebView({
             onPress={() => {
               stopPolling();
               setPollStatus("timeout");
+              if (!reportedRef.current) {
+                reportedRef.current = true;
+                onDoneRef.current({ success: false, result: "timeout" });
+              }
             }}
             style={{ marginTop: 24, paddingVertical: 10, paddingHorizontal: 20 }}
           >
