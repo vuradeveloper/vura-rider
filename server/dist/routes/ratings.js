@@ -32,7 +32,7 @@ router.post("/", auth_1.requireAuth, async (req, res) => {
         const driverId = isPassenger ? ride.driver_id : user.id;
         await (0, database_1.execute)(`INSERT INTO ratings (ride_id, passenger_id, driver_id, score, comment)
        VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (ride_id) DO UPDATE SET score = $4, comment = $5`, [rideId, passengerId, driverId, score, comment || null]);
+       ON CONFLICT (ride_id, passenger_id) DO UPDATE SET score = $4, comment = $5`, [rideId, passengerId, driverId, score, comment || null]);
         // Update driver's rating average
         const avg = await (0, database_1.queryOne)("SELECT AVG(score)::float AS avg FROM ratings WHERE driver_id = $1", [driverId]);
         if (avg) {

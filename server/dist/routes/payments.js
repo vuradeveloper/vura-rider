@@ -332,7 +332,15 @@ router.get("/verify", async (req, res) => {
                 console.warn("Verify against Paystack failed:", e);
             }
         }
-        res.json({ status: payment.status, reference });
+        // A "refunded" payment row means the charge actually SUCCEEDED and was
+        // then returned to the card — the normal outcome of card registration
+        // (R1 pre-auth immediately refunded after tokenisation). Without this,
+        // a rider who just added a card successfully would be told
+        // "Card not added — Paystack said: refunded".
+        const succeeded = payment.status === "completed" ||
+            payment.status === "success" ||
+            payment.status === "refunded";
+        res.json({ status: succeeded ? "completed" : payment.status, success: succeeded, reference });
     }
     catch (err) {
         console.error("Verify payment error:", err);

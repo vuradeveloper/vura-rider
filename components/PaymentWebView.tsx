@@ -177,7 +177,10 @@ export default function PaymentWebView({
         if (stoppedRef.current || reportedRef.current) return;
 
         const s = data.status?.toLowerCase();
-        if (s === "completed" || s === "success") {
+        // The server reports `success: true` for any terminal paid state,
+        // including "refunded" (card registration's R1 auth is refunded right
+        // after the card is tokenised — the card WAS saved successfully).
+        if (data.success === true || s === "completed" || s === "success" || s === "refunded") {
           stoppedRef.current = true;
           reportedRef.current = true;
           if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
