@@ -37,14 +37,21 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 // âš ï¸ Adjust these two imports to match where they actually live in your project.
 import MapView, { Marker, Polyline } from "@/components/MapView";
-import { CAR_LOCATOR_DATA_URL } from "@/lib/carIcon";
+import { CAR_LOCATOR_DATA_URL, getCarIconDataUrl } from "@/lib/carIcon";
 const CAR_LOCATOR_IMG = CAR_LOCATOR_DATA_URL;
+// Free local icon library: pick a body-type + colour from the matched
+// driver's vehicle (fallback: generic silver sedan for nearby cars).
+export const driverIconFor = (d: Driver | null): string =>
+  getCarIconDataUrl(d?.vehicle_make, d?.vehicle_model, d?.vehicle_color);
 
 type Driver = {
   name: string;
   vehicle: string | null;
   license_plate: string | null;
   rating: number | null;
+  vehicle_make?: string | null;
+  vehicle_model?: string | null;
+  vehicle_color?: string | null;
 };
 
 type DriverLoc = { lat: number; lng: number; bearing: number };
@@ -794,6 +801,9 @@ export default function Track() {
                 .join(" ") || null,
             license_plate: ride.driver_license_plate,
             rating: ride.rating_score ?? null,
+            vehicle_make: ride.vehicle_make || null,
+            vehicle_model: ride.vehicle_model || null,
+            vehicle_color: ride.vehicle_color || null,
           });
         }
       } catch (e: any) {
@@ -955,6 +965,9 @@ export default function Track() {
               null,
             license_plate: data.driver_license_plate || data.driver?.license_plate || null,
             rating: data.driver?.rating ?? null,
+            vehicle_make: data.vehicle_make || null,
+            vehicle_model: data.vehicle_model || null,
+            vehicle_color: data.vehicle_color || null,
           };
           setDriver(driverData);
 
@@ -1104,6 +1117,22 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
           useAppStore.getState().resetRideState();
         });
 
+        socket.on("ride:driver:cancelled", (data) => {
+          // The assigned driver cancelled BEFORE pickup, so the ride went back
+          // into the dispatch pool. Go back to "searching" so the rider keeps
+          // waiting and a new driver can accept.
+          setStatus("searching");
+          setDriver(null);
+          setDriverLoc(null);
+          driverLocRef.current = null;
+          setError(null);
+          if (data?.reason) {
+            Alert.alert("Your driver cancelled", data.reason, [{ text: "OK" }]);
+          } else {
+            Alert.alert("Finding a new driver", "Your driver cancelled — we're matching you with a new one.", [{ text: "OK" }]);
+          }
+        });
+
         socket.on("ride:refunded", (data) => {
           // Rider cancelled before pickup â€” the card pre-auth was refunded.
           Alert.alert(
@@ -1154,6 +1183,9 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
                     .join(" ") || null,
                 license_plate: ride.driver_license_plate,
                 rating: ride.rating_score ?? null,
+                vehicle_make: ride.vehicle_make || null,
+                vehicle_model: ride.vehicle_model || null,
+                vehicle_color: ride.vehicle_color || null,
               });
             }
             // â”€â”€ Resume the EXACT driver route + live position (Uber/Bolt style) â”€â”€
@@ -1570,7 +1602,7 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
           {driverLoc && (
             <Marker
               coordinate={{ latitude: driverLoc.lat, longitude: driverLoc.lng }}
-              image={CAR_LOCATOR_IMG}
+              image={driverIconFor(driver)}
               rotation={(driverLoc.bearing + 90) % 360}
               title="Driver"
             />

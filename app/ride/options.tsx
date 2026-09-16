@@ -26,7 +26,7 @@ import type { SavedCard, Waypoint } from "@/lib/types";
 
 // ⚠️ Adjust these two imports to match where they actually live in your project.
 import MapView, { Marker, Polyline } from "@/components/MapView";
-import { CAR_LOCATOR_DATA_URL } from "@/lib/carIcon";
+import { CAR_LOCATOR_DATA_URL, getCarIconDataUrl } from "@/lib/carIcon";
 const CAR_LOCATOR_IMG = CAR_LOCATOR_DATA_URL;
 
 const tiers = [
@@ -321,7 +321,7 @@ export default function RideOptions() {
               <Marker
                 key={c.id}
                 coordinate={{ latitude: c.lat, longitude: c.lng }}
-                image={CAR_LOCATOR_IMG}
+                image={getCarIconDataUrl(null, null, null)}
                 rotation={(c.angle + 90) % 360}
                 title="Nearby driver"
               />

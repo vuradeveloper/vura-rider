@@ -38,6 +38,7 @@ export interface ServerToClientEvents {
   }) => void;
   "ride:completed": (data: { riderTotal?: number; fare?: number }) => void;
   "ride:cancelled": (data: { reason?: string }) => void;
+  "ride:driver:cancelled": (data: { reason?: string; rideId?: string }) => void;
   "ride:refunded": (data: { amount?: number | null; note?: string }) => void;
   "ride:pickup:updated": (data: {
     address: string;

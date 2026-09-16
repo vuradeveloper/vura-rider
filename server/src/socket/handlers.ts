@@ -346,14 +346,39 @@ export function setupSocketHandlers(io: SocketIOServer) {
     socket.on("passenger:ride:cancel", async (data) => {
       try {
         const { rideId, reason } = data;
+
+        // Cancellation-fee policy. Read the ride's pre-cancel state so we can
+        // decide whether a fee applies (driver was already matched + meaningful
+        // time passed). Store it on the row and deduct from any refund.
+        const before = await queryOne<{ status: string; accepted_at: Date | null }>(
+          "SELECT status, accepted_at FROM rides WHERE id = $1 LIMIT 1",
+          [rideId]
+        ).catch(() => null);
+        const FEE_FLAT_RANDS = 15.0;          // flat cancellation fee (policy)
+        const FEE_GRACE_MINUTES = 2;          // no fee if cancelled within 2 min of match
+        let fee = 0.0;
+        if (before?.status === "accepted" || before?.status === "driver_arrived") {
+          let elapsedMin = 0;
+          if (before.accepted_at) {
+            elapsedMin = (Date.now() - new Date(before.accepted_at).getTime()) / 60000;
+          }
+          if (elapsedMin > FEE_GRACE_MINUTES) fee = FEE_FLAT_RANDS;
+        }
+
         await execute(
-          "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW() WHERE id = $3 AND status IN ('searching','scheduled','accepted','driver_arrived')",
-          [socket.userId, reason, rideId]
+          "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW(), cancellation_fee = $3 WHERE id = $4 AND status IN ('searching','scheduled','accepted','driver_arrived')",
+          [socket.userId, reason, fee, rideId]
         );
         stopServerRideSim(rideId);
 
         // Tell the rider instantly — no waiting on the refund API.
-        io.to(`ride:${rideId}`).emit("ride:cancelled", { reason });
+        io.to(`ride:${rideId}`).emit("ride:cancelled", {
+          reason,
+          cancellation_fee: fee,
+          fee_note: fee > 0
+            ? `A R${fee.toFixed(2)} cancellation fee applies because a driver was already on the way.`
+            : null,
+        });
 
         // Also broadcast to every online driver so pending Accept/Decline
         // cards for this ride disappear immediately (drivers not yet joined
@@ -372,8 +397,9 @@ export function setupSocketHandlers(io: SocketIOServer) {
         })();
 
         // ── Auto-refund (async, non-blocking) ──
-        // If the rider cancels, refund the card payment taken at pickup. This
-        // runs in the background so the cancel is instant for the rider.
+        // If the rider cancels, refund the card payment taken at pickup. If a
+        // cancellation fee applies, keep the fee and refund the remainder.
+        // This runs in the background so the cancel is instant for the rider.
         (async () => {
           try {
             const payment = await queryOne<{ id: string; status: string; reference: string; amount: string }>(
@@ -381,17 +407,31 @@ export function setupSocketHandlers(io: SocketIOServer) {
               [rideId]
             ).catch(() => null);
             if (!payment) return;
+            const paid = Number(payment.amount);
+            const refundAmount = Math.max(0, paid - fee);
             try {
-              await refundTransaction(payment.reference, Number(payment.amount));
-              console.log(`Refunded Paystack payment ${payment.reference}`);
+              if (refundAmount >= 0.01) {
+                await refundTransaction(payment.reference, refundAmount);
+                console.log(`Refunded R${refundAmount} of Paystack payment ${payment.reference}`);
+                await execute(
+                  "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
+                  [payment.id]
+                ).catch(() => {});
+              } else {
+                console.log(`Cancellation fee R${fee} covers the full R${paid} — no refund due.`);
+              }
             } catch (e) {
               console.warn("Paystack refund failed on cancel:", e);
             }
-            await execute(
-              "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
-              [payment.id]
-            ).catch(() => {});
-            io.to(`ride:${rideId}`).emit("ride:refunded", { amount: null, note: "If your payment was taken, it is being refunded to the same account you paid from." });
+            io.to(`ride:${rideId}`).emit("ride:refunded", {
+              amount: refundAmount >= 0.01 ? refundAmount : null,
+              note:
+                fee > 0 && refundAmount > 0.01
+                  ? `R${refundAmount.toFixed(2)} was refunded (a R${fee.toFixed(2)} cancellation fee applies because a driver was already on the way).`
+                  : fee > 0
+                    ? `A R${fee.toFixed(2)} cancellation fee applies; the payment is retained for that fee.`
+                    : "If your payment was taken, it is being refunded to the same account you paid from.",
+            });
           } catch (err) {
             console.error("Async refund error on cancel:", err);
           }
@@ -698,7 +738,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
             return;
           }
         }
-        await execute("UPDATE rides SET driver_id = $1, status = 'accepted' WHERE id = $2", [dbUserId, rideId]);
+        await execute(
+          "UPDATE rides SET driver_id = $1, status = 'accepted', accepted_at = NOW() WHERE id = $2",
+          [dbUserId, rideId]
+        );
         socket.join(`ride:${rideId}`);
         // Notify the rider
         const driver = await queryOne<any>(
@@ -750,6 +793,94 @@ export function setupSocketHandlers(io: SocketIOServer) {
         try {
           socket.emit("ride:accepted:ack", { success: false, error: "Could not accept this ride right now. Please try again." });
         } catch { /* socket already gone */ }
+      }
+    });
+
+    // ── Driver: cancel an accepted ride (or release a pre-claimed scheduled ride) ──
+    // Uber/Bolt style: when the driver cancels BEFORE pickup, the ride is NOT
+    // dead — it goes straight back into the dispatch pool ('searching') so a
+    // different driver can accept it, and the driver's cancellation-rate
+    // counter is incremented for quality control.
+    socket.on("driver:ride:cancel", async (data: any) => {
+      try {
+        const { rideId, reason } = data || {};
+        if (!rideId) return;
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+
+        const ride = await queryOne<{ id: string; status: string; passenger_id: string }>(
+          "SELECT id, status, passenger_id FROM rides WHERE id = $1 AND driver_id = $2",
+          [rideId, dbUserId]
+        );
+        if (!ride) {
+          socket.emit("ride:cancel:ack", { success: false, error: "Ride not found for this driver" });
+          return;
+        }
+
+        // 1) Increment the driver's cancellation-rate counter.
+        try {
+          await execute(
+            `UPDATE driver_profiles SET cancellations_count = COALESCE(cancellations_count, 0) + 1, updated_at = NOW()
+             WHERE user_id = $1`,
+            [dbUserId]
+          );
+        } catch (e) { console.warn("Driver cancel counter update failed:", e); }
+
+        // 2) Pre-pickup states → release back into the dispatch pool for rematch.
+        //    A mid-trip cancel (in_progress) is a hard cancel instead.
+        if (ride.status === "in_progress") {
+          await execute(
+            `UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW()
+             WHERE id = $3`,
+            [dbUserId, reason || "Driver cancelled mid-trip", rideId]
+          );
+          stopServerRideSim(rideId);
+          io.to(`ride:${rideId}`).emit("ride:cancelled", { reason: "Your driver cancelled the trip." });
+          notifyUser(
+            (await queryOne<{ firebase_uid: string }>(
+              "SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]
+            ).catch(() => null))?.firebase_uid,
+            "Ride cancelled",
+            "Your driver cancelled. Your payment will be refunded.",
+            { ride_id: rideId }
+          );
+        } else {
+          // Release for rematch: clear the assigned driver so accept is possible again.
+          await execute(
+            `UPDATE rides SET status = 'searching', driver_id = NULL, updated_at = NOW()
+             WHERE id = $1 AND status IN ('scheduled','accepted','driver_arrived')`,
+            [rideId]
+          );
+          io.to(`ride:${rideId}`).emit("ride:driver:cancelled", { reason: reason || "Your driver cancelled. Finding a new driver…" });
+          // Push to the rider's personal room too (survives ride-room loss on reconnect).
+          (async () => {
+            const p = await queryOne<{ firebase_uid: string }>(
+              "SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]
+            ).catch(() => null);
+            if (p?.firebase_uid) {
+              io.to(`user:${p.firebase_uid}`).emit("ride:driver:cancelled", { reason: "Finding a new driver…" });
+              notifyUser(p.firebase_uid, "Driver changed", "Your driver cancelled — finding you a new driver.", { ride_id: rideId });
+            }
+          })();
+          // Wake riders waiting in the dispatch pool — re-broadcast to online drivers.
+          (async () => {
+            const drivers = await query<{ id: string; firebase_uid: string }>(
+              `SELECT u.id, u.firebase_uid FROM users u
+               JOIN driver_profiles dp ON dp.user_id = u.id
+               WHERE u.role = 'driver' AND dp.is_online = true`
+            );
+            io.to("drivers").emit("ride:request:refresh", { rideId });
+            for (const driver of drivers || []) {
+              if (driver?.firebase_uid) io.to(`user:${driver.firebase_uid}`).emit("ride:request:refresh", { rideId });
+            }
+          })();
+          await broadcastRiderQueue();
+        }
+
+        socket.emit("ride:cancel:ack", { success: true, rideId, rematched: ride.status !== "in_progress" });
+      } catch (err: any) {
+        console.error("Driver cancel error:", err);
+        try { socket.emit("ride:cancel:ack", { success: false, error: "Could not cancel this ride right now." }); } catch {}
       }
     });
 

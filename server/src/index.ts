@@ -374,12 +374,20 @@ async function start() {
         ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'x',
         ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE,
-        ADD COLUMN IF NOT EXISTS device_id VARCHAR(100)
+        ADD COLUMN IF NOT EXISTS device_id VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS cancellation_fee NUMERIC(10,2) DEFAULT 0
       `);
       // Driver verification status — gates "Go Online" until docs are approved.
       await execute(`
         ALTER TABLE driver_profiles
         ADD COLUMN IF NOT EXISTS verification_status VARCHAR(20) DEFAULT 'pending'
+      `);
+      // Driver cancellation-rate counter — incremented every time a driver
+      // cancels an accepted ride (used for quality control / rematch stats).
+      await execute(`
+        ALTER TABLE driver_profiles
+        ADD COLUMN IF NOT EXISTS cancellations_count INT DEFAULT 0
       `);
       // Backfill: drivers who already uploaded ID/license docs become approved.
       await execute(`
