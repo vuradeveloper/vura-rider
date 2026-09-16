@@ -7,6 +7,7 @@ import {
   chargeAuthorization,
   refundTransaction,
   paymentsMode,
+  PaystackVerifyResult,
 } from "../services/paystackPayment";
 import { ensurePayoutsTable } from "./payouts";
 
@@ -305,7 +306,20 @@ router.get("/return", async (req: AuthRequest, res: Response) => {
     }
 
     const verified = await verifyTransaction(reference);
-    const success = Boolean(verified && verified.status === "success");
+    const payStatus = String(verified?.status || "").toLowerCase();
+
+    // 3-D Secure still pending is NOT a failure — keep the payment row pending
+    // so the app's poll can finish the tokenisation once Paystack reports success.
+    if (
+      verified &&
+      payStatus !== "success" &&
+      (payStatus === "" || payStatus === "ongoing" || payStatus === "pending" || payStatus === "awaiting_3ds_response" || payStatus === "awaiting_3ds")
+    ) {
+      res.json({ reference, result: "pending", success: false, pending: true });
+      return;
+    }
+
+    const success = Boolean(verified && payStatus === "success");
 
     if (verified) {
       await execute(
@@ -368,59 +382,69 @@ router.get("/verify", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // If the row is still initiated and it's a hosted checkout, ask Paystack.
-    if (payment.status === "initiated") {
-      try {
-        const verified = await verifyTransaction(reference);
-        if (verified) {
-          const success = verified.status === "success";
-          await execute(
-            `UPDATE payments SET status = $1, raw_response = $2, updated_at = NOW()
-             WHERE reference = $3`,
-            [success ? "completed" : "failed", JSON.stringify(verified), reference]
-          ).catch(() => {});
+    let verified: PaystackVerifyResult | null = null;
+  try {
+    verified = await verifyTransaction(reference);
+  } catch (e) {
+    console.warn("Verify against Paystack failed:", e);
+  }
 
-          if (success && verified.authorization?.reusable) {
-            const rec = await queryOne<{ user_id: string; ride_id: string | null; amount: string }>(
-              "SELECT user_id, ride_id, amount FROM payments WHERE reference = $1",
-              [reference]
-            );
-            if (rec) {
-              await storeAuthorizationCard(rec.user_id, verified);
-              // Card registration (no ride) used a R1.00 auth — refund it
-              // immediately so adding a card never charges the rider.
-              if (!rec.ride_id) {
-                try {
-                  await refundTransaction(reference, Number(rec.amount));
-                  await execute(
-                    `UPDATE payments SET status = 'refunded', updated_at = NOW()
-                     WHERE reference = $1`,
-                    [reference]
-                  ).catch(() => {});
-                } catch (e) {
-                  console.warn("Card-register refund failed (manual refund may be needed):", e);
-                }
-              }
-            }
-          }
-          res.json({ status: success ? "completed" : String(verified?.status || "failed").toLowerCase(), reference, paystackStatus: verified?.status || null });
-          return;
+  // Paystack statuses: "success" = paid, "ongoing"/"awaiting_3ds_response" =
+  // still waiting for 3-D Secure, "failed"/"abandoned"/"reversed" = terminal.
+  const payStatus = String(verified?.status || "").toLowerCase();
+
+  if (payStatus === "success") {
+    const rec = await queryOne<{ user_id: string; ride_id: string | null; amount: string }>(
+      "SELECT user_id, ride_id, amount FROM payments WHERE reference = $1",
+      [reference]
+    ).catch(() => null);
+    if (rec) {
+      await execute(
+        "UPDATE payments SET status = 'completed', raw_response = $1, updated_at = NOW() WHERE reference = $2",
+        [JSON.stringify(verified), reference]
+      ).catch(() => {});
+      if (verified?.authorization?.reusable) {
+        try {
+          await storeAuthorizationCard(rec.user_id, verified);
+        } catch (e) {
+          console.warn("Store card failed on verify:", e);
         }
-      } catch (e) {
-        console.warn("Verify against Paystack failed:", e);
+        if (!rec.ride_id) {
+          try {
+            await refundTransaction(reference, Number(rec.amount));
+            await execute(
+              "UPDATE payments SET status = 'refunded', raw_response = $1, updated_at = NOW() WHERE reference = $2",
+              [JSON.stringify(verified), reference]
+            ).catch(() => {});
+          } catch (e) {
+            console.warn("Card-register refund failed (manual refund may be needed):", e);
+          }
+        }
       }
     }
+    res.json({ status: "completed", success: true, reference, paystackStatus: payStatus });
+    return;
+  }
 
-    // A "refunded" payment row means the charge actually SUCCEEDED and was
-    // then returned to the card — the normal outcome of card registration
-    // (R1 pre-auth immediately refunded after tokenisation). Without this,
-    // a rider who just added a card successfully would be told
-    // "Card not added — Paystack said: refunded".
-    const succeeded =
-      payment.status === "completed" ||
-      payment.status === "success" ||
-      payment.status === "refunded";
-    res.json({ status: succeeded ? "completed" : payment.status, success: succeeded, reference });
+  // Still waiting on 3-D Secure (or provider hiccup) — NOT a failure. Keep the
+  // payment pending so the client can keep polling and the card still gets
+  // tokenised the moment Paystack reports success.
+  if (payStatus === "" || payStatus === "ongoing" || payStatus === "pending" || payStatus === "awaiting_3ds_response" || payStatus === "awaiting_3ds") {
+    res.json({ status: "pending", pending: true, reference, paystackStatus: payStatus });
+    return;
+  }
+
+  // Genuine terminal failures.
+  await execute(
+    "UPDATE payments SET status = 'failed', raw_response = $1, updated_at = NOW() WHERE reference = $2",
+    [JSON.stringify(verified || null), reference]
+  ).catch(() => {});
+  res.json({
+    status: (payStatus === "abandoned" || payStatus === "reversed" ? "abandoned" : "failed"),
+    success: false,
+    reference,
+    paystackStatus: payStatus,
+  });
   } catch (err: any) {
     console.error("Verify payment error:", err);
     res.status(500).json({ status: "error", error: err.message });

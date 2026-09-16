@@ -85,19 +85,26 @@ export default function AddPaymentMethod() {
       }
 
       // Poll the server until it sees the card saved (or the transaction ends).
-      const deadline = Date.now() + 90000; // 90s cap
+      // With 3-D Secure the user may need to approve in their banking app —
+      // allow up to 3 minutes for that, then keep the page open so they can
+      // tap "Done" and check again.
+      const deadline = Date.now() + 180000; // 3 min automatic cap
+      let lastStatus: string | null = null;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 3000));
         const verify = await apiFetch<any>(
           `/api/payments/verify?reference=${reference}`
         ).catch(() => null);
         const status = verify?.status;
+        if (!status) continue;
+        lastStatus = status;
         if (status === "success" || status === "completed" || status === "refunded") {
           queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
           setVerifying(false);
           setVerified(true);
           return;
         }
+        // pending / ongoing (3-D Secure waiting) is NOT a failure — keep polling.
         if (status === "abandoned" || status === "failed") {
           setVerifying(false);
           Alert.alert(
@@ -107,10 +114,12 @@ export default function AddPaymentMethod() {
           return;
         }
       }
+      // Server still says pending after 3 min: the bank may be waiting on 3-D
+      // Secure approval. Let the rider check again without losing their place.
       setVerifying(false);
       Alert.alert(
-        "Card not added",
-        "The payment page didn't complete within 90 seconds. Check your connection and the page, then tap Continue and complete it."
+        "Almost there",
+        "Your bank may be waiting for you to approve this (3-D Secure / OTP). If you completed it, tap Continue again to finish adding your card."
       );
     } catch (e: any) {
       setVerifying(false);
