@@ -73,14 +73,12 @@ export default function AddPaymentMethod() {
         if (browserResult.type === "success") {
           const parsedRef = parsePaymentReference(browserResult.url);
           if (parsedRef) reference = parsedRef;
-        } else if (browserResult.type === "dismiss" || browserResult.type === "cancel") {
-          setVerifying(false);
-          Alert.alert(
-            "Card not added",
-            "The payment window was closed before a card was submitted. Tap Continue and complete the card form."
-          );
-          return;
         }
+        // NOTE: on `dismiss`/`cancel` we do NOT bail out. The user may have
+        // finished the payment and then closed the tab — the R1 auth can be
+        // successfully charged while the browser reports "dismiss". We fall
+        // through to the poll below; only the SERVER's verify verdict decides
+        // whether the card was actually saved.
       } else {
         // No in-app browser available — fall back to the system browser.
         Linking.openURL(result.authorizationUrl);
