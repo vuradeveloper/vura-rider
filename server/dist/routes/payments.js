@@ -24,6 +24,7 @@ async function ensurePaymentsTable() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+        await (0, database_1.execute)(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS authorization_url VARCHAR(500)`);
     }
     catch {
         /* already exists */
@@ -157,6 +158,13 @@ router.post("/card-register", auth_1.requireAuth, async (req, res) => {
             reference,
             email: user.email,
         });
+        // Persist the checkout URL so /verify can hand it back to the app while the
+        // transaction is still pending 3-D Secure (Paystack's `authorization_url`
+        // is resumable — e.g. checkout.paystack.com/resume/{access_code}).
+        try {
+            await (0, database_1.execute)(`UPDATE payments SET authorization_url = $1, updated_at = NOW() WHERE reference = $2`, [result.authorizationUrl, reference]);
+        }
+        catch (e) { /* best-effort */ }
         res.json({ ...result, reference });
     }
     catch (err) {
@@ -227,6 +235,11 @@ router.post("/initiate", auth_1.requireAuth, async (req, res) => {
             reference,
             email: user.email,
         });
+        // Persist the resumable checkout URL (used to reopen 3-D Secure challenges).
+        try {
+            await (0, database_1.execute)(`UPDATE payments SET authorization_url = $1, updated_at = NOW() WHERE reference = $2`, [init.authorizationUrl, reference]);
+        }
+        catch (e) { /* best-effort */ }
         res.json({
             ...init,
             reference,
@@ -257,7 +270,13 @@ router.get("/return", async (req, res) => {
         if (verified &&
             payStatus !== "success" &&
             (payStatus === "" || payStatus === "ongoing" || payStatus === "pending" || payStatus === "awaiting_3ds_response" || payStatus === "awaiting_3ds")) {
-            res.json({ reference, result: "pending", success: false, pending: true });
+            let resumeUrl = null;
+            try {
+                const pm = await (0, database_1.queryOne)("SELECT authorization_url FROM payments WHERE reference = $1 LIMIT 1", [reference]);
+                resumeUrl = pm?.authorization_url || null;
+            }
+            catch (e) { /* best-effort */ }
+            res.json({ reference, result: "pending", success: false, pending: true, authorizationUrl: resumeUrl });
             return;
         }
         const success = Boolean(verified && payStatus === "success");
@@ -302,7 +321,7 @@ router.get("/verify", async (req, res) => {
             res.status(400).json({ status: "error", error: "Missing reference" });
             return;
         }
-        const payment = await (0, database_1.queryOne)("SELECT status FROM payments WHERE reference = $1 LIMIT 1", [reference]);
+        const payment = await (0, database_1.queryOne)("SELECT status, authorization_url FROM payments WHERE reference = $1 LIMIT 1", [reference]);
         if (!payment) {
             res.json({ status: "pending", reference });
             return;
@@ -346,7 +365,13 @@ router.get("/verify", async (req, res) => {
         // payment pending so the client can keep polling and the card still gets
         // tokenised the moment Paystack reports success.
         if (payStatus === "" || payStatus === "ongoing" || payStatus === "pending" || payStatus === "awaiting_3ds_response" || payStatus === "awaiting_3ds") {
-            res.json({ status: "pending", pending: true, reference, paystackStatus: payStatus });
+            res.json({
+                status: "pending",
+                pending: true,
+                reference,
+                paystackStatus: payStatus,
+                authorizationUrl: payment.authorization_url || null,
+            });
             return;
         }
         // Genuine terminal failures.

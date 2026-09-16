@@ -63,33 +63,43 @@ export default function AddPaymentMethod() {
       setVerifying(true);
       let reference = result.reference;
       const callbackUrl = getApiUrl("/api/payments/return");
+      // The original checkout page from Paystack is RESUMABLE. When the bank
+      // raises a 3-D Secure challenge (transaction status "ongoing") we reopen
+      // this same URL so the rider can complete the approval in the bank's
+      // page — exactly what Paystack's docs direct for `paused` transactions.
+      let resumeUrl: string | null = result.authorizationUrl;
 
-      if (await InAppBrowser.isAvailable()) {
-        const browserResult = await InAppBrowser.openAuth(
-          result.authorizationUrl,
-          callbackUrl,
-          { showTitle: false, enableUrlBarHiding: true, enableDefaultShare: false }
-        );
-        if (browserResult.type === "success") {
-          const parsedRef = parsePaymentReference(browserResult.url);
-          if (parsedRef) reference = parsedRef;
+      const openCheckout = async () => {
+        if (await InAppBrowser.isAvailable()) {
+          const browserResult = await InAppBrowser.openAuth(
+            resumeUrl || result.authorizationUrl,
+            callbackUrl,
+            { showTitle: false, enableUrlBarHiding: true, enableDefaultShare: false }
+          );
+          if (browserResult.type === "success") {
+            const parsedRef = parsePaymentReference(browserResult.url);
+            if (parsedRef) reference = parsedRef;
+          }
+          // NOTE: on `dismiss`/`cancel` we do NOT bail out. The user may have
+          // finished the payment and then closed the tab — the R1 auth can be
+          // successfully charged while the browser reports "dismiss". Only the
+          // SERVER's verify verdict decides whether the card was actually saved.
+        } else {
+          // No in-app browser available — fall back to the system browser.
+          Linking.openURL(resumeUrl || result.authorizationUrl);
         }
-        // NOTE: on `dismiss`/`cancel` we do NOT bail out. The user may have
-        // finished the payment and then closed the tab — the R1 auth can be
-        // successfully charged while the browser reports "dismiss". We fall
-        // through to the poll below; only the SERVER's verify verdict decides
-        // whether the card was actually saved.
-      } else {
-        // No in-app browser available — fall back to the system browser.
-        Linking.openURL(result.authorizationUrl);
-      }
+      };
+
+      // First checkout opening.
+      await openCheckout();
 
       // Poll the server until it sees the card saved (or the transaction ends).
-      // With 3-D Secure the user may need to approve in their banking app —
-      // allow up to 3 minutes for that, then keep the page open so they can
-      // tap "Done" and check again.
-      const deadline = Date.now() + 180000; // 3 min automatic cap
-      let lastStatus: string | null = null;
+      // Status `pending` means the bank is still waiting on 3-D Secure — while
+      // that is the case we bounce the rider back onto the resumable Paystack
+      // checkout so they can finish the OTP/approval IN the bank page, then we
+      // keep polling. Deadlines only stop this loop after a generous window.
+      const deadline = Date.now() + 300000; // 5 min automatic cap
+      let reopened = false;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 3000));
         const verify = await apiFetch<any>(
@@ -97,14 +107,15 @@ export default function AddPaymentMethod() {
         ).catch(() => null);
         const status = verify?.status;
         if (!status) continue;
-        lastStatus = status;
+        // Keep polling through the whole window: the R1 hold can take a moment
+        // to resolve after the rider finishes 3-D Secure in their bank app.
         if (status === "success" || status === "completed" || status === "refunded") {
           queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
           setVerifying(false);
           setVerified(true);
           return;
         }
-        // pending / ongoing (3-D Secure waiting) is NOT a failure — keep polling.
+        // Genuine terminal failures from the server.
         if (status === "abandoned" || status === "failed") {
           setVerifying(false);
           Alert.alert(
@@ -113,13 +124,22 @@ export default function AddPaymentMethod() {
           );
           return;
         }
+        // Pending / ongoing (3-D Secure waiting): update the resume URL from the
+        // server (it stores the checkout link) and, if we haven't already, hand
+        // the rider back to Paystack's page to finish the bank approval.
+        if (verify?.authorizationUrl) resumeUrl = verify.authorizationUrl;
+        if (!reopened) {
+          reopened = true;
+          await openCheckout();
+        }
       }
-      // Server still says pending after 3 min: the bank may be waiting on 3-D
-      // Secure approval. Let the rider check again without losing their place.
+      // Server still says pending after 5 min: the bank approval never came
+      // through in the checkout. Tell the rider to complete it in their bank
+      // app; the card will finish saving automatically once they do.
       setVerifying(false);
       Alert.alert(
         "Almost there",
-        "Your bank may be waiting for you to approve this (3-D Secure / OTP). If you completed it, tap Continue again to finish adding your card."
+        "Your bank may be waiting for you to approve this (3-D Secure / OTP) before we can save the card. If you complete the approval in your banking app, tap Continue again — it finishes automatically. The R1 shown on your card is a temporary hold and is always returned."
       );
     } catch (e: any) {
       setVerifying(false);

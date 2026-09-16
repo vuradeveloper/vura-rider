@@ -31,6 +31,7 @@ async function ensurePaymentsTable() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await execute(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS authorization_url VARCHAR(500)`);
   } catch {
     /* already exists */
   }
@@ -182,6 +183,16 @@ router.post("/card-register", requireAuth, async (req: AuthRequest, res: Respons
       email: user.email,
     });
 
+    // Persist the checkout URL so /verify can hand it back to the app while the
+    // transaction is still pending 3-D Secure (Paystack's `authorization_url`
+    // is resumable — e.g. checkout.paystack.com/resume/{access_code}).
+    try {
+      await execute(
+        `UPDATE payments SET authorization_url = $1, updated_at = NOW() WHERE reference = $2`,
+        [result.authorizationUrl, reference]
+      );
+    } catch (e) { /* best-effort */ }
+
     res.json({ ...result, reference });
   } catch (err: any) {
     console.error("Card register error:", err);
@@ -281,6 +292,14 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
       email: user.email,
     });
 
+    // Persist the resumable checkout URL (used to reopen 3-D Secure challenges).
+    try {
+      await execute(
+        `UPDATE payments SET authorization_url = $1, updated_at = NOW() WHERE reference = $2`,
+        [init.authorizationUrl, reference]
+      );
+    } catch (e) { /* best-effort */ }
+
     res.json({
       ...init,
       reference,
@@ -315,7 +334,15 @@ router.get("/return", async (req: AuthRequest, res: Response) => {
       payStatus !== "success" &&
       (payStatus === "" || payStatus === "ongoing" || payStatus === "pending" || payStatus === "awaiting_3ds_response" || payStatus === "awaiting_3ds")
     ) {
-      res.json({ reference, result: "pending", success: false, pending: true });
+      let resumeUrl: string | null = null;
+      try {
+        const pm = await queryOne<{ authorization_url: string | null }>(
+          "SELECT authorization_url FROM payments WHERE reference = $1 LIMIT 1",
+          [reference]
+        );
+        resumeUrl = pm?.authorization_url || null;
+      } catch (e) { /* best-effort */ }
+      res.json({ reference, result: "pending", success: false, pending: true, authorizationUrl: resumeUrl });
       return;
     }
 
@@ -373,8 +400,8 @@ router.get("/verify", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const payment = await queryOne<{ status: string }>(
-      "SELECT status FROM payments WHERE reference = $1 LIMIT 1",
+    const payment = await queryOne<{ status: string; authorization_url: string | null }>(
+      "SELECT status, authorization_url FROM payments WHERE reference = $1 LIMIT 1",
       [reference]
     );
     if (!payment) {
@@ -430,7 +457,13 @@ router.get("/verify", async (req: AuthRequest, res: Response) => {
   // payment pending so the client can keep polling and the card still gets
   // tokenised the moment Paystack reports success.
   if (payStatus === "" || payStatus === "ongoing" || payStatus === "pending" || payStatus === "awaiting_3ds_response" || payStatus === "awaiting_3ds") {
-    res.json({ status: "pending", pending: true, reference, paystackStatus: payStatus });
+    res.json({
+      status: "pending",
+      pending: true,
+      reference,
+      paystackStatus: payStatus,
+      authorizationUrl: payment.authorization_url || null,
+    });
     return;
   }
 
