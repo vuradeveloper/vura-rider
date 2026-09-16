@@ -10,6 +10,7 @@ import { submitTip, getTipSuggestions } from "@/services/TipService";
 import { getDeviceId } from "@/lib/device";
 import { shareTrip } from "@/services/SafetyService";
 import { buzzArrival, buzzMilestone } from "@/lib/haptics";
+import * as Notifications from "expo-notifications";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
@@ -976,6 +977,31 @@ export default function Track() {
         socket.on("ride:driver:arrived", () => {
           setStatus("driver_arrived");
           // Buzz the rider's phone â€” the driver tapped "I've arrived".
+          // The driver has arrived — hide the rider's Cancel button immediately.
+          setShowCancel(false);
+          // Fire a LOCAL phone notification so the rider always sees the arrival
+          // (mirrors the reliable cancel-notification flow; the server push may be
+          // delayed or blocked on the rider's device). Sound + banner + vibration.
+          try {
+            Notifications.setNotificationChannelAsync("arrival", {
+              name: "Driver arrival",
+              importance: Notifications.AndroidImportance.MAX,
+              vibrationPattern: [0, 250, 250, 250],
+              sound: "default",
+            });
+            Notifications.scheduleNotificationAsync({
+              content: {
+                title: "Driver arrived",
+                body: `${driver?.name || "Your driver"} is here to pick you up.`,
+                sound: "default",
+                priority: Notifications.AndroidNotificationPriority.HIGH,
+              },
+              trigger: null,
+            });
+          } catch {
+            /* local notification best-effort */
+          }
+
           buzzArrival();
           // Refresh the route line from the driver's published data (new leg
           // may have been posted since the driver reached the pickup).
@@ -1470,7 +1496,7 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
   }
 
   const canCancel =
-    status === "searching" || status === "accepted" || status === "driver_arrived";
+    status === "searching" || status === "accepted";
   const canEditPickup =
     !isHistory &&
     ["searching", "accepted", "driver_arrived"].includes(status);
