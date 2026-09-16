@@ -328,6 +328,33 @@ async function start() {
           UNIQUE(ride_id, passenger_id)
         )
       `);
+      await execute(`
+        CREATE TABLE IF NOT EXISTS driver_documents (
+          id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          driver_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          doc_type        VARCHAR(40) NOT NULL CHECK (doc_type IN (
+                            'drivers_license', 'id_document', 'prdp',
+                            'criminal_record', 'license_disk',
+                            'carscan_report', 'vehicle_scan'
+                          )),
+          file_name       VARCHAR(255),
+          mime_type       VARCHAR(100),
+          s3_key          TEXT NOT NULL,
+          s3_bucket       VARCHAR(255),
+          size_bytes      INTEGER,
+          status          VARCHAR(20) NOT NULL DEFAULT 'pending_review'
+                          CHECK (status IN ('pending_review', 'approved', 'rejected')),
+          note            TEXT,
+          reviewed_at     TIMESTAMPTZ,
+          created_at      TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await execute(`
+        CREATE INDEX IF NOT EXISTS idx_driver_documents_driver ON driver_documents(driver_id)
+      `);
+      await execute(`
+        CREATE INDEX IF NOT EXISTS idx_driver_documents_type ON driver_documents(doc_type)
+      `);
       console.log("✓ Schema bootstrapped");
     } catch (err) {
       console.warn("⚠ Schema bootstrap skipped:", err);
