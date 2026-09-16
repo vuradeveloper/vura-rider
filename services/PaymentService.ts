@@ -8,7 +8,7 @@ import { getApiUrl } from "@/lib/config";
  * Parses the redirect URL from the payment gateway (e.g. Paystack) to extract
  * the reference or transaction ID. Returns null if it is a cancel/fallback URL.
  */
-const parsePaymentReference = (urlStr: string): string | null => {
+export const parsePaymentReference = (urlStr: string): string | null => {
   const lowerUrl = urlStr.toLowerCase();
   if (
     lowerUrl.includes("/cancel") ||

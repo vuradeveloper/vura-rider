@@ -7,21 +7,25 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
-import { registerPaystackCard } from "@/services/PaymentService";
-import PaymentWebView from "@/components/PaymentWebView";
+import InAppBrowser from "react-native-inappbrowser-reborn";
+import {
+  registerPaystackCard,
+  parsePaymentReference,
+} from "@/services/PaymentService";
+import { getApiUrl } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 
 export default function AddPaymentMethod() {
   const router = useRouter();
   const queryClient = useQueryClient();
 
   const [isStarting, setIsStarting] = useState(false);
-  const [paystackVisible, setPaystackVisible] = useState(false);
-  const [paystackUrl, setPaystackUrl] = useState("");
-  const [paystackReference, setPaystackReference] = useState<string | undefined>();
+  const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState(false);
 
   const navigateBack = () => {
@@ -51,10 +55,67 @@ export default function AddPaymentMethod() {
         );
         return;
       }
-      setPaystackUrl(result.authorizationUrl || "");
-      setPaystackReference(result.reference || undefined);
-      setPaystackVisible(true);
+      if (!result.authorizationUrl) {
+        Alert.alert("Error", "No payment page was returned by the server.");
+        return;
+      }
+
+      setVerifying(true);
+      let reference = result.reference;
+      const callbackUrl = getApiUrl("/api/payments/return");
+
+      if (await InAppBrowser.isAvailable()) {
+        const browserResult = await InAppBrowser.openAuth(
+          result.authorizationUrl,
+          callbackUrl,
+          { showTitle: false, enableUrlBarHiding: true, enableDefaultShare: false }
+        );
+        if (browserResult.type === "success") {
+          const parsedRef = parsePaymentReference(browserResult.url);
+          if (parsedRef) reference = parsedRef;
+        } else if (browserResult.type === "dismiss" || browserResult.type === "cancel") {
+          setVerifying(false);
+          Alert.alert(
+            "Card not added",
+            "The payment window was closed before a card was submitted. Tap Continue and complete the card form."
+          );
+          return;
+        }
+      } else {
+        // No in-app browser available — fall back to the system browser.
+        Linking.openURL(result.authorizationUrl);
+      }
+
+      // Poll the server until it sees the card saved (or the transaction ends).
+      const deadline = Date.now() + 90000; // 90s cap
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const verify = await apiFetch<any>(
+          `/api/payments/verify?reference=${reference}`
+        ).catch(() => null);
+        const status = verify?.status;
+        if (status === "success" || status === "completed" || status === "refunded") {
+          queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
+          setVerifying(false);
+          setVerified(true);
+          return;
+        }
+        if (status === "abandoned" || status === "failed") {
+          setVerifying(false);
+          Alert.alert(
+            "Card not added",
+            `The payment page didn't complete — Paystack said: ${status}. No card was saved. Check the card details and try again.`
+          );
+          return;
+        }
+      }
+      setVerifying(false);
+      Alert.alert(
+        "Card not added",
+        "The payment page didn't complete within 90 seconds. Check your connection and the page, then tap Continue and complete it."
+      );
     } catch (e: any) {
+      setVerifying(false);
       Alert.alert("Error", e.message || "Could not start secure card setup");
     } finally {
       setIsStarting(false);
@@ -101,11 +162,16 @@ export default function AddPaymentMethod() {
 
             <TouchableOpacity
               onPress={startSecureAdd}
-              disabled={isStarting}
-              className={`w-full rounded-xl bg-white border border-border py-4 items-center ${isStarting ? "opacity-60" : ""}`}
+              disabled={isStarting || verifying}
+              className={`w-full rounded-xl bg-white border border-border py-4 items-center ${isStarting || verifying ? "opacity-60" : ""}`}
             >
-              {isStarting ? (
-                <ActivityIndicator size="small" color="#e04e2f" />
+              {isStarting || verifying ? (
+                <View className="flex-row items-center gap-2">
+                  <ActivityIndicator size="small" color="#e04e2f" />
+                  <Text className="text-sm font-bold text-foreground">
+                    {verifying ? "Confirming with bank…" : "Starting…"}
+                  </Text>
+                </View>
               ) : (
                 <View className="flex-row items-center gap-2">
                   <Ionicons name="lock-closed" size={16} color="#2e1e1a" />
@@ -118,36 +184,6 @@ export default function AddPaymentMethod() {
           </>
         )}
       </ScrollView>
-
-      <PaymentWebView
-        visible={paystackVisible}
-        authorizationUrl={paystackUrl}
-        reference={paystackReference}
-        onClose={() => {
-          setPaystackVisible(false);
-        }}
-        onDone={({ success, result }) => {
-          setPaystackVisible(false);
-          if (success) {
-            queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
-            setVerified(true);
-          } else {
-            const why = result ? ` — Paystack said: ${String(result)}` : "";
-            const hint =
-              String(result) === "timeout"
-                ? "The payment page didn't finish within 60 seconds. Check your connection and the page, then tap Continue and complete it."
-                : String(result) === "abandoned"
-                  ? "The payment window was closed before a card was submitted. Tap Continue and complete the card form."
-                  : ['failed', 'declined'].includes(String(result))
-                    ? "Check the card details and try again."
-                    : "Please try again.";
-            Alert.alert(
-              "Card not added",
-              `The payment page didn't complete${why}. No card was saved. ${hint}`
-            );
-          }
-        }}
-      />
     </SafeAreaView>
   );
 }
