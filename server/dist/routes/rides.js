@@ -278,9 +278,23 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
             res.status(404).json({ error: "User not found" });
             return;
         }
-        const result = await (0, database_1.execute)(`UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = 'Ride cancelled by user', cancelled_at = NOW()
-       WHERE id = $2 AND passenger_id = $3
-         AND status IN ('scheduled','searching','accepted','driver_arrived','in_progress')`, [user.id, req.params.id, user.id]);
+        // Share the same cancellation-fee policy as the socket path: no fee while
+        // searching/scheduled, flat R15 once a driver was matched (after grace).
+        const before = await (0, database_1.queryOne)("SELECT status, accepted_at FROM rides WHERE id = $1 LIMIT 1", [req.params.id]).catch(() => null);
+        const FEE_FLAT_RANDS = 15.0;
+        const FEE_GRACE_MINUTES = 2;
+        let fee = 0.0;
+        if (before?.status === "accepted" || before?.status === "driver_arrived") {
+            let elapsedMin = 0;
+            if (before.accepted_at) {
+                elapsedMin = (Date.now() - new Date(before.accepted_at).getTime()) / 60000;
+            }
+            if (elapsedMin > FEE_GRACE_MINUTES)
+                fee = FEE_FLAT_RANDS;
+        }
+        const result = await (0, database_1.execute)(`UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = 'Ride cancelled by user', cancelled_at = NOW(), cancellation_fee = $2
+       WHERE id = $3 AND passenger_id = $4
+         AND status IN ('scheduled','searching','accepted','driver_arrived','in_progress')`, [user.id, fee, req.params.id, user.id]);
         if (!result.rowCount) {
             res.status(404).json({ error: "Ride not found or no longer active" });
             return;
@@ -289,9 +303,9 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
         // Tell the rider + driver + any online driver instantly so the ride
         // disappears everywhere (same broadcast the socket cancel does).
         const io = global.__vuraIo;
-        io?.to(`ride:${req.params.id}`).emit("ride:cancelled", { reason: "Ride cancelled by user" });
+        io?.to(`ride:${req.params.id}`).emit("ride:cancelled", { reason: "Ride cancelled by user", cancellation_fee: fee });
         io?.to("drivers").emit("ride:cancelled", { rideId: req.params.id, reason: "Ride cancelled by user" });
-        res.json({ success: true });
+        res.json({ success: true, cancellation_fee: fee });
     }
     catch (err) {
         console.error("Cancel scheduled ride error:", err);
