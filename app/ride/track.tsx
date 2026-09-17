@@ -37,6 +37,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 // âš ï¸ Adjust these two imports to match where they actually live in your project.
 import MapView, { Marker, Polyline } from "@/components/MapView";
+import CarIcon from "@/components/CarIcon";
 import { CAR_LOCATOR_DATA_URL, getCarIconDataUrl } from "@/lib/carIcon";
 const CAR_LOCATOR_IMG = CAR_LOCATOR_DATA_URL;
 // Free local icon library: pick a body-type + colour from the matched
@@ -1533,14 +1534,6 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
     !isHistory &&
     ["searching", "accepted", "driver_arrived"].includes(status);
   const tipSuggestions = getTipSuggestions(fare && fare > 0 ? fare : 50);
-  const driverInitials = driver?.name
-    ? driver.name
-      .split(" ")
-      .map((p) => p[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase()
-    : "";
 
   return (
     <View className="flex-1 bg-background">
@@ -1722,10 +1715,13 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
 
           {driver && (
             <View className="flex-row items-center gap-3">
-              <View className="h-14 w-14 rounded-full bg-primary items-center justify-center">
-                <Text className="text-lg font-bold text-white">
-                  {driverInitials}
-                </Text>
+              <View className="h-14 w-14 rounded-full bg-primary/15 border border-primary/30 items-center justify-center overflow-hidden">
+                <CarIcon
+                  make={driver.vehicle_make}
+                  model={driver.vehicle_model}
+                  color={driver.vehicle_color}
+                  size={40}
+                />
               </View>
               <View className="flex-1">
                 <View className="flex-row items-center gap-1">
