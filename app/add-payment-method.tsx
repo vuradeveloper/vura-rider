@@ -7,17 +7,13 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
-  Linking,
+  Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
-import InAppBrowser from "react-native-inappbrowser-reborn";
-import {
-  registerPaystackCard,
-  parsePaymentReference,
-} from "@/services/PaymentService";
-import { getApiUrl } from "@/lib/config";
+import { WebView } from "react-native-webview";
+import { registerPaystackCard } from "@/services/PaymentService";
 import { apiFetch } from "@/lib/api";
 
 export default function AddPaymentMethod() {
@@ -46,6 +42,8 @@ export default function AddPaymentMethod() {
       return () => clearTimeout(timer);
     }
   }, [verified]);
+
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
 
   const startSecureAdd = async () => {
     setIsStarting(true);
@@ -80,55 +78,29 @@ export default function AddPaymentMethod() {
         setPendingResumeUrl(authorizationUrl);
       }
 
-      const callbackUrl = getApiUrl("/api/payments/return");
       // The original checkout page from Paystack is RESUMABLE. When the bank
       // raises a 3-D Secure challenge (transaction status "ongoing") we reopen
-      // this same URL so the rider can complete the approval in the bank's
+      // this same URL so the rider can complete the approval on the bank's
       // page — exactly what Paystack's docs direct for `paused` transactions.
       let resumeUrl: string | null = authorizationUrl;
 
-      // Opens the checkout WITHOUT blocking the poll below. The browser may
-      // stay open while the rider completes 3-D Secure in their banking app —
-      // polling must keep running so the success is picked up the moment
-      // Paystack reports it.
-      let browserOpen = false;
-      const openCheckout = async () => {
-        if (browserOpen) return;
-        browserOpen = true;
-        try {
-          if (await InAppBrowser.isAvailable()) {
-            const browserResult = await InAppBrowser.openAuth(
-              resumeUrl || authorizationUrl,
-              callbackUrl,
-              { showTitle: false, enableUrlBarHiding: true, enableDefaultShare: false }
-            );
-            if (browserResult.type === "success") {
-              const parsedRef = parsePaymentReference(browserResult.url);
-              if (parsedRef) reference = parsedRef;
-            }
-            // NOTE: on `dismiss`/`cancel` we do NOT bail out. The user may have
-            // finished the payment and then closed the tab — the R1 auth can be
-            // successfully charged while the browser reports "dismiss". Only the
-            // SERVER's verify verdict decides whether the card was actually saved.
-          } else {
-            // No in-app browser available — fall back to the system browser.
-            Linking.openURL(resumeUrl || authorizationUrl);
-          }
-        } finally {
-          browserOpen = false;
-        }
+      // Open Paystack INSIDE the app in an embedded WebView so the rider never
+      // context-switches out of the app (external in-app browsers can fail the
+      // return-redirect on some devices and make the R1 look "taken").
+      const openCheckout = () => {
+        setCheckoutUrl(resumeUrl || authorizationUrl);
       };
 
-      // First checkout opening — fire-and-forget so polling starts immediately.
-      const firstOpen = openCheckout().catch(() => {});
+      // First opening — fire-and-forget so polling starts immediately.
+      openCheckout();
 
       // Poll the server until it sees the card saved (or the transaction ends).
       // Status `pending` means the bank is still waiting on 3-D Secure — keep
       // polling. Deadlines only stop this loop after a generous window.
       const deadline = Date.now() + 300000; // 5 min automatic cap
-      let reopened = false;
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       while (Date.now() < deadline) {
-        await Promise.race([firstOpen, new Promise((r) => setTimeout(r, 3000))]);
+        await sleep(3000);
         const verify = await apiFetch<any>(
           `/api/payments/verify?reference=${reference}`
         ).catch(() => null);
@@ -137,6 +109,7 @@ export default function AddPaymentMethod() {
         if (status === "success" || status === "completed" || status === "refunded") {
           setPendingRef(null);
           setPendingResumeUrl("");
+          setCheckoutUrl(null);
           queryClient.invalidateQueries({ queryKey: ["saved-cards"] });
           setVerifying(false);
           setVerified(true);
@@ -146,6 +119,7 @@ export default function AddPaymentMethod() {
         if (status === "abandoned" || status === "failed") {
           setPendingRef(null);
           setPendingResumeUrl("");
+          setCheckoutUrl(null);
           setVerifying(false);
           Alert.alert(
             "Card not added",
@@ -154,23 +128,19 @@ export default function AddPaymentMethod() {
           return;
         }
         // Pending / ongoing (3-D Secure waiting): update the resume URL from the
-        // server (it stores the checkout link) and, if the checkout tab is
-        // closed, hand the rider back to Paystack's page to finish the approval.
+        // server (it stores the checkout link) so a "Continue" re-opens the
+        // same page without a brand-new R1 hold.
         if (verify?.authorizationUrl) resumeUrl = verify.authorizationUrl;
-        if (!reopened && !browserOpen) {
-          reopened = true;
-          await openCheckout().catch(() => {});
-        }
       }
       // Server still says pending after 5 min: the bank approval never came
       // through in the checkout. Keep the pending ref so the next tap on
       // "Continue" RESUMES the SAME transaction (no new R1) — and tell the
-      // rider to complete it in their banking app; the card finishes saving
-      // automatically once they do.
+      // rider to finish it inside the card page.
+      setCheckoutUrl(null);
       setVerifying(false);
       Alert.alert(
         "Almost there",
-        "Your bank may be waiting for you to approve this (3-D Secure / OTP) before we can save the card. Tap Continue to reopen the payment page and finish the approval in your banking app — the card saves the moment it's approved. The R1 shown on your card is a temporary hold and is always returned."
+        "Your bank may be waiting for you to approve this (3-D Secure / OTP) before we can save the card. Tap Continue to reopen the payment page and finish the approval — the card saves the moment it's approved. The R1 shown on your card is a temporary hold and is always returned."
       );
     } catch (e: any) {
       setVerifying(false);
@@ -242,6 +212,53 @@ export default function AddPaymentMethod() {
           </>
         )}
       </ScrollView>
+
+      {/* In-app Paystack checkout — keeps the rider inside our app. */}
+      {checkoutUrl ? (
+        <Modal
+          visible={!!checkoutUrl}
+          animationType="slide"
+          onRequestClose={() => setCheckoutUrl(null)}
+        >
+          <View className="flex-1 bg-white pt-12">
+            <View className="flex-row items-center justify-between px-4 py-3 bg-surface border-b border-border">
+              <TouchableOpacity
+                onPress={() => setCheckoutUrl(null)}
+                className="w-9 h-9 rounded-full bg-secondary items-center justify-center"
+              >
+                <Ionicons name="close" size={20} color="#2e1e1a" />
+              </TouchableOpacity>
+              <Text className="text-base font-bold text-foreground">
+                Secure card payment
+              </Text>
+              <View className="w-9 h-9" />
+            </View>
+            <WebView
+              source={{ uri: checkoutUrl }}
+              originWhitelist={["*"]}
+              javaScriptEnabled
+              domStorageEnabled
+              startInLoadingState
+              onShouldStartLoadWithRequest={(req) => {
+                // When Paystack redirects to our callback we don't need to load
+                // it in the WebView — the poll verifies and closes this modal.
+                if (req.url && req.url.includes("/api/payments/return")) {
+                  setCheckoutUrl(null);
+                  return false;
+                }
+                return true;
+              }}
+              onNavigationStateChange={(nav) => {
+                // Backup: some Paystack redirects happen inside the WebView
+                // (3-D Secure, bank redirects) that miss the load-request hook.
+                if (nav.url && nav.url.includes("/api/payments/return")) {
+                  setCheckoutUrl(null);
+                }
+              }}
+            />
+          </View>
+        </Modal>
+      ) : null}
     </SafeAreaView>
   );
 }
