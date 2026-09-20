@@ -90,6 +90,30 @@ router.get("/geocode", auth_1.requireAuth, async (req, res) => {
         return;
     }
     try {
+        // ── HERE Maps Geocoding & Search API (primary; free tier, great SA coverage) ──
+        const HERE_KEY = process.env.HERE_API_KEY || "";
+        if (HERE_KEY) {
+            const hereParams = new URLSearchParams({ q, limit: String(Math.max(limit, 10)), lang: "eng" });
+            if (Number.isFinite(lat) && Number.isFinite(lng))
+                hereParams.set("at", `${lat},${lng}`);
+            const here = await fetch(`https://geocode.search.hereapi.com/v1/geocode?${hereParams.toString()}&apiKey=${encodeURIComponent(HERE_KEY)}`, { headers: { "User-Agent": "VuraRiderServer/1.0" } })
+                .then((r) => (r.ok ? r.json() : null))
+                .catch(() => null);
+            if (here?.items?.length) {
+                const results = here.items
+                    .map((item) => ({
+                    name: String(item.title || q).split(",")[0],
+                    address: String(item.title || ""),
+                    lat: item.position?.lat,
+                    lng: item.position?.lng,
+                    type: "here",
+                }))
+                    .slice(0, limit);
+                res.json({ provider: "here", results });
+                return;
+            }
+            console.warn("[search] HERE returned nothing, falling back to OSM");
+        }
         const base = (process.env.NOMINATIM_URL?.replace(/\/+$/, "") ||
             "https://nominatim.openstreetmap.org");
         const raw = (await fetch(`${base}/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
@@ -120,6 +144,24 @@ router.get("/reverse", auth_1.requireAuth, async (req, res) => {
         return;
     }
     try {
+        // ── HERE Maps reverse geocoding (primary) ──
+        const HERE_KEY = process.env.HERE_API_KEY || "";
+        if (HERE_KEY) {
+            const here = await fetch(`https://revgeocode.search.hereapi.com/v1/revgeocode?at=${lat},${lng}&limit=1&lang=eng&apiKey=${encodeURIComponent(HERE_KEY)}`, { headers: { "User-Agent": "VuraRiderServer/1.0" } })
+                .then((r) => (r.ok ? r.json() : null))
+                .catch(() => null);
+            if (here?.items?.length) {
+                const item = here.items[0];
+                const addr = item?.address?.label || item?.title || "Current location";
+                res.json({
+                    provider: "here",
+                    name: String(addr).split(",")[0],
+                    address: addr,
+                });
+                return;
+            }
+            console.warn("[search] HERE reverse empty, falling back to OSM");
+        }
         const base = (process.env.NOMINATIM_URL?.replace(/\/+$/, "") ||
             "https://nominatim.openstreetmap.org");
         const url = `${base}/reverse?format=json&lat=${lat}&lon=${lng}`;
