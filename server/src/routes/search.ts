@@ -82,14 +82,23 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || "").trim();
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
-  const limit = Math.min(10, parseInt(req.query.limit as string || "6", 10));
-  if (!q) { res.json({ results: [] }); return; }
+  const limit = Math.min(10, parseInt(req.query.limit as string || "8", 10));
+  if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
 
   try {
-    // ── HERE Maps Autosuggest (same engine WeGo uses: addresses + real POIs like malls/landmarks) ──
+    // ── HERE Maps Autosuggest — the EXACT engine HERE WeGo uses ──
+    // Pass through everything WeGo's UI reads: title, id, resultType,
+    // address.label, position, distance (straight-line metres from `at`),
+    // categories, highlights, and `href` for chain/category follow-ups.
+    // HERE's item ORDER (most-relevant first) is preserved verbatim.
     const HERE_KEY = process.env.HERE_API_KEY || "";
     if (HERE_KEY) {
-      const hereParams = new URLSearchParams({ q, limit: String(Math.max(limit, 10)), lang: "eng" });
+      const hereParams = new URLSearchParams({
+        q,
+        limit: String(Math.max(limit, 10)),
+        lang: "eng",
+        termsLimit: "5",
+      });
       if (Number.isFinite(lat) && Number.isFinite(lng)) hereParams.set("at", `${lat},${lng}`);
       const here: any = await fetch(
         `https://autosuggest.search.hereapi.com/v1/autosuggest?${hereParams.toString()}&apiKey=${encodeURIComponent(HERE_KEY)}`,
@@ -99,18 +108,28 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
         .catch(() => null);
 
       if (here?.items?.length) {
-        const results = here.items
+        const items = here.items
           .map((item: any) => ({
-            name: String(item.title || item.address?.label || q).split(",")[0],
-            address: String(item.address?.label || item.title || ""),
+            name: item.title || item.address?.label || q,
+            address: item.address?.label || item.title || "",
             lat: item.position?.lat,
             lng: item.position?.lng,
-            type: "here",
-            kind: item.resultType || "place",
+            resultType: item.resultType || "place",
+            id: item.id,
+            href: item.href,
+            distance: Number.isFinite(item.distance) ? item.distance : undefined,
+            categories: (item.categories || []).map((c: any) => c.name).filter(Boolean),
+            primaryCategory: (item.categories || []).find((c: any) => c.primary)?.name,
+            highlights: item.highlights,
           }))
-          .filter((r: any) => Number.isFinite(r.lat) && Number.isFinite(r.lng))
           .slice(0, limit);
-        res.json({ provider: "here", results });
+        res.json({
+          provider: "here",
+          items,
+          queryTerms: Array.isArray(here.queryTerms)
+            ? here.queryTerms.map((qt: any) => (typeof qt === "string" ? qt : qt?.term)).filter(Boolean)
+            : [],
+        });
         return;
       }
       console.warn("[search] HERE returned nothing, falling back to OSM");
@@ -128,17 +147,64 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => [])) as any[];
 
-    const results = (Array.isArray(raw) ? raw : []).map((item: any) => ({
+    const items = (Array.isArray(raw) ? raw : []).map((item: any) => ({
       name: String(item.display_name || q).split(",")[0],
       address: String(item.display_name || "").split(",").slice(1).join(",").trim(),
       lat: parseFloat(item.lat),
       lng: parseFloat(item.lon),
-      type: "osm",
+      resultType: "address",
     })).slice(0, limit);
 
-    res.json({ provider: "nominatim", results });
+    res.json({ provider: "nominatim", items, queryTerms: [] });
   } catch (err: any) {
     console.error("Search geocode error:", err.message);
+    res.status(502).json({ error: "Search failed. Please try again." });
+  }
+});
+
+// GET /api/search/discover?q=..&lat=..&lng=..&limit=..
+// Full-text place/category/chain search — the follow-up endpoint WeGo uses when
+// a rider taps a "restaurants"/"Starbucks"-style suggestion row.
+router.get("/discover", requireAuth, async (req: AuthRequest, res: Response) => {
+  const q = String(req.query.q || "").trim();
+  const lat = parseFloat(req.query.lat as string);
+  const lng = parseFloat(req.query.lng as string);
+  const limit = Math.min(15, parseInt(req.query.limit as string || "10", 10));
+  if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
+
+  try {
+    const HERE_KEY = process.env.HERE_API_KEY || "";
+    const params = new URLSearchParams({
+      q,
+      limit: String(Math.max(limit, 12)),
+      lang: "eng",
+    });
+    if (Number.isFinite(lat) && Number.isFinite(lng)) params.set("at", `${lat},${lng}`);
+    const here: any = await fetch(
+      `https://discover.search.hereapi.com/v1/discover?${params.toString()}&apiKey=${encodeURIComponent(HERE_KEY)}`,
+      { headers: { "User-Agent": "VuraRiderServer/1.0" } }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+
+    const items = (here?.items || [])
+      .map((item: any) => ({
+        name: item.title || item.address?.label || q,
+        address: item.address?.label || item.title || "",
+        lat: item.position?.lat,
+        lng: item.position?.lng,
+        resultType: item.resultType || "place",
+        id: item.id,
+        href: item.href,
+        distance: Number.isFinite(item.distance) ? item.distance : undefined,
+        categories: (item.categories || []).map((c: any) => c.name).filter(Boolean),
+        primaryCategory: (item.categories || []).find((c: any) => c.primary)?.name,
+        highlights: item.highlights,
+      }))
+      .slice(0, limit);
+    res.json({ provider: "here", items, queryTerms: [] });
+  } catch (err: any) {
+    console.error("Discover search error:", err.message);
     res.status(502).json({ error: "Search failed. Please try again." });
   }
 });

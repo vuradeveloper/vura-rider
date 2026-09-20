@@ -25,7 +25,7 @@ export default function Search() {
   const [pickup, setPickup] = useState("Locating...");
   const [dropoff, setDropoff] = useState("");
   const [results, setResults] = useState<any[]>([]);
-  const [radiusNote, setRadiusNote] = useState<string | null>(null);
+  const [queryTerms, setQueryTerms] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [entranceModal, setEntranceModal] = useState<{
     s: any;
@@ -110,68 +110,52 @@ export default function Search() {
     return merged;
   };
 
-  const fetchCommunity = async (term: string) => {
-    try {
-      const params = new URLSearchParams({ q: term });
-      if (gpsCoords) {
-        params.set("lat", String(gpsCoords.lat));
-        params.set("lng", String(gpsCoords.lng));
-      }
-      const res = await apiFetch<{ results: any[] }>(
-        `/api/search/community?${params.toString()}`
-      );
-      return (res?.results || []).map((r: any) => ({
-        name: r.name,
-        addr: r.address || "Community place",
-        lat: Number(r.lat),
-        lon: Number(r.lng),
-        community: true,
-      }));
-    } catch {
-      return [];
-    }
-  };
-
-  const fetchGeocoders = async (term: string, lat?: number, lon?: number, bounded = false) => {
-    // PRIMARY: Mapbox-backed search proxy on our server (key hidden server-side).
-    // Returns used-friendly results and finds POIs malls/landmarks (the OSM
-    // stack below misses these).
+  // WEGO-EXACT SEARCH: ONE autosuggest call with the raw query. HERE ranks the
+  // results — we consume them in HERE's order (never re-sorted, never deduped).
+  // The server proxies /api/search/geocode (HERE Autosuggest → OSM last-resort).
+  const fetchGeocoders = async (
+    term: string,
+    lat?: number,
+    lon?: number
+  ): Promise<{ items: any[]; queryTerms: string[] }> => {
     try {
       const params = new URLSearchParams({ q: term });
       if (lat != null && lon != null) params.set("lat", String(lat));
       if (lon != null) params.set("lng", String(lon));
-      params.set("limit", bounded ? "6" : "8");
-      if (bounded && lat != null && lon != null) {
-        const box = 0.35;
-        params.set("bbox", `${lon - box},${lat - box},${lon + box},${lat + box}`);
-      }
-      const res = await apiFetch<{ provider?: string; results: any[] }>(
-        `/api/search/geocode?${params.toString()}`
-      );
-      const fromHere = res?.provider === "here";
-      if (Array.isArray(res?.results) && res.results.length > 0) {
-        return res.results.map((r: any) => ({
-          name: r.name,
-          addr: r.address || "",
-          lat: Number(r.lat),
-          lon: Number(r.lng),
-          _here: fromHere,
-        }));
+      params.set("limit", "10");
+      const res = await apiFetch<{
+        provider?: string;
+        items?: any[];
+        queryTerms?: string[];
+      }>(`/api/search/geocode?${params.toString()}`);
+      if (Array.isArray(res?.items)) {
+        return {
+          items: res.items.map((r: any) => ({
+            name: r.name,
+            addr: r.address || "",
+            lat: Number(r.lat),
+            lon: Number(r.lng),
+            resultType: r.resultType || "place",
+            distance: r.distance, // straight-line metres from `at` (WeGo badge)
+            categories: r.categories || [],
+            primaryCategory: r.primaryCategory || "",
+            highlights: r.highlights,
+            href: r.href,
+            id: r.id,
+          })),
+          queryTerms: Array.isArray(res?.queryTerms) ? res.queryTerms : [],
+        };
       }
     } catch {
-      // fall through to OSM
+      // fall through to OSM below
     }
 
-    // FALLBACK: OSM + Photon (legacy code path).
+    // FALLBACK: OSM + Photon (only used when the server/HERE truly returned nothing).
     const box = 0.35; // ~40km box for the strict "near pickup" pass
-    const photonUrl = bounded
-      ? `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8&bbox=${lon! - box},${lat! - box},${lon! + box},${lat! + box}`
-      : `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8${lat != null ? `&lat=${lat}&lon=${lon}` : ""}`;
-    const nominatimUrl = bounded
-      ? `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1&viewbox=${lon! - box},${lat! - box},${lon! + box},${lat! + box}&bounded=1`
-      : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1${
-          lat != null ? `&viewbox=${lon! - 0.15},${lat - 0.15},${lon! + 0.15},${lat + 0.15}&bounded=0` : ""
-        }`;
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8${lat != null ? `&lat=${lat}&lon=${lon}` : ""}`;
+    const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1${
+      lat != null ? `&viewbox=${lon! - 0.15},${lat - 0.15},${lon! + 0.15},${lat + 0.15}&bounded=0` : ""
+    }`;
 
     const photonPromise = fetch(photonUrl)
       .then((r) => r.json())
@@ -183,18 +167,64 @@ export default function Search() {
       .catch(() => []);
 
     const [photonData, nominatimData] = await Promise.all([photonPromise, nominatimPromise]);
-    return mergeResults(nominatimData, photonData);
+    const merged = mergeResults(nominatimData, photonData);
+    return {
+      items: merged.map((r: any) => ({
+        name: r.name,
+        addr: r.addr || "",
+        lat: Number(r.lat),
+        lon: Number(r.lon),
+        resultType: "place",
+        distance: undefined,
+        categories: [],
+        primaryCategory: "",
+        highlights: null,
+        href: undefined,
+        id: undefined,
+      })),
+      queryTerms: [],
+    };
   };
 
-  // Strictly-scoped second pass: re-query each candidate with results forced
-  // inside a box around the pickup. Used ONLY when the first pass found nothing
-  // close by, so far destinations (other cities/airports) still work.
-  const boundedPass = async (terms: string[], lat: number, lon: number) => {
-    for (const term of terms) {
-      const res = await fetchGeocoders(term, lat, lon, true);
-      if (res.length > 0) return res;
+  // WeGo follow-up: tapping a "restaurants" / "Starbucks"-style suggestion row
+  // runs a Discover search (exactly what WeGo does with the item's `href`).
+  const followUpSearch = async (s: any) => {
+    setLoading(true);
+    try {
+      let bias: { lat: number; lon: number } | null = null;
+      const p = JSON.parse(
+        (await AsyncStorage.getItem("vura.ride.pickup")) || "null"
+      );
+      if (p && p.length === 2) bias = { lat: p[0], lon: p[1] };
+      const params = new URLSearchParams({ q: s.name || s.href || "" });
+      if (bias) {
+        params.set("lat", String(bias.lat));
+        params.set("lng", String(bias.lon));
+      }
+      params.set("limit", "12");
+      const res = await apiFetch<{ items?: any[] }>(
+        `/api/search/discover?${params.toString()}`
+      );
+      const items = (res?.items || []).map((r: any) => ({
+        name: r.name,
+        addr: r.address || "",
+        lat: Number(r.lat),
+        lon: Number(r.lng),
+        resultType: r.resultType || "place",
+        distance: r.distance,
+        categories: r.categories || [],
+        primaryCategory: r.primaryCategory || "",
+        highlights: r.highlights,
+        href: r.href,
+        id: r.id,
+      }));
+      setResults(items.slice(0, 10));
+      setQueryTerms([]);
+    } catch (err) {
+      console.error("Follow-up search error:", err);
+    } finally {
+      setLoading(false);
     }
-    return [];
   };
 
   // Last-resort fallback: search the LIVE OpenStreetMap database (Overpass)
@@ -265,117 +295,41 @@ export default function Search() {
         );
         if (p && p.length === 2) bias = { lat: p[0], lon: p[1] };
 
-        const words = q.trim().split(/\s+/).filter((w) => w.length > 1);
-        // Try the full phrase first, then progressively shorter names — so
-        // "Horizon Heights Student Accommodation" also matches "Horizon Heights".
-        const candidates = [
-          q,
-          words.slice(0, 2).join(" "),
-          words.slice(0, 1).join(" "),
-        ].filter((c) => c && c.length >= 3);
+        // ── WEGO-EXACT: ONE autosuggest call with the raw query ──
+        // HERE ranks the results by relevance (respecting the `at` bias); we
+        // show them in HERE's exact order. No candidate re-queries, no
+        // community pinning, no coordinate-dedup, no radius trimming.
+        const fetched = await fetchGeocoders(q, bias?.lat, bias?.lon);
+        let list = fetched.items || [];
 
-        let merged: any[] = [];
-        const all: any[] = [];
-        const seenAll = new Set<string>();
-        // Community places first — local, user-confirmed (finds new buildings).
-        const community = await fetchCommunity(q);
-        community.forEach((r: any) => {
-          const k = `${r.lat.toFixed(4)},${r.lon.toFixed(4)}`;
-          if (!seenAll.has(k)) {
-            seenAll.add(k);
-            all.push(r);
-          }
-        });
-        for (const term of [...new Set(candidates)]) {
-          const res = await fetchGeocoders(term, bias?.lat, bias?.lon);
-          res.forEach((r: any) => {
-            const k = `${r.lat.toFixed(4)},${r.lon.toFixed(4)}`;
-            if (!seenAll.has(k)) {
-              seenAll.add(k);
-              all.push(r);
-            }
-          });
-          // If this term found something close to the pickup, stop narrowing.
-          // Otherwise keep trying shorter names so far-away lookalikes (e.g. a
-          // UK "Student Accommodation") don't hide your local residence.
-          if (
-            bias
-              ? res.some((r: any) => haversineKm(bias!.lat, bias!.lon, r.lat, r.lon) <= 50)
-              : res.length > 0
-          ) {
-            break;
+        // Silent last-resort: only if HERE (and its OSM proxy) truly returned
+        // nothing do we hit the live OpenStreetMap database around the pickup.
+        if (list.length === 0 && bias) {
+          const words = q.trim().split(/\s+/).filter((w) => w.length > 1);
+          const ov = await overpassSearch(
+            words.slice(0, 2).join(" ") || q,
+            bias.lat,
+            bias.lon
+          );
+          if (ov.length > 0) {
+            list = ov.map((r: any) => ({
+              name: r.name,
+              addr: r.addr || "",
+              lat: Number(r.lat),
+              lon: Number(r.lon),
+              resultType: "place",
+              distance: undefined,
+              categories: [],
+              primaryCategory: "",
+              highlights: null,
+              href: undefined,
+              id: undefined,
+            }));
           }
         }
-        merged = all;
 
-        // Strictly-scoped second pass: if nothing close to the pickup was found,
-        // re-query with results forced inside a box around it — this is what
-        // stops "foreign lookalike" results hiding your local places. Far
-        // destinations are unaffected because this only runs when there's no
-        // nearby match.
-        if (bias && !merged.some((r: any) => haversineKm(bias!.lat, bias!.lon, r.lat, r.lon) <= 50)) {
-          const scoped = await boundedPass([...new Set(candidates)], bias.lat, bias.lon);
-          if (scoped.length > 0) merged = scoped;
-        }
-
-        // Live-map fallback: search nearby OSM for named places the geocoders miss.
-        if (merged.length === 0 && bias) {
-          merged = await overpassSearch(words.slice(0, 2).join(" ") || q, bias.lat, bias.lon);
-        }
-
-        // ── Progressive radius: surface the NEAREST matches first ──
-        // Start with a small radius around the pickup. If nothing matches that
-        // name nearby, open up the search to the next radius band (5 → 10 → 25
-        // → 50 → 100 → 250 km), and keep expanding until at least one place
-        // with that name is found. Community places (user-confirmed pins) are
-        // always shown first — they're local by definition.
-        if (bias && merged.length > 0) {
-          const withDist: any[] = merged.map((r: any) => ({
-            ...r,
-            _dist: haversineKm(bias!.lat, bias!.lon, Number(r.lat ?? r.latitude ?? 0), Number(r.lon ?? r.longitude ?? 0)),
-          }));
-          const community = withDist.filter((r: any) => r.community);
-          const others = withDist.filter((r: any) => !r.community);
-
-          // HERE results arrive pre-ranked by relevance (just like WeGo) — show
-          // ALL of them in HERE's original order regardless of distance. The old
-          // radius trimming below is now ONLY a fallback for OSM/community
-          // results (which need local bias).
-          const hereResults = others.some((r: any) => r._here);
-          if (hereResults) {
-            merged = [...community, ...others].map(({ _dist, ...rest }: any) => rest);
-            setRadiusNote(null);
-          } else {
-            // Radius bands in km. Pick the first band that yields at least one hit.
-            const RADII = [5, 10, 25, 50, 100, 250];
-            let band = RADII[0];
-            let within = others.filter((r: any) => r._dist <= band);
-            for (const r of RADII.slice(1)) {
-              if (within.length > 0) break;
-              band = r;
-              within = others.filter((x: any) => x._dist <= r);
-            }
-            // If even the widest band is empty, fall back to all matches (so
-            // far-away destinations / other cities still work), sorted nearest.
-            if (within.length === 0) within = others;
-
-            merged = [...community, ...within]
-              .sort((a: any, b: any) => a._dist - b._dist)
-              .map(({ _dist, ...rest }: any) => rest);
-
-            setRadiusNote(
-              community.length > 0 && others.length === 0
-                ? "Community places near you"
-                : within.length === others.length && others.length > 0
-                  ? "Showing places anywhere"
-                  : `Showing places within ${band} km`
-            );
-          }
-        } else {
-          setRadiusNote(null);
-        }
-
-        setResults(merged.slice(0, 9));
+        setResults(list.slice(0, 10));
+        setQueryTerms(fetched.queryTerms || []);
       } catch (err) {
         console.error("Autocomplete fetch error:", err);
       } finally {
@@ -388,6 +342,16 @@ export default function Search() {
   }, [pickup, dropoff, activeInput, waypoints, activeStopIndex]);
 
   const handleSelect = (s: any) => {
+    // WeGo follow-up rows: "restaurants" / "Starbucks" style suggestions don't
+    // have a coordinate — tapping one runs a Discover search via the server.
+    if (
+      s.resultType === "categoryQuery" ||
+      s.resultType === "chainQuery" ||
+      (s.href && !Number.isFinite(Number(s.lat)))
+    ) {
+      followUpSearch(s);
+      return;
+    }
     if (activeInput === "pickup" || activeInput === "stop") {
       proceedWithSelection(s, s.name);
       return;
@@ -668,40 +632,97 @@ export default function Search() {
           <ActivityIndicator size="small" color="#e04e2f" style={{ marginVertical: 16 }} />
         )}
 
-        {radiusNote && results.length > 0 && (
-          <View className="flex-row items-center gap-1 px-1 py-1.5">
-            <Ionicons name="location" size={12} color="#80716b" />
-            <Text className="text-[11px] font-semibold text-muted-foreground">
-              {radiusNote}
-            </Text>
+        {queryTerms.length > 0 && (
+          <View className="flex-row flex-wrap gap-2 px-1 pt-1">
+            {queryTerms.slice(0, 5).map((term, qi) => (
+              <TouchableOpacity
+                key={qi}
+                onPress={() => {
+                  // WeGo fills in the last word from the queryTerms list.
+                  const existing = activeQueryText.trim();
+                  const lastSpace = existing.lastIndexOf(" ");
+                  const filled = lastSpace >= 0
+                    ? existing.slice(0, lastSpace + 1) + term
+                    : term;
+                  if (activeInput === "pickup") setPickup(filled);
+                  else if (activeInput === "stop" && activeStopIndex !== null) {
+                    const copy = [...waypoints];
+                    copy[activeStopIndex] = { ...copy[activeStopIndex], address: filled };
+                    setWaypoints(copy);
+                  } else setDropoff(filled);
+                }}
+                className="px-3 py-1.5 rounded-full bg-secondary/80 banner"
+              >
+                <Text className="text-xs font-medium text-foreground">
+                  {term}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </View>
         )}
 
         {displayResults.map((s, i) => {
-          // Categorize icon
-          let iconName: "airplane-outline" | "briefcase-outline" | "train-outline" | "school-outline" | "location-outline" | "time-outline" = "location-outline";
+          const isFollowUp =
+            s.resultType === "categoryQuery" ||
+            s.resultType === "chainQuery" ||
+            (s.href && !Number.isFinite(Number(s.lat)));
+
+          // Categorize icon (WeGo shows a type icon per result).
+          let iconName: "airplane-outline" | "briefcase-outline" | "train-outline" | "school-outline" | "location-outline" | "time-outline" | "search" = "location-outline";
           const queryResultsActive = results.length > 0;
-          if (!queryResultsActive) {
-            iconName = "time-outline";
-          } else {
-            const nameLower = s.name.toLowerCase();
-            if (nameLower.includes("airport")) {
-              iconName = "airplane-outline";
-            } else if (nameLower.includes("mall") || nameLower.includes("shopping") || nameLower.includes("centre") || nameLower.includes("center") || nameLower.includes("plaza")) {
-              iconName = "briefcase-outline";
-            } else if (nameLower.includes("station") || nameLower.includes("train") || nameLower.includes("metro") || nameLower.includes("gautrain")) {
-              iconName = "train-outline";
-            } else if (nameLower.includes("college") || nameLower.includes("school") || nameLower.includes("university")) {
-              iconName = "school-outline";
+          if (queryResultsActive) {
+            if (isFollowUp) {
+              iconName = "search";
+            } else {
+              const nameLower = s.name.toLowerCase();
+              if (nameLower.includes("airport")) {
+                iconName = "airplane-outline";
+              } else if (nameLower.includes("mall") || nameLower.includes("shopping") || nameLower.includes("centre") || nameLower.includes("center") || nameLower.includes("plaza")) {
+                iconName = "briefcase-outline";
+              } else if (nameLower.includes("station") || nameLower.includes("train") || nameLower.includes("metro") || nameLower.includes("gautrain")) {
+                iconName = "train-outline";
+              } else if (nameLower.includes("college") || nameLower.includes("school") || nameLower.includes("university")) {
+                iconName = "school-outline";
+              }
             }
+          } else {
+            iconName = "time-outline";
           }
 
-          // Calculate distance
+          // Distance badge — straight-line metres from HERE's `at` when present,
+          // otherwise fall back to a client haversine from the GPS fix.
           let distText = "";
-          if (gpsCoords && s.lat && s.lon) {
+          if (Number.isFinite(Number(s.distance))) {
+            const km = Number(s.distance) / 1000;
+            distText = km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+          } else if (gpsCoords && s.lat && s.lon) {
             const km = haversineKm(gpsCoords.lat, gpsCoords.lng, s.lat, s.lon);
-            distText = `${km.toFixed(1)} km`;
+            distText = km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
           }
+
+          // WeGo-style primary line: the title with the matched part **bold**
+          // (set of [start,end) ranges from HERE `highlights.title`).
+          const title = String(s.name || "");
+          const titleHl = Array.isArray(s.highlights?.title) ? s.highlights.title : [];
+          const titleParts: { text: string; bold: boolean }[] = [];
+          let cursor = 0;
+          titleHl
+            .filter((r: any) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
+            .sort((a: any, b: any) => a.start - b.start)
+            .forEach((r: any) => {
+              const st = Math.max(0, Math.min(title.length, Number(r.start)));
+              const en = Math.max(st, Math.min(title.length, Number(r.end)));
+              if (st > cursor) titleParts.push({ text: title.slice(cursor, st), bold: false });
+              if (en > st) titleParts.push({ text: title.slice(st, en), bold: true });
+              cursor = Math.max(cursor, en);
+            });
+          if (cursor < title.length) titleParts.push({ text: title.slice(cursor), bold: false });
+          if (titleParts.length === 0) titleParts.push({ text: title, bold: false });
+
+          // Subtitle: WeGo shows the full address label (or the category/chain for follow-ups).
+          const subtitle = isFollowUp
+            ? (s.resultType === "chainQuery" ? "Chain" : "Category") + " • tap to search"
+            : s.addr || "";
 
           return (
             <TouchableOpacity
@@ -718,10 +739,14 @@ export default function Search() {
               </View>
               <View className="flex-1">
                 <Text className="text-sm font-semibold text-foreground" numberOfLines={1}>
-                  {s.name}
+                  {titleParts.map((p, pi) => (
+                    <Text key={pi} className={p.bold ? "font-bold" : ""}>
+                      {p.text}
+                    </Text>
+                  ))}
                 </Text>
                 <Text className="text-xs text-muted-foreground mt-0.5" numberOfLines={1}>
-                  {s.addr || "Johannesburg"}
+                  {subtitle}
                 </Text>
               </View>
               {distText ? (
@@ -735,7 +760,7 @@ export default function Search() {
 
         {/* Footer */}
         <Text className="text-[10px] text-center text-muted-foreground/60 mt-8 mb-6">
-          © OpenStreetMap, GeoNames • Who's On First, OpenAddresses
+          © HERE Maps • Powered by the same search engine as HERE WeGo
         </Text>
       </ScrollView>
 
