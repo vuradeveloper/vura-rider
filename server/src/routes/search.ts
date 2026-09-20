@@ -86,13 +86,13 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   if (!q) { res.json({ results: [] }); return; }
 
   try {
-    // ── HERE Maps Geocoding & Search API (primary; free tier, great SA coverage) ──
+    // ── HERE Maps Autosuggest (same engine WeGo uses: addresses + real POIs like malls/landmarks) ──
     const HERE_KEY = process.env.HERE_API_KEY || "";
     if (HERE_KEY) {
       const hereParams = new URLSearchParams({ q, limit: String(Math.max(limit, 10)), lang: "eng" });
       if (Number.isFinite(lat) && Number.isFinite(lng)) hereParams.set("at", `${lat},${lng}`);
       const here: any = await fetch(
-        `https://geocode.search.hereapi.com/v1/geocode?${hereParams.toString()}&apiKey=${encodeURIComponent(HERE_KEY)}`,
+        `https://autosuggest.search.hereapi.com/v1/autosuggest?${hereParams.toString()}&apiKey=${encodeURIComponent(HERE_KEY)}`,
         { headers: { "User-Agent": "VuraRiderServer/1.0" } }
       )
         .then((r) => (r.ok ? r.json() : null))
@@ -101,12 +101,14 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
       if (here?.items?.length) {
         const results = here.items
           .map((item: any) => ({
-            name: String(item.title || q).split(",")[0],
-            address: String(item.title || ""),
+            name: String(item.title || item.address?.label || q).split(",")[0],
+            address: String(item.address?.label || item.title || ""),
             lat: item.position?.lat,
             lng: item.position?.lng,
             type: "here",
+            kind: item.resultType || "place",
           }))
+          .filter((r: any) => Number.isFinite(r.lat) && Number.isFinite(r.lng))
           .slice(0, limit);
         res.json({ provider: "here", results });
         return;
