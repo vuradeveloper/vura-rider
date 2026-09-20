@@ -154,17 +154,66 @@ function sortByStraightLineDistance(items: HereItem[]): HereItem[] {
     .map((x) => x.it);
 }
 
-// GET /api/search/geocode?q=..&lat=..&lng=..&limit=..&sort=distance
+// ─────────────────────────────────────────────────────────────────────────────
+//  South Africa boundary. Vura operates in ZA, so every HERE query is confined
+//  to ZA by default via HERE's `in=countryCode:ZAF` — a search for "Heathrow"
+//  then returns the Sandton street 3 km away instead of London 9 000 km away.
+//  Widen per request with `country=ZAF,ZWE`, or disable with `country=any`.
+// ─────────────────────────────────────────────────────────────────────────────
+function countryInFilter(value: unknown): string {
+  const raw = String(value ?? "ZAF").trim();
+  if (!raw || raw.toLowerCase() === "any" || raw.toLowerCase() === "world") return "";
+  return raw
+    .split(",")
+    .map((c) => c.trim().toUpperCase())
+    .filter((c) => /^[A-Z]{3}$/.test(c))
+    .map((c) => `countryCode:${c}`)
+    .join(",");
+}
+
+// Nominatim/OSM takes ISO-3166 alpha-2 codes, while HERE uses alpha-3. Keep the
+// two in step so the last-resort fallback can never surface a foreign place.
+const ISO2_BY_ISO3: Record<string, string> = {
+  ZAF: "za", ZWE: "zw", NAM: "na", BWA: "bw", MOZ: "mz", LSO: "ls",
+  SWZ: "sz", AGO: "ao", ZMB: "zm", MWI: "mw", TZA: "tz", KEN: "ke",
+  NGA: "ng", GHA: "gh",
+};
+
+function osmCountryCodes(inFilter: string): string {
+  if (!inFilter) return "";
+  return inFilter
+    .split(",")
+    .map((c) => c.split(":").pop() || "")
+    .map((c) => ISO2_BY_ISO3[c.toUpperCase()] || "")
+    .filter(Boolean)
+    .join(",");
+}
+
+// Distance-first is the default whenever the rider's own location is known —
+// the nearest match is the one they want to tap. `sort=relevance` restores
+// HERE's own ranking, `sort=distance` forces closest-first.
+function wantsDistanceSort(value: unknown, hasAt: boolean): boolean {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (mode === "relevance") return false;
+  if (mode === "distance") return true;
+  return hasAt;
+}
+
+// GET /api/search/geocode?q=..&lat=..&lng=..&limit=..&sort=..&country=..
 // HERE WeGo-exact search: Autosuggest ranking + Discover canonical top-up,
-// with OpenStreetMap (Nominatim) as the silent last-resort fallback.
+// confined to South Africa and returned closest-first, with OpenStreetMap
+// (Nominatim) as the silent last-resort fallback.
 
 router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || "").trim();
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
   const limit = Math.max(1, Math.min(15, parseInt((req.query.limit as string) || "10", 10)));
-  const wantsDistance = String(req.query.sort || "").toLowerCase() === "distance";
   const hasAt = Number.isFinite(lat) && Number.isFinite(lng);
+  // Closest-first by default while the rider's location is known, and always
+  // restricted to South Africa unless the caller widens it.
+  const wantsDistance = wantsDistanceSort(req.query.sort, hasAt);
+  const inFilter = countryInFilter(req.query.country);
   if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
 
   try {
@@ -172,6 +221,7 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
     if (HERE_KEY) {
       const shared = new URLSearchParams({ q, limit: "15", lang: "eng" });
       if (hasAt) shared.set("at", `${lat},${lng}`);
+      if (inFilter) shared.set("in", inFilter);
       const suggestParams = new URLSearchParams(shared);
       suggestParams.set("termsLimit", "5");
       const hereKey = encodeURIComponent(HERE_KEY);
@@ -220,7 +270,8 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
     );
     const raw = (await fetch(
       `${base}/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
-        (Number.isFinite(lat) && Number.isFinite(lng) ? `&lat=${lat}&lon=${lng}` : ""),
+        (Number.isFinite(lat) && Number.isFinite(lng) ? `&lat=${lat}&lon=${lng}` : "") +
+        (osmCountryCodes(inFilter) ? `&countrycodes=${osmCountryCodes(inFilter)}` : ""),
       { headers: { "User-Agent": "VuraRiderServer/1.0" } }
     )
       .then((r) => (r.ok ? r.json() : []))
@@ -249,8 +300,9 @@ router.get("/discover", requireAuth, async (req: AuthRequest, res: Response) => 
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
   const limit = Math.max(1, Math.min(15, parseInt((req.query.limit as string) || "10", 10)));
-  const wantsDistance = String(req.query.sort || "").toLowerCase() === "distance";
   const hasAt = Number.isFinite(lat) && Number.isFinite(lng);
+  const wantsDistance = wantsDistanceSort(req.query.sort, hasAt);
+  const inFilter = countryInFilter(req.query.country);
   if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
 
   try {
@@ -263,6 +315,7 @@ router.get("/discover", requireAuth, async (req: AuthRequest, res: Response) => 
 
     const shared = new URLSearchParams({ q, limit: "15", lang: "eng" });
     if (hasAt) shared.set("at", `${lat},${lng}`);
+    if (inFilter) shared.set("in", inFilter);
     const hereKey = encodeURIComponent(HERE_KEY);
 
     const [discover, suggest] = await Promise.all([

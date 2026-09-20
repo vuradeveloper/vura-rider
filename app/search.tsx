@@ -36,41 +36,86 @@ export default function Search() {
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locating, setLocating] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     getRecentSearches().then(setRecentSearches);
   }, []);
 
-  useEffect(() => {
-    (async () => {
+  // ── Current location ──────────────────────────────────────────────────────
+  // Resolves the rider's GPS fix into a street label and stores it as the
+  // pickup bias every search and distance badge uses. Hardened so the field can
+  // NEVER stick on "Locating...": we use the last known fix instantly, then a
+  // fresh fix with a hard timeout, and always fall back to a usable label.
+  const locateMe = async (silent = false) => {
+    if (!silent) setLocating(true);
+    try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         setPickup("Current location");
         return;
       }
+
+      let coords: { lat: number; lng: number } | null = null;
+
+      // 1) Instant: the cached fix (works indoors / with no fresh GPS lock).
+      const last = await Location.getLastKnownPositionAsync().catch(() => null);
+      if (last?.coords) {
+        coords = { lat: last.coords.latitude, lng: last.coords.longitude };
+        setGpsCoords(coords);
+      }
+
+      // 2) Fresh fix, but never wait more than 12s for it.
       try {
-        const pos = await Location.getCurrentPositionAsync({});
-        setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        await AsyncStorage.setItem(
-          "vura.ride.pickup",
-          JSON.stringify([pos.coords.latitude, pos.coords.longitude])
-        );
-        const res = await apiFetch<{ name: string; address: string }>(
-          `/api/search/reverse?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`
-        ).catch(() => null);
-        if (res?.address) {
-          const label = res.address.split(",").slice(0, 2).join(", ");
-          setPickup(label);
-          await AsyncStorage.setItem("vura.ride.pickup.address", label);
-        } else {
-          setPickup("Current location");
+        const fresh: any = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise((resolve) => setTimeout(() => resolve(null), 12000)),
+        ]);
+        if (fresh?.coords) {
+          coords = { lat: fresh.coords.latitude, lng: fresh.coords.longitude };
+          setGpsCoords(coords);
         }
       } catch {
-        setPickup("Current location");
+        // keep the cached fix
       }
-    })();
+
+      if (!coords) {
+        setPickup("Current location");
+        return;
+      }
+
+      await AsyncStorage.setItem("vura.ride.pickup", JSON.stringify([coords.lat, coords.lng]));
+      const res = await apiFetch<{ name: string; address: string }>(
+        `/api/search/reverse?lat=${coords.lat}&lng=${coords.lng}`
+      ).catch(() => null);
+      const label = res?.address
+        ? res.address.split(",").slice(0, 2).join(", ")
+        : "Current location";
+      setPickup(label);
+      await AsyncStorage.setItem("vura.ride.pickup.address", label);
+    } catch {
+      setPickup("Current location");
+    } finally {
+      if (!silent) setLocating(false);
+    }
+  };
+
+  useEffect(() => {
+    locateMe(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // South Africa bounding box. HERE is already country-filtered server-side,
+  // but the client-side OSM/Photon last-resort has no country parameter — so
+  // anything outside ZA is dropped here and can never reach the results list.
+  const inSouthAfrica = (lat: number, lon: number) =>
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -35.2 &&
+    lat <= -21.9 &&
+    lon >= 16.2 &&
+    lon <= 33.2;
 
   const mergeResults = (nominatimData: any, photonData: any) => {
     const merged: any[] = [];
@@ -123,6 +168,11 @@ export default function Search() {
       if (lat != null && lon != null) params.set("lat", String(lat));
       if (lon != null) params.set("lng", String(lon));
       params.set("limit", "10");
+      // Closest-first: the nearest match is the one the rider wants to tap.
+      params.set("sort", "distance");
+      // Closest match first, and never a place outside South Africa.
+      params.set("sort", "distance");
+      params.set("country", "ZAF");
       const res = await apiFetch<{
         provider?: string;
         items?: any[];
@@ -151,9 +201,8 @@ export default function Search() {
     }
 
     // FALLBACK: OSM + Photon (only used when the server/HERE truly returned nothing).
-    const box = 0.35; // ~40km box for the strict "near pickup" pass
     const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(term)}&limit=8${lat != null ? `&lat=${lat}&lon=${lon}` : ""}`;
-    const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1${
+    const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(term)}&format=json&limit=5&addressdetails=1&countrycodes=za${
       lat != null ? `&viewbox=${lon! - 0.15},${lat - 0.15},${lon! + 0.15},${lat + 0.15}&bounded=0` : ""
     }`;
 
@@ -167,7 +216,9 @@ export default function Search() {
       .catch(() => []);
 
     const [photonData, nominatimData] = await Promise.all([photonPromise, nominatimPromise]);
-    const merged = mergeResults(nominatimData, photonData);
+    const merged = mergeResults(nominatimData, photonData).filter((r: any) =>
+      inSouthAfrica(Number(r.lat), Number(r.lon))
+    );
     return {
       items: merged.map((r: any) => ({
         name: r.name,
@@ -294,6 +345,9 @@ export default function Search() {
           (await AsyncStorage.getItem("vura.ride.pickup")) || "null"
         );
         if (p && p.length === 2) bias = { lat: p[0], lon: p[1] };
+        // Fresh install / cleared storage: fall back to the live GPS fix still
+        // held in state so the results stay proximity-ranked.
+        if (!bias && gpsCoords) bias = { lat: gpsCoords.lat, lon: gpsCoords.lng };
 
         // ── WEGO-EXACT: ONE autosuggest call with the raw query ──
         // HERE ranks the results by relevance (respecting the `at` bias); we
@@ -312,7 +366,9 @@ export default function Search() {
             bias.lon
           );
           if (ov.length > 0) {
-            list = ov.map((r: any) => ({
+            list = ov
+              .filter((r: any) => inSouthAfrica(Number(r.lat), Number(r.lon)))
+              .map((r: any) => ({
               name: r.name,
               addr: r.addr || "",
               lat: Number(r.lat),
@@ -411,18 +467,14 @@ export default function Search() {
     router.push("/ride/options");
   };
 
+  // Shown only when the rider has no query, no recent searches AND no GPS fix
+  // has resolved yet. South African places only — never foreign ones.
   const defaultSuggestions = [
-    { name: "Heathrow Airport", addr: "Terminal 5, London TW6", lat: 51.47, lon: -0.4543 },
+    { name: "OR Tambo International Airport", addr: "O.R. Tambo, Kempton Park, Johannesburg", lat: -26.1392, lon: 28.246 },
     { name: "Mall of Africa", addr: "Waterfall City, Midrand", lat: -26.0152, lon: 28.1065 },
-    { name: "British Museum", addr: "Great Russell St, London", lat: 51.5194, lon: -0.127 },
-    { name: "King's Cross Station", addr: "Euston Rd, London N1C", lat: 51.532, lon: -0.124 },
+    { name: "Sandton City Shopping Centre", addr: "Sandton, Johannesburg", lat: -26.1076, lon: 28.0567 },
+    { name: "Cape Town International Airport", addr: "Matroosfontein, Cape Town", lat: -33.9715, lon: 18.6021 },
   ];
-
-  const displayResults = results.length > 0
-    ? results
-    : recentSearches.length > 0
-      ? recentSearches.slice(0, 2).map((s) => ({ name: s.name, addr: s.addr, lat: s.lat, lon: s.lng }))
-      : defaultSuggestions;
 
   const activeQueryText =
     activeInput === "pickup"
@@ -430,6 +482,19 @@ export default function Search() {
       : activeInput === "stop" && activeStopIndex !== null
         ? waypoints[activeStopIndex]?.address || ""
         : dropoff;
+
+  // With a query typed, an empty list genuinely means "nothing matched" —
+  // showing unrelated default suggestions there reads as a wrong result.
+  const hasTypedQuery = activeQueryText.trim().length >= 3;
+  const showEmptyState = !loading && hasTypedQuery && results.length === 0;
+
+  const displayResults = results.length > 0
+    ? results
+    : hasTypedQuery
+      ? []
+      : recentSearches.length > 0
+        ? recentSearches.slice(0, 2).map((s) => ({ name: s.name, addr: s.addr, lat: s.lat, lon: s.lng }))
+        : defaultSuggestions;
 
   // Show the "drop a pin + name it" option whenever the rider is typing a
   // location (>=2 chars) — EVEN if matches exist below. Many buildings aren't
@@ -488,6 +553,14 @@ export default function Search() {
                   onChangeText={setPickup}
                   className="flex-1 py-2.5 text-sm font-medium text-foreground bg-transparent"
                 />
+                {/* Re-locate: refreshes the GPS fix on demand. */}
+                <TouchableOpacity onPress={() => locateMe()} className="ml-1 p-1.5 bg-secondary rounded-md">
+                  {locating ? (
+                    <ActivityIndicator size="small" color="#166534" />
+                  ) : (
+                    <Ionicons name="locate" size={16} color="#166534" />
+                  )}
+                </TouchableOpacity>
               </View>
               {/* small + button aligned next to pickup field */}
               <TouchableOpacity
@@ -588,6 +661,50 @@ export default function Search() {
             </TouchableOpacity>
           )}
         </View>
+
+        {results.length > 0 && (
+          <Text className="text-[10px] text-muted-foreground mb-2">
+            South Africa · closest first
+          </Text>
+        )}
+
+        {showEmptyState && (
+          <View className="py-6 items-center">
+            <Ionicons name="search-outline" size={28} color="#80716b" />
+            <Text className="mt-2 text-sm font-semibold text-foreground">
+              No places found in South Africa
+            </Text>
+            <Text className="text-xs text-muted-foreground text-center mt-1">
+              Check the spelling, or set it on the map / drop a pin below.
+            </Text>
+          </View>
+        )}
+
+        {/* Use current location — WeGo shows this while the rider is browsing, and
+            it gives a stuck GPS fix a one-tap recovery. */}
+        {activeQueryText.trim().length < 3 && (
+          <TouchableOpacity
+            onPress={() => locateMe()}
+            className="flex-row items-center gap-3 py-3.5 border-b border-border"
+          >
+            <View className="w-10 h-10 rounded-full bg-primary/10 items-center justify-center">
+              {locating ? (
+                <ActivityIndicator size="small" color="#e04e2f" />
+              ) : (
+                <Ionicons name="locate" size={18} color="#e04e2f" />
+              )}
+            </View>
+            <View className="flex-1">
+              <Text className="text-sm font-bold text-foreground">
+                Use current location
+              </Text>
+              <Text className="text-xs text-muted-foreground">
+                {locating ? "Getting your GPS position…" : "Refresh my pickup point"}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#80716b" />
+          </TouchableOpacity>
+        )}
 
         {/* Set Location on Map Option */}
         <TouchableOpacity
