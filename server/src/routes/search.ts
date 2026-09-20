@@ -75,60 +75,139 @@ router.delete("/", requireAuth, async (req: AuthRequest, res: Response) => {
 });
 
 // ── OpenStreetMap (Nominatim) place search ──
-// GET /api/search/geocode?q=...&lat=...&lng=...&limit=6
-// Free, keyless place autocomplete from OpenStreetMap.
+// ─────────────────────────────────────────────────────────────────────────────
+//  HERE WeGo-exact search helpers
+//
+//  HERE WeGo drives its search box with TWO HERE APIs, and so do we:
+//    • Autosuggest (/v1/autosuggest) — the typeahead dropdown: places,
+//      addresses, building entrances, plus the category / chain "quick search"
+//      rows ("Restaurants", "STARBUCKS") and the "did you mean" terms.
+//    • Discover    (/v1/discover)    — the submitted full-text search: the
+//      canonical place records (malls, markets, airports, taxi ranks …).
+//
+//  We call BOTH and keep HERE's own relevance order (never re-sorted, never
+//  radius-trimmed) so a far-away canonical place such as "Fourways Farmers
+//  Market" always stays visible. `sort=distance` is opt-in for callers that
+//  explicitly want closest-first.
+// ─────────────────────────────────────────────────────────────────────────────
+type HereItem = {
+  name: string;
+  address: string;
+  lat?: number;
+  lng?: number;
+  resultType: string;
+  id?: string;
+  href?: string;
+  distance?: number;
+  categories: string[];
+  primaryCategory?: string;
+  highlights?: any;
+};
+
+// Maps a raw HERE item (Autosuggest and Discover share the same shape) into the
+// exact payload the rider app renders — title, label, position, distance badge,
+// category icon, bold-match highlights and the follow-up `href`.
+function mapHereItem(item: any, fallback: string): HereItem {
+  return {
+    name: item?.title || item?.address?.label || fallback,
+    address: item?.address?.label || item?.title || "",
+    lat: Number.isFinite(item?.position?.lat) ? item.position.lat : undefined,
+    lng: Number.isFinite(item?.position?.lng) ? item.position.lng : undefined,
+    resultType: item?.resultType || "place",
+    id: item?.id,
+    href: item?.href,
+    // Straight-line metres from `at`, exactly the number WeGo shows as a badge.
+    distance: Number.isFinite(item?.distance) ? item.distance : undefined,
+    categories: (item?.categories || []).map((c: any) => c.name).filter(Boolean),
+    primaryCategory: (item?.categories || []).find((c: any) => c.primary)?.name,
+    highlights: item?.highlights || null,
+  };
+}
+
+// Stable identity so the same place returned by BOTH endpoints is listed once.
+function hereItemKey(it: HereItem): string {
+  if (it.id) return `id:${it.id}`;
+  const coords =
+    Number.isFinite(it.lat) && Number.isFinite(it.lng)
+      ? `${Number(it.lat).toFixed(4)},${Number(it.lng).toFixed(4)}`
+      : "";
+  return `nm:${it.name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}|${coords}`;
+}
+
+// Shared GET helper — a HERE hiccup must never break the rider's search.
+async function hereJson(url: string): Promise<any | null> {
+  return fetch(url, { headers: { "User-Agent": "VuraRiderServer/1.0" } })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+}
+
+// Closest-first. Only used when the caller asks for `sort=distance`; items with
+// no coordinate (category/chain rows) always sink to the bottom.
+function sortByStraightLineDistance(items: HereItem[]): HereItem[] {
+  return items
+    .map((it, index) => ({ it, index }))
+    .sort((a, b) => {
+      const da = Number.isFinite(a.it.distance) ? (a.it.distance as number) : Number.POSITIVE_INFINITY;
+      const db = Number.isFinite(b.it.distance) ? (b.it.distance as number) : Number.POSITIVE_INFINITY;
+      return da === db ? a.index - b.index : da - db;
+    })
+    .map((x) => x.it);
+}
+
+// GET /api/search/geocode?q=..&lat=..&lng=..&limit=..&sort=distance
+// HERE WeGo-exact search: Autosuggest ranking + Discover canonical top-up,
+// with OpenStreetMap (Nominatim) as the silent last-resort fallback.
 
 router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || "").trim();
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
-  const limit = Math.min(10, parseInt(req.query.limit as string || "8", 10));
+  const limit = Math.max(1, Math.min(15, parseInt((req.query.limit as string) || "10", 10)));
+  const wantsDistance = String(req.query.sort || "").toLowerCase() === "distance";
+  const hasAt = Number.isFinite(lat) && Number.isFinite(lng);
   if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
 
   try {
-    // ── HERE Maps Autosuggest — the EXACT engine HERE WeGo uses ──
-    // Pass through everything WeGo's UI reads: title, id, resultType,
-    // address.label, position, distance (straight-line metres from `at`),
-    // categories, highlights, and `href` for chain/category follow-ups.
-    // HERE's item ORDER (most-relevant first) is preserved verbatim.
     const HERE_KEY = process.env.HERE_API_KEY || "";
     if (HERE_KEY) {
-      const hereParams = new URLSearchParams({
-        q,
-        limit: String(Math.max(limit, 10)),
-        lang: "eng",
-        termsLimit: "5",
-      });
-      if (Number.isFinite(lat) && Number.isFinite(lng)) hereParams.set("at", `${lat},${lng}`);
-      const here: any = await fetch(
-        `https://autosuggest.search.hereapi.com/v1/autosuggest?${hereParams.toString()}&apiKey=${encodeURIComponent(HERE_KEY)}`,
-        { headers: { "User-Agent": "VuraRiderServer/1.0" } }
-      )
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
+      const shared = new URLSearchParams({ q, limit: "15", lang: "eng" });
+      if (hasAt) shared.set("at", `${lat},${lng}`);
+      const suggestParams = new URLSearchParams(shared);
+      suggestParams.set("termsLimit", "5");
+      const hereKey = encodeURIComponent(HERE_KEY);
 
-      if (here?.items?.length) {
-        const items = here.items
-          .map((item: any) => ({
-            name: item.title || item.address?.label || q,
-            address: item.address?.label || item.title || "",
-            lat: item.position?.lat,
-            lng: item.position?.lng,
-            resultType: item.resultType || "place",
-            id: item.id,
-            href: item.href,
-            distance: Number.isFinite(item.distance) ? item.distance : undefined,
-            categories: (item.categories || []).map((c: any) => c.name).filter(Boolean),
-            primaryCategory: (item.categories || []).find((c: any) => c.primary)?.name,
-            highlights: item.highlights,
-          }))
-          .slice(0, limit);
+      // Autosuggest + Discover in parallel — WeGo's typeahead plus its
+      // submitted-search index, so no canonical place is ever missed.
+      const [suggest, discover] = await Promise.all([
+        hereJson(`https://autosuggest.search.hereapi.com/v1/autosuggest?${suggestParams.toString()}&apiKey=${hereKey}`),
+        hereJson(`https://discover.search.hereapi.com/v1/discover?${shared.toString()}&apiKey=${hereKey}`),
+      ]);
+
+      const items: HereItem[] = [];
+      const seen = new Set<string>();
+      const add = (raw: any) => {
+        const mapped = mapHereItem(raw, q);
+        if (!mapped.name) return;
+        const dedupeKey = hereItemKey(mapped);
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        items.push(mapped);
+      };
+
+      // 1) Autosuggest first — HERE's own ranking, exactly as WeGo lists it.
+      (suggest?.items || []).forEach(add);
+      // 2) Then any canonical Discover place Autosuggest did not return.
+      (discover?.items || []).forEach(add);
+
+      if (items.length > 0) {
+        const ordered = wantsDistance ? sortByStraightLineDistance(items) : items;
         res.json({
           provider: "here",
-          items,
-          queryTerms: Array.isArray(here.queryTerms)
-            ? here.queryTerms.map((qt: any) => (typeof qt === "string" ? qt : qt?.term)).filter(Boolean)
-            : [],
+          sort: wantsDistance ? "distance" : "relevance",
+          items: ordered.slice(0, limit),
+          queryTerms: (suggest?.queryTerms || [])
+            .map((t: any) => (typeof t === "string" ? t : t?.term))
+            .filter(Boolean),
         });
         return;
       }
@@ -169,40 +248,51 @@ router.get("/discover", requireAuth, async (req: AuthRequest, res: Response) => 
   const q = String(req.query.q || "").trim();
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
-  const limit = Math.min(15, parseInt(req.query.limit as string || "10", 10));
+  const limit = Math.max(1, Math.min(15, parseInt((req.query.limit as string) || "10", 10)));
+  const wantsDistance = String(req.query.sort || "").toLowerCase() === "distance";
+  const hasAt = Number.isFinite(lat) && Number.isFinite(lng);
   if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
 
   try {
     const HERE_KEY = process.env.HERE_API_KEY || "";
-    const params = new URLSearchParams({
-      q,
-      limit: String(Math.max(limit, 12)),
-      lang: "eng",
-    });
-    if (Number.isFinite(lat) && Number.isFinite(lng)) params.set("at", `${lat},${lng}`);
-    const here: any = await fetch(
-      `https://discover.search.hereapi.com/v1/discover?${params.toString()}&apiKey=${encodeURIComponent(HERE_KEY)}`,
-      { headers: { "User-Agent": "VuraRiderServer/1.0" } }
-    )
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null);
+    if (!HERE_KEY) {
+      console.warn("[search] HERE_API_KEY missing — discover returned empty");
+      res.json({ provider: "here", items: [], queryTerms: [] });
+      return;
+    }
 
-    const items = (here?.items || [])
-      .map((item: any) => ({
-        name: item.title || item.address?.label || q,
-        address: item.address?.label || item.title || "",
-        lat: item.position?.lat,
-        lng: item.position?.lng,
-        resultType: item.resultType || "place",
-        id: item.id,
-        href: item.href,
-        distance: Number.isFinite(item.distance) ? item.distance : undefined,
-        categories: (item.categories || []).map((c: any) => c.name).filter(Boolean),
-        primaryCategory: (item.categories || []).find((c: any) => c.primary)?.name,
-        highlights: item.highlights,
-      }))
-      .slice(0, limit);
-    res.json({ provider: "here", items, queryTerms: [] });
+    const shared = new URLSearchParams({ q, limit: "15", lang: "eng" });
+    if (hasAt) shared.set("at", `${lat},${lng}`);
+    const hereKey = encodeURIComponent(HERE_KEY);
+
+    const [discover, suggest] = await Promise.all([
+      hereJson(`https://discover.search.hereapi.com/v1/discover?${shared.toString()}&apiKey=${hereKey}`),
+      hereJson(`https://autosuggest.search.hereapi.com/v1/autosuggest?${shared.toString()}&termsLimit=5&apiKey=${hereKey}`),
+    ]);
+
+    const items: HereItem[] = [];
+    const seen = new Set<string>();
+    const add = (raw: any) => {
+      const mapped = mapHereItem(raw, q);
+      if (!mapped.name) return;
+      const dedupeKey = hereItemKey(mapped);
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      items.push(mapped);
+    };
+
+    // A submitted search (WeGo's follow-up tap) is Discover-led…
+    (discover?.items || []).forEach(add);
+    // …with Autosuggest filling the gaps (category/chain rows, entrances).
+    (suggest?.items || []).forEach(add);
+
+    const ordered = wantsDistance ? sortByStraightLineDistance(items) : items;
+    res.json({
+      provider: "here",
+      sort: wantsDistance ? "distance" : "relevance",
+      items: ordered.slice(0, limit),
+      queryTerms: [],
+    });
   } catch (err: any) {
     console.error("Discover search error:", err.message);
     res.status(502).json({ error: "Search failed. Please try again." });
