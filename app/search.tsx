@@ -145,15 +145,17 @@ export default function Search() {
         const box = 0.35;
         params.set("bbox", `${lon - box},${lat - box},${lon + box},${lat + box}`);
       }
-      const res = await apiFetch<{ results: any[] }>(
+      const res = await apiFetch<{ provider?: string; results: any[] }>(
         `/api/search/geocode?${params.toString()}`
       );
+      const fromHere = res?.provider === "here";
       if (Array.isArray(res?.results) && res.results.length > 0) {
         return res.results.map((r: any) => ({
           name: r.name,
           addr: r.address || "",
           lat: Number(r.lat),
           lon: Number(r.lng),
+          _here: fromHere,
         }));
       }
     } catch {
@@ -335,30 +337,40 @@ export default function Search() {
           const community = withDist.filter((r: any) => r.community);
           const others = withDist.filter((r: any) => !r.community);
 
-          // Radius bands in km. Pick the first band that yields at least one hit.
-          const RADII = [5, 10, 25, 50, 100, 250];
-          let band = RADII[0];
-          let within = others.filter((r: any) => r._dist <= band);
-          for (const r of RADII.slice(1)) {
-            if (within.length > 0) break;
-            band = r;
-            within = others.filter((x: any) => x._dist <= r);
+          // HERE results arrive pre-ranked by relevance (just like WeGo) — show
+          // ALL of them in HERE's original order regardless of distance. The old
+          // radius trimming below is now ONLY a fallback for OSM/community
+          // results (which need local bias).
+          const hereResults = others.some((r: any) => r._here);
+          if (hereResults) {
+            merged = [...community, ...others].map(({ _dist, ...rest }: any) => rest);
+            setRadiusNote(null);
+          } else {
+            // Radius bands in km. Pick the first band that yields at least one hit.
+            const RADII = [5, 10, 25, 50, 100, 250];
+            let band = RADII[0];
+            let within = others.filter((r: any) => r._dist <= band);
+            for (const r of RADII.slice(1)) {
+              if (within.length > 0) break;
+              band = r;
+              within = others.filter((x: any) => x._dist <= r);
+            }
+            // If even the widest band is empty, fall back to all matches (so
+            // far-away destinations / other cities still work), sorted nearest.
+            if (within.length === 0) within = others;
+
+            merged = [...community, ...within]
+              .sort((a: any, b: any) => a._dist - b._dist)
+              .map(({ _dist, ...rest }: any) => rest);
+
+            setRadiusNote(
+              community.length > 0 && others.length === 0
+                ? "Community places near you"
+                : within.length === others.length && others.length > 0
+                  ? "Showing places anywhere"
+                  : `Showing places within ${band} km`
+            );
           }
-          // If even the widest band is empty, fall back to all matches (so
-          // far-away destinations / other cities still work), sorted nearest.
-          if (within.length === 0) within = others;
-
-          merged = [...community, ...within]
-            .sort((a: any, b: any) => a._dist - b._dist)
-            .map(({ _dist, ...rest }: any) => rest);
-
-          setRadiusNote(
-            community.length > 0 && others.length === 0
-              ? "Community places near you"
-              : within.length === others.length && others.length > 0
-                ? "Showing places anywhere"
-                : `Showing places within ${band} km`
-          );
         } else {
           setRadiusNote(null);
         }
