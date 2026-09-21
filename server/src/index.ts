@@ -29,6 +29,7 @@ import emailRouter from "./routes/email";
 import shareRouter, { sharePage } from "./routes/share";
 import payoutsRouter from "./routes/payouts";
 import documentsRouter from "./routes/documents";
+import devLogsRouter from "./routes/devLogs";
 import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOsmPlaceSync, syncOsmPlaces, getOsmSyncStatus } from "./services/OsmPlaceSyncService";
@@ -71,14 +72,24 @@ app.use(express.urlencoded({ extended: true }));
 // Logging
 app.use(morgan(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
 
+// Device-log endpoint sits BEFORE the global limiter — logging must never
+// steal from the app's request budget (which caused 429 storms) nor be
+// throttled itself. The write/read key header still gates it.
+app.use("/api/dev/logs", devLogsRouter);
+
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
 // 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
 // which caused constant "Too many requests" errors and broke every other API
 // call (stats, earnings, wallet). 6000/15min = 400/min, plenty of headroom.
+// NOTE: the deployed server/.env (and EB env props) once shipped with
+// RATE_LIMIT_MAX_REQUESTS=100 — clamp the floor so a stale/old value can
+// never re-create the 429 storm on a fresh deploy.
+const rateMaxRaw = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "6000", 10);
+const rateMax = Math.max(Number.isFinite(rateMaxRaw) ? rateMaxRaw : 6000, 3000);
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "6000", 10),
+  max: rateMax,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later" },
@@ -354,6 +365,23 @@ async function start() {
       `);
       await execute(`
         CREATE INDEX IF NOT EXISTS idx_driver_documents_type ON driver_documents(doc_type)
+      `);
+      // Remote device-log sink (debugging). Apps batch POSTs here and the local
+      // log viewer polls this — see routes/devLogs.ts.
+      await execute(`
+        CREATE TABLE IF NOT EXISTS dev_logs (
+          id          BIGSERIAL PRIMARY KEY,
+          app         VARCHAR(20)  NOT NULL,
+          device_id   VARCHAR(120),
+          level       VARCHAR(10)  NOT NULL DEFAULT 'info',
+          tag         VARCHAR(120),
+          message     TEXT,
+          data        JSONB,
+          created_at  TIMESTAMPTZ  DEFAULT NOW()
+        )
+      `);
+      await execute(`
+        CREATE INDEX IF NOT EXISTS idx_dev_logs_id ON dev_logs(id)
       `);
       console.log("✓ Schema bootstrapped");
     } catch (err) {

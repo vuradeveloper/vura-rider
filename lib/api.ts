@@ -1,5 +1,6 @@
 import { auth } from "./firebase";
 import { getApiUrl } from "./config";
+import { logError, devLog } from "./devlog";
 
 /**
  * Hermes-safe request timeout.
@@ -53,10 +54,31 @@ export async function apiFetch<T = any>(
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
+      // Remote device logging: every failed API call is captured for the local
+      // log viewer (tools/dev-log-viewer). Throttled client-side by devlog's
+      // batching; useful for diagnosing status codes without guessing.
+      devLog("error", "api", `${path} -> ${res.status}`, {
+        status: res.status,
+        method: options.method || "GET",
+        path: path.slice(0, 120),
+        error: err,
+      });
       throw new Error(err.error || `Request failed: ${res.status}`);
     }
 
     return res.json();
+  } catch (e) {
+    // Network failures (offline, DNS, timeout) — log and rethrow. Non-2xx
+    // statuses are already logged above.
+    if (e instanceof Error && !(e as any)?.__logged) {
+      devLog("error", "api-net", `${path} -> ${e.message}`, {
+        method: options.method || "GET",
+        path: path.slice(0, 120),
+        error: { message: e.message },
+      });
+      (e as any).__logged = true;
+    }
+    throw e;
   } finally {
     clearTimeout(timeoutId);
   }

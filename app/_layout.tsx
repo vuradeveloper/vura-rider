@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/lib/auth";
 import { useAppStore } from "@/lib/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { hookConsole, flushNow, logInfo } from "@/lib/devlog";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getActiveRide, getRide, getRideHistory, submitRating } from "@/services/RideService";
@@ -349,6 +350,17 @@ function AuthGate() {
 function RootLayout() {
   const url = Linking.useURL();
   const router = useRouter();
+
+  // Fire-and-forget remote device logging: hook console + drain any buffered
+  // events from a previous session, then announce boot.
+  useEffect(() => {
+    hookConsole();
+    void flushNow();
+    logInfo("app", "app_started", {
+      ts: new Date().toISOString(),
+      screen: "RootLayout",
+    });
+  }, []);
 
   // Capture referral/affiliate codes from deep links like vura-rider://r/VURA-CODE
   useEffect(() => {
