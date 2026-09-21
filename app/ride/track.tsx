@@ -84,6 +84,13 @@ function computeBearing(
   return (brng + 360) % 360;
 }
 
+function metersBetween(a: [number, number], b: [number, number]) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * rad, dLon = (b[1] - a[1]) * rad;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * rad) * Math.cos(b[0] * rad) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
 function densifyRoute(route: { latitude: number; longitude: number }[], segM = 12) {
   if (route.length < 2) return route;
   const R = 6371e3, rad = Math.PI / 180;
@@ -177,6 +184,10 @@ export default function Track() {
   // re-route the car mid-leg without restarting the whole simulation.
   const pickupCoordRef = useRef<[number, number] | null>(pickupCoord);
   const driverLocRef = useRef<DriverLoc | null>(null);
+  // Live re-route bookkeeping: remembers where the driver was when we last
+  // recomputed the approach line, so we only redraw when it's actually stale.
+  const dropoffCoordRef = useRef<[number, number] | null>(null);
+  const liveRerouteRef = useRef<{ lat: number; lng: number; at: number } | null>(null);
   const demoPhaseRef = useRef<"searching" | "to_pickup" | "arrived" | "to_dest">("searching");
   const demoRouteRef = useRef<{ latitude: number; longitude: number }[]>([]);
   const demoStepRef = useRef(0);
@@ -351,7 +362,8 @@ export default function Track() {
   // changes during the 45s "searching" phase.
   useEffect(() => {
     pickupCoordRef.current = pickupCoord;
-  }, [pickupCoord]);
+    dropoffCoordRef.current = dropoffCoord;
+  }, [pickupCoord, dropoffCoord]);
 
   // Starts (or re-starts) the car glide along the given points. Safe to call
   // repeatedly â€” it clears the previous interval, so a pickup update can
@@ -1111,6 +1123,35 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
                     setDenseRoute(ride.route);
                     setRouteCoords(ride.route);
                     demoRouteRef.current = ride.route;
+                  }
+                })
+                .catch(() => {});
+            }
+
+            // ── Live re-route (the driver is moving — often inside Waze) ──────
+            // While the driver follows Waze, the line we first drew no longer
+            // starts where the car actually is. Recompute it from the REAL
+            // position to the current leg's target whenever the car has moved
+            // >150 m (or 15 s have passed), and redraw it, so the rider keeps
+            // seeing the true approach path toward the pickup / destination.
+            const stage = statusRef.current;
+            const target =
+              stage === "in_progress" ? dropoffCoordRef.current : pickupCoordRef.current;
+            const from = liveRerouteRef.current;
+            const movedM = from
+              ? metersBetween([from.lat, from.lng], [data.lat, data.lng])
+              : Number.POSITIVE_INFINITY;
+            const staleMs = from ? Date.now() - from.at : Number.POSITIVE_INFINITY;
+            if (target && Number.isFinite(target[0]) && (movedM > 150 || staleMs > 15000)) {
+              liveRerouteRef.current = { lat: data.lat, lng: data.lng, at: Date.now() };
+              fetchRoute([data.lat, data.lng], target)
+                .then((pts) => {
+                  if (Array.isArray(pts) && pts.length > 1) {
+                    const dense = densifyRoute(pts, 12);
+                    setStaticRoute(pts);
+                    setDenseRoute(dense);
+                    setRouteCoords(dense);
+                    demoRouteRef.current = pts;
                   }
                 })
                 .catch(() => {});
