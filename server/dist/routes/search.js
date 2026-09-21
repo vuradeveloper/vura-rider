@@ -17,6 +17,37 @@ async function ensureTable() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+    await ensureUniqueIndex();
+}
+// The upsert in POST / below needs a real unique constraint on (user_id, name).
+// This table was originally created without one, so `ON CONFLICT (user_id, name)`
+// raised "there is no unique or exclusion constraint matching the ON CONFLICT
+// specification" (SQLSTATE 42P10) and every save returned 500 — which is why
+// search history never persisted.
+//
+// Because that upsert never worked, every search INSERTED A NEW ROW instead of
+// updating, so duplicates have accumulated. They must be collapsed before the
+// unique index can be created, otherwise CREATE UNIQUE INDEX would fail and the
+// endpoint would stay broken.
+async function ensureUniqueIndex() {
+    const hasIndex = await (0, database_1.queryOne)(`SELECT 1 FROM pg_indexes
+      WHERE schemaname = 'public' AND indexname = 'recent_searches_user_name_key'`);
+    if (hasIndex)
+        return;
+    // Keep the newest row per (user_id, name); id breaks ties deterministically.
+    await (0, database_1.execute)(`
+    DELETE FROM recent_searches
+    WHERE id IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY user_id, name ORDER BY created_at DESC, id DESC
+        ) AS rn
+        FROM recent_searches
+      ) t WHERE t.rn > 1
+    )
+  `);
+    await (0, database_1.execute)(`CREATE UNIQUE INDEX IF NOT EXISTS recent_searches_user_name_key
+       ON recent_searches (user_id, name)`);
 }
 // GET /api/searches — Get recent searches
 router.get("/", auth_1.requireAuth, async (req, res) => {
