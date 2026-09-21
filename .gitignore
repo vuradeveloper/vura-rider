@@ -49,3 +49,25 @@ deploy/production.env
 /android
 
 server/dev-server.log
+
+# ── local build / debug noise (never commit) ──────────────────────────────────
+*.log
+_*.txt
+_*.cjs
+*.zip
+# root-level scratch scripts / outputs from local APK build debugging
+/_*.cmd
+/_*.xml
+/tsc_*.txt
+/server/dist_*.txt
+/server/*-tsc.txt
+
+# ── secrets + data that must NEVER reach GitHub ───────────────────────────────
+# The CloudShell clone runs `git add -A` inside deploy/cape-town/04-deploy.sh;
+# these rules make that safe. A DB dump holds customers' personal data and the
+# Firebase service-account key can impersonate the whole project.
+*.dump
+*.dump.gz
+*.sql.gz
+service-account*.json
+*adminsdk*.json
