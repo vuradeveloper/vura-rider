@@ -268,7 +268,7 @@ router.get("/:id/receipt", requireAuth, async (req: AuthRequest, res: Response) 
 router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
-    const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduledAt, tier } = req.body;
+    const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduledAt, tier, estimatedFare } = req.body;
 
     const scheduled = new Date(scheduledAt);
     if (!scheduledAt || isNaN(scheduled.getTime())) {
@@ -279,6 +279,28 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
       res.status(400).json({ error: "Scheduled time must be in the future" });
       return;
     }
+    // ── Reservation window (mirrors Uber Reserve) ──────────────────────────
+    // A reservation must be made at least 30 minutes ahead (so a driver can be
+    // lined up in advance) and at most 90 days ahead.
+    const MIN_LEAD_MS = 30 * 60 * 1000;
+    const MAX_AHEAD_MS = 90 * 24 * 60 * 60 * 1000;
+    const leadMs = scheduled.getTime() - Date.now();
+    if (leadMs < MIN_LEAD_MS) {
+      res.status(400).json({
+        error: "Reservations must be made at least 30 minutes ahead of pickup.",
+        code: "RESERVATION_TOO_SOON",
+        minLeadMinutes: 30,
+      });
+      return;
+    }
+    if (leadMs > MAX_AHEAD_MS) {
+      res.status(400).json({
+        error: "Reservations can be made at most 90 days ahead of pickup.",
+        code: "RESERVATION_TOO_FAR",
+        maxAheadDays: 90,
+      });
+      return;
+    }
 
     const user = await queryOne<{ id: string }>(
       "SELECT id FROM users WHERE firebase_uid = $1",
@@ -286,11 +308,18 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
     );
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
+    // The upfront price is stored at booking time and is locked for the
+    // reservation (a reserved fare does not change later, like Uber Reserve).
+    const lockedFare =
+      estimatedFare != null && Number.isFinite(Number(estimatedFare)) && Number(estimatedFare) > 0
+        ? Number(estimatedFare)
+        : null;
+
     const ride = await queryOne(
-      `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, scheduled_at, tier)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled', $8, $9)
+      `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, scheduled_at, tier, estimated_fare)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled', $8, $9, $10)
        RETURNING *`,
-      [user.id, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduled.toISOString(), tier || "x"]
+      [user.id, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduled.toISOString(), tier || "x", lockedFare]
     );
 
     res.status(201).json({ ride: mapRide(ride) });
