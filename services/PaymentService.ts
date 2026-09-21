@@ -59,6 +59,7 @@ export const registerPaystackCard = async () => {
   return {
     reference: result.reference,
     authorizationUrl: result.authorizationUrl || "",
+    live: !!result.live,
     mock: !result.live,
   };
 };

@@ -21,6 +21,7 @@ import {
 } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/lib/store";
+import { logEvent, logError, logInfo } from "@/lib/devlog";
 import {
   ActivityIndicator,
   Alert,
@@ -865,7 +866,10 @@ export default function Track() {
         socket = await getSocket();
         if (!active || !socket) return;
 
-        socket.on("connect_error", () => {
+        socket.on("connect_error", (err: any) => {
+          logError("socket", "connect_error_retry", {
+            error: err,
+          });
           // Transport hiccup (e.g. websocket upgrade blocked) â€” socket.io keeps
           // retrying with the polling fallback, so don't flash a scary banner.
           console.warn("[Track] Socket connect_error (retrying)");
@@ -926,6 +930,11 @@ export default function Track() {
         }
 
         socket.on("ride:requested:ack", (data) => {
+          logEvent("ride", "requested_ack", {
+            success: !!data.success,
+            rideId: data.rideId,
+            reason: data.reason,
+          });
           if (data.success) {
             setRideId(data.rideId ?? null);
             rideIdRef.current = data.rideId ?? null;
@@ -941,14 +950,20 @@ export default function Track() {
           }
         });
 
-        socket.on("ride:no:drivers", () =>
-          setError("No drivers available nearby right now.")
-        );
-        socket.on("ride:expired", () =>
-          setError("No drivers accepted your request. Please try again.")
-        );
+        socket.on("ride:no:drivers", () => {
+          logEvent("ride", "no_drivers", { rideId: rideIdRef.current });
+          setError("No drivers available nearby right now.");
+        });
+        socket.on("ride:expired", () => {
+          logEvent("ride", "expired", { rideId: rideIdRef.current });
+          setError("No drivers accepted your request. Please try again.");
+        });
 
         socket.on("ride:accepted", (data) => {
+          logEvent("ride", "accepted", {
+            rideId: data.id,
+            driver_name: data.driver_name || data.driver?.name,
+          });
           setStatus("accepted");
           if (data.id) {
             setRideId(data.id);
@@ -989,6 +1004,7 @@ export default function Track() {
         });
 
         socket.on("ride:driver:arrived", () => {
+          logEvent("ride", "driver_arrived", { rideId: rideIdRef.current });
           setStatus("driver_arrived");
           // Buzz the rider's phone â€” the driver tapped "I've arrived".
           // The driver has arrived — hide the rider's Cancel button immediately.
@@ -1036,6 +1052,7 @@ export default function Track() {
         });
 
         socket.on("ride:started", () => {
+          logEvent("ride", "started", { rideId: rideIdRef.current });
           setStatus("in_progress");
           // Trip leg changed (pickup â†’ destination) â€” reload the driver's
           // route so the rider draws the exact same new line.
@@ -1102,6 +1119,10 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
         });
 
         socket.on("ride:completed", (data) => {
+          logEvent("ride", "completed", {
+            rideId: rideIdRef.current,
+            fare: data.riderTotal ?? data.fare,
+          });
           setStatus("completed");
           setFare(data.riderTotal ?? data.fare ?? null);
           handleCompleted(data.riderTotal ?? data.fare ?? null);
@@ -1111,6 +1132,10 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
         });
 
         socket.on("ride:cancelled", (data) => {
+          logEvent("ride", "cancelled", {
+            rideId: rideIdRef.current,
+            reason: data.reason,
+          });
           setStatus("cancelled");
           setError(data.reason || "Ride cancelled");
 
@@ -1119,6 +1144,10 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
         });
 
         socket.on("ride:driver:cancelled", (data) => {
+          logEvent("ride", "driver_cancelled_rematch", {
+            rideId: rideIdRef.current,
+            reason: data?.reason,
+          });
           // The assigned driver cancelled BEFORE pickup, so the ride went back
           // into the dispatch pool. Go back to "searching" so the rider keeps
           // waiting and a new driver can accept.

@@ -15,6 +15,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { registerPaystackCard } from "@/services/PaymentService";
 import { apiFetch } from "@/lib/api";
+import { devLog, logInfo, logError, logEvent } from "@/lib/devlog";
 
 export default function AddPaymentMethod() {
   const router = useRouter();
@@ -47,6 +48,10 @@ export default function AddPaymentMethod() {
 
   const startSecureAdd = async () => {
     setIsStarting(true);
+    logEvent("payment", "start_secure_add", {
+      resumedRef: pendingRef,
+      ts: new Date().toISOString(),
+    });
     try {
       setVerifying(true);
 
@@ -58,7 +63,15 @@ export default function AddPaymentMethod() {
 
       if (!reference || !authorizationUrl) {
         const result = await registerPaystackCard();
+        logInfo("payment", "card_register_response", {
+          live: result.live,
+          mock: result.mock,
+          hasAuthUrl: !!result.authorizationUrl,
+          reference: result.reference,
+          authUrlPreview: result.authorizationUrl.slice(0, 120),
+        });
         if (result.mock && !result.authorizationUrl) {
+          logError("payment", "mock_mode_no_url", { result });
           Alert.alert(
             "Payments are in test mode",
             "Your server is in mock payment mode (PAYMENTS_MODE=mock). Fill in the PAYSTACK_* values in server/.env to go live.",
@@ -68,6 +81,7 @@ export default function AddPaymentMethod() {
           return;
         }
         if (!result.authorizationUrl) {
+          logError("payment", "no_auth_url", { result, reference });
           Alert.alert("Error", "No payment page was returned by the server.");
           setVerifying(false);
           return;
@@ -88,6 +102,10 @@ export default function AddPaymentMethod() {
       // context-switches out of the app (external in-app browsers can fail the
       // return-redirect on some devices and make the R1 look "taken").
       const openCheckout = () => {
+        logEvent("payment", "webview_opened", {
+          reference,
+          urlPreview: (resumeUrl || authorizationUrl).slice(0, 120),
+        });
         setCheckoutUrl(resumeUrl || authorizationUrl);
       };
 
@@ -99,14 +117,33 @@ export default function AddPaymentMethod() {
       // polling. Deadlines only stop this loop after a generous window.
       const deadline = Date.now() + 300000; // 5 min automatic cap
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-      while (Date.now() < deadline) {
-        await sleep(3000);
-        const verify = await apiFetch<any>(
-          `/api/payments/verify?reference=${reference}`
-        ).catch(() => null);
-        const status = verify?.status;
+      let lastLoggedStatus = "";
+        // Also capture the raw Paystack verdict + how long the checkout stayed open,
+        // so "abandoned after 4s" is distinguishable from "user actually closed it".
+        const openedAt = Date.now();
+        while (Date.now() < deadline) {
+          await sleep(3000);
+          const verify = await apiFetch<any>(
+            `/api/payments/verify?reference=${reference}`
+          ).catch(() => null);
+          const status = verify?.status;
+          // Log status changes AND every verdict for the first 30s (so we can see
+          // if Paystack jumps straight to "abandoned" before the page even loads).
+          const ageS = Math.round((Date.now() - openedAt) / 1000);
+          if (status !== lastLoggedStatus || (ageS < 30 && lastLoggedStatus === "")) {
+            if (status !== lastLoggedStatus) lastLoggedStatus = status ?? lastLoggedStatus;
+            logEvent("payment", "verify_status", {
+              reference,
+              status,
+              ageS,
+              paystackStatus: verify?.paystackStatus,
+              gatewayResponse: verify?.gateway_response,
+              authorizationUrl: verify?.authorizationUrl?.slice(0, 120),
+            });
+          }
         if (!status) continue;
         if (status === "success" || status === "completed" || status === "refunded") {
+          logEvent("payment", "card_add_success", { reference, status });
           setPendingRef(null);
           setPendingResumeUrl("");
           setCheckoutUrl(null);
@@ -117,6 +154,7 @@ export default function AddPaymentMethod() {
         }
         // Genuine terminal failures from the server.
         if (status === "abandoned" || status === "failed") {
+          logError("payment", "card_add_failed", { reference, status });
           setPendingRef(null);
           setPendingResumeUrl("");
           setCheckoutUrl(null);
@@ -136,6 +174,7 @@ export default function AddPaymentMethod() {
       // through in the checkout. Keep the pending ref so the next tap on
       // "Continue" RESUMES the SAME transaction (no new R1) — and tell the
       // rider to finish it inside the card page.
+      logEvent("payment", "verify_timeout_pending", { reference });
       setCheckoutUrl(null);
       setVerifying(false);
       Alert.alert(
@@ -143,6 +182,9 @@ export default function AddPaymentMethod() {
         "Your bank may be waiting for you to approve this (3-D Secure / OTP) before we can save the card. Tap Continue to reopen the payment page and finish the approval — the card saves the moment it's approved. The R1 shown on your card is a temporary hold and is always returned."
       );
     } catch (e: any) {
+      logError("payment", "start_secure_add_caught", {
+        error: { message: e.message, stack: e.stack },
+      });
       setVerifying(false);
       Alert.alert("Error", e.message || "Could not start secure card setup");
     } finally {
@@ -218,12 +260,18 @@ export default function AddPaymentMethod() {
         <Modal
           visible={!!checkoutUrl}
           animationType="slide"
-          onRequestClose={() => setCheckoutUrl(null)}
+          onRequestClose={() => {
+            logEvent("payment", "webview_closed_by_back", { at: Date.now() });
+            setCheckoutUrl(null);
+          }}
         >
           <View className="flex-1 bg-white pt-12">
             <View className="flex-row items-center justify-between px-4 py-3 bg-surface border-b border-border">
               <TouchableOpacity
-                onPress={() => setCheckoutUrl(null)}
+                onPress={() => {
+                  logEvent("payment", "webview_closed_by_rider", { at: Date.now() });
+                  setCheckoutUrl(null);
+                }}
                 className="w-9 h-9 rounded-full bg-secondary items-center justify-center"
               >
                 <Ionicons name="close" size={20} color="#2e1e1a" />
@@ -239,10 +287,37 @@ export default function AddPaymentMethod() {
               javaScriptEnabled
               domStorageEnabled
               startInLoadingState
+              mixedContentMode="always"
+              userAgent="Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 vurarider/1.0"
+              onLoadStart={(s) => {
+                logEvent("payment", "webview_load_start", {
+                  url: (s.nativeEvent.url || "").slice(0, 140),
+                });
+              }}
+              onLoadEnd={(s) => {
+                logEvent("payment", "webview_load_end", {
+                  ok: (s.nativeEvent as any).success ?? true,
+                  url: (s.nativeEvent.url || "").slice(0, 140),
+                });
+              }}
+              onError={(s) => {
+                logError("payment", "webview_error", {
+                  code: s.nativeEvent.code,
+                  description: s.nativeEvent.description,
+                  url: (s.nativeEvent.url || "").slice(0, 140),
+                });
+              }}
+              onHttpError={(s) => {
+                logError("payment", "webview_http_error", {
+                  statusCode: s.nativeEvent.statusCode,
+                  url: (s.nativeEvent.url || "").slice(0, 140),
+                });
+              }}
               onShouldStartLoadWithRequest={(req) => {
                 // When Paystack redirects to our callback we don't need to load
                 // it in the WebView — the poll verifies and closes this modal.
                 if (req.url && req.url.includes("/api/payments/return")) {
+                  logEvent("payment", "webview_callback_intercepted", { url: req.url.slice(0, 140) });
                   setCheckoutUrl(null);
                   return false;
                 }
