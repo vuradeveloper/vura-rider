@@ -71,3 +71,12 @@ _*.cjs
 *.sql.gz
 service-account*.json
 *adminsdk*.json
+
+# Elastic Beanstalk Files
+# Restored: commit 054a3ce hardened .gitignore but dropped these three lines,
+# which existed only in the CloudShell clone. They matter because
+# deploy/cape-town/04-deploy.sh runs `git add -A` inside CloudShell, where
+# .elasticbeanstalk/config.yml exists and would otherwise be committed.
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml
