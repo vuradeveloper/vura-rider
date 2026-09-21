@@ -101,6 +101,17 @@ export default function ScheduleRideScreen() {
       return;
     }
 
+    // The address strings live in AsyncStorage right beside the coordinates
+    // (written by search.tsx / map-picker.tsx, read by track.tsx). The Zustand
+    // store fields are frequently empty on this screen, which made the payload
+    // fall through to the literal words "Pickup" / "Destination" and store
+    // those as the ride's addresses. Prefer the stored address; keep the store
+    // value and the old placeholder as last-resort fallbacks.
+    const storedPickupAddress = await AsyncStorage.getItem("vura.ride.pickup.address");
+    const storedDropoffAddress = await AsyncStorage.getItem("vura.ride.dropoff.address");
+    const finalPickupAddress = storedPickupAddress || pickupAddress || "Pickup";
+    const finalDropoffAddress = storedDropoffAddress || destinationAddress || "Destination";
+
     const chosen = new Date(`${dateKey(selectedDate)}T${timeStr}:00`);
     if (chosen.getTime() <= Date.now()) {
       Alert.alert("Error", "Please choose a future date and time.");
@@ -111,10 +122,10 @@ export default function ScheduleRideScreen() {
     setScheduling(true);
     try {
       await scheduleRide({
-        pickupAddress: pickupAddress || "Pickup",
+        pickupAddress: finalPickupAddress,
         pickupLat: pickup[0],
         pickupLng: pickup[1],
-        destinationAddress: destinationAddress || "Destination",
+        destinationAddress: finalDropoffAddress,
         destinationLat: dropoff[0],
         destinationLng: dropoff[1],
         scheduledAt,

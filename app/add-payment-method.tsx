@@ -153,7 +153,18 @@ export default function AddPaymentMethod() {
           return;
         }
         // Genuine terminal failures from the server.
-        if (status === "abandoned" || status === "failed") {
+        //
+        // "abandoned" is Paystack's RESTING status for a freshly-initialised
+        // transaction that simply has not been paid YET — verify returns it
+        // within seconds of the checkout opening, long before the rider could
+        // possibly have typed a card number. Treating it as terminal closed the
+        // WebView ~4s in and showed a false "Card not added". So only accept
+        // "abandoned" once the checkout has been open long enough for a real
+        // attempt; a "failed" verdict is a genuine decline and stays immediate.
+        const ABANDON_GRACE_MS = 120000; // 2 min
+        const abandonedIsTerminal =
+          status === "abandoned" && Date.now() - openedAt >= ABANDON_GRACE_MS;
+        if (status === "failed" || abandonedIsTerminal) {
           logError("payment", "card_add_failed", { reference, status });
           setPendingRef(null);
           setPendingResumeUrl("");
