@@ -12,6 +12,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import { getScheduledRides, cancelScheduledRide } from "@/services/SchedulingService";
+import { cancelRideReminders, syncRideReminders } from "@/lib/rideReminders";
 import { useAppStore } from "@/lib/store";
 import { formatCurrency } from "@/lib/utils";
 import type { ScheduledRide } from "@/lib/types";
@@ -36,6 +37,8 @@ export default function ScheduledRidesScreen() {
       );
       setRides(filtered);
       useAppStore.getState().setScheduledRides(filtered);
+      // Keep the phone's reminder alarms in step with the server's list.
+      void syncRideReminders(filtered);
     } catch {
       setRides([]);
     } finally {
@@ -52,6 +55,8 @@ export default function ScheduledRidesScreen() {
         onPress: async () => {
           try {
             await cancelScheduledRide(id);
+            // Drop the queued reminders too, so a cancelled ride can't still buzz.
+            await cancelRideReminders(id);
             setRides((prev) => prev.filter((r) => r.id !== id));
             Alert.alert("Cancelled", "Scheduled ride has been cancelled.");
           } catch (err: any) {

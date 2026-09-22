@@ -14,6 +14,7 @@ import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { formatCurrency, estimateFare } from "@/lib/utils";
 import { scheduleRide } from "@/services/SchedulingService";
+import { scheduleRideReminders } from "@/lib/rideReminders";
 import { useAppStore } from "@/lib/store";
 
 const tiers = [
@@ -121,7 +122,7 @@ export default function ScheduleRideScreen() {
 
     setScheduling(true);
     try {
-      await scheduleRide({
+      const { ride } = await scheduleRide({
         pickupAddress: finalPickupAddress,
         pickupLat: pickup[0],
         pickupLng: pickup[1],
@@ -131,6 +132,9 @@ export default function ScheduleRideScreen() {
         scheduledAt,
         tier: selectedTier,
       });
+      // Hand the 10-minute / 5-minute / pickup-time reminders to the phone's own
+      // OS alarm scheduler, so they fire even if the app is closed or killed.
+      if (ride) await scheduleRideReminders(ride);
       Alert.alert("Ride scheduled!", "We'll book your driver closer to pickup time.", [
         { text: "View schedule", onPress: () => router.replace("/scheduled-rides") },
       ]);

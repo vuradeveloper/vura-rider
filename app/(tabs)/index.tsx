@@ -5,6 +5,7 @@ import { estimateEtaMins, haversineKm } from "@/lib/utils";
 import { getNearbyDrivers } from "@/services/DriverService";
 import { getRecentSearches } from "@/services/SearchService";
 import { getScheduledRides } from "@/services/SchedulingService";
+import { syncRideReminders } from "@/lib/rideReminders";
 import type { RecentSearch, ScheduledRide } from "@/lib/types";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
@@ -71,7 +72,14 @@ export default function Home() {
         const { rides } = await getScheduledRides();
         // Never render cancelled rides — the server drops them too, but filter
         // here so a just-cancelled ride leaves the home screen instantly.
-        if (active) setScheduledRides((rides || []).filter((r) => r.status !== "cancelled" && r.status !== "completed"));
+        const upcoming = (rides || []).filter(
+          (r) => r.status !== "cancelled" && r.status !== "completed"
+        );
+        if (active) setScheduledRides(upcoming);
+        // Re-arm the phone's ride reminders (10 min / 5 min / at pickup).
+        // Android forgets scheduled alarms across a reboot, so they are rebuilt
+        // from the server list on launch instead of trusted to survive.
+        void syncRideReminders(upcoming);
       } catch {
         // offline / not signed in — keep whatever we have
       }
