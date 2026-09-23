@@ -503,10 +503,13 @@ export default function Search() {
 
   const addStopField = () => {
     if (waypoints.length < 5) {
-      const newIndex = waypoints.length;
+      // Only add the empty row. Deliberately do NOT force activeInput/
+      // activeStopIndex here: that put the search into "stop" mode while the
+      // rider was tapping into the Final destination box, so the two state
+      // writes fought and focus ping-ponged between the inputs instead of
+      // staying where they tapped. Each row's own onFocus sets the target, so
+      // tapping a box is now the only thing that decides where typing goes.
       setWaypoints((prev) => [...prev, { address: "", lat: 0, lng: 0 }]);
-      setActiveInput("stop");
-      setActiveStopIndex(newIndex);
     }
   };
 
@@ -654,7 +657,7 @@ export default function Search() {
         </View>
       </View>
 
-      <ScrollView className="flex-1 px-5 py-4">
+      <ScrollView className="flex-1 px-5 py-4" keyboardShouldPersistTaps="handled">
         <View className="flex-row items-center justify-between mb-2">
           <Text className="text-xs font-bold text-muted-foreground uppercase">
             {results.length > 0 ? "Search Results" : activeInput === "stop" ? "Select a stop" : recentSearches.length > 0 ? "Recent Searches" : "Suggestions"}
