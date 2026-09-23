@@ -546,7 +546,7 @@ export default function Search() {
           <View className="flex-1 gap-y-2.5">
             {/* Pickup Input + Add Stop button */}
             <View className="flex-row items-center gap-2">
-              <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "pickup" ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border border-transparent"}`}>
+              <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "pickup" ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border-2 border-transparent"}`}>
                 <TextInput
                   value={pickup}
                   onFocus={() => setActiveInput("pickup")}
@@ -574,7 +574,7 @@ export default function Search() {
             {/* Waypoints/Stops */}
             {waypoints.map((wp, i) => (
               <View key={i} className="flex-row items-center gap-2">
-                <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "stop" && activeStopIndex === i ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border border-transparent"}`}>
+                <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "stop" && activeStopIndex === i ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border-2 border-transparent"}`}>
                   <TextInput
                     placeholder={`Stop ${i + 1}`}
                     placeholderTextColor="#80716b"
@@ -596,8 +596,12 @@ export default function Search() {
                 {/* Delete Stop button */}
                 <TouchableOpacity
                   onPress={() => {
+                    // Deleting shifts every index after this row, so an index
+                    // pointing past the new end would read undefined and render
+                    // a blank input. Re-clamp instead of only handling i.
+                    const newLength = waypoints.length - 1;
                     setWaypoints((prev) => prev.filter((_, j) => j !== i));
-                    if (activeStopIndex === i) {
+                    if (activeStopIndex !== null && activeStopIndex >= newLength) {
                       setActiveStopIndex(null);
                       setActiveInput("dropoff");
                     }
@@ -611,7 +615,7 @@ export default function Search() {
 
             {/* Dropoff Input + Swap button */}
             <View className="flex-row items-center gap-2">
-              <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "dropoff" ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border border-transparent"}`}>
+              <View className={`flex-1 flex-row items-center rounded-xl px-3 py-1 ${activeInput === "dropoff" ? "border-2 border-[#166534] bg-white shadow-sm" : "bg-[#f2f1ef] border-2 border-transparent"}`}>
                 <Ionicons name="search" size={18} color="#2e1e1a" className="mr-2" />
                 <TextInput
                   placeholder={waypoints.length > 0 ? "Final destination?" : "Where to?"}
