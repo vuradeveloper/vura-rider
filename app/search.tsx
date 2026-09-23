@@ -326,11 +326,20 @@ export default function Search() {
     return [];
   };
 
+  // Only the text of the field currently being searched. Depending on the whole
+  // `waypoints` ARRAY made this effect re-run — and re-render the entire screen,
+  // three TextInputs included — on every keystroke in ANY stop box, which is
+  // what made focus/cursor unstable while typing.
+  const activeStopText =
+    activeInput === "stop" && activeStopIndex !== null
+      ? waypoints[activeStopIndex]?.address || ""
+      : "";
+
   useEffect(() => {
     let q = "";
     if (activeInput === "pickup") q = pickup;
     else if (activeInput === "dropoff") q = dropoff;
-    else if (activeInput === "stop" && activeStopIndex !== null) q = waypoints[activeStopIndex]?.address || "";
+    else if (activeInput === "stop") q = activeStopText;
 
     if (q === "Locating..." || q === "Current location" || q.length < 3) {
       setResults([]);
@@ -395,7 +404,7 @@ export default function Search() {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [pickup, dropoff, activeInput, waypoints, activeStopIndex]);
+  }, [pickup, dropoff, activeInput, activeStopText, activeStopIndex]);
 
   const handleSelect = (s: any) => {
     // WeGo follow-up rows: "restaurants" / "Starbucks" style suggestions don't
@@ -921,12 +930,16 @@ export default function Search() {
                 {realEntrances.map((ent, i) => (
                   <TouchableOpacity
                     key={i}
-                    onPress={() =>
-                      proceedWithSelection(
-                        entranceModal!.s,
-                        `${entranceModal!.s.name} (${ent})`
-                      )
-                    }
+                    onPress={() => {
+                      // entranceModal can already be null here: tapping Cancel
+                      // clears it while animationType="slide" still has these
+                      // children mounted for the exit animation. The previous
+                      // non-null assertions (entranceModal!.s) threw a
+                      // TypeError on that render and blanked the whole screen.
+                      const chosen = entranceModal?.s;
+                      if (!chosen) return;
+                      proceedWithSelection(chosen, `${chosen.name} (${ent})`);
+                    }}
                     className="w-full flex-row items-center justify-between px-4 py-3.5 rounded-full border border-border bg-surface mb-2"
                   >
                     <Text className="text-sm font-semibold text-foreground">
