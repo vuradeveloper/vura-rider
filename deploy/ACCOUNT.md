@@ -7,7 +7,7 @@ password manager (see `deploy/AWS-NEW-ACCOUNT-SETUP.md` §2 mistake 2 and §4).
 
 | Field | Value | Where to find it |
 |---|---|---|
-| Account ID | `________________` | Console → top-right account menu → Account |
+| Account ID | `171180524226` | Console → top-right account menu → Account |
 | Account alias / sign-in URL | `https://__________.signin.aws.amazon.com/console` | Console → Account → alias |
 | Root email | `________________` (recommended: `aws@ridevura.com` via Cloudflare Email Routing) | |
 | Region | `________________` (recommended `af-south-1` for SA users) | Console → region dropdown |
@@ -17,7 +17,7 @@ password manager (see `deploy/AWS-NEW-ACCOUNT-SETUP.md` §2 mistake 2 and §4).
 | DB name / user | `vura` / `vura_admin` | |
 | S3 documents bucket | `________________` | S3 console |
 | IAM admin user (daily use) | `vura-admin` | IAM → Users |
-| MFA devices on root | 1) TOTP (secret saved in password manager) 2) passkey (Windows Hello) | IAM → Security credentials |
+| MFA devices on root | 1) **virtual TOTP** — `arn:aws:iam::171180524226:mfa/ridevura` (created 26 Sep 2026) — **verify it is attached to root, not only to an IAM user**; 2) passkey (Windows Hello) — still to add | IAM → Security credentials |
 
 ## Previous AWS account (legacy — keep until the migration is signed off)
 
