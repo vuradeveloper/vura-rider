@@ -22,8 +22,14 @@ ACCOUNT_ID="${ACCOUNT_ID:-171180524226}"
 BUCKET="${BUCKET:-vura-driver-docs-${ACCOUNT_ID}}"
 
 echo "=== 0/6  tooling + repo ==="
-command -v eb >/dev/null || pip3 install --user awsebcli
-command -v eb >/dev/null || { echo "❌ eb CLI still missing"; exit 1; }
+if ! command -v eb >/dev/null; then
+  pip3 install --user --break-system-packages awsebcli 2>/dev/null \
+    || pip3 install --user awsebcli 2>/dev/null \
+    || python3 -m pip install --user --break-system-packages awsebcli 2>/dev/null \
+    || true
+fi
+export PATH="$HOME/.local/bin:$PATH"
+command -v eb >/dev/null || { echo "❌ eb CLI still missing (try: pip3 install --user --break-system-packages awsebcli)"; exit 1; }
 cd ~/vura-rider 2>/dev/null || { echo "❌ clone first: git clone https://github.com/vuradeveloper/vura-rider.git ~/vura-rider"; exit 1; }
 git pull --ff-only || true
 
@@ -39,15 +45,7 @@ else
   echo "   already exists"
 fi
 
-echo "=== 2/6  instance role permission (no static keys needed) ==="
-cat > /tmp/vura-docs-s3.json <<EOF
-{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":"arn:aws:s3:::$BUCKET/*"}]}
-EOF
-aws iam put-role-policy --role-name aws-elasticbeanstalk-ec2-role \
-  --policy-name vura-docs-s3 --policy-document file:///tmp/vura-docs-s3.json \
-  && echo "   inline policy attached" || echo "   ⚠️ role not found yet (created by eb create) — re-run this step after step 4"
-
-echo "=== 3/6  eb init / eb create (idempotent) ==="
+echo "=== 2/6  eb init / eb create (idempotent; create must come first) ==="
 [ -f .elasticbeanstalk/config.yml ] || \
   eb init "$APP" --region "$REGION" --platform "Node.js 22 running on 64bit Amazon Linux 2023" \
   || eb init "$APP" --region "$REGION"
@@ -55,6 +53,30 @@ if ! eb list --region "$REGION" 2>/dev/null | grep -qx "$ENVNAME"; then
   eb create "$ENVNAME" --region "$REGION" --single --instance-type t3.small
 else
   echo "   env $ENVNAME already exists"
+fi
+
+echo "=== 3/6  permissions + network (no static keys, no manual console edits) ==="
+cat > /tmp/vura-docs-s3.json <<EOF
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":"arn:aws:s3:::$BUCKET/*"}]}
+EOF
+aws iam put-role-policy --role-name aws-elasticbeanstalk-ec2-role \
+  --policy-name vura-docs-s3 --policy-document file:///tmp/vura-docs-s3.json \
+  && echo "   S3 policy attached to the EB instance role" \
+  || echo "   ⚠️ role aws-elasticbeanstalk-ec2-role not found — attach the policy manually"
+
+RDS_SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=vura-rds-sg \
+  --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+EB_SG=$(aws ec2 describe-security-groups \
+  --filters "Name=tag:elasticbeanstalk:environment-name,Values=$ENVNAME" \
+  --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+if [ -n "${RDS_SG:-}" ] && [ "$RDS_SG" != "None" ] && [ -n "${EB_SG:-}" ] && [ "$EB_SG" != "None" ]; then
+  aws ec2 authorize-security-group-ingress --group-id "$RDS_SG" --protocol tcp \
+    --port 5432 --source-group "$EB_SG" 2>/dev/null \
+    && echo "   RDS now accepts 5432 from the EB instance SG ($EB_SG)" \
+    || echo "   rule already present"
+else
+  echo "   ⚠️ could not auto-detect security groups (RDS_SG=$RDS_SG EB_SG=$EB_SG)"
+  echo "      Manual: RDS → vura-prod → Connectivity → vura-rds-sg → Inbound → PostgreSQL 5432, source = EB instance SG"
 fi
 
 echo "=== 4/6  secrets + env vars (input hidden; nothing is written to disk) ==="
