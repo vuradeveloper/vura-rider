@@ -24,7 +24,7 @@ different account. This single fact explains the whole "wrong account / wrong em
 
 **Rules that prevent a repeat**
 1. One AWS account per business. Write its **account ID** and **root email** into this repo
-   (`deploy/README` line 1). Never guess an email at the sign-in screen.
+   (`deploy/ACCOUNT.md` line 1). Never guess an email at the sign-in screen.
 2. Register **at least two MFA devices** on the root user the day the account is created
    (AWS allows 8): one **TOTP** (authenticator app) + one **passkey**. A single
    device-bound passkey is what locked us out.
@@ -173,7 +173,7 @@ Do these **in this order**. Every step exists because skipping it cost us time.
    — bookmark it, it makes IAM-user sign-in trivial).
 3. Verify email → verify phone → **Basic support (free)** → add the card.
 4. **Copy the 12-digit account ID** (top-right → Account) into the password manager **and**
-   into `deploy/README` in this repo. Do this before anything else — Support asks for it,
+   into `deploy/ACCOUNT.md`. Do this before anything else — Support asks for it,
    and every ARN contains it.
 5. **Billing → Budgets → Monthly cost budget** ($60) with an email alert. Then
    **Billing → Preferences → Billing alerts / CloudWatch alarm** on estimated charges.
