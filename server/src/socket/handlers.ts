@@ -131,7 +131,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
     // ── Passenger: request ride ──
     socket.on("passenger:ride:request", async (data) => {
       try {
-        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId } = data;
+        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops } = data;
         let dbUserId = await getDbUserId();
 
         if (!dbUserId) {
@@ -274,12 +274,35 @@ export function setupSocketHandlers(io: SocketIOServer) {
             ).catch(() => {});
           }
         }
-        const ride = await queryOne<any>(
-          `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
-           RETURNING *`,
-          [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null]
-        );
+        // ── Stops between pickup and drop-off ──
+        // Accept `waypoints` (current apps) and `stops` (older payloads); each
+        // entry is { address, lat, lng }. Stored in rides.waypoints (JSONB) so the
+        // stops survive the booking round-trip and can be re-drawn on BOTH maps.
+        const rideWaypoints = (Array.isArray(waypoints) ? waypoints : Array.isArray(stops) ? stops : [])
+          .filter((w: any) => w && Number.isFinite(Number(w?.lat)) && Number.isFinite(Number(w?.lng)))
+          .slice(0, 8)
+          .map((w: any) => ({ address: String(w?.address ?? ""), lat: Number(w.lat), lng: Number(w.lng) }));
+
+        // Add the column if this deployment's DB predates it (no-op otherwise).
+        // CRITICAL: if the migration cannot run we fall back to the previous
+        // 10-column INSERT, so booking can NEVER break because of stops.
+        const waypointsReady = await execute(
+          `ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB`
+        ).then(() => true).catch(() => false);
+
+        const ride = waypointsReady
+          ? await queryOne<any>(
+              `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id, waypoints)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10, $11)
+               RETURNING *`,
+              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null]
+            )
+          : await queryOne<any>(
+              `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
+               RETURNING *`,
+              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null]
+            );
 
         // Link the successful card charge to this ride so it can be refunded on cancel.
         if (cardChargeRef) {
@@ -319,6 +342,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
               destinationLng,
               fare: fare != null ? Number(fare) : 0,
               paymentMethod: paymentMethod || "cash",
+              // Stops the rider added (pickup → stops… → drop-off). Both keys are
+              // sent so DTOs/normalisers on either app pick them up.
+              waypoints: rideWaypoints,
+              stops: rideWaypoints,
               riderName: "Rider",
               riderRating: 5,
             };
@@ -714,6 +741,12 @@ export function setupSocketHandlers(io: SocketIOServer) {
           "SELECT id, passenger_id, status, estimated_fare, device_id, scheduled_at FROM rides WHERE id = $1 AND status IN ('searching','scheduled')",
           [rideId]
         );
+        // Stops live in their own column, which an older database may not have —
+        // a missing column must never break accepting a ride, so this read is
+        // isolated and its failure is swallowed.
+        const rideWaypoints = await queryOne<{ waypoints: any }>(
+          "SELECT waypoints FROM rides WHERE id = $1", [rideId]
+        ).then((r) => (Array.isArray(r?.waypoints) ? r!.waypoints : [])).catch(() => [] as any[]);
         if (!ride) {
           socket.emit("ride:accepted:ack", { success: false, error: "Ride no longer available" });
           return;
@@ -756,6 +789,9 @@ export function setupSocketHandlers(io: SocketIOServer) {
           vehicle_model: driver?.vehicle_model,
           driver_license_plate: driver?.license_plate,
           fare: ride?.estimated_fare ?? null,
+          // The rider's stops, replayed on accept (e.g. app relaunch mid-search).
+          waypoints: rideWaypoints,
+          stops: rideWaypoints,
           scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined,
           // Include the driver's rating so the rider can see it on accept.
           driver: {

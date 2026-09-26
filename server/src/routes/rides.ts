@@ -24,6 +24,10 @@ function mapRide(row: any) {
     route: Array.isArray(row.route_data)
       ? row.route_data
       : row.route_data?.coordinates ?? null,
+    // Rider stops captured at booking time (pickup → stops… → drop-off). Sent
+    // under both names so either app's normaliser finds them.
+    waypoints: Array.isArray(row.waypoints) ? row.waypoints : null,
+    stops: Array.isArray(row.waypoints) ? row.waypoints : null,
   };
 }
 
@@ -268,7 +272,13 @@ router.get("/:id/receipt", requireAuth, async (req: AuthRequest, res: Response) 
 router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
-    const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduledAt, tier, estimatedFare } = req.body;
+    const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduledAt, tier, estimatedFare, waypoints, stops } = req.body;
+    // Stops for the reservation, normalised to { address, lat, lng } — same
+    // shape and limits as the live booking path.
+    const rideWaypoints = (Array.isArray(waypoints) ? waypoints : Array.isArray(stops) ? stops : [])
+      .filter((w: any) => w && Number.isFinite(Number(w?.lat)) && Number.isFinite(Number(w?.lng)))
+      .slice(0, 8)
+      .map((w: any) => ({ address: String(w?.address ?? ""), lat: Number(w.lat), lng: Number(w.lng) }));
 
     const scheduled = new Date(scheduledAt);
     if (!scheduledAt || isNaN(scheduled.getTime())) {
@@ -315,12 +325,28 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
         ? Number(estimatedFare)
         : null;
 
-    const ride = await queryOne(
-      `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, scheduled_at, tier, estimated_fare)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled', $8, $9, $10)
-       RETURNING *`,
-      [user.id, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduled.toISOString(), tier || "x", lockedFare]
+    // Insert with the stops column when the database has it; if the column is
+    // genuinely absent (older DB, no ALTER rights) 42703 = undefined_column and
+    // we transparently retry without it, so reserving a ride never 500s.
+    const insertScheduledRide = (withStops: boolean) => queryOne(
+      withStops
+        ? `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, scheduled_at, tier, estimated_fare, waypoints)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled', $8, $9, $10, $11)
+           RETURNING *`
+        : `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, scheduled_at, tier, estimated_fare)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled', $8, $9, $10)
+           RETURNING *`,
+      withStops
+        ? [user.id, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduled.toISOString(), tier || "x", lockedFare, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null]
+        : [user.id, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduled.toISOString(), tier || "x", lockedFare]
     );
+    let ride: any;
+    try {
+      ride = await insertScheduledRide(true);
+    } catch (e: any) {
+      if (e?.code === "42703") ride = await insertScheduledRide(false);
+      else throw e;
+    }
 
     res.status(201).json({ ride: mapRide(ride) });
   } catch (err: any) {
@@ -500,9 +526,11 @@ router.post("/:id/route", requireAuth, async (req: AuthRequest, res: Response) =
   }
 });
 
-// Ensure the route_data column exists (idempotent migration).
+// Ensure columns added after the original schema exist (idempotent migrations).
 async function ensureRouteColumn() {
   await execute(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS route_data JSONB`).catch(() => {});
+  // Rider stops captured at booking time (pickup → waypoints… → drop-off).
+  await execute(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB`).catch(() => {});
 }
 ensureRouteColumn();
 
