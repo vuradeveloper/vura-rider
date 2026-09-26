@@ -33,6 +33,12 @@ command -v eb >/dev/null || { echo "❌ eb CLI still missing (try: pip3 install 
 cd ~/vura-rider 2>/dev/null || { echo "❌ clone first: git clone https://github.com/vuradeveloper/vura-rider.git ~/vura-rider"; exit 1; }
 git pull --ff-only || true
 
+# EB version labels must match [^/]+ — the annotated tag "backup/2026-09-20-cape-working"
+# makes `git describe` produce a label the EB API rejects
+# ("Value '[…]' at 'versionLabels' failed to satisfy constraint … pattern: [^/]+"),
+# which aborts `eb create` with a confusing ServiceError. Drop slash-tags in this clone.
+git tag -l | grep '/' | xargs -r -n1 git tag -d || true
+
 echo "=== 1/6  S3 bucket for driver documents: $BUCKET ==="
 if ! aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
   aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
@@ -45,15 +51,22 @@ else
   echo "   already exists"
 fi
 
-echo "=== 2/6  eb init / eb create (idempotent; create must come first) ==="
-[ -f .elasticbeanstalk/config.yml ] || \
-  eb init "$APP" --region "$REGION" --platform "Node.js 22 running on 64bit Amazon Linux 2023" \
-  || eb init "$APP" --region "$REGION"
+echo "=== 2/6  eb init / eb create (create MUST come first: it makes the instance role) ==="
+PLATFORM="$(aws elasticbeanstalk list-available-solution-stacks --region "$REGION" \
+  --query "SolutionStacks[?contains(@,'Node.js 22') && contains(@,'Amazon Linux 2023')] | [0]" \
+  --output text 2>/dev/null)"
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "None" ]; then
+  PLATFORM="Node.js 22 running on 64bit Amazon Linux 2023"
+fi
+echo "   platform: $PLATFORM"
+[ -f .elasticbeanstalk/config.yml ] || eb init "$APP" --region "$REGION" --platform "$PLATFORM"
 if ! eb list --region "$REGION" 2>/dev/null | grep -qx "$ENVNAME"; then
-  eb create "$ENVNAME" --region "$REGION" --single --instance-type t3.small
+  eb create "$ENVNAME" --region "$REGION" --single --instance-type t3.small \
+    || { echo "❌ eb create failed — fix the cause and re-run (this script is idempotent)"; exit 1; }
 else
   echo "   env $ENVNAME already exists"
 fi
+eb use "$ENVNAME" --region "$REGION" >/dev/null 2>&1 && echo "   default environment = $ENVNAME"
 
 echo "=== 3/6  permissions + network (no static keys, no manual console edits) ==="
 cat > /tmp/vura-docs-s3.json <<EOF
@@ -79,33 +92,64 @@ else
   echo "      Manual: RDS → vura-prod → Connectivity → vura-rds-sg → Inbound → PostgreSQL 5432, source = EB instance SG"
 fi
 
-echo "=== 4/6  secrets + env vars (input hidden; nothing is written to disk) ==="
-read -rp  "RDS endpoint host only (….af-south-1.rds.amazonaws.com): " DB_HOST
-read -rsp "DB password: " DB_PASSWORD; echo
-read -rp  "Firebase client email: " FIREBASE_CLIENT_EMAIL
-read -rsp "Firebase private_key base64 (one line): " FIREBASE_PRIVATE_KEY_B64; echo
+echo "=== 4/6  secrets + env vars (nothing is written to disk) ==="
+echo "  Source of each value: deploy/production.env and server/.env on your PC."
+echo "  Enter skips an optional value; DB_HOST and DB_PASSWORD are required."
+
+ask() { # ask VAR "prompt" ['validation-regex']
+  local var="$1" prompt="$2" regex="${3:-}" val=""
+  while :; do
+    read -rp "$prompt: " val || true
+    if [ -z "$val" ]; then printf -v "$var" '%s' ""; return; fi
+    if [ -n "$regex" ] && ! printf '%s' "$val" | grep -Eq "$regex"; then
+      echo "   ↳ not valid (must match ${regex}) — try again, or Enter to skip"; continue
+    fi
+    printf -v "$var" '%s' "$val"; return
+  done
+}
+
+ask DB_HOST "RDS endpoint host only" '\.rds\.amazonaws\.com$'
+read -rsp "DB password for vura_admin: " DB_PASSWORD; echo
+ask FIREBASE_CLIENT_EMAIL "Firebase client email" '@.*\.iam\.gserviceaccount\.com$'
+read -rsp "Firebase private_key base64 (one line, from _vura_cloudshell_values.txt): " FIREBASE_PRIVATE_KEY_B64; echo
 read -rsp "Paystack LIVE secret (sk_live_…): " PAYSTACK_SECRET_LIVE; echo
 read -rp  "Paystack LIVE public (pk_live_…): " PAYSTACK_PUBLIC_LIVE
 read -rsp "Resend API key (re_…): " RESEND_API_KEY; echo
-read -rp  "Admin emails (comma-separated): " ADMIN_EMAILS
+ask HERE_API_KEY "HERE API key (optional — Enter to skip)"
+ask ADMIN_EMAILS "Admin emails, comma-separated (needed for the admin screens)"
+[ -z "${DB_HOST:-}" ] && { echo "❌ DB_HOST is required"; exit 1; }
+[ -z "${DB_PASSWORD:-}" ] && { echo "❌ DB_PASSWORD is required"; exit 1; }
 
-eb setenv --region "$REGION" \
-  NODE_ENV=production PORT=3000 \
-  DB_HOST="$DB_HOST" DB_PORT=5432 DB_NAME=vura DB_USER=vura_admin DB_PASSWORD="$DB_PASSWORD" DB_SSL=true \
-  FIREBASE_PROJECT_ID=vura-f667d FIREBASE_CLIENT_EMAIL="$FIREBASE_CLIENT_EMAIL" \
-  FIREBASE_PRIVATE_KEY_B64="$FIREBASE_PRIVATE_KEY_B64" \
-  AWS_S3_BUCKET="$BUCKET" AWS_S3_REGION="$REGION" \
-  ALLOWED_ORIGINS="http://localhost:19006,http://localhost:8081,https://localhost,capacitor://localhost,http://localhost,https://ridevura.com,https://www.ridevura.com,https://api.ridevura.com" \
-  PUBLIC_BASE_URL=https://api.ridevura.com \
-  RATE_LIMIT_WINDOW_MS=900000 RATE_LIMIT_MAX_REQUESTS=6000 ROUTE_RATE_LIMIT_MAX=300 LOG_LEVEL=info \
-  PAYMENTS_MODE=live PAYSTACK_SECRET_LIVE="$PAYSTACK_SECRET_LIVE" PAYSTACK_PUBLIC_LIVE="$PAYSTACK_PUBLIC_LIVE" \
-  PAYSTACK_CALLBACK_URL=https://api.ridevura.com/api/payments/return \
-  RESEND_API_KEY="$RESEND_API_KEY" RESEND_FROM_EMAIL=onboarding@ridevura.com \
-  ADMIN_EMAILS="$ADMIN_EMAILS" \
-  DEV_LOG_WRITE_KEY="$(openssl rand -hex 16)" DEV_LOG_READ_KEY="$(openssl rand -hex 16)"
+ENV_ARGS=(
+  "NODE_ENV=production" "PORT=3000"
+  "DB_HOST=${DB_HOST}" "DB_PORT=5432" "DB_NAME=vura" "DB_USER=vura_admin"
+  "DB_PASSWORD=${DB_PASSWORD}" "DB_SSL=true"
+  "FIREBASE_PROJECT_ID=vura-f667d"
+  "AWS_S3_BUCKET=${BUCKET}" "AWS_S3_REGION=${REGION}"
+  "ALLOWED_ORIGINS=http://localhost:19006,http://localhost:8081,https://localhost,capacitor://localhost,http://localhost,https://ridevura.com,https://www.ridevura.com,https://api.ridevura.com"
+  "PUBLIC_BASE_URL=https://api.ridevura.com"
+  "RATE_LIMIT_WINDOW_MS=900000" "RATE_LIMIT_MAX_REQUESTS=6000" "ROUTE_RATE_LIMIT_MAX=300" "LOG_LEVEL=info"
+  "PAYMENTS_MODE=live" "PAYSTACK_CALLBACK_URL=https://api.ridevura.com/api/payments/return"
+  "RESEND_FROM_EMAIL=onboarding@ridevura.com"
+  "DEV_LOG_WRITE_KEY=$(openssl rand -hex 16)" "DEV_LOG_READ_KEY=$(openssl rand -hex 16)"
+)
+for pair in "FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL:-}" \
+            "FIREBASE_PRIVATE_KEY_B64=${FIREBASE_PRIVATE_KEY_B64:-}" \
+            "PAYSTACK_SECRET_LIVE=${PAYSTACK_SECRET_LIVE:-}" \
+            "PAYSTACK_PUBLIC_LIVE=${PAYSTACK_PUBLIC_LIVE:-}" \
+            "RESEND_API_KEY=${RESEND_API_KEY:-}" \
+            "HERE_API_KEY=${HERE_API_KEY:-}" \
+            "ADMIN_EMAILS=${ADMIN_EMAILS:-}"; do
+  [ -n "${pair#*=}" ] && ENV_ARGS+=("$pair")
+done
+eb setenv -e "$ENVNAME" --region "$REGION" "${ENV_ARGS[@]}" \
+  || { echo "❌ eb setenv failed"; exit 1; }
+echo "   ✓ set ${#ENV_ARGS[@]} environment properties"
 
-echo "=== 5/6  deploy (server/dist ships committed; deps install on the instance) ==="
-eb deploy "$ENVNAME" --region "$REGION"
+echo "=== 5/6  deploy (server/dist is committed; deps install on the instance) ==="
+LABEL="vura-$(date +%y%m%d_%H%M%S)"   # explicit: a slash in a git tag must never reach the label
+eb deploy "$ENVNAME" --region "$REGION" --label "$LABEL" \
+  || { echo "❌ eb deploy failed"; exit 1; }
 
 echo "=== 6/6  verify ==="
 HOST="$(eb status "$ENVNAME" --region "$REGION" --verbose | awk -F': ' '/CNAME/{print $2; exit}')"
