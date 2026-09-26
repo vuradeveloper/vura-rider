@@ -204,12 +204,22 @@ Do these **in this order**. Every step exists because skipping it cost us time.
    * No CORS rules needed — the server uploads/reads via presigned URLs
      (`server/src/lib/s3.ts`), the browser never talks to S3 directly.
 2. **RDS PostgreSQL** (console → RDS → Create database):
+   * ⚠️ **The console now defaults to Aurora + Multi-AZ DB *cluster* + io2 provisioned-IOPS
+     storage, which quotes ~$1,939/month.** Always switch **Engine type → PostgreSQL**,
+     **Deployment → Single-AZ DB instance (1 instance)**, storage **gp3 20 GiB, no provisioned
+     IOPS**. Target estimate: **$13–17/month** (`db.t4g.micro`) or ~$27–30 (`db.t4g.small`).
+     If the estimate still shows hundreds, you are still on Aurora/io2 — go back and check.
    * Engine PostgreSQL 16+, template **Free tier / Dev-Test** unless you need Multi-AZ;
    * Identifier `vura-prod`, master user `vura_admin`, **strong password → password manager**;
    * Initial database name **`vura`** (this exact name is hardcoded all over the app);
    * **Public access: No**; place it in the same region as the app;
    * **Automated backups: 7 days**, plus a manual snapshot before any migration;
    * Security group: allow **5432 only from the Elastic Beanstalk instance security group**;
+   * **Safety settings the console does NOT default correctly:** *Storage autoscaling* max
+     threshold → **50 GiB** (the form offers 1000 GiB, which risks ~+$100/mo), *Backup
+     retention* → **7 days** (default offered is 1), **Enable deletion protection** → **ON**,
+     and *Public access* → **No**. Leave RDS Proxy off, Enhanced Monitoring off, log exports
+     none, Database Insights **Standard** (free).
    * Note the endpoint → it goes into `DB_HOST`.
 3. **EC2 key pair** (EC2 → Key pairs → Create) — even if you plan never to SSH. `eb ssh`
    needs it, and without a key you cannot get onto an instance when something is wrong.
@@ -531,7 +541,3 @@ to the old EB host; data → the old DB is untouched for 7 days.
    service account) and delete the old ones.
 7. Commit this playbook and the `deploy/env.prod.example` template — they contain no secrets and
    are the hand-over document for whoever does this next.
-
-
-
-
