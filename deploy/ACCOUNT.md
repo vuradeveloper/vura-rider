@@ -7,15 +7,25 @@ password manager (see `deploy/AWS-NEW-ACCOUNT-SETUP.md` §2 mistake 2 and §4).
 
 | Field | Value | Where to find it |
 |---|---|---|
-| Account ID | `171180524226` | Console → top-right account menu → Account |
+| Account ID | `171180524226` | verified 27 Sep 2026 with `aws sts get-caller-identity` |
 | Account alias / sign-in URL | `https://__________.signin.aws.amazon.com/console` | Console → Account → alias |
 | Root email | `________________` (recommended: `aws@ridevura.com` via Cloudflare Email Routing) | |
-| Region | `________________` (recommended `af-south-1` for SA users) | Console → region dropdown |
+| Region | `af-south-1` | verified — every resource lives here |
 | Elastic Beanstalk app / env | `vura-rider` / `vura-rider-prod` | EB console |
-| EB hostname | `________________________________.elasticbeanstalk.com` | EB → env → URL |
-| RDS endpoint | `________________________________` | RDS → Databases → Connectivity |
+| EB hostname | `vura-rider-prod.eba-2uy5gtu2.af-south-1.elasticbeanstalk.com` | EB → env → URL. Serves **HTTP only** — Cloudflare terminates TLS for `api.ridevura.com` |
+| EB instance SG | `sg-070019b918e15eded` | EC2 → Security groups (tag `elasticbeanstalk:environment-name`) |
+| RDS instance / endpoint | `vura-prod` / `vura-prod.<12-char-id>.af-south-1.rds.amazonaws.com` — 51 chars, print it with `aws rds describe-db-instances --region af-south-1 --db-instance-identifier vura-prod --query 'DBInstances[0].Endpoint.Address' --output text` | RDS → Databases → Connectivity |
+| RDS security group | `sg-0ac99f697843e73a5` (`vura-rds-sg`) — 5432 open **from the EB instance SG**, not from a CIDR | EC2 → Security groups |
 | DB name / user | `vura` / `vura_admin` | |
-| S3 documents bucket | `________________` | S3 console |
+| S3 documents bucket | `vura-driver-docs-171180524226` — versioned, public access blocked, region `af-south-1` | S3 console |
+
+**Migration status (verified 27 Sep 2026).** `api.ridevura.com` already serves this environment
+(Cloudflare CNAME, confirmed by a unique access-log probe in `deploy/verify-new-account.sh`), but
+**no data was migrated**: RDS `vura-prod` reports `DBSnapshotIdentifier=None` and was created empty
+on `2026-09-26T22:48`. The app self-heals the *schema* (boot bootstrap + an idempotent
+`ensureTable()` in every route) but not the *rows* — no ride history, wallets, earnings, driver
+approvals or document metadata; `community_places` re-imports from OSM on its own. Run
+`bash deploy/verify-new-account.sh`: it prints the RDS provenance line and warns about this.
 | IAM admin user (daily use) | `vura-admin` | IAM → Users |
 | MFA devices on root | 1) **virtual TOTP** — `arn:aws:iam::171180524226:mfa/ridevura` (created 26 Sep 2026) — **verify it is attached to root, not only to an IAM user**; 2) passkey (Windows Hello) — still to add | IAM → Security credentials |
 
@@ -28,6 +38,8 @@ password manager (see `deploy/AWS-NEW-ACCOUNT-SETUP.md` §2 mistake 2 and §4).
 | RDS endpoint | `vura.cy1qwqwmkmvc.us-east-1.rds.amazonaws.com` | `deploy/production.env` |
 | Access today | unknown — IAM user `makhavurr` / `developerdev3839@gmail.com` | `deploy/cape-town/STEPS.md:7` |
 | Passkey account (NOT the app account) | `054037132330` | passkey ARN in the Windows dialog, 26 Sep 2026 |
+| EB hostname (the **rollback target** for the `api` CNAME) | **not recorded** — print it with the old account's credentials: `aws elasticbeanstalk describe-environments --region us-east-1 --application-name vura-rider --query 'Environments[].[EnvironmentName,Status,Health,CNAME]' --output text`, or read Cloudflare → Audit Log → last change to the `api` record | missing as of 27 Sep 2026 |
+| Data handover | **not done** — `aws rds describe-db-snapshots --region us-east-1 --db-instance-identifier vura --snapshot-type manual` returned nothing (run it with *old-account* credentials; an empty result with new-account credentials means nothing) | `AWS-NEW-ACCOUNT-SETUP.md` §6 |
 
 ## Other panels — who owns what
 
