@@ -56,6 +56,38 @@ approvals or document metadata; `community_places` re-imports from OSM on its ow
 | Email | **Resend** | from `onboarding@ridevura.com` |
 | API hostname | `https://api.ridevura.com` | proxied CNAME → EB; never rename (clients hardcode it) |
 
+## Deploying
+
+Build `dist` **before** deploying — Elastic Beanstalk runs `node dist/index.js`, so a `dist`
+that lags `src` means the fix is not on the server even though `git push` succeeded:
+
+```bash
+cd server && npm run build && cd ..     # tsc: regenerate dist from src
+git add server/src server/dist && git commit -m "..." && git push origin main
+bash deploy/deploy.sh                   # = eb deploy vura-rider-prod --region af-south-1 --label vura-<sha>-<utc>
+```
+
+Use `deploy/deploy.sh`, not a bare `eb deploy`: EB derives the version label from
+`git describe --tags` and rejects any label containing `/`. The annotated tag
+`backup/2026-09-20-cape-working` (renamed to `backup-2026-09-20-cape-working`, same commit
+`fd7503d`, on 27 Sep 2026) made a production deploy fail on 27 Sep 2026 with:
+
+```
+ServiceError - 1 validation error detected: Value '[app-backup/2026-09-20-...]' at
+'versionLabels' failed to satisfy constraint: Member must satisfy constraint: [Member
+must have length less than or equal to 100, ...]
+```
+
+which reads as a label-length problem, not a slash problem. The wrapper deletes local slash
+tags and always passes its own slash-free label. Note that a `git pull` does not remove an
+already-fetched tag, so an old clone needs `git tag -l | grep '/' | xargs -r -n1 git tag -d`
+once.
+
+Boot-time migrations run on every start (`server/src/index.ts`, inside the DB bootstrap), so a
+schema fix reaches an existing database on the next deploy — no manual SQL. `GET /api/rides/:id`
+needed this: on a fresh database the column `route_data` was missing because
+`ensureRouteColumn()` ran at module-import time, before the bootstrap created the `rides` table.
+
 ## Secrets policy
 
 Never in this file, never in git. Values live in:
