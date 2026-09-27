@@ -410,6 +410,18 @@ async function start() {
         ADD COLUMN IF NOT EXISTS id_document_name VARCHAR(255),
         ADD COLUMN IF NOT EXISTS license_document_name VARCHAR(255)
       `);
+            // The bootstrap above is NOT the full production schema: the old database had
+            // accumulated columns from earlier migrations, and the code SELECTs them. On a
+            // fresh database `GET /api/rides/:id` returned 500 "column r.route_data does not
+            // exist" (found 27 Sep 2026, right after the account move) because `route_data`
+            // was only ever created lazily by the route-saving handler — and a boot that
+            // never saves a route leaves the column missing. Keep the rides columns the code
+            // relies on in the boot migration so a brand-new database matches the code.
+            await (0, database_2.execute)(`
+        ALTER TABLE rides
+        ADD COLUMN IF NOT EXISTS waypoints JSONB,
+        ADD COLUMN IF NOT EXISTS route_data JSONB
+      `);
             await (0, database_2.execute)(`
         ALTER TABLE rides
         ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
