@@ -21,7 +21,26 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
       const params: any[] = [];
       let idx = 1;
 
-      if (role) { updates.push(`role = $${idx}`); params.push(role); idx++; }
+      // A driver must never be downgraded to passenger just because the RIDER app
+      // was used with the same account: both apps share one auth system, and the
+      // rider app syncs `role: 'passenger'` on launch. That flip locks a real
+      // driver out of their own documents (403 "Insufficient permissions") and out
+      // of GET /api/rides/available, which is how rides reach them at all.
+      // Added 27 Sep 2026 after exactly that was reported from the field.
+      let effectiveRole = role;
+      if (role === "passenger") {
+        const current = await queryOne<{ role: string | null; has_profile: boolean }>(
+          `SELECT u.role,
+                  EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = u.id) AS has_profile
+             FROM users u WHERE u.firebase_uid = $1`,
+          [firebaseUid]
+        );
+        if (current?.role === "driver" || current?.has_profile) {
+          effectiveRole = undefined;
+        }
+      }
+
+      if (effectiveRole) { updates.push(`role = $${idx}`); params.push(effectiveRole); idx++; }
       if (phone) { updates.push(`phone = $${idx}`); params.push(phone); idx++; }
       if (full_name) { updates.push(`full_name = $${idx}`); params.push(full_name); idx++; }
       if (req.user?.email) { updates.push(`email = $${idx}`); params.push(req.user.email); idx++; }

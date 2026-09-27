@@ -50,7 +50,15 @@ async function loadDoc(id) {
 // ── driver side ───────────────────────────────────────────────────────────────
 // POST /api/documents/upload
 // Body: { type, fileName, mimeType, data (base64 or data: URL), note? }
-router.post("/upload", roleGuard(["driver", "admin"]), async (req, res) => {
+// Note: `passenger` is included on EVERY owner-scoped route below on purpose.
+// Both apps share one auth system, so using the rider app with a driver's account
+// syncs `role: 'passenger'` and this account would then get 403 "Insufficient
+// permissions" on its OWN documents (reported from the field 27 Sep 2026:
+// "Link your car says: Could not load your documents: Insufficient permissions").
+// Riders also need to upload an ID document. Safety is unaffected: each handler
+// still enforces owner-or-admin (doc.driver_id !== dbUser.id -> 403), so nobody
+// can see or delete anyone else's documents.
+router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
     try {
         const { type, fileName, mimeType, data, note } = req.body || {};
         const dbUser = req.dbUser;
@@ -114,7 +122,7 @@ router.post("/upload", roleGuard(["driver", "admin"]), async (req, res) => {
     }
 });
 // GET /api/documents/mine — the driver's own documents, newest first
-router.get("/mine", roleGuard(["driver", "admin"]), async (req, res) => {
+router.get("/mine", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
     try {
         const dbUser = req.dbUser;
         const rows = await (0, database_1.query)(`SELECT id, driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket,
@@ -145,7 +153,7 @@ router.get("/", roleGuard(["admin"]), async (req, res) => {
     }
 });
 // GET /api/documents/:id/url — owner or admin gets a 15-min presigned view URL
-router.get("/:id/url", roleGuard(["driver", "admin"]), async (req, res) => {
+router.get("/:id/url", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
     try {
         const dbUser = req.dbUser;
         const doc = await loadDoc(String(req.params.id));
@@ -186,7 +194,7 @@ router.patch("/:id/status", roleGuard(["admin"]), async (req, res) => {
     }
 });
 // DELETE /api/documents/:id — owner or admin removes a document (S3 + row)
-router.delete("/:id", roleGuard(["driver", "admin"]), async (req, res) => {
+router.delete("/:id", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
     try {
         const dbUser = req.dbUser;
         const doc = await loadDoc(String(req.params.id));
