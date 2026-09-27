@@ -34,13 +34,14 @@ approvals or document metadata; `community_places` re-imports from OSM on its ow
 | Field | Value | Evidence |
 |---|---|---|
 | Account ID | `456097556241` | `deploy/rds-backup.sh:31`, `deploy/cape-town/02-backup-and-restore-db.sh:40` |
-| Console access | **yes** — root sign-in is `nhlanhlabhengu99@gmail.com` via `https://456097556241.signin.aws.amazon.com/console` (password: password manager / the `*credentials.csv` in Downloads — move it out of there and verify MFA on root) | `Downloads/nhlanhlabhengu99@gmail.com_credentials.csv`, 27 Sep 2026 |
+| Console access | **blocked in practice** — the 31 Aug / 6 Sep CSV sign-in (`nhlanhlabhengu99@gmail.com` at `https://456097556241.signin.aws.amazon.com/console`) does not get in (stale password or an MFA prompt with no device). No longer blocking: the old data turned out to be test-only, see below. Recovery if ever needed: root "Forgot password" via the root email inbox, or AWS account recovery with proof of ownership (invoice / phone on file). | attempt 27 Sep 2026 |
 | EB app / env (us-east-1) | `vura-rider` / `vura-rider-prod` → `vura-rider-prod.eba-sqwpehvf.us-east-1.elasticbeanstalk.com` | `deploy/cape-town/00-overview.sh:33` |
 | EB app / env (af-south-1, "cape2") | `vura-rider-prod-cape2.eba-heeiam6b.af-south-1.elasticbeanstalk.com` — **this was the live `api` CNAME target before the move** (proof the old account's production was already in af-south-1) | `ridevura.com.txt` DNS export, 16 Sep 2026 |
 | **Rollback target for the `api` CNAME** | `vura-rider-prod-cape2.eba-heeiam6b.af-south-1.elasticbeanstalk.com` — confirm it still exists before relying on it | same |
 | RDS endpoint (pre-cape) | `vura.cy1qwqwmkmvc.us-east-1.rds.amazonaws.com` (db `vura`, user `vura_admin`) | `deploy/production.env:9` |
-| RDS after the cape-town move | unknown — `deploy/cape-town/` moved the DB into af-south-1 in this account; discover it with `bash deploy/check-old-account.sh` | |
-| Data handover | **not done** as of 27 Sep 2026 — the new `vura-prod` reports `DBSnapshotIdentifier=None` (created empty 26 Sep 22:48) | `AWS-NEW-ACCOUNT-SETUP.md` §6 |
+| RDS after the cape-town move | never identified by name (console blocked) — but its **data was readable anyway**: the `cape2` env still answers on plain HTTP and served real DB rows on 27 Sep 2026 | `server/_probe_old_api.cjs` |
+| Data handover | **NOT NEEDED — deliberately dropped (27 Sep 2026).** Read through the old backend's own API with a service-account token (no AWS sign-in): the old DB holds **test/demo data only** — 28 Firebase accounts, of which the non-test ones are the owner's Gmails (`mbofhenijunior7@`, `makhavhuemjay@`, `nhlanhlabhengu99@`) plus `*@vura-test.dev` / `@vura.app` fixtures, **none with a phone number**; total activity ≈14 test rides, R3.92 earned, one test licence-disk document. Nothing of commercial value is lost. | probe output, 27 Sep 2026 |
+| Old env security | the `cape2` backend is still publicly reachable over **plain HTTP** and still accepts the **default dev-log key** (`vura-devlog-key`), so its device logs are world-readable. **Terminate that environment** (and the old account's resources) instead of holding them for 7 days. The new env uses 32-char custom keys — fine. | probe, 27 Sep 2026 |
 
 ## Other panels — who owns what
 
