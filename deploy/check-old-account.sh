@@ -13,9 +13,9 @@
 set -uo pipefail
 OLD_ACCOUNT=456097556241
 NEW_ACCOUNT=171180524226
-REGION=us-east-1
-DBID=vura
-APP=vura-rider
+# The old account kept production in af-south-1 (`vura-rider-prod-cape2`) after an
+# earlier us-east-1 → Cape Town move, so discover BOTH regions instead of assuming.
+REGIONS="af-south-1 us-east-1"
 
 echo "=== identity ==="
 ACCT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"
@@ -24,43 +24,40 @@ if [ "$ACCT" != "$OLD_ACCOUNT" ]; then
   echo "         Every check below would silently return EMPTY from here — which is"
   echo "         exactly how 'there is no data' gets misread. CloudShell credentials"
   echo "         come from the console session that opened it: sign in to the old"
-  echo "         account ($OLD_ACCOUNT), region $REGION, open CloudShell, re-run."
+  echo "         account ($OLD_ACCOUNT), open CloudShell in any region, re-run."
   exit 1
 fi
 echo "  [ok] account $ACCT in $REGION"
 
-echo "=== 1/5  rollback target — old EB env CNAME (record it in deploy/ACCOUNT.md) ==="
-aws elasticbeanstalk describe-environments --region "$REGION" --application-name "$APP" \
-  --query 'Environments[].[EnvironmentName,Status,Health,CNAME]' --output text
+for REGION in $REGIONS; do
+  echo "########## region $REGION ##########"
+  echo "=== EB environments (the live one's CNAME is the rollback target) ==="
+  aws elasticbeanstalk describe-environments --region "$REGION" \
+    --query 'Environments[].[EnvironmentName,Status,Health,CNAME]' --output text
+  echo "=== RDS instances (KmsKeyId decides whether a snapshot can be shared) ==="
+  aws rds describe-db-instances --region "$REGION" \
+    --query 'DBInstances[].[DBInstanceIdentifier,DBInstanceClass,AllocatedStorage,StorageEncrypted,KmsKeyId,PubliclyAccessible,Endpoint.Address,DBName,MasterUsername]' \
+    --output text
+  echo "=== snapshots: manual (the only shareable kind), then automated newest 3 ==="
+  aws rds describe-db-snapshots --region "$REGION" --snapshot-type manual \
+    --query 'DBSnapshots[].[DBSnapshotIdentifier,DBInstanceIdentifier,Status,SnapshotCreateTime]' --output text
+  aws rds describe-db-snapshots --region "$REGION" --snapshot-type automated \
+    --query 'reverse(sort_by(DBSnapshots,&SnapshotCreateTime))[:3].[DBSnapshotIdentifier,SnapshotCreateTime]' --output text
+done
 
-echo "=== 2/5  DB instance — snapshot sharing needs a customer-managed KMS key ==="
-aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$DBID" \
-  --query 'DBInstances[0].[DBInstanceIdentifier,DBInstanceClass,Engine,EngineVersion,AllocatedStorage,StorageEncrypted,KmsKeyId,PubliclyAccessible,Endpoint.Address,DBName,MasterUsername]' \
-  --output text
-
-echo "=== 3/5  snapshots (manual ones are the only shareable kind) ==="
-echo "-- manual --"
-aws rds describe-db-snapshots --region "$REGION" --db-instance-identifier "$DBID" \
-  --query 'DBSnapshots[].[DBSnapshotIdentifier,Status,SnapshotCreateTime]' --output text
-echo "-- automated, newest 3 --"
-aws rds describe-db-snapshots --region "$REGION" --db-instance-identifier "$DBID" --snapshot-type automated \
-  --query 'reverse(sort_by(DBSnapshots,&SnapshotCreateTime))[:3].[DBSnapshotIdentifier,SnapshotCreateTime]' \
-  --output text
-
-echo "=== 4/5  rough data volume (allocated − free storage) ==="
-ALLOC="$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$DBID" \
-  --query 'DBInstances[0].AllocatedStorage' --output text 2>/dev/null)"
-FREE="$(aws cloudwatch get-metric-statistics --region "$REGION" --namespace AWS/RDS --metric-name FreeStorageSpace \
-  --dimensions Name=DBInstanceIdentifier,Value="$DBID" --statistics Average --period 3600 \
-  --start-time "$(date -u -d '6 hours ago' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" \
-  --query 'sort_by(Datapoints,&Timestamp)[-1].Average' --output text 2>/dev/null)"
-if [ -n "$ALLOC" ] && [ -n "$FREE" ] && [ "$FREE" != "None" ]; then
-  awk -v a="$ALLOC" -v b="$FREE" 'BEGIN { printf "  allocated %.0f GiB · free %.2f GiB · used %.2f GiB\n", a, b/1073741824, a - b/1073741824 }'
-  echo "  (a few hundred MB 'used' is only the empty Postgres filesystem — a hint, not"
-  echo "   proof; the row-count SQL in §6 is the proof)"
-else
-  echo "  (no CloudWatch datapoint yet — treat as unknown)"
-fi
+echo "=== 4/5  rough data volume per instance (allocated − free; a hint, not proof) ==="
+for REGION in $REGIONS; do
+  for ID in $(aws rds describe-db-instances --region "$REGION" --query 'DBInstances[].DBInstanceIdentifier' --output text 2>/dev/null); do
+    ALLOC="$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$ID" --query 'DBInstances[0].AllocatedStorage' --output text 2>/dev/null)"
+    FREE="$(aws cloudwatch get-metric-statistics --region "$REGION" --namespace AWS/RDS --metric-name FreeStorageSpace \
+      --dimensions Name=DBInstanceIdentifier,Value="$ID" --statistics Average --period 3600 \
+      --start-time "$(date -u -d '6 hours ago' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" \
+      --query 'sort_by(Datapoints,&Timestamp)[-1].Average' --output text 2>/dev/null)"
+    [ -z "$FREE" ] || [ "$FREE" = "None" ] && FREE=0
+    awk -v r="$REGION" -v id="$ID" -v a="$ALLOC" -v b="$FREE" 'BEGIN { printf "  %-10s %-24s allocated %.0f GiB · free %.2f GiB · used %.2f GiB\n", r, id, a, b/1073741824, a-b/1073741824 }'
+  done
+done
+echo "  (a few hundred MB 'used' is just the empty Postgres filesystem — the §6 row-count SQL is the proof)"
 
 echo "=== 5/5  driver-document buckets (rows store s3_key, so keys must be copied) ==="
 aws s3 ls 2>/dev/null | grep -i docs || { echo "  (none matching 'docs'; all buckets:)"; aws s3 ls 2>/dev/null; }
@@ -70,13 +67,14 @@ cat <<'NEXT'
 NEXT — once the output above looks right:
 
   # 1. take a manual snapshot (freeze writes for a few minutes if you want a clean copy)
-  aws rds create-db-snapshot --region us-east-1 --db-instance-identifier vura \
+  #    use the <region>/<instance> that actually holds the live data (see the list above)
+  aws rds create-db-snapshot --region <region> --db-instance-identifier <instance> \
     --db-snapshot-identifier vura-handover-YYYYMMDD
-  aws rds wait db-snapshot-completed --region us-east-1 --db-snapshot-identifier vura-handover-YYYYMMDD
+  aws rds wait db-snapshot-completed --region <region> --db-snapshot-identifier vura-handover-YYYYMMDD
 
   # 2. share it with the new account. Fails when the instance uses the default
   #    aws/rds KMS key → in that case use the pg_dump route (§6 option B).
-  aws rds modify-db-snapshot-attribute --region us-east-1 \
+  aws rds modify-db-snapshot-attribute --region <region> \
     --db-snapshot-identifier vura-handover-YYYYMMDD \
     --attribute-name restore --values-to-add 171180524226
 
