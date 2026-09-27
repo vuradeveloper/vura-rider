@@ -37,13 +37,28 @@ else
   pass "CNAME $E_CNAME"
 fi
 
-echo "=== 4/8  network: 5432 from EB SG → RDS ==="
+echo "=== 4/8  network: 5432 from the EB instance SG → RDS ==="
 RDS_SG="$(aws ec2 describe-security-groups --region "$REGION" --filters Name=group-name,Values=vura-rds-sg --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)"
-EB_SG="$(aws ec2 describe-security-groups --region "$REGION" --filters "Name=tag:elasticbeanstalk:environment-name,Values=$ENVNAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)"
-RULE="$(aws ec2 describe-security-groups --region "$REGION" --group-ids "${RDS_SG:-x}" --query "SecurityGroups[0].IpPermissions[?FromPort==\`5432\`].UserIdGroupPairs[?GroupId=='${EB_SG:-x}'].GroupId | [0]" --output text 2>/dev/null)"
-[ "${RULE:-None}" = "${EB_SG:-x}" ] && pass "5432 ← $EB_SG on $RDS_SG" || fail "no 5432 rule from $EB_SG on $RDS_SG"
+INST_SGS="$(aws ec2 describe-instances --region "$REGION" \
+  --filters "Name=tag:elasticbeanstalk:environment-name,Values=$ENVNAME" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].SecurityGroups[].GroupId' --output text 2>/dev/null | tr '\t' '\n' | grep . | sort -u)"
+EB_SG="$(printf '%s\n' "$INST_SGS" | head -1)"
+[ -n "${EB_SG:-}" ] && pass "EB instance SG(s): $(printf '%s' "$INST_SGS" | tr '\n' ' ')" \
+  || fail "no running instance found for $ENVNAME"
+RULES="$(aws ec2 describe-security-groups --region "$REGION" --group-ids "${RDS_SG:-x}" \
+  --query 'SecurityGroups[0].IpPermissions[].[IpProtocol,FromPort,ToPort,UserIdGroupPairs[].GroupId]' --output text 2>/dev/null)"
+if printf '%s\n' "$RULES" | grep -E "^(tcp[[:space:]]+5432|-1[[:space:]])" | grep -q "${EB_SG:-none}"; then
+  pass "$RDS_SG accepts 5432 from $EB_SG"
+else
+  fail "$RDS_SG does not accept 5432 from $EB_SG"
+  note "RDS inbound rules (protocol / from / to / source SG):"
+  printf '%s\n' "$RULES" | sed 's/^/         /'
+fi
 RDS_PUB="$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$RDS_ID" --query 'DBInstances[0].PubliclyAccessible' --output text 2>/dev/null)"
 [ "$RDS_PUB" = "False" ] && pass "$RDS_ID is private" || fail "$RDS_ID PubliclyAccessible=$RDS_PUB"
+PENDING="$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$RDS_ID" --query 'length(keys(DBInstances[0].PendingModifiedValues))' --output text 2>/dev/null)"
+[ "${PENDING:-1}" = "0" ] && pass "no pending RDS modifications" \
+  || fail "RDS still has pending modifications (re-run the CLI password reset)"
 
 echo "=== 5/8  instance role (document uploads) ==="
 aws iam get-role-policy --role-name aws-elasticbeanstalk-ec2-role --policy-name vura-docs-s3 >/dev/null 2>&1 \
@@ -52,14 +67,16 @@ aws iam get-role-policy --role-name aws-elasticbeanstalk-ec2-role --policy-name 
 echo "=== 6/8  environment properties (values masked) ==="
 PROPS="$(aws elasticbeanstalk describe-configuration-settings --region "$REGION" --application-name "$APP" --environment-name "$ENVNAME" \
   --query 'ConfigurationSettings[0].OptionSettings[?Namespace==`aws:elasticbeanstalk:application:environment`].[OptionName,Value]' --output text 2>/dev/null)"
-REQUIRED="NODE_ENV PORT DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSL FIREBASE_PROJECT_ID FIREBASE_CLIENT_EMAIL FIREBASE_PRIVATE_KEY_B64 AWS_S3_BUCKET AWS_S3_REGION PUBLIC_BASE_URL ALLOWED_ORIGINS PAYMENTS_MODE PAYSTACK_SECRET_LIVE PAYSTACK_PUBLIC_LIVE PAYSTACK_CALLBACK_URL RESEND_API_KEY RESEND_FROM_EMAIL ADMIN_EMAILS DEV_LOG_WRITE_KEY DEV_LOG_READ_KEY"
+REQUIRED="NODE_ENV PORT DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSL FIREBASE_PROJECT_ID FIREBASE_CLIENT_EMAIL FIREBASE_PRIVATE_KEY_B64 AWS_S3_BUCKET AWS_S3_REGION PUBLIC_BASE_URL ALLOWED_ORIGINS PAYMENTS_MODE PAYSTACK_SECRET_LIVE PAYSTACK_PUBLIC_LIVE PAYSTACK_CALLBACK_URL RESEND_API_KEY RESEND_FROM_EMAIL ADMIN_EMAILS HERE_API_KEY DEV_LOG_WRITE_KEY DEV_LOG_READ_KEY"
+SECRETS=" DB_PASSWORD FIREBASE_PRIVATE_KEY_B64 PAYSTACK_SECRET_LIVE PAYSTACK_PUBLIC_LIVE RESEND_API_KEY HERE_API_KEY DEV_LOG_WRITE_KEY DEV_LOG_READ_KEY "
 for k in $REQUIRED; do
   v="$(printf '%s\n' "$PROPS" | awk -F'\t' -v k="$k" '$1==k {print $2; exit}')"
+  case "$SECRETS" in *" $k "*) hide=1 ;; *) hide=0 ;; esac
   if [ -z "$v" ]; then fail "$k missing or empty"
-  elif [ "${#v}" -gt 26 ]; then pass "$k set (${#v} chars)"
+  elif [ "$hide" = "1" ] || [ "${#v}" -gt 26 ]; then pass "$k set (${#v} chars)"
   else pass "$k = $v"; fi
 done
-note "expected: FIREBASE_PRIVATE_KEY_B64 2272 chars · DEV_LOG_* 32"
+note "expected: FIREBASE_PRIVATE_KEY_B64 2272 · PAYSTACK_* 48 · RESEND_API_KEY 36 · DEV_LOG_* 32"
 
 echo "=== 7/8  live endpoints (origin HTTP-only; Cloudflare adds TLS) ==="
 if [ -n "$E_CNAME" ]; then
@@ -72,16 +89,32 @@ if [ -n "$E_CNAME" ]; then
     note "app boot log:"
     eb logs "$ENVNAME" --region "$REGION" 2>&1 \
       | grep -iE "PostgreSQL|EADDRINUSE|Cannot find module" | tail -6 | sed 's/^/         /'
+    note "(pre-boot 'Cannot find module' lines are the deploy restart race; the last PostgreSQL line is the live state)"
   fi
 fi
 
 echo "=== 8/8  DNS / TLS cutover for $DOMAIN ==="
 RESOLVED="$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)"
 [ -z "$RESOLVED" ] && RESOLVED="$(dig +short "$DOMAIN" 2>/dev/null | head -1)"
-note "$DOMAIN resolves to ${RESOLVED:-<unresolved>}"
+note "$DOMAIN resolves to ${RESOLVED:-<unresolved>} (Cloudflare anycast — the origin is invisible to DNS)"
 CODE3="$(curl -sS -m 25 -o /dev/null -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null)"
-[ "$CODE3" = "200" ] && pass "https://$DOMAIN/health → 200 (cutover complete)" \
-  || note "https://$DOMAIN/health → ${CODE3:-000} (CNAME not pointed here yet)"
+if [ "$CODE3" = "200" ]; then pass "https://$DOMAIN/health → 200"
+else fail "https://$DOMAIN/health → ${CODE3:-000}"; fi
+# A 200 does NOT prove THIS environment serves the domain — the old backend answers
+# 200 too. Send a unique request through the public domain and look for it in this
+# environment's own access log. That is the only content-independent proof.
+if command -v eb >/dev/null 2>&1 && [ -n "$E_CNAME" ]; then
+  TAG="probe$(date +%s)"
+  curl -sS -m 25 -o /dev/null "https://$DOMAIN/health?$TAG" 2>/dev/null
+  sleep 3
+  if eb logs "$ENVNAME" --region "$REGION" 2>&1 | grep -q "$TAG"; then
+    pass "$DOMAIN serves THIS environment (probe $TAG found in its access log)"
+  else
+    note "$DOMAIN does NOT reach this environment yet — probe $TAG is absent from its log"
+    note "→ set Cloudflare's 'api' CNAME to: $E_CNAME"
+  fi
+  note "final stops proof (from the repo, needs this backend): pwsh figma-ui/_verify_stops.ps1"
+fi
 
 echo
 [ "$FAILED" -eq 0 ] && echo "✅ ALL CHECKS PASSED — the new account is serving." \
