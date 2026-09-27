@@ -60,8 +60,22 @@ else
   note "RDS inbound rules (protocol / from / to / source SG):"
   printf '%s\n' "$RULES" | sed 's/^/         /'
 fi
-RDS_PUB="$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$RDS_ID" --query 'DBInstances[0].PubliclyAccessible' --output text 2>/dev/null)"
+RDS_META="$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$RDS_ID" \
+  --query 'DBInstances[0].[PubliclyAccessible,InstanceCreateTime,DBSnapshotIdentifier,AllocatedStorage]' --output text 2>/dev/null)"
+RDS_PUB="$(printf '%s' "$RDS_META" | awk '{print $1}')"
 [ "$RDS_PUB" = "False" ] && pass "$RDS_ID is private" || fail "$RDS_ID PubliclyAccessible=$RDS_PUB"
+note "RDS $RDS_ID: created $(printf '%s' "$RDS_META" | awk '{print $2}'), snapshot source $(printf '%s' "$RDS_META" | awk '{print $3}'), $(printf '%s' "$RDS_META" | awk '{print $4}') GB"
+# Provenance matters: an instance restored from the old account's shared snapshot
+# reports that snapshot here. 'None' means the database was created EMPTY — the app
+# self-heals the schema (every route has ensureTable()) but NOT the rows, so real
+# riders/drivers/rides/wallets/driver approvals would be missing.
+if printf '%s' "$RDS_META" | awk '{exit ($3 == "None") ? 1 : 0}'; then
+  pass "$RDS_ID was restored from a snapshot (old-account rows are present)"
+else
+  note "!! snapshot source is None ⇒ $RDS_ID was created EMPTY. If the old account held"
+  note "   real riders/drivers/rides, migrate them now — deploy/AWS-NEW-ACCOUNT-SETUP.md §6"
+  note "   (the old account stays untouched for 7 days, so a CNAME rollback is still possible)"
+fi
 PENDING="$(aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$RDS_ID" --query 'length(keys(DBInstances[0].PendingModifiedValues))' --output text 2>/dev/null)"
 [ "${PENDING:-1}" = "0" ] && pass "no pending RDS modifications" \
   || fail "RDS still has pending modifications (re-run the CLI password reset)"
