@@ -151,11 +151,18 @@ LABEL="vura-$(date +%y%m%d_%H%M%S)"   # explicit: a slash in a git tag must neve
 eb deploy "$ENVNAME" --region "$REGION" --label "$LABEL" \
   || { echo "❌ eb deploy failed"; exit 1; }
 
-echo "=== 6/6  verify ==="
+echo "=== 6/6  verify (the beanstalk origin is HTTP-only: Cloudflare terminates TLS) ==="
 HOST="$(eb status "$ENVNAME" --region "$REGION" --verbose | awk -F': ' '/CNAME/{print $2; exit}')"
 echo "EB hostname: $HOST"
-curl -s  "https://$HOST/health"; echo
-curl -s -o /dev/null -w "  /api/rides/available -> %{http_code} (expect 401)\n" "https://$HOST/api/rides/available"
+echo "-- GET /health --"
+curl -sS -m 20 -w "\n   http %{http_code} in %{time_total}s\n" "http://$HOST/health"
+echo "-- GET /api/rides/available --"
+curl -sS -m 20 -o /dev/null -w "   %{http_code} (expect 401: auth required)\n" "http://$HOST/api/rides/available"
+echo
+echo "  A 000/502 here just means the app is still booting — wait 60s, then:"
+echo "    curl -sS http://$HOST/health"
+echo "    eb health $ENVNAME --region $REGION"
+echo "  Full dependency check:  bash deploy/verify-new-account.sh"
 echo
 echo "NEXT: only after /health says ok, point Cloudflare's 'api' CNAME at:"
 echo "      $HOST"
