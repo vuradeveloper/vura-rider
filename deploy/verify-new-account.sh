@@ -47,7 +47,13 @@ EB_SG="$(printf '%s\n' "$INST_SGS" | head -1)"
   || fail "no running instance found for $ENVNAME"
 RULES="$(aws ec2 describe-security-groups --region "$REGION" --group-ids "${RDS_SG:-x}" \
   --query 'SecurityGroups[0].IpPermissions[].[IpProtocol,FromPort,ToPort,UserIdGroupPairs[].GroupId]' --output text 2>/dev/null)"
-if printf '%s\n' "$RULES" | grep -E "^(tcp[[:space:]]+5432|-1[[:space:]])" | grep -q "${EB_SG:-none}"; then
+# Note: --output text prints a row's source-SG list on the FOLLOWING line (e.g.
+# "tcp 5432 5432" then "sg-xxxx"), so a single-line grep can never see both fields.
+# Walk the rows: a protocol/port header is followed by its sources until the next header.
+if printf '%s\n' "$RULES" | awk -v sg="${EB_SG:-none}" '
+      /^(tcp|udp|icmp|icmpv6)[[:space:]]/ || /^-1[[:space:]]/ { hit = ($1 == "tcp" && $2 == "5432") || $1 == "-1"; next }
+      hit && index($0, sg) > 0 { found = 1 }
+      END { exit found ? 0 : 1 }'; then
   pass "$RDS_SG accepts 5432 from $EB_SG"
 else
   fail "$RDS_SG does not accept 5432 from $EB_SG"
