@@ -67,6 +67,7 @@ const share_1 = __importStar(require("./routes/share"));
 const payouts_1 = __importDefault(require("./routes/payouts"));
 const documents_1 = __importDefault(require("./routes/documents"));
 const devLogs_1 = __importDefault(require("./routes/devLogs"));
+const devDispatch_1 = __importDefault(require("./routes/devDispatch"));
 const admin_1 = __importDefault(require("./routes/admin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const offerWorker_1 = require("./services/offerWorker");
@@ -104,6 +105,9 @@ app.use((0, morgan_1.default)(process.env.LOG_LEVEL === "debug" ? "dev" : "combi
 // steal from the app's request budget (which caused 429 storms) nor be
 // throttled itself. The write/read key header still gates it.
 app.use("/api/dev/logs", devLogs_1.default);
+// Dispatch inspector (read-only, same read key): see the whole offer trail for a
+// ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
+app.use("/api/dev/dispatch", devDispatch_1.default);
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
 // 300/15min cap was exhausted within 5 minutes by the every-second ride poll,

@@ -30,6 +30,7 @@ import shareRouter, { sharePage } from "./routes/share";
 import payoutsRouter from "./routes/payouts";
 import documentsRouter from "./routes/documents";
 import devLogsRouter from "./routes/devLogs";
+import devDispatchRouter from "./routes/devDispatch";
 import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOfferWorker } from "./services/offerWorker";
@@ -77,6 +78,10 @@ app.use(morgan(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
 // steal from the app's request budget (which caused 429 storms) nor be
 // throttled itself. The write/read key header still gates it.
 app.use("/api/dev/logs", devLogsRouter);
+
+// Dispatch inspector (read-only, same read key): see the whole offer trail for a
+// ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
+app.use("/api/dev/dispatch", devDispatchRouter);
 
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
