@@ -3,8 +3,142 @@ import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { settleFirstRide } from "../services/AffiliateService";
 import { startServerRideSim, stopServerRideSim } from "../services/rideSim";
+import { acceptRide, declineOffer } from "../services/dispatch";
+import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
+
+// GET /api/rides/me/active-state — ONE call that rebuilds the app's world.
+//
+// The apps call this on launch, on returning to the foreground and on every socket
+// reconnect. The DB is the source of truth, so a force-quit mid-trip lands the user
+// back on their trip instead of an empty home screen; a driver gets their pending
+// offer with the SECONDS REMAINING (so an expired offer can never show a stale
+// accept button).
+router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = await queryOne<{ id: string; role: string }>(
+      "SELECT id, role FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) {
+      res.json({ role: null, offer: null, ride: null, serverTime: new Date().toISOString() });
+      return;
+    }
+
+    // Driver: a pending, unexpired offer with a countdown.
+    const offer = await queryOne<any>(
+      `SELECT ro.id AS offer_id, ro.round, ro.expires_at,
+              GREATEST(0, EXTRACT(EPOCH FROM (ro.expires_at - NOW()))::int) AS seconds_remaining,
+              r.id AS ride_id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
+              r.destination_address, r.destination_lat, r.destination_lng,
+              r.estimated_fare, r.payment_method, r.waypoints
+         FROM ride_offers ro
+         JOIN rides r ON r.id = ro.ride_id
+        WHERE ro.driver_id = $1 AND ro.status = 'pending' AND ro.expires_at > NOW()
+        ORDER BY ro.created_at DESC
+        LIMIT 1`,
+      [user.id]
+    ).catch(() => null);
+
+    // Either role: the ride this user is currently on (rider or driver side).
+    const ride = await queryOne<any>(
+      `SELECT r.*,
+              d.full_name AS driver_name, d.phone AS driver_phone,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              dp.current_lat AS driver_lat, dp.current_lng AS driver_lng,
+              dp.current_heading AS driver_heading,
+              COALESCE(r.version, 0) AS version
+         FROM rides r
+         LEFT JOIN users d ON d.id = r.driver_id
+         LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+        WHERE (r.passenger_id = $1 OR r.driver_id = $1)
+          AND r.status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
+          AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
+        ORDER BY r.created_at DESC
+        LIMIT 1`,
+      [user.id]
+    ).catch(() => null);
+
+    res.json({
+      role: user.role,
+      offer: offer
+        ? {
+            offerId: offer.offer_id,
+            rideId: offer.ride_id,
+            round: offer.round,
+            expiresAt: offer.expires_at,
+            secondsRemaining: offer.seconds_remaining,
+            ride: mapRide(offer),
+          }
+        : null,
+      ride: ride ? mapRide(ride) : null,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error("Active state error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/rides/:id/accept — REST twin of the `driver:ride:accept` socket event.
+// Idempotent + atomic (see services/dispatch.ts acceptRide): safe to retry, and two
+// drivers accepting at the same moment can never both win.
+router.post("/:id/accept", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const io = (global as any).__vuraIo as SocketIOServer | undefined;
+    if (!io) {
+      res.status(503).json({ ok: false, error: "Dispatch is starting up, please retry" });
+      return;
+    }
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) {
+      res.status(403).json({ ok: false, error: "Driver account not synced" });
+      return;
+    }
+    const result = await acceptRide(io, { rideId: String(req.params.id), driverId: user.id });
+    if (!result.ok) {
+      res.status(409).json({ ok: false, error: result.error || "Ride no longer available" });
+      return;
+    }
+    res.json({ ok: true, rideId: result.rideId, version: result.version, duplicate: result.duplicate === true });
+  } catch (err: any) {
+    console.error("REST accept error:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/rides/:id/decline — REST twin of `driver:ride:decline`.
+router.post("/:id/decline", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const io = (global as any).__vuraIo as SocketIOServer | undefined;
+    if (!io) {
+      res.status(503).json({ ok: false, error: "Dispatch is starting up, please retry" });
+      return;
+    }
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) {
+      res.status(403).json({ ok: false, error: "Driver account not synced" });
+      return;
+    }
+    const result = await declineOffer(io, {
+      rideId: String(req.params.id),
+      driverId: user.id,
+      reason: req.body?.reason || "declined",
+    });
+    res.json({ ok: true, duplicate: result.duplicate === true });
+  } catch (err: any) {
+    console.error("REST decline error:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 
 // Helper: map DB ride row to app-friendly format
 function mapRide(row: any) {

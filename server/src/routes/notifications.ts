@@ -93,4 +93,62 @@ router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST /api/notifications/device — register/refresh a NATIVE push token (FCM).
+// Called on login, on every app start and on token refresh by the Capacitor apps.
+// Kept separate from /register (Expo tokens for the legacy RN app) so both builds
+// can coexist: a user may have an Expo phone and an FCM phone at the same time.
+router.post("/device", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { token, platform } = req.body || {};
+    if (!token) {
+      res.status(400).json({ error: "token is required" });
+      return;
+    }
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) {
+      res.status(404).json({ error: "User not synced yet" });
+      return;
+    }
+    await execute(
+      `INSERT INTO device_tokens (user_id, platform, push_token, is_active, last_seen_at, updated_at)
+       VALUES ($1, $2, $3, TRUE, NOW(), NOW())
+       ON CONFLICT (push_token) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
+         platform = EXCLUDED.platform,
+         is_active = TRUE,
+         invalidated_at = NULL,
+         last_seen_at = NOW(),
+         updated_at = NOW()`,
+      [user.id, platform || "android", String(token)]
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Device token error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/notifications/device/remove — called on sign-out so the next user of
+// this phone does not receive the previous user's ride notifications.
+router.post("/device/remove", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) {
+      res.status(400).json({ error: "token is required" });
+      return;
+    }
+    await execute(
+      `UPDATE device_tokens SET is_active = FALSE, invalidated_at = NOW(), updated_at = NOW()
+        WHERE push_token = $1`,
+      [String(token)]
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

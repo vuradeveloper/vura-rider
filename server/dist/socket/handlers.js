@@ -6,6 +6,7 @@ const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
 const push_1 = require("../services/push");
 const rideSim_1 = require("../services/rideSim");
+const dispatch_1 = require("../services/dispatch");
 // Push a ride milestone to a user's registered devices. firebaseUid is the
 // riders/driver Firebase account id (stored on users.firebase_uid).
 function notifyUser(firebaseUid, title, body, data) {
@@ -245,6 +246,24 @@ function setupSocketHandlers(io) {
                     .filter((w) => w && Number.isFinite(Number(w?.lat)) && Number.isFinite(Number(w?.lng)))
                     .slice(0, 8)
                     .map((w) => ({ address: String(w?.address ?? ""), lat: Number(w.lat), lng: Number(w.lng) }));
+                // One rider, one live ride: a double-tap on "Confirm" (or a retry after a
+                // timeout) must not create two rides that two drivers could each accept.
+                const existingActive = await (0, database_1.queryOne)(`SELECT id, status FROM rides
+            WHERE passenger_id = $1
+              AND status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
+            ORDER BY created_at DESC LIMIT 1`, [dbUserId]).catch(() => null);
+                if (existingActive?.id) {
+                    socket.emit("ride:requested:ack", {
+                        success: true,
+                        rideId: existingActive.id,
+                        reused: true,
+                    });
+                    socket.join(`ride:${existingActive.id}`);
+                    if (["searching", "scheduled"].includes(existingActive.status)) {
+                        await (0, dispatch_1.offerToNextDriver)(io, existingActive.id);
+                    }
+                    return;
+                }
                 // Add the column if this deployment's DB predates it (no-op otherwise).
                 // CRITICAL: if the migration cannot run we fall back to the previous
                 // 10-column INSERT, so booking can NEVER break because of stops.
@@ -272,9 +291,12 @@ function setupSocketHandlers(io) {
                 // first to accept wins.
                 (async () => {
                     try {
-                        const drivers = await (0, database_1.query)(`SELECT u.id, u.firebase_uid FROM users u
-               JOIN driver_profiles dp ON dp.user_id = u.id
-               WHERE u.role = 'driver' AND dp.is_online = true`);
+                        // Targeted dispatch replaces the old "shout at every online driver"
+                        // broadcast: services/dispatch.ts offers this ride to the CLOSEST fresh
+                        // driver only (15s window), then the next one, logging every step.
+                        const drivers = [];
+                        if (ride?.id)
+                            void (0, dispatch_1.startDispatch)(io, ride.id);
                         const payload = {
                             id: ride?.id,
                             pickupAddress,
@@ -299,7 +321,7 @@ function setupSocketHandlers(io) {
                         }
                         // Fallback: broadcast to the drivers room so any online driver
                         // socket that is connected but missed the direct emit still gets it.
-                        io.to("drivers").emit("ride:request", payload);
+                        // (no room-wide broadcast: offers are targeted, see services/dispatch.ts)
                     }
                     catch (e) {
                         console.warn("Failed to notify driver:", e);
@@ -332,8 +354,17 @@ function setupSocketHandlers(io) {
                     if (elapsedMin > FEE_GRACE_MINUTES)
                         fee = FEE_FLAT_RANDS;
                 }
-                await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW(), cancellation_fee = $3 WHERE id = $4 AND status IN ('searching','scheduled','accepted','driver_arrived')", [socket.userId, reason, fee, rideId]);
+                await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW(), cancellation_fee = $3 WHERE id = $4 AND status IN ('searching','scheduled','no_drivers','accepted','driver_arrived')", [socket.userId, reason, fee, rideId]);
                 (0, rideSim_1.stopServerRideSim)(rideId);
+                // ── Cancelling while an offer is out ──
+                // The driver who was being asked gets told immediately (previously the
+                // Accept/Decline card stayed on their screen until they ignored it), and the
+                // driver who had accepted goes back to 'available' instead of staying
+                // 'on_trip' forever.
+                await (0, dispatch_1.cancelPendingOffers)(io, rideId, "rider_cancelled");
+                const assigned = await (0, database_1.queryOne)("SELECT driver_id FROM rides WHERE id = $1", [rideId]).catch(() => null);
+                if (assigned?.driver_id)
+                    await (0, dispatch_1.releaseDriver)(assigned.driver_id);
                 // Tell the rider instantly — no waiting on the refund API.
                 io.to(`ride:${rideId}`).emit("ride:cancelled", {
                     reason,
@@ -564,6 +595,12 @@ function setupSocketHandlers(io) {
                 await (0, database_1.execute)(`UPDATE driver_profiles
            SET current_lat = $1, current_lng = $2,
                current_heading = COALESCE($3, current_heading),
+               last_location_at = NOW(),
+               last_heartbeat_at = NOW(),
+               status = CASE
+                 WHEN COALESCE(status, 'offline') = 'offline' AND is_online THEN 'available'
+                 ELSE COALESCE(status, 'offline')
+               END,
                updated_at = NOW()
            WHERE user_id = $4`, [lat, lng, heading ?? null, dbUserId]);
                 // Broadcast the driver's live position to the rider(s) of any ACTIVE
@@ -600,11 +637,22 @@ function setupSocketHandlers(io) {
                 // Auto-create driver_profiles if missing (first time going online).
                 const existing = await (0, database_1.queryOne)("SELECT id, verification_status FROM driver_profiles WHERE user_id = $1", [dbUserId]).catch(() => null);
                 if (!existing) {
-                    await (0, database_1.execute)(`INSERT INTO driver_profiles (user_id, is_online, verification_status)
-             VALUES ($1, $2, 'approved')`, [dbUserId, online === true]);
+                    await (0, database_1.execute)(`INSERT INTO driver_profiles (user_id, is_online, verification_status, status, last_heartbeat_at)
+             VALUES ($1, $2, 'approved', $3, NOW())`, [dbUserId, online === true, online === true ? "available" : "offline"]);
                 }
                 else {
-                    await (0, database_1.execute)(`UPDATE driver_profiles SET is_online = $1, updated_at = NOW() WHERE user_id = $2`, [online === true, dbUserId]);
+                    // status drives dispatch: available = offerable, offline = never offered,
+                    // on_trip = busy. is_online stays in sync for the older code paths.
+                    await (0, database_1.execute)(`UPDATE driver_profiles
+                SET is_online = $1,
+                    status = CASE
+                      WHEN $1 = FALSE THEN 'offline'
+                      WHEN COALESCE(status, 'offline') = 'on_trip' THEN 'on_trip'
+                      ELSE 'available'
+                    END,
+                    last_heartbeat_at = NOW(),
+                    updated_at = NOW()
+              WHERE user_id = $2`, [online === true, dbUserId]);
                 }
                 // Join/leave the drivers room so we can broadcast queue counts.
                 if (online === true) {
@@ -654,32 +702,27 @@ function setupSocketHandlers(io) {
                         return;
                     }
                 }
-                await (0, database_1.execute)("UPDATE rides SET driver_id = $1, status = 'accepted', accepted_at = NOW() WHERE id = $2", [dbUserId, rideId]);
+                // ── Atomic claim (this used to be a read-then-write race) ──
+                // services/dispatch.acceptRide locks the ride row, verifies this driver's
+                // offer is still inside its 15s window, updates with a status guard and
+                // promotes the driver to 'on_trip' — all inside ONE transaction. Two drivers
+                // accepting at the same instant can no longer both win.
+                const claim = await (0, dispatch_1.acceptRide)(io, { rideId, driverId: dbUserId });
+                if (!claim.ok) {
+                    socket.emit("ride:accepted:ack", {
+                        success: false,
+                        error: claim.error || "Ride no longer available",
+                    });
+                    return;
+                }
                 socket.join(`ride:${rideId}`);
                 // Notify the rider
                 const driver = await (0, database_1.queryOne)("SELECT u.full_name, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate, COALESCE(dp.rating_avg, 0) AS rating_avg FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id WHERE u.id = $1", [dbUserId]);
-                io.to(`ride:${rideId}`).emit("ride:accepted", {
-                    id: rideId,
-                    driver_name: driver?.full_name || "Driver",
-                    vehicle_color: driver?.vehicle_color,
-                    vehicle_make: driver?.vehicle_make,
-                    vehicle_model: driver?.vehicle_model,
-                    driver_license_plate: driver?.license_plate,
-                    fare: ride?.estimated_fare ?? null,
-                    // The rider's stops, replayed on accept (e.g. app relaunch mid-search).
-                    waypoints: rideWaypoints,
-                    stops: rideWaypoints,
-                    scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined,
-                    // Include the driver's rating so the rider can see it on accept.
-                    driver: {
-                        name: driver?.full_name || "Driver",
-                        vehicle: [driver?.vehicle_color, driver?.vehicle_make, driver?.vehicle_model]
-                            .filter(Boolean)
-                            .join(" ") || null,
-                        license_plate: driver?.license_plate,
-                        rating: driver?.rating_avg ? Number(driver.rating_avg) : null,
-                    },
-                });
+                // NOTE: the rider-facing `ride:accepted` event and its push are now emitted
+                // by services/dispatch.emitRideAccepted() (single source of truth, carries
+                // the ride `version` and is delivered to the user room as well). Removing
+                // the old duplicate here stops the rider's phone buzzing twice.
+                void driver;
                 // Push "driver found" to the rider's devices.
                 (async () => {
                     const passenger = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null);
@@ -707,6 +750,47 @@ function setupSocketHandlers(io) {
         // dead — it goes straight back into the dispatch pool ('searching') so a
         // different driver can accept it, and the driver's cancellation-rate
         // counter is incremented for quality control.
+        // ── Driver: decline an offer (or let the 15s countdown do it) ──
+        socket.on("driver:ride:decline", async (data) => {
+            try {
+                const { rideId, reason } = data || {};
+                const dbUserId = await getDbUserId();
+                if (!dbUserId || !rideId)
+                    return;
+                const res = await (0, dispatch_1.declineOffer)(io, {
+                    rideId,
+                    driverId: dbUserId,
+                    reason: reason || "declined",
+                });
+                socket.emit("ride:decline:ack", { success: res.ok, duplicate: res.duplicate === true });
+            }
+            catch (err) {
+                console.error("Driver decline error:", err);
+                socket.emit("ride:decline:ack", { success: false, error: "Could not decline right now." });
+            }
+        });
+        // ── Driver: heartbeat ──
+        // Cheap liveness beacon the driver app sends every ~10s while online (and on
+        // every foreground resume). Without it a force-quit driver stayed "available"
+        // forever and absorbed offers that nobody could answer.
+        socket.on("driver:heartbeat", async () => {
+            try {
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                await (0, database_1.execute)(`UPDATE driver_profiles
+              SET last_heartbeat_at = NOW(),
+                  status = CASE
+                    WHEN COALESCE(status, 'offline') = 'offline' AND is_online THEN 'available'
+                    ELSE COALESCE(status, 'offline')
+                  END,
+                  updated_at = NOW()
+            WHERE user_id = $1`, [dbUserId]).catch(() => undefined);
+            }
+            catch (err) {
+                console.warn("driver heartbeat failed:", err?.message);
+            }
+        });
         socket.on("driver:ride:cancel", async (data) => {
             try {
                 const { rideId, reason } = data || {};
@@ -735,12 +819,18 @@ function setupSocketHandlers(io) {
              WHERE id = $3`, [dbUserId, reason || "Driver cancelled mid-trip", rideId]);
                     (0, rideSim_1.stopServerRideSim)(rideId);
                     io.to(`ride:${rideId}`).emit("ride:cancelled", { reason: "Your driver cancelled the trip." });
+                    await (0, dispatch_1.releaseDriver)(dbUserId);
                     notifyUser((await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null))?.firebase_uid, "Ride cancelled", "Your driver cancelled. Your payment will be refunded.", { ride_id: rideId });
                 }
                 else {
                     // Release for rematch: clear the assigned driver so accept is possible again.
                     await (0, database_1.execute)(`UPDATE rides SET status = 'searching', driver_id = NULL, updated_at = NOW()
              WHERE id = $1 AND status IN ('scheduled','accepted','driver_arrived')`, [rideId]);
+                    // Hand the ride straight back to the dispatcher: kill any offer still
+                    // pending for it and immediately offer it to the next closest driver.
+                    await (0, dispatch_1.cancelPendingOffers)(io, rideId, "driver_cancelled");
+                    void (0, dispatch_1.startDispatch)(io, rideId);
+                    await (0, dispatch_1.releaseDriver)(dbUserId);
                     io.to(`ride:${rideId}`).emit("ride:driver:cancelled", { reason: reason || "Your driver cancelled. Finding a new driver…" });
                     // Push to the rider's personal room too (survives ride-room loss on reconnect).
                     (async () => {
@@ -850,6 +940,9 @@ function setupSocketHandlers(io) {
                 }
                 catch { }
                 io.to(`ride:${rideId}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
+                // Driver is free again: straight back into the dispatch pool (status flips
+                // to 'available' while they stay online, 'offline' otherwise).
+                await (0, dispatch_1.releaseDriver)(dbUserId);
                 // Push "arrived at destination" to the rider.
                 (async () => {
                     const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
@@ -862,7 +955,38 @@ function setupSocketHandlers(io) {
                 console.error("Driver complete error:", err);
             }
         });
-        socket.on("disconnect", () => {
+        socket.on("disconnect", async () => {
+            // Heartbeat: a driver who drops off the network stops being a candidate, and
+            // any offer they were holding is released so the ride moves to the next driver
+            // instead of waiting out the 15s window. A driver mid-trip is left alone —
+            // the rider's trip must survive a dropped socket.
+            try {
+                const dbUserId = socket.dbUserId;
+                if (dbUserId) {
+                    const onTrip = await (0, database_1.queryOne)(`SELECT id FROM rides
+              WHERE driver_id = $1 AND status IN ('accepted','driver_arrived','in_progress')
+              LIMIT 1`, [dbUserId]).catch(() => null);
+                    if (!onTrip) {
+                        await (0, database_1.execute)(`UPDATE driver_profiles
+                  SET status = 'offline', is_online = FALSE, updated_at = NOW()
+                WHERE user_id = $1`, [dbUserId]).catch(() => undefined);
+                        const released = await (0, database_1.query)(`UPDATE ride_offers
+                  SET status = 'expired', decline_reason = 'driver_disconnected', updated_at = NOW()
+                WHERE status = 'pending' AND driver_id = $1
+                RETURNING ride_id, round`, [dbUserId]).catch(() => []);
+                        for (const o of released) {
+                            await (0, dispatch_1.logRideEvent)(o.ride_id, dbUserId, "offer_driver_disconnected", {});
+                            const r = await (0, database_1.queryOne)(`SELECT status FROM rides WHERE id = $1`, [o.ride_id]).catch(() => null);
+                            if (r && ["searching", "scheduled"].includes(r.status)) {
+                                await (0, dispatch_1.offerToNextDriver)(io, o.ride_id, (o.round ?? 1) + 1);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (err) {
+                console.warn("disconnect cleanup failed:", err?.message);
+            }
             console.log(`🔌 Disconnected: ${socket.id}`);
         });
     });

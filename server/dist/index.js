@@ -69,6 +69,7 @@ const documents_1 = __importDefault(require("./routes/documents"));
 const devLogs_1 = __importDefault(require("./routes/devLogs"));
 const admin_1 = __importDefault(require("./routes/admin"));
 const SchedulingService_1 = require("./services/SchedulingService");
+const offerWorker_1 = require("./services/offerWorker");
 const OsmPlaceSyncService_1 = require("./services/OsmPlaceSyncService");
 // ── Socket handlers ──
 const handlers_1 = require("./socket/handlers");
@@ -460,12 +461,109 @@ async function start() {
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+            // ── Dispatch tables ──────────────────────────────────────────────────────
+            // Targeted offers: one row per (ride, driver) with a 15s deadline. This is
+            // what makes expiry/re-offer/no_drivers possible and what lets the flow
+            // resume from the DB after a restart (see services/dispatch.ts).
+            await (0, database_2.execute)(`
+        CREATE TABLE IF NOT EXISTS ride_offers (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          ride_id UUID NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+          driver_id UUID NOT NULL REFERENCES users(id),
+          status VARCHAR(20) NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending','accepted','declined','expired')),
+          expires_at TIMESTAMPTZ NOT NULL,
+          round INT DEFAULT 1,
+          decline_reason VARCHAR(60),
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE (ride_id, driver_id)
+        )
+      `);
+            await (0, database_2.execute)(`CREATE INDEX IF NOT EXISTS idx_ride_offers_pending ON ride_offers(status, expires_at)`);
+            await (0, database_2.execute)(`CREATE INDEX IF NOT EXISTS idx_ride_offers_ride ON ride_offers(ride_id)`);
+            await (0, database_2.execute)(`CREATE INDEX IF NOT EXISTS idx_ride_offers_driver ON ride_offers(driver_id)`);
+            // Native push tokens (one row per device). The legacy push_tokens table keeps
+            // serving the Expo app; this one is FCM for the Capacitor builds.
+            await (0, database_2.execute)(`
+        CREATE TABLE IF NOT EXISTS device_tokens (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          platform VARCHAR(20),
+          push_token TEXT NOT NULL UNIQUE,
+          is_active BOOLEAN DEFAULT TRUE,
+          last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+          invalidated_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+            await (0, database_2.execute)(`CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id) WHERE is_active`);
+            // Every push we attempt, so delivery can be traced per ride.
+            await (0, database_2.execute)(`
+        CREATE TABLE IF NOT EXISTS notifications_log (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID,
+          type VARCHAR(40),
+          ride_id UUID,
+          title VARCHAR(200),
+          body TEXT,
+          sent_at TIMESTAMPTZ DEFAULT NOW(),
+          delivery_status VARCHAR(20),
+          error TEXT,
+          provider VARCHAR(20)
+        )
+      `);
+            await (0, database_2.execute)(`CREATE INDEX IF NOT EXISTS idx_notifications_log_user ON notifications_log(user_id, sent_at DESC)`);
+            // The dispatch trail: ride_requested -> candidates_found -> offer_sent ->
+            // offer_expired/offer_declined -> ride_accepted / no_drivers.
+            await (0, database_2.execute)(`
+        CREATE TABLE IF NOT EXISTS ride_events (
+          id BIGSERIAL PRIMARY KEY,
+          ride_id UUID,
+          driver_id UUID,
+          event VARCHAR(60) NOT NULL,
+          detail JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+            await (0, database_2.execute)(`CREATE INDEX IF NOT EXISTS idx_ride_events_ride ON ride_events(ride_id, id DESC)`);
+            // Dispatch state on the tables that already existed.
+            await (0, database_2.execute)(`
+        ALTER TABLE driver_profiles
+        ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'offline',
+        ADD COLUMN IF NOT EXISTS last_location_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ
+      `);
+            await (0, database_2.execute)(`
+        ALTER TABLE rides
+        ADD COLUMN IF NOT EXISTS offer_round INT DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS search_started_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS version INT DEFAULT 0
+      `);
+            // Backfill so the new status column agrees with the old is_online boolean and
+            // with trips already in flight (a driver mid-trip must not look available).
+            await (0, database_2.execute)(`
+        UPDATE driver_profiles SET status = 'on_trip'
+         WHERE EXISTS (SELECT 1 FROM rides r WHERE r.driver_id = driver_profiles.user_id
+                        AND r.status IN ('accepted','driver_arrived','in_progress'))
+      `);
+            await (0, database_2.execute)(`
+        UPDATE driver_profiles SET status = 'available'
+         WHERE is_online = TRUE AND COALESCE(status,'offline') = 'offline'
+           AND NOT EXISTS (SELECT 1 FROM rides r WHERE r.driver_id = driver_profiles.user_id
+                            AND r.status IN ('accepted','driver_arrived','in_progress'))
+      `);
             console.log("✓ Schema up to date");
         }
         catch (err) {
             console.warn("⚠ Schema migration skipped:", err);
         }
     }
+    // Driver dispatch runs on the DB, not on setTimeout (a restart must not strand
+    // a rider waiting for an offer that will never expire).
+    (0, offerWorker_1.startOfferWorker)(io);
     // 2. Init Firebase Admin
     try {
         (0, firebase_1.getFirebaseApp)();

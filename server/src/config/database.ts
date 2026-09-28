@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 
 let pool: Pool | null = null;
 
@@ -52,6 +52,44 @@ export async function testConnection(): Promise<boolean> {
   } catch (err) {
     console.error("✗ PostgreSQL connection failed:", err);
     return false;
+  }
+}
+
+/**
+ * Run several statements in ONE transaction on a SINGLE pooled connection.
+ *
+ * Why this is needed: `execute()` above takes whatever connection the pool hands
+ * it, so two statements are never guaranteed to share a transaction — a
+ * read-then-write across two `execute()` calls is a time-of-check/time-of-use
+ * race. Ride acceptance is exactly that shape (read the ride, then claim it), so
+ * two drivers could both "win" the same ride. Everything that must be all-or-
+ * nothing (accept, offer->assign) goes through here with `FOR UPDATE` row locks.
+ *
+ * Usage:
+ *   const result = await withTransaction(async (client) => {
+ *     const r = await client.query("SELECT ... FOR UPDATE", [id]);
+ *     ...
+ *     return something;
+ *   });
+ */
+export async function withTransaction<T>(
+  fn: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const out = await fn(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      /* the original error matters more than a failed rollback */
+    }
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
