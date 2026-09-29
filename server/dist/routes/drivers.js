@@ -5,6 +5,7 @@ const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const dispatch_1 = require("../services/dispatch");
 const vehicleCatalogue_1 = require("../data/vehicleCatalogue");
+const vehicleImages_1 = require("../services/vehicleImages");
 const router = (0, express_1.Router)();
 // GET /api/drivers/stats — Get driver statistics
 router.get("/stats", auth_1.requireAuth, async (req, res) => {
@@ -165,6 +166,17 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)`, [user.id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name]);
         }
         const profile = await (0, database_1.queryOne)("SELECT * FROM driver_profiles WHERE user_id = $1", [user.id]);
+        // Vehicle photo cache. This is DB-only: if we already hold an approved image
+        // for this make|model|generation|colour it is simply used. If nothing exists
+        // yet, noteDriverVehicle() WINS a one-row claim (unique cache_key), which is
+        // what guarantees a single CarsXE call even if two drivers save the same car
+        // in the same second. Fire-and-forget: saving a car must never wait on it.
+        (0, vehicleImages_1.noteDriverVehicle)({
+            make: vehicle_make ?? profile?.vehicle_make,
+            model: vehicle_model ?? profile?.vehicle_model,
+            year: vehicle_year ?? profile?.vehicle_year,
+            colour: colour ?? profile?.vehicle_color,
+        }).catch((err) => console.error("[vehicleImages] hook failed:", err?.message || err));
         res.json(profile);
     }
     catch (err) {

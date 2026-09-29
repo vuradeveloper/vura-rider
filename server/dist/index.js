@@ -68,6 +68,8 @@ const payouts_1 = __importDefault(require("./routes/payouts"));
 const documents_1 = __importDefault(require("./routes/documents"));
 const devLogs_1 = __importDefault(require("./routes/devLogs"));
 const devDispatch_1 = __importDefault(require("./routes/devDispatch"));
+const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmin"));
+const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const offerWorker_1 = require("./services/offerWorker");
@@ -108,6 +110,15 @@ app.use("/api/dev/logs", devLogs_1.default);
 // Dispatch inspector (read-only, same read key): see the whole offer trail for a
 // ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
 app.use("/api/dev/dispatch", devDispatch_1.default);
+// Vehicle photos: our own copy of every cached car image (public, <img>-able) plus
+// the password-gated review page. Mounted BEFORE the global limiter for the same
+// reason as the dev routes: an image request must never eat the app's API budget.
+app.use("/api", vehicleImagesAdmin_1.default);
+// Create the cache tables and start the queue drainer (one CarsXE call per
+// cache_key, ever, and never past the budget). Best-effort: a database hiccup
+// here must not stop the API from booting.
+(0, vehicleImages_1.ensureVehicleImageTables)().catch((err) => console.error("[vehicleImages] table ensure failed:", err?.message || err));
+(0, vehicleImages_1.startVehicleImageWorker)();
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
 // 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
