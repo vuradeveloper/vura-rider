@@ -2,6 +2,13 @@ import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { reviveWaitingRides } from "../services/dispatch";
+import {
+  catalogueForApi,
+  colourName,
+  normalisePlate,
+  resolveBodyType,
+  resolveCategory,
+} from "../data/vehicleCatalogue";
 
 const router = Router();
 
@@ -86,7 +93,20 @@ router.get("/nearby", async (req: AuthRequest, res: Response) => {
 router.patch("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
-    const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name } = req.body;
+    const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, vehicle_body_type } = req.body;
+
+    // NORMALISE the car on the way in: plate uppercase without spaces, colour stored
+    // as a palette NAME, and the body type + category DERIVED from make + model (a
+    // driver — or a client — can never choose the shape of a catalogued car).
+    const plate = license_plate !== undefined ? normalisePlate(license_plate) : undefined;
+    const colour = vehicle_color !== undefined ? colourName(vehicle_color) : undefined;
+    const derivedBody =
+      vehicle_make !== undefined || vehicle_model !== undefined || vehicle_body_type !== undefined
+        ? resolveBodyType(vehicle_make, vehicle_model, vehicle_body_type)
+        : undefined;
+    const derivedCategory = derivedBody
+      ? resolveCategory(vehicle_make, vehicle_model, derivedBody)
+      : undefined;
 
     const user = await queryOne<{ id: string }>(
       "SELECT id FROM users WHERE firebase_uid = $1",
@@ -110,8 +130,10 @@ router.patch("/profile", requireAuth, async (req: AuthRequest, res: Response) =>
       if (vehicle_make !== undefined) { updates.push(`vehicle_make = $${idx}`); params.push(vehicle_make); idx++; }
       if (vehicle_model !== undefined) { updates.push(`vehicle_model = $${idx}`); params.push(vehicle_model); idx++; }
       if (vehicle_year !== undefined) { updates.push(`vehicle_year = $${idx}`); params.push(vehicle_year); idx++; }
-      if (vehicle_color !== undefined) { updates.push(`vehicle_color = $${idx}`); params.push(vehicle_color); idx++; }
-      if (license_plate !== undefined) { updates.push(`license_plate = $${idx}`); params.push(license_plate); idx++; }
+      if (vehicle_color !== undefined) { updates.push(`vehicle_color = $${idx}`); params.push(colour); idx++; }
+      if (license_plate !== undefined) { updates.push(`license_plate = $${idx}`); params.push(plate); idx++; }
+    if (derivedBody !== undefined) { updates.push(`body_type = $${idx}`); params.push(derivedBody); idx++; }
+    if (derivedCategory !== undefined) { updates.push(`vehicle_category = $${idx}`); params.push(derivedCategory); idx++; }
       if (vehicle_type !== undefined) { updates.push(`vehicle_type = $${idx}`); params.push(vehicle_type); idx++; }
       if (vehicle_vin !== undefined) { updates.push(`vehicle_vin = $${idx}`); params.push(vehicle_vin); idx++; }
       if (odometer_km !== undefined) { updates.push(`odometer_km = $${idx}`); params.push(odometer_km); idx++; }
@@ -240,6 +262,13 @@ router.post("/offline", requireAuth, async (req: AuthRequest, res: Response) => 
   ).catch(() => undefined);
   console.log(`[driver] online_intent=false status=offline driver=${dbUser.id}`);
   res.json({ ok: true, online_intent: false, status: "offline" });
+});
+
+// GET /api/drivers/vehicle-catalogue — dropdown data for the driver app
+// (makes → models → body type, the 12 colours with hex, the 5 body types) and the
+// fallbacks the UI must apply. Public on purpose: reference data, not personal data.
+router.get("/vehicle-catalogue", (_req: AuthRequest, res: Response) => {
+  res.json(catalogueForApi());
 });
 
 export default router;

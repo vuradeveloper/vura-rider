@@ -545,6 +545,22 @@ async function start() {
             await (0, database_2.execute)(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_profiles_user ON driver_profiles(user_id)
       `).catch((err) => console.warn("⚠ driver_profiles unique index skipped:", err?.message));
+            // CATALOGUE-DERIVED vehicle shape (never typed by the driver) and the snapshot
+            // of the car stamped onto the ride at accept time, so trip history keeps
+            // showing the car that actually did that trip after the driver changes cars.
+            await (0, database_2.execute)(`
+        ALTER TABLE driver_profiles
+        ADD COLUMN IF NOT EXISTS body_type VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS vehicle_category VARCHAR(20)
+      `).catch((err) => console.warn("⚠ driver_profiles body_type migration skipped:", err?.message));
+            await (0, database_2.execute)(`
+        ALTER TABLE rides
+        ADD COLUMN IF NOT EXISTS vehicle_make VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS vehicle_model VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS vehicle_color VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS license_plate VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS vehicle_body_type VARCHAR(20)
+      `).catch((err) => console.warn("⚠ rides vehicle snapshot migration skipped:", err?.message));
             await (0, database_2.execute)(`
         ALTER TABLE rides
         ADD COLUMN IF NOT EXISTS offer_round INT DEFAULT 0,

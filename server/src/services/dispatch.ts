@@ -426,11 +426,30 @@ export async function emitRideAccepted(
 ): Promise<void> {
   const driver = await queryOne<any>(
     `SELECT u.full_name, u.phone, u.profile_photo_url, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color,
+            dp.vehicle_year, dp.body_type, dp.vehicle_category,
             dp.license_plate, COALESCE(dp.rating_avg, 0)::float AS rating_avg
        FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id
       WHERE u.id = $1`,
     [driverId]
   ).catch(() => null);
+
+  // STAMP the car onto the ride at accept time: trip history must keep showing the
+  // car that did THAT trip even after the driver changes cars. Best-effort — a
+  // failure here must never block an accept that already succeeded.
+  await execute(
+    `UPDATE rides
+        SET vehicle_make = $2, vehicle_model = $3, vehicle_color = $4,
+            license_plate = $5, vehicle_body_type = $6
+      WHERE id = $1`,
+    [
+      rideId,
+      driver?.vehicle_make ?? null,
+      driver?.vehicle_model ?? null,
+      driver?.vehicle_color ?? null,
+      driver?.license_plate ?? null,
+      driver?.body_type ?? null,
+    ]
+  ).catch(() => undefined);
   const ride = await loadRide(rideId);
   const stops = Array.isArray(ride?.waypoints) ? ride?.waypoints : [];
 
@@ -442,6 +461,9 @@ export async function emitRideAccepted(
     vehicle_color: driver?.vehicle_color,
     vehicle_make: driver?.vehicle_make,
     vehicle_model: driver?.vehicle_model,
+    vehicle_year: driver?.vehicle_year ?? null,
+    vehicle_body_type: driver?.body_type || null,
+    vehicle_category: driver?.vehicle_category || null,
     driver_license_plate: driver?.license_plate,
     fare: ride?.estimated_fare != null ? Number(ride.estimated_fare) : null,
     waypoints: stops,

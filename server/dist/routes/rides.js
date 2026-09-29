@@ -38,6 +38,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
               d.full_name AS driver_name, d.phone AS driver_phone,
               d.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              dp.vehicle_year, dp.body_type, dp.vehicle_category,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng,
               dp.current_heading AS driver_heading,
               COALESCE(r.version, 0) AS version
