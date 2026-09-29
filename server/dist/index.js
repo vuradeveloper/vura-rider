@@ -539,6 +539,12 @@ async function start() {
         ADD COLUMN IF NOT EXISTS last_location_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ
       `);
+            // One profile row per driver: the online/offline endpoint upserts with
+            // ON CONFLICT (user_id), which needs a unique index — and duplicates would
+            // break dispatch (two rows for one driver = two statuses).
+            await (0, database_2.execute)(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_profiles_user ON driver_profiles(user_id)
+      `).catch((err) => console.warn("⚠ driver_profiles unique index skipped:", err?.message));
             await (0, database_2.execute)(`
         ALTER TABLE rides
         ADD COLUMN IF NOT EXISTS offer_round INT DEFAULT 0,

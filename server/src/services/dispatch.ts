@@ -425,7 +425,7 @@ export async function emitRideAccepted(
   version: number
 ): Promise<void> {
   const driver = await queryOne<any>(
-    `SELECT u.full_name, u.phone, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color,
+    `SELECT u.full_name, u.phone, u.profile_photo_url, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color,
             dp.license_plate, COALESCE(dp.rating_avg, 0)::float AS rating_avg
        FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id
       WHERE u.id = $1`,
@@ -438,6 +438,7 @@ export async function emitRideAccepted(
     id: rideId,
     version,
     driver_name: driver?.full_name || "Driver",
+    driver_photo_url: driver?.profile_photo_url || null,
     vehicle_color: driver?.vehicle_color,
     vehicle_make: driver?.vehicle_make,
     vehicle_model: driver?.vehicle_model,
@@ -448,6 +449,7 @@ export async function emitRideAccepted(
     driver: {
       name: driver?.full_name || "Driver",
       phone: driver?.phone || null,
+      photo_url: driver?.profile_photo_url || null,
       rating: driver?.rating_avg ?? 0,
       plate: driver?.license_plate || null,
       vehicle: [driver?.vehicle_color, driver?.vehicle_make, driver?.vehicle_model]
@@ -549,6 +551,34 @@ export async function expireOffers(io: SocketIOServer): Promise<number> {
  * offers nobody could answer — one of the reasons riders waited forever.
  */
 export async function sweepStaleDrivers(io: SocketIOServer): Promise<number> {
+  // SAFETY TIMEOUT: 15 minutes of total silence means the driver really is gone
+  // (phone off, app force-stopped, uninstalled), so the INTENT is turned off — and
+  // we tell them why, otherwise they sit waiting for offers that will never come.
+  const gone = await query<{ user_id: string }>(
+    `UPDATE driver_profiles
+        SET is_online = FALSE, status = 'offline', updated_at = NOW()
+      WHERE is_online = TRUE
+        AND GREATEST(COALESCE(last_location_at, updated_at), COALESCE(last_heartbeat_at, updated_at))
+            < NOW() - INTERVAL '15 minutes'
+        AND NOT EXISTS (
+              SELECT 1 FROM rides r
+               WHERE r.driver_id = driver_profiles.user_id
+                 AND r.status IN ('accepted', 'driver_arrived', 'in_progress'))
+      RETURNING user_id`
+  ).catch(() => [] as { user_id: string }[]);
+  if (gone.length > 0) {
+    console.log(`[dispatch] safety timeout: ${gone.length} driver(s) offline after 15 min of silence`);
+    await logRideEvent(null, null, "drivers_offline_timeout", { count: gone.length });
+    void sendPushToUsers(
+      gone.map((g) => g.user_id),
+      {
+        type: "offline_timeout",
+        title: "You were taken offline",
+        body: "We lost contact with your phone, so we stopped sending ride requests. Tap to go back online.",
+      }
+    ).catch(() => 0);
+  }
+
   const stale = await query<{ user_id: string }>(
     `UPDATE driver_profiles
         SET status = 'offline', updated_at = NOW()

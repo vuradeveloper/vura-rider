@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
+import { reviveWaitingRides } from "../services/dispatch";
 
 const router = Router();
 
@@ -177,6 +178,68 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response) => {
     console.error("Driver me error:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/drivers/online | /offline — REST twins of the `driver:online` socket
+// event. The toggle calls these so the driver's INTENT (is_online) is recorded on
+// the server and the app can show the SERVER's answer instead of its own opinion.
+// They are idempotent, and coming online immediately retries any waiting ride.
+router.post("/online", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const dbUser = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!dbUser) {
+      res.status(403).json({ error: "Driver account not synced yet" });
+      return;
+    }
+    const online = req.body?.online !== false; // default: go online
+    const onTrip = await queryOne<{ id: string }>(
+      `SELECT id FROM rides WHERE driver_id = $1
+        AND status IN ('accepted','driver_arrived','in_progress') LIMIT 1`,
+      [dbUser.id]
+    ).catch(() => null);
+    const status = online ? (onTrip ? "on_trip" : "available") : "offline";
+
+    const row = await queryOne<any>(
+      `INSERT INTO driver_profiles (user_id, is_online, status, last_heartbeat_at, verification_status)
+       VALUES ($1, $2, $3, NOW(), 'approved')
+       ON CONFLICT (user_id) DO UPDATE
+         SET is_online = EXCLUDED.is_online,
+             status = EXCLUDED.status,
+             last_heartbeat_at = NOW(),
+             updated_at = NOW()
+       RETURNING user_id, is_online, status, last_heartbeat_at`,
+      [dbUser.id, online, status]
+    ).catch(() => null);
+
+    console.log(`[driver] online_intent=${online} status=${status} driver=${dbUser.id}`);
+    if (online) void reviveWaitingRides((global as any).__vuraIo).catch(() => 0);
+    res.json({ ok: true, online_intent: !!row?.is_online, status: row?.status || status });
+  } catch (err: any) {
+    console.error("Driver online/offline error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/drivers/offline — explicit offline (kept as its own path for clarity).
+router.post("/offline", requireAuth, async (req: AuthRequest, res: Response) => {
+  const dbUser = await queryOne<{ id: string }>(
+    "SELECT id FROM users WHERE firebase_uid = $1",
+    [req.userId!]
+  ).catch(() => null);
+  if (!dbUser) {
+    res.status(403).json({ error: "Driver account not synced yet" });
+    return;
+  }
+  await execute(
+    `UPDATE driver_profiles SET is_online = FALSE, status = 'offline', updated_at = NOW()
+      WHERE user_id = $1`,
+    [dbUser.id]
+  ).catch(() => undefined);
+  console.log(`[driver] online_intent=false status=offline driver=${dbUser.id}`);
+  res.json({ ok: true, online_intent: false, status: "offline" });
 });
 
 export default router;

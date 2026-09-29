@@ -45,6 +45,7 @@ router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Respon
     const ride = await queryOne<any>(
       `SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
+              d.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng,
               dp.current_heading AS driver_heading,
