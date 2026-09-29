@@ -11,6 +11,7 @@ import {
   logRideEvent,
   offerToNextDriver,
   releaseDriver,
+  reviveWaitingRides,
   startDispatch,
 } from "../services/dispatch";
 
@@ -783,6 +784,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
         if (online === true) {
           socket.join("drivers");
           await broadcastRiderQueue();
+          // A driver just became available: give them any ride that is still waiting
+          // (including one parked as 'no_drivers'), instead of making the rider wait
+          // for their next booking attempt.
+          void reviveWaitingRides(io).catch(() => 0);
         } else {
           socket.leave("drivers");
         }
@@ -1132,9 +1137,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
             [dbUserId]
           ).catch(() => null);
           if (!onTrip) {
+            // NOTE: is_online is the driver's INTENT (the app's toggle) and stays as
+            // it is — only the dispatch status drops. Flipping is_online here stranded
+            // drivers: the shipped APK has no heartbeat and never re-announces, so the
+            // server said "offline" forever while the app said "Online", and that
+            // driver could never be offered a ride again until they toggled manually.
             await execute(
               `UPDATE driver_profiles
-                  SET status = 'offline', is_online = FALSE, updated_at = NOW()
+                  SET status = 'offline', updated_at = NOW()
                 WHERE user_id = $1`,
               [dbUserId]
             ).catch(() => undefined);

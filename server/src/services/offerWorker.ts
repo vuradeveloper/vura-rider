@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Server as SocketIOServer } from "socket.io";
-import { expireOffers, sweepStaleDrivers } from "./dispatch";
+import { expireOffers, reviveWaitingRides, sweepStaleDrivers } from "./dispatch";
 
 const TICK_MS = 2000;
 const SWEEP_EVERY_TICKS = 15;
@@ -33,6 +33,9 @@ export function startOfferWorker(io: SocketIOServer): void {
         ticks += 1;
         const expired = await expireOffers(io);
         if (expired > 0) console.log(`[offerWorker] expired ${expired} offer(s) and moved them on`);
+        // Riders must never be left waiting just because no driver was available at
+        // the exact second they booked: retry waiting/parked rides every tick.
+        await reviveWaitingRides(io).catch(() => 0);
         if (ticks % SWEEP_EVERY_TICKS === 0) {
           const demoted = await sweepStaleDrivers(io);
           if (demoted > 0) console.log(`[offerWorker] marked ${demoted} silent driver(s) offline`);

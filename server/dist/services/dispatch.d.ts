@@ -27,7 +27,7 @@ export interface Candidate {
  * Closest drivers who are: available, recently heard from, not already offered
  * this ride, not on another trip, and not the rider themselves.
  */
-export declare function findCandidates(rideId: string, pickupLat: number, pickupLng: number, limit?: number): Promise<Candidate[]>;
+export declare function findCandidates(rideId: string, pickupLat: number, pickupLng: number, limit?: number, ignorePreviousOffers?: boolean): Promise<Candidate[]>;
 export interface DispatchRide {
     id: string;
     status: string;
@@ -55,7 +55,9 @@ export declare function loadRide(rideId: string): Promise<DispatchRide | null>;
  * push always goes out too — that is the only thing that works when the app is
  * closed, which is what made rides "never arrive".
  */
-export declare function offerToNextDriver(io: SocketIOServer, rideId: string, round?: number): Promise<OfferResult>;
+export declare function offerToNextDriver(io: SocketIOServer, rideId: string, round?: number, opts?: {
+    revive?: boolean;
+}): Promise<OfferResult>;
 /** No driver left (or too many rounds): park the ride and tell the rider. */
 export declare function markNoDrivers(io: SocketIOServer, rideId: string): Promise<void>;
 /** Entry point when a rider books (socket handler calls this after INSERT). */
@@ -112,6 +114,21 @@ export declare function expireOffers(io: SocketIOServer): Promise<number>;
 export declare function sweepStaleDrivers(io: SocketIOServer): Promise<number>;
 /** Rider cancelled (or the ride died): kill pending offers + tell those drivers. */
 export declare function cancelPendingOffers(io: SocketIOServer, rideId: string, reason?: string): Promise<number>;
+/**
+ * Retry rides that are still waiting for a driver.
+ *
+ * WHY: a ride used to be dispatched exactly once. If nobody was eligible in that
+ * instant the ride was parked as 'no_drivers' and NOTHING ever offered it again —
+ * the rider waited forever and the next driver to come online never saw it (this
+ * is what a live field report looked like: `candidates_found {"count":0}` then a
+ * parked ride). The worker calls this every few seconds, so a driver who comes
+ * online moments later gets the ride, and a parked ride is un-parked back to
+ * 'searching' when it is offered again.
+ *
+ * Guards: only rides younger than 15 minutes, with no live offer, and not retried
+ * in the last ~6 seconds (prevents churn/loops), newest first.
+ */
+export declare function reviveWaitingRides(io: SocketIOServer, limit?: number): Promise<number>;
 /** Driver is free again (trip finished / driver cancelled). */
 export declare function releaseDriver(driverId: string): Promise<void>;
 export {};

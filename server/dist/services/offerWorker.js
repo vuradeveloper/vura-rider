@@ -34,6 +34,9 @@ function startOfferWorker(io) {
                 const expired = await (0, dispatch_1.expireOffers)(io);
                 if (expired > 0)
                     console.log(`[offerWorker] expired ${expired} offer(s) and moved them on`);
+                // Riders must never be left waiting just because no driver was available at
+                // the exact second they booked: retry waiting/parked rides every tick.
+                await (0, dispatch_1.reviveWaitingRides)(io).catch(() => 0);
                 if (ticks % SWEEP_EVERY_TICKS === 0) {
                     const demoted = await (0, dispatch_1.sweepStaleDrivers)(io);
                     if (demoted > 0)

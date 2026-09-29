@@ -35,6 +35,7 @@ exports.declineOffer = declineOffer;
 exports.expireOffers = expireOffers;
 exports.sweepStaleDrivers = sweepStaleDrivers;
 exports.cancelPendingOffers = cancelPendingOffers;
+exports.reviveWaitingRides = reviveWaitingRides;
 exports.releaseDriver = releaseDriver;
 const database_1 = require("../config/database");
 const notify_1 = require("./notify");
@@ -67,7 +68,7 @@ function emitRide(io, rideId, event, payload, firebaseUid) {
  * Closest drivers who are: available, recently heard from, not already offered
  * this ride, not on another trip, and not the rider themselves.
  */
-async function findCandidates(rideId, pickupLat, pickupLng, limit = 3) {
+async function findCandidates(rideId, pickupLat, pickupLng, limit = 3, ignorePreviousOffers = false) {
     return (0, database_1.query)(`SELECT u.id, u.firebase_uid, dp.current_lat, dp.current_lng,
             (6371 * acos(LEAST(1, GREATEST(-1,
               cos(radians($2)) * cos(radians(dp.current_lat)) *
@@ -83,13 +84,13 @@ async function findCandidates(rideId, pickupLat, pickupLng, limit = 3) {
                      COALESCE(dp.last_heartbeat_at, dp.updated_at))
             > NOW() - make_interval(secs => $4::double precision)
         AND u.id <> COALESCE((SELECT passenger_id FROM rides WHERE id = $1), '00000000-0000-0000-0000-000000000000'::uuid)
-        AND NOT EXISTS (SELECT 1 FROM ride_offers ro WHERE ro.ride_id = $1 AND ro.driver_id = u.id)
+        AND ($6::boolean OR NOT EXISTS (SELECT 1 FROM ride_offers ro WHERE ro.ride_id = $1 AND ro.driver_id = u.id))
         AND NOT EXISTS (
               SELECT 1 FROM rides r
                WHERE r.driver_id = u.id
                  AND r.status IN ('accepted', 'driver_arrived', 'in_progress'))
       ORDER BY distance_km ASC
-      LIMIT $5`, [rideId, pickupLat, pickupLng, exports.LOCATION_FRESH_SECONDS, limit]).catch((err) => {
+      LIMIT $5`, [rideId, pickupLat, pickupLng, exports.LOCATION_FRESH_SECONDS, limit, ignorePreviousOffers]).catch((err) => {
         console.warn("[dispatch] candidate query failed:", err?.message);
         return [];
     });
@@ -113,12 +114,23 @@ async function loadRide(rideId) {
  * push always goes out too — that is the only thing that works when the app is
  * closed, which is what made rides "never arrive".
  */
-async function offerToNextDriver(io, rideId, round) {
+async function offerToNextDriver(io, rideId, round, opts) {
     const ride = await loadRide(rideId);
     if (!ride)
         return { offered: false, reason: "ride_not_found" };
-    if (!["searching", "scheduled"].includes(ride.status)) {
+    const reviving = opts?.revive === true;
+    // A parked ('no_drivers') ride may be retried when a driver comes back online —
+    // that is the whole point of revival: a rider must not wait forever just because
+    // nobody was available at the moment they booked.
+    if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
         return { offered: false, reason: `ride_is_${ride.status}` };
+    }
+    if (ride.status === "no_drivers" && reviving) {
+        await (0, database_1.execute)(`UPDATE rides SET status = 'searching', no_drivers_at = NULL, updated_at = NOW()
+        WHERE id = $1 AND status = 'no_drivers'`, [rideId]).catch(() => undefined);
+    }
+    else if (ride.status === "no_drivers") {
+        return { offered: false, reason: "ride_parked_no_drivers" };
     }
     if (ride.pickup_lat == null || ride.pickup_lng == null) {
         return { offered: false, reason: "ride_has_no_pickup_coords" };
@@ -129,7 +141,7 @@ async function offerToNextDriver(io, rideId, round) {
         await markNoDrivers(io, rideId);
         return { offered: false, reason: "too_many_rounds" };
     }
-    const candidates = await findCandidates(rideId, ride.pickup_lat, ride.pickup_lng, 1);
+    const candidates = await findCandidates(rideId, ride.pickup_lat, ride.pickup_lng, 1, reviving);
     await logRideEvent(rideId, null, "candidates_found", {
         round: nextRound,
         count: candidates.length,
@@ -379,7 +391,7 @@ async function expireOffers(io) {
  */
 async function sweepStaleDrivers(io) {
     const stale = await (0, database_1.query)(`UPDATE driver_profiles
-        SET status = 'offline', is_online = FALSE, updated_at = NOW()
+        SET status = 'offline', updated_at = NOW()
       WHERE COALESCE(status, 'offline') = 'available'
         AND GREATEST(COALESCE(last_location_at, updated_at), COALESCE(last_heartbeat_at, updated_at))
             < NOW() - make_interval(secs => $1::double precision)
@@ -426,6 +438,46 @@ async function cancelPendingOffers(io, rideId, reason = "cancelled") {
     }
     await logRideEvent(rideId, null, "offers_cancelled", { reason, drivers: driverIds.length });
     return rows.length;
+}
+/**
+ * Retry rides that are still waiting for a driver.
+ *
+ * WHY: a ride used to be dispatched exactly once. If nobody was eligible in that
+ * instant the ride was parked as 'no_drivers' and NOTHING ever offered it again —
+ * the rider waited forever and the next driver to come online never saw it (this
+ * is what a live field report looked like: `candidates_found {"count":0}` then a
+ * parked ride). The worker calls this every few seconds, so a driver who comes
+ * online moments later gets the ride, and a parked ride is un-parked back to
+ * 'searching' when it is offered again.
+ *
+ * Guards: only rides younger than 15 minutes, with no live offer, and not retried
+ * in the last ~6 seconds (prevents churn/loops), newest first.
+ */
+async function reviveWaitingRides(io, limit = 5) {
+    const waiting = await (0, database_1.query)(`SELECT r.id, r.status FROM rides r
+      WHERE r.status IN ('searching', 'no_drivers')
+        AND r.created_at > NOW() - INTERVAL '15 minutes'
+        AND NOT EXISTS (
+              SELECT 1 FROM ride_offers ro
+               WHERE ro.ride_id = r.id AND ro.status = 'pending' AND ro.expires_at > NOW())
+        AND COALESCE(r.no_drivers_at, r.created_at) < NOW() - INTERVAL '6 seconds'
+      ORDER BY r.created_at DESC
+      LIMIT $1`, [limit]).catch(() => []);
+    let revived = 0;
+    for (const ride of waiting) {
+        // Round restarts at 1: every driver gets a fresh chance, because the reason the
+        // ride is waiting again is usually that somebody's phone came back online.
+        const res = await offerToNextDriver(io, ride.id, 1, { revive: true });
+        if (res.offered) {
+            revived += 1;
+            await logRideEvent(ride.id, res.driverId ?? null, "ride_revived", {
+                was: ride.status,
+            });
+        }
+    }
+    if (revived > 0)
+        console.log(`[offerWorker] revived ${revived} waiting ride(s)`);
+    return revived;
 }
 /** Driver is free again (trip finished / driver cancelled). */
 async function releaseDriver(driverId) {
