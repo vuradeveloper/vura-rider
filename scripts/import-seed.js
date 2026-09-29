@@ -180,7 +180,7 @@ ${images.map((img, i) => `<div class="card">
 
   const password = process.env.CARSXE_ADMIN_PASSWORD
   if (!password) fail('set CARSXE_ADMIN_PASSWORD (the same value as on the server) to import')
-  const base = String(arg('api', process.env.VURA_API || 'https://api.vura.co.za')).replace(/\/+$/, '')
+  const base = String(arg('api', process.env.VURA_API || 'https://api.ridevura.com')).replace(/\/+$/, '')
 
   console.log(`\nimporting #${index + 1}: ${picked.link}`)
   const webp = await processImage(await download(picked.link, arg('backup')))
