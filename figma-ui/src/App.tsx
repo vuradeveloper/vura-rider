@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import DriverVehicleCard from './components/DriverVehicleCard'
 import CountrySelect from './components/CountrySelect'
 import type { LatLng } from './components/LeafletMap'
 import LeafletMap from './components/LeafletMap'
@@ -1419,6 +1420,30 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
             <button onClick={sos} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#FEF0EF]">{IC.shield()}</button>
           </div>
         </div>
+
+        {/* The car, the plate and who is driving — one shared card on every stage
+            (Uber-style), rebuilt from the ride row so a relaunch mid-trip redraws it. */}
+        <DriverVehicleCard
+          driver={{ name: driverName, photo_url: ride?.driver_photo_url, rating }}
+          vehicle={{
+            make: ride?.vehicle_make,
+            model: ride?.vehicle_model,
+            year: ride?.vehicle_year,
+            colour: ride?.vehicle_color,
+            plate: plate,
+            body_type: ride?.vehicle_body_type || ride?.body_type,
+          }}
+          stage={
+            done ? 'completed'
+            : started ? 'in_progress'
+            : status === 'driver_arrived' ? 'arrived'
+            : 'accepted'
+          }
+          compact={started && !done}
+          onCall={() => { if (ride?.driver_phone) window.location.href = `tel:${ride.driver_phone}` }}
+          onMessage={() => setToast('Chat opens from the driver card')}
+          onMore={() => setToast('Safety tools: Share trip, SOS, RideCheck')}
+        />
 
         <div className="flex items-center gap-2 bg-[#F7F7F7] rounded-xl px-3.5 py-2.5 mb-4">
           {IC.car('#9E9E9E')}
