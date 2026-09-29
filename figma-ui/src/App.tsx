@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import VehicleImage from './components/vehicle/VehicleImage'
+import { colourNameOf } from './components/vehicle/palette'
+
 import DriverVehicleCard from './components/DriverVehicleCard'
 import CountrySelect from './components/CountrySelect'
 import type { LatLng } from './components/LeafletMap'
@@ -1583,6 +1586,27 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                     <p className="text-[15px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{formatRand(fare)}</p>
                   </div>
                 </div>
+                {/* The car that did THIS trip — painted from the snapshot stamped on
+                    the ride at accept time, so it stays correct even after the driver
+                    changes cars later. */}
+                <div className="flex items-center gap-3 pt-3">
+                  <VehicleImage
+                    bodyType={t.vehicle_body_type || t.body_type}
+                    colour={t.vehicle_color}
+                    size={78}
+                    missing={!t.vehicle_make && !t.vehicle_model}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-[14px] font-bold text-[#1A1A1A] tracking-[0.18em]"
+                      style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                      {t.license_plate || '—'}
+                    </p>
+                    <p className="text-[11px] text-[#6B6B6B] font-semibold truncate capitalize">
+                      {[colourNameOf(t.vehicle_color), t.vehicle_make, t.vehicle_model].filter(Boolean).join(' ') || 'Vehicle details pending'}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between pt-3 border-t border-[#F5F5F5]">
                   <p className="text-[12px] text-[#ADADAD]">{fmtTripTime(t.date || t.completed_at || t.created_at)}</p>
                   <div className="flex items-center gap-1">
