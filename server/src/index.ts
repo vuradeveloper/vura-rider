@@ -31,6 +31,8 @@ import payoutsRouter from "./routes/payouts";
 import documentsRouter from "./routes/documents";
 import devLogsRouter from "./routes/devLogs";
 import devDispatchRouter from "./routes/devDispatch";
+import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
+import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOfferWorker } from "./services/offerWorker";
@@ -82,6 +84,19 @@ app.use("/api/dev/logs", devLogsRouter);
 // Dispatch inspector (read-only, same read key): see the whole offer trail for a
 // ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
 app.use("/api/dev/dispatch", devDispatchRouter);
+
+// Vehicle photos: our own copy of every cached car image (public, <img>-able) plus
+// the password-gated review page. Mounted BEFORE the global limiter for the same
+// reason as the dev routes: an image request must never eat the app's API budget.
+app.use("/api", vehicleImagesRouter);
+
+// Create the cache tables and start the queue drainer (one CarsXE call per
+// cache_key, ever, and never past the budget). Best-effort: a database hiccup
+// here must not stop the API from booting.
+ensureVehicleImageTables().catch((err) =>
+  console.error("[vehicleImages] table ensure failed:", err?.message || err)
+);
+startVehicleImageWorker();
 
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
