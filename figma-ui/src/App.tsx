@@ -16,7 +16,7 @@ import VehicleLinkScreen from './components/VehicleLinkScreen'
 // moment a screen rendered with two or more points — one of the white screens.
 import { getRoute } from './lib/backend'
 import WalletScreen from './components/WalletScreen'
-import { notifyRide } from './lib/notify'
+import { initPushNotifications, notifyRide } from './lib/notify'
 import type { Earnings as EarningsSummary } from './lib/backend'
 import {
   acceptRide,
@@ -3079,6 +3079,13 @@ export default function App() {
         document.removeEventListener('visibilitychange', onVisible)
         window.removeEventListener('vura:reconnect', onVisible)
       }
+    }, [authed])
+
+    // Push: register this phone so ride events reach it even while the app is
+    // backgrounded or closed (a live socket cannot be relied on there).
+    useEffect(() => {
+      if (!authed) return
+      void initPushNotifications()
     }, [authed])
 
   const [rNav, setRNav] = useState<RiderScreen>('home')
