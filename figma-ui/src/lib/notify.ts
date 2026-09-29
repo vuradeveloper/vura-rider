@@ -1,13 +1,13 @@
-// ─────────────────────────────────────────────────────────────────────────────
+﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Phone notifications for ride milestones.
 //
 // IMPLEMENTED BELOW with FCM push. The "stub" note just below is kept only as the
 // history of why a local-notification implementation was abandoned.
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Phone notifications (FCM push): asks for permission, creates the Android
 // channels and registers this phone with the server (POST
 // /api/notifications/device) so ride events arrive even while the app is
-// backgrounded or CLOSED — where no socket and no JavaScript exist.
+// backgrounded or CLOSED â€” where no socket and no JavaScript exist.
 // Requires android/app/google-services.json (in place) + @capacitor/push-notifications.
 import { Capacitor } from '@capacitor/core'
 import { apiFetch } from './backend'
@@ -28,7 +28,7 @@ export function pushAvailable(): boolean {
 /**
  * Asks for the notification permission, creates the channels and registers this
  * phone with the server so ride events arrive while the app is backgrounded or
- * closed. Idempotent — safe on every launch.
+ * closed. Idempotent â€” safe on every launch.
  */
 export async function initPushNotifications(): Promise<boolean> {
   if (!pushAvailable() || started) return started
@@ -43,7 +43,7 @@ export async function initPushNotifications(): Promise<boolean> {
         id: c.id,
         name: c.name,
         description: c.description,
-        importance: c.importance,
+        importance: c.importance as any,
         visibility: 1,
         sound: 'default',
         vibration: true,
@@ -52,7 +52,7 @@ export async function initPushNotifications(): Promise<boolean> {
 
     const perm = await PushNotifications.requestPermissions()
     if (perm.receive !== 'granted') {
-      console.warn('[push] notification permission not granted — in-app alerts only')
+      console.warn('[push] notification permission not granted â€” in-app alerts only')
       return false
     }
 
@@ -99,7 +99,7 @@ export async function initPushNotifications(): Promise<boolean> {
 // STATUS: stubbed on purpose. The intended implementation uses
 // @capacitor/local-notifications (a SYSTEM notification needs no FCM), but that
 // plugin's Android module requires a JDK 21 toolchain and this build machine only
-// has JDK 17 — including it broke the whole APK build:
+// has JDK 17 â€” including it broke the whole APK build:
 //
 //   Could not create task ':capacitor-local-notifications:compileDebugJavaWithJavac'
 //     > Cannot find a Java installation matching: {languageVersion=21}
@@ -110,8 +110,8 @@ export async function initPushNotifications(): Promise<boolean> {
 //
 // To switch the phone notification on: either install a JDK 21 toolchain and
 // re-add the plugin, or use FCM push (needs android/app/google-services.json)
-// which also covers a CLOSED app — then replace the body of notifyRide() below.
-// ─────────────────────────────────────────────────────────────────────────────
+// which also covers a CLOSED app â€” then replace the body of notifyRide() below.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function notifyRide(title: string, body: string): Promise<void> {
   if (typeof window === 'undefined') return

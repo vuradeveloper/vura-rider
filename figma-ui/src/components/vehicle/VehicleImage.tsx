@@ -1,5 +1,5 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// <VehicleImage /> — the driver's car, drawn inline as SVG so it can be recoloured
+﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// <VehicleImage /> â€” the driver's car, drawn inline as SVG so it can be recoloured
 // at runtime. Everything is bundled (no network, no API key, no <img>, so no CSP or
 // CORS problem in the Capacitor WebView and it works offline).
 //
@@ -11,12 +11,13 @@
 // The five silhouettes come from ONE parametric drawing, so the layering can never
 // drift between body types: hatchback, sedan, suv, bakkie, minibus.
 //
-// Licence: drawn from scratch here — no third-party asset, nothing to attribute.
-// ─────────────────────────────────────────────────────────────────────────────
+// Licence: drawn from scratch here â€” no third-party asset, nothing to attribute.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import type { CSSProperties } from 'react'
 import {
   type BodyType,
   bodyOutline,
+  colourNameOf,
   hexFromColourName,
   highlightOpacity,
   normaliseBody,
@@ -83,13 +84,13 @@ function glassPath(g: Geo, body: BodyType): string {
   return `M ${left} ${top} L ${right} ${top} L ${right - 16} ${bottom} L ${left + 10} ${bottom} Z`
 }
 
-/** Transparent dark band low on the body — works on any body colour. */
+/** Transparent dark band low on the body â€” works on any body colour. */
 function shadePath(g: Geo): string {
   const y = g.sillY - 26
   return `M ${g.frontX + 10} ${y} L ${g.rearX - 12} ${y} L ${g.rearX - 14} ${g.sillY} L ${g.frontX + 16} ${g.sillY} Z`
 }
 
-/** Transparent white on the roof and bonnet — the "3D" read. */
+/** Transparent white on the roof and bonnet â€” the "3D" read. */
 function highlightPath(g: Geo): string {
   return [
     `M ${g.roofX1 + 24} ${g.roofY + 3} L ${g.roofX2 - 4} ${g.roofY + 3} L ${g.roofX2 - 8} ${g.roofY + 11} L ${g.roofX1 + 30} ${g.roofY + 11} Z`,
@@ -125,10 +126,10 @@ export default function VehicleImage({ bodyType, colour, size = 200, missing, cl
     <div style={wrap} className={className}>
       <svg viewBox={`0 0 ${W} ${H}`} style={style} role="img"
         aria-label={`${body} car`} preserveAspectRatio="xMidYMid meet">
-        {/* ground shadow — fixed */}
+        {/* ground shadow â€” fixed */}
         <ellipse cx={200} cy={g.sillY + 24} rx={152} ry={12} fill="rgba(0,0,0,0.18)" />
 
-        {/* tyres + rims — fixed */}
+        {/* tyres + rims â€” fixed */}
         {[frontWheel, rearWheel].map((cx) => (
           <g key={cx}>
             <circle cx={cx} cy={g.sillY + 8} r={g.wheelR} fill={tyre} />
@@ -137,7 +138,7 @@ export default function VehicleImage({ bodyType, colour, size = 200, missing, cl
           </g>
         ))}
 
-        {/* BODY — the only layer whose colour changes */}
+        {/* BODY â€” the only layer whose colour changes */}
         <path d={bodyPath(g)} fill="var(--car-body)"
           stroke={bodyOutline(hex)} strokeWidth={1.5} strokeLinejoin="round" />
 
@@ -145,18 +146,18 @@ export default function VehicleImage({ bodyType, colour, size = 200, missing, cl
         <path d={shadePath(g)} fill={`rgba(0,0,0,${shadeOpacity(hex)})`} />
         <path d={highlightPath(g)} fill={`rgba(255,255,255,${highlightOpacity(hex)})`} />
 
-        {/* glass, with a light reflection — fixed */}
+        {/* glass, with a light reflection â€” fixed */}
         <path d={glassPath(g, body)} fill={glass} opacity={0.92} />
         <path
           d={`M ${g.roofX1 + 32} ${g.roofY + 10} L ${g.roofX1 + 62} ${g.roofY + 10} L ${g.roofX1 + 50} ${g.bonnetY - 12} L ${g.roofX1 + 34} ${g.bonnetY - 12} Z`}
           fill="rgba(255,255,255,0.18)"
         />
 
-        {/* bumper / trim + grille — fixed */}
+        {/* bumper / trim + grille â€” fixed */}
         <rect x={g.frontX + 8} y={g.sillY - 8} width={g.rearX - g.frontX - 20} height={10} rx={4} fill="#33363B" />
         <rect x={g.frontX + 20} y={g.bonnetY + 12} width={30} height={9} rx={3} fill="#24262A" />
 
-        {/* headlight (front, right) + tail light — fixed */}
+        {/* headlight (front, right) + tail light â€” fixed */}
         <rect x={g.frontX + 8} y={g.bonnetY + 14} width={16} height={11} rx={3} fill="#FFF6D8" />
         <rect x={g.rearX - 18} y={g.bonnetY + 16} width={12} height={10} rx={2} fill="#D32F2F" />
       </svg>
