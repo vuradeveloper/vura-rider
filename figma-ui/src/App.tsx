@@ -16,6 +16,7 @@ import VehicleLinkScreen from './components/VehicleLinkScreen'
 // moment a screen rendered with two or more points — one of the white screens.
 import { getRoute } from './lib/backend'
 import WalletScreen from './components/WalletScreen'
+import { notifyRide } from './lib/notify'
 import type { Earnings as EarningsSummary } from './lib/backend'
 import {
   acceptRide,
@@ -1102,9 +1103,51 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
   // The driver accepting arrives over the socket.
   useEffect(() => {
     const off = on('ride:accepted', (d: any) => {
-      if (d?.id) onMatched(String(d.id))
+      if (d?.id) {
+        void notifyRide('Driver accepted', 'Your driver is on the way — tap to see the trip.')
+        onMatched(String(d.id))
+      }
     })
     return () => off()
+  }, [onMatched])
+
+  // SAFETY NET (the DB is the source of truth; the socket is only a shortcut).
+  //
+  // Why this exists: 'ride:accepted' is emitted once, to the ride room AND the
+  // rider's personal room. If the matching screen was not mounted at that instant
+  // (e.g. the ride was parked as 'no_drivers', the rider left the screen, or the
+  // socket was mid-reconnect) the event is gone forever and the rider sits on
+  // "waiting for a driver". So we also ASK THE SERVER, immediately and then every
+  // 3 seconds, plus on every foreground resume and socket reconnect.
+  useEffect(() => {
+    let alive = true
+
+    const check = async () => {
+      try {
+        const active = await getActiveRide()
+        const st = String((active as any)?.status || '')
+        if (!alive) return
+        if ((active as any)?.id && ['accepted', 'driver_arrived', 'in_progress'].includes(st)) {
+          console.log('[rider] matching: recovered from server, status =', st)
+          onMatched(String((active as any).id))
+        }
+      } catch {
+        /* keep waiting */
+      }
+    }
+
+    void check()
+    const timer = setInterval(check, 3000)
+    const onVisible = () => { if (document.visibilityState === 'visible') void check() }
+    document.addEventListener('visibilitychange', onVisible)
+    const offConnect = on('connect', () => { void check() })
+
+    return () => {
+      alive = false
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      offConnect()
+    }
   }, [onMatched])
 
   async function cancel() {
@@ -1197,8 +1240,14 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   // — the same events the native track screen listens to (lib/socket.ts).
   useEffect(() => {
     const offs = [
-      on('ride:driver:arrived', () => setStatus('driver_arrived')),
-      on('ride:started', () => setStatus('in_progress')),
+      on('ride:driver:arrived', () => {
+        setStatus('driver_arrived')
+        void notifyRide('Driver has arrived', 'Your driver is waiting at the pickup point.')
+      }),
+      on('ride:started', () => {
+        setStatus('in_progress')
+        void notifyRide('Trip started', 'You are on your way to the destination.')
+      }),
       on('ride:completed', () => { setStatus('completed'); setToast('Trip complete') }),
       on('ride:cancelled', () => setStatus('cancelled')),
       on('ride:driver:cancelled', () => setStatus('cancelled')),
@@ -1209,6 +1258,37 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
     ]
     return () => offs.forEach((o) => o())
   }, [])
+
+  // Same safety net as the matching screen (3s + foreground resume + reconnect):
+  // if an event was missed — or the phone was locked when the driver arrived — the
+  // server still knows the truth, so the rider's screen catches up regardless.
+  useEffect(() => {
+    if (!rideId) return
+    let alive = true
+
+    const check = () => {
+      getActiveRide()
+        .then((r: any) => {
+          if (!alive || !r?.id || String(r.id) !== String(rideId)) return
+          const st = String(r.status || '')
+          if (['accepted', 'driver_arrived', 'in_progress'].includes(st)) setStatus(st)
+        })
+        .catch(() => undefined)
+    }
+
+    check()
+    const timer = setInterval(check, 3000)
+    const onVisible = () => { if (document.visibilityState === 'visible') check() }
+    document.addEventListener('visibilitychange', onVisible)
+    const offConnect = on('connect', check)
+
+    return () => {
+      alive = false
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      offConnect()
+    }
+  }, [rideId])
 
   const driverName = ride?.driver_name || 'Your driver'
   const vehicle = [ride?.vehicle_make, ride?.vehicle_model].filter(Boolean).join(' ') || 'Vehicle'
@@ -2969,6 +3049,38 @@ export default function App() {
   // The id of the ride the server created, used to track / cancel / rate it.
   const [rideId, setRideId] = useState<string | null>(null)
   const [rScreen, setRScreen] = useState<RiderScreen>('home')
+
+    // ── Trip continuity: launch, resume and reconnect all rebuild from the DB ──
+    // The server is the source of truth, not the screen we happened to be on.
+    // Swiping the app away — or Android killing it — mid-trip must never dump the
+    // rider back on Home while a ride is still running, so on every cold start,
+    // every return to the foreground and every reconnect we ask what this rider is
+    // actually doing and jump straight to that ride.
+    useEffect(() => {
+      if (!authed) return
+      let alive = true
+      const ACTIVE = ['searching', 'accepted', 'driver_arrived', 'in_progress']
+      const restore = async () => {
+        try {
+          const active: any = await getActiveRide()
+          if (!alive || !active?.id) return
+          if (!ACTIVE.includes(String(active.status || ''))) return
+          setRideId(String(active.id))
+          if (active.destination_address) setDest(String(active.destination_address))
+          setRScreen('ride') // RideScreen re-reads the whole ride from this id
+        } catch { /* offline — stay wherever we are */ }
+      }
+      void restore()
+      const onVisible = () => { if (document.visibilityState === 'visible') void restore() }
+      document.addEventListener('visibilitychange', onVisible)
+      window.addEventListener('vura:reconnect', onVisible)
+      return () => {
+        alive = false
+        document.removeEventListener('visibilitychange', onVisible)
+        window.removeEventListener('vura:reconnect', onVisible)
+      }
+    }, [authed])
+
   const [rNav, setRNav] = useState<RiderScreen>('home')
   const [dScreen, setDScreen] = useState<DriverScreen>('driverHome')
   const [dNav, setDNav] = useState<DriverScreen>('driverHome')
