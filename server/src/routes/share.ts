@@ -1,9 +1,9 @@
-import { Router, Request, Response } from "express";
+﻿import { Router, Request, Response } from "express";
 import { query, queryOne, execute } from "../config/database";
 
 const router = Router();
 
-// Ensure safety tables exist (best-effort) — a share GET must not 500 if the
+// Ensure safety tables exist (best-effort) â€” a share GET must not 500 if the
 // table hasn't been created yet (e.g. first share before any POST ran).
 async function ensureShareTables(): Promise<void> {
   try {
@@ -21,7 +21,7 @@ async function ensureShareTables(): Promise<void> {
   }
 }
 
-// GET /api/share/:token — Public live-trip tracking data (no auth). The token
+// GET /api/share/:token â€” Public live-trip tracking data (no auth). The token
 // was stored in safety_events when the rider pressed "Share trip".
 router.get("/:token", async (req: Request, res: Response) => {
   try {
@@ -42,7 +42,7 @@ router.get("/:token", async (req: Request, res: Response) => {
       `SELECT r.id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
               r.destination_address, r.destination_lat, r.destination_lng, r.created_at,
               u.full_name AS driver_name,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading
        FROM rides r
        LEFT JOIN users u ON u.id = r.driver_id
@@ -87,7 +87,7 @@ router.get("/:token", async (req: Request, res: Response) => {
   }
 });
 
-// GET /share/:token — Public tracking web page
+// GET /share/:token â€” Public tracking web page
 export async function sharePage(req: Request, res: Response) {
   const token = String(req.params.token || "");
   res.send(sharePageHtml(token));
@@ -99,7 +99,7 @@ function sharePageHtml(token: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Vura Ride — Live Trip</title>
+<title>Vura Ride â€” Live Trip</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -133,7 +133,7 @@ function sharePageHtml(token: string): string {
 </style>
 </head>
 <body>
-<div id="app"><div class="load">Loading your trip…</div></div>
+<div id="app"><div class="load">Loading your tripâ€¦</div></div>
 
 <script>
 (function(){
@@ -170,13 +170,13 @@ function sharePageHtml(token: string): string {
       (ended ? '<div class="ended-banner">This rider has stopped sharing their trip.</div>' : '') +
       '<div class="map-wrap"><div id="map"></div></div>' +
       '<div class="driver-card">' +
-        '<div class="avatar">🚗</div>' +
+        '<div class="avatar">ðŸš—</div>' +
         '<div><b>' + escapeHtml(r.driverName) + '</b>' +
         '<span>' + escapeHtml(vehicleText(r)) + '</span></div>' +
       '</div>' +
       '<div class="info"><div><div class="big">Ride from</div><div class="addr"><div class="pin" style="background:#22c55e"></div><div><b>' + escapeHtml(r.pickupAddress||'Pickup') + '</b></div></div></div></div>' +
       '<div class="addr" style="margin-top:-12px"><div class="pin" style="background:#ef4444"></div><div><b>' + escapeHtml(r.destinationAddress||'Destination') + '</b></div></div>' +
-      '<div class="footer">Vura Ride • Powered by Ridevura</div>';
+      '<div class="footer">Vura Ride â€¢ Powered by Ridevura</div>';
   }
 
   function vehicleText(r){
@@ -185,7 +185,7 @@ function sharePageHtml(token: string): string {
     if(r.vehicleModel) parts.push(r.vehicleModel);
     if(r.vehicleColor) parts.push(r.vehicleColor);
     if(r.licensePlate) parts.push(r.licensePlate);
-    return parts.length ? parts.join(' • ') : 'Private driver';
+    return parts.length ? parts.join(' â€¢ ') : 'Private driver';
   }
 
   function escapeHtml(s){
@@ -197,7 +197,7 @@ function sharePageHtml(token: string): string {
     var hasDrop = r.destination && r.destination.length===2;
     var hasDriver = r.driverLat!=null && r.driverLng!=null;
     // Center on pickup if we have it, else the driver's live location, else the
-    // destination — so the trip ALWAYS renders even mid-search / pre-driver.
+    // destination â€” so the trip ALWAYS renders even mid-search / pre-driver.
     var center = null;
     if(hasPickup) center = r.pickup;
     else if (hasDriver) center = [r.driverLat, r.driverLng];
@@ -213,7 +213,7 @@ function sharePageHtml(token: string): string {
     if(hasDrop && !(Math.abs(DROPOFF[0]-PICKUP[0])<1e-9 && Math.abs(DROPOFF[1]-PICKUP[1])<1e-9)){
       L.marker([DROPOFF[0],DROPOFF[1]],{icon:L.divIcon({html:'<div style="background:#ef4444;width:22px;height:22px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff">D</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map);
     }
-    carMarker = L.marker([center[0],center[1]],{icon:L.divIcon({html:'<div style="width:30px;height:30px;background:#1a1a1a;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.3)">🚗</div>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map);
+    carMarker = L.marker([center[0],center[1]],{icon:L.divIcon({html:'<div style="width:30px;height:30px;background:#1a1a1a;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.3)">ðŸš—</div>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map);
     // Fit both points after the car is placed
     if(hasPickup && hasDrop){ try{ map.fitBounds(L.latLngBounds([PICKUP,DROPOFF]),{padding:[40,40]}); }catch(e){} }
     else if (hasDriver){ try{ map.setView([r.driverLat,r.driverLng], 15); }catch(e){} }
