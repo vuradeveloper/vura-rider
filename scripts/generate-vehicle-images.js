@@ -14,9 +14,20 @@
  * re-run. The app then falls back: local photo -> body-type SVG -> generic car.
  *
  *   node scripts/generate-vehicle-images.js --setup       setup checklist
+ *   node scripts/generate-vehicle-images.js --probe       which image models THIS credential can use
  *   node scripts/generate-vehicle-images.js --limit=3     smoke test
  *   node scripts/generate-vehicle-images.js --only=Polo   one model, all colours
  *   node scripts/generate-vehicle-images.js --sheet       sheet only
+ *
+ * CREDENTIALS — measured on 2026-09-29, not guessed:
+ *   AI Studio key (GEMINI_API_KEY): 429 "You exceeded your current quota" with
+ *     limit: 0 for gemini-2.5-flash-image AND gemini-3.1-flash-image, i.e. the FREE
+ *     TIER SERVES NO IMAGE MODELS. Imagen answers 404 "only supported by the Gemini
+ *     Enterprise Agent Platform (previously Vertex AI)". Enabling billing on the
+ *     key's project unlocks the Gemini image models (~0.04 USD per image).
+ *   Vertex AI: GEMINI_VERTEX=1 GCP_PROJECT=<project-id> [GCP_LOCATION=us-central1]
+ *     plus `gcloud auth application-default login` serves both the Gemini image
+ *     models and Imagen. Run --probe with each credential to see what it can use.
  */
 
 const fs = require('fs')
@@ -134,19 +145,25 @@ function firstImageBase64(res) {
 }
 
 /**
- * A 429 means three very different things and each needs different handling:
- *   'limit: 0'              -> the model is NOT IN YOUR PLAN      -> try the NEXT model
- *   "retryDelay": N s       -> temporary per-minute rate limit    -> wait N s, retry same model
- *   PerDay, limit > 0       -> the day's allowance is used up     -> stop the whole run
- * Treating them all as fatal is what stopped the first real run on a model the
- * key simply cannot use.
+ * A 429/4xx from an image model means several very different things:
+ *   'limit: 0'                   -> the model is NOT IN THIS PLAN   -> skip to the next model
+ *   404 / not found / not supported / permission / api key invalid
+ *                                -> this key cannot use that model   -> skip to the next model
+ *   "retryDelay": N s (429)      -> temporary per-minute limit       -> wait N s, retry same model
+ *   PerDay with a real limit     -> the day's allowance is gone      -> stop the whole run
+ * And every non-fatal failure now LOGS THE REAL MESSAGE, because "rate-limited" hid
+ * an Imagen error that had nothing to do with rate limiting.
  */
 function classify429(err) {
   const s = String(err?.message || err || '')
   const low = s.toLowerCase()
   const limits = [...s.matchAll(/limit:\s*(\d+)/g)].map((m) => Number(m[1]))
   const retry = Number((s.match(/"retryDelay":"(\d+)s"/) || [])[1] || 0)
-  if (limits.length && Math.max(...limits) === 0) return { kind: 'model-unavailable' }
+  const unavailable =
+    (limits.length > 0 && Math.max(...limits) === 0) ||
+    /not found|not supported|does not exist|permission|api key not valid|invalid api key|unauthenticated|403/.test(low) ||
+    /\b404\b/.test(low)
+  if (unavailable) return { kind: 'model-unavailable' }
   if (/perday|per day/.test(low) || limits.some((n) => n > 0)) return { kind: 'daily' }
   if (retry > 0 && retry <= 90) return { kind: 'rate', wait: retry }
   return { kind: 'rate', wait: 20 }
@@ -169,39 +186,45 @@ function loadReference() {
   return refPart
 }
 
-/** Gemini call: the TEXT plus the reference IMAGE as inputs, with a retry wording. */
+/**
+ * One call path for EVERY model: ai.models.generateContent. Imagen used to need its
+ * own generateImages() call, but the SDK now reports that method deprecated ("use
+ * generateContent with image models instead", see
+ * https://ai.google.dev/gemini-api/docs/deprecations#imagen-models) — and the image
+ * still comes back as inline base64, which firstImageBase64() already reads.
+ * Imagen does NOT accept the reference image; the STYLE_WORDS paragraph carries the
+ * style for it, and the log says so per call.
+ */
 async function generateRaw(ai, car, colour, year, tweak = '') {
   const prompt = promptFor(car, colour, year) + tweak
   const ref = loadReference()
   const parts = ref ? [{ text: prompt }, ref] : [{ text: prompt }]
   let lastErr = null
   for (const model of MODELS) {
-    const isImagen = model.startsWith('imagen')
+    const supportsReference = !model.startsWith('imagen')
     for (let attempt = 1; attempt <= 2; attempt++) {
       const started = Date.now()
       try {
-        logLine(`CALL model=${model} attempt=${attempt}${isImagen ? ' [text-only: style in words]' : ' [with reference image]'} ${car.make} ${car.model} ${colour}${tweak ? ' [retry wording]' : ''}`)
-        const res = isImagen
-          ? await ai.models.generateImages({ model, prompt, config: { numberOfImages: 1, aspectRatio: '16:9' } })
-          : await ai.models.generateContent({ model, contents: [{ role: 'user', parts }] })
-        const b64 = isImagen
-          ? res?.generatedImages?.[0]?.image?.imageBytes
-          : firstImageBase64(res)
+        logLine(`CALL model=${model} attempt=${attempt}${supportsReference ? ' [with reference image]' : ' [text-only: style in words]'} ${car.make} ${car.model} ${colour}${tweak ? ' [retry wording]' : ''}`)
+        const contents = supportsReference ? [{ role: 'user', parts }] : prompt
+        const res = await ai.models.generateContent({ model, contents })
+        const b64 = firstImageBase64(res)
         if (!b64) throw new Error('no image in the reply')
         logLine(`OK   ${model} ${car.make} ${car.model} ${colour} ${Date.now() - started}ms`)
         return Buffer.from(b64, 'base64')
       } catch (err) {
         lastErr = err
         const c = classify429(err)
+        const why = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 220)
         if (c.kind === 'daily') {
-          logLine(`DAILY QUOTA REACHED on ${model}: ${err.message.slice(0, 200)}`)
+          logLine(`DAILY QUOTA REACHED on ${model}: ${why}`)
           const e = new Error('daily quota'); e.quota = true; throw e
         }
         if (c.kind === 'model-unavailable') {
-          logLine(`  ${model} is not in this plan (quota limit: 0) — trying the next model`)
+          logLine(`  ${model} cannot be used by this key — moving to the next model. Reason: ${why}`)
           break
         }
-        logLine(`  ${model} rate-limited (attempt ${attempt}); waiting ${c.wait}s`)
+        logLine(`  ${model} failed (attempt ${attempt}), will wait ${c.wait}s then retry. Reason: ${why}`)
         await new Promise((r) => setTimeout(r, (c.wait + 2) * 1000))
       }
     }
@@ -384,14 +407,48 @@ async function main() {
   if (args.includes('--sheet')) { writeContactSheet(map); return }
 
   const key = process.env.GEMINI_API_KEY
-  if (!key) { console.error('GEMINI_API_KEY is not set.\n' + SETUP); process.exit(1) }
+  const usingVertex = process.env.GEMINI_VERTEX === '1'
+  if (!key && !usingVertex) { console.error('GEMINI_API_KEY is not set.\n' + SETUP); process.exit(1) }
 
   let sharp, ai
   try { sharp = require('sharp') } catch { console.error('Missing sharp. Run: npm i -D sharp'); process.exit(1) }
   try {
     const { GoogleGenAI } = await import('@google/genai')
-    ai = new GoogleGenAI({ apiKey: key })
+    // TWO ways in, and they are NOT equivalent for images:
+    //   AI Studio key -> apiKey. The free tier has NO image models ("limit: 0" on
+    //                    gemini-2.5-flash-image and gemini-3.1-flash-image), and
+    //                    Imagen answers "only supported by the Gemini Enterprise
+    //                    Agent Platform (previously Vertex AI)".
+    //   Vertex AI     -> vertexai:true + project + location + Application Default
+    //                    Credentials. This one DOES serve the image models.
+    //                    Set GEMINI_VERTEX=1, GCP_PROJECT and GCP_LOCATION.
+    if (usingVertex) {
+      const project = process.env.GCP_PROJECT
+      const location = process.env.GCP_LOCATION || 'us-central1'
+      if (!project) { console.error('GEMINI_VERTEX=1 needs GCP_PROJECT (and optionally GCP_LOCATION).'); process.exit(1) }
+      ai = new GoogleGenAI({ vertexai: true, project, location })
+      logLine(`auth=VERTEX project=${project} location=${location} (Application Default Credentials)`)
+    } else {
+      ai = new GoogleGenAI({ apiKey: key })
+      logLine('auth=AI Studio API key (note: the free tier serves no image models)')
+    }
   } catch { console.error('Missing @google/genai. Run: npm i -D @google/genai'); process.exit(1) }
+
+  if (args.includes('--probe')) {
+    logLine('probe: which image models can this credential see? (uses no image quota)')
+    try {
+      const page = await ai.models.list()
+      const items = page?.pageInternal || page?.models || (Array.isArray(page) ? page : [])
+      const names = items.map((m) => m?.name || m?.model || String(m)).filter(Boolean)
+      const img = names.filter((n) => /image|imagen/i.test(n))
+      logLine(`  ${names.length} model(s) visible, ${img.length} image-capable:`)
+      for (const n of img) logLine(`    ${n}`)
+      if (!img.length) logLine('  none — this credential cannot generate images (see the CREDENTIALS note at the top of this file)')
+    } catch (err) {
+      logLine(`  probe failed: ${String(err?.message || err).replace(/\s+/g, ' ').slice(0, 300)}`)
+    }
+    return
+  }
 
   logLine(`start: ${jobs.length} job(s)${FIRST_RUN ? ' [FIRST RUN]' : ''} models=${MODELS.join(',')} reference=${fs.existsSync(REFERENCE) ? 'yes' : 'NO'}`)
   let made = 0
