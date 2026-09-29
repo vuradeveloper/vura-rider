@@ -60,6 +60,7 @@ import {
   publishLocation,
   RecentSearch,
   registerPaystackCard,
+  reverseGeocode,
   requestRide,
   resyncOnlineState,
   reverseGeocode,
@@ -74,6 +75,7 @@ import {
   signOut,
   signUp,
   startTrip,
+  sendTip,
   submitRating,
   triggerSos,
   verifyPayment
@@ -1069,8 +1071,16 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
             dest = { name: places[0].address || places[0].name, lat: places[0].lat, lng: places[0].lng }
           }
           const from = mine || { lat: -26.2041, lng: 28.0473, heading: 0 }
+          // The driver's trip card and Earnings show the ride's pickup_address, so
+          // it has to be the rider's REAL address — the literal words "Current
+          // location" told the driver nothing. Resolve the fix to a street address
+          // (GET /api/search/reverse) and only fall back to a coordinate pin if the
+          // lookup fails, so the ride is never blocked by a geocoder problem.
+          const pickupAddress = await reverseGeocode(from.lat, from.lng)
+            .then((p: any) => String(p?.address || p?.name || '').trim())
+            .catch(() => '')
           const res = await requestRide({
-            pickupAddress: 'Current location',
+            pickupAddress: pickupAddress || `Pin ${from.lat.toFixed(5)}, ${from.lng.toFixed(5)}`,
             pickupLat: from.lat,
             pickupLng: from.lng,
             destinationAddress: dest.name,
@@ -1207,6 +1217,11 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   const [ride, setRide] = useState<any>(null)
   const [status, setStatus] = useState<string>('accepted')
   const [toast, setToast] = useState('')
+  // End-of-trip sheet: rating + tip, then Next takes the rider home.
+  const [sheet, setSheet] = useState(false)
+  const [stars, setStars] = useState(5)
+  const [tip, setTip] = useState(0)
+  const [busy, setBusy] = useState(false)
 
   /**
    * The live route to draw. It prefers the coordinates the SERVER holds for this
@@ -1296,6 +1311,30 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   const rating = Number(ride?.driver_rating || 0)
   const done = status === 'completed'
   const cancelled = status === 'cancelled'
+  // Once the driver presses Start trip the ride is live and the rider can no longer
+  // cancel it, so the Cancel button is not rendered at all in that state.
+  const started = status === 'in_progress'
+
+  // The driver pressed End trip: open the rating + tip window immediately.
+  useEffect(() => { if (done) setSheet(true) }, [done])
+
+  async function finishTrip() {
+    if (!rideId) { setSheet(false); onDone(); return }
+    setBusy(true)
+    // Rating first (POST /api/ratings), then the tip (POST /api/tips) — the tip is
+    // best-effort so a rider without a saved card still leaves this screen.
+    await submitRating(rideId, stars).catch((e: any) =>
+      setToast(`Rating not saved: ${e?.message || 'error'}`)
+    )
+    if (tip > 0) {
+      await sendTip(rideId, tip).catch(() =>
+        setToast('Tip not saved — add a card in Account → Wallet')
+      )
+    }
+    setBusy(false)
+    setSheet(false)
+    onDone() // the shell sends the rider home
+  }
 
   const STATUS_TEXT: Record<string, string> = {
     accepted: 'Driver on the way',
@@ -1397,15 +1436,61 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
             className="flex-1 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[13px] py-3.5 rounded-2xl active:bg-[#F7F7F7] disabled:opacity-40">
             Share trip
           </button>
-          {done
-            ? <button onClick={onDone} className="flex-1 bg-[#1A1A1A] text-white font-semibold text-[13px] py-3.5 rounded-2xl transition">Rate your trip</button>
-            : <button onClick={cancel} disabled={!rideId}
+          {started || done ? (
+            done ? (
+              <button onClick={() => setSheet(true)} className="flex-1 bg-[#1A1A1A] text-white font-semibold text-[13px] py-3.5 rounded-2xl transition">
+                Rate &amp; tip your driver
+              </button>
+            ) : (
+              <span className="flex-1 text-center text-[12px] font-semibold text-[#6B6B6B] py-3.5">Trip in progress</span>
+            )
+          ) : (
+            <button onClick={cancel} disabled={!rideId}
               className="flex-1 border border-[#F5C6C2] text-[#C5221F] font-semibold text-[13px] py-3.5 rounded-2xl active:bg-[#FEF0EF] disabled:opacity-40">
               Cancel ride
-            </button>}
+            </button>
+          )}
         </div>
         {cancelled && (
           <p className="text-center text-[12px] text-[#C5221F] font-semibold mt-3">This trip was cancelled.</p>
+        )}
+
+        {/* End of trip: rating + tip. Opens by itself when the driver ends the trip;
+            Next saves both and the shell takes the rider home. */}
+        {sheet && (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-end" onClick={() => { if (!busy) setSheet(false) }}>
+            <div className="w-full bg-white rounded-t-3xl p-5 pb-7" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-[18px] font-bold text-[#1A1A1A]">How was your trip?</h2>
+              <p className="text-[12px] text-[#6B6B6B] mt-1">
+                Rate {driverName} and add a tip if you would like to.
+              </p>
+
+              <div className="flex justify-center gap-3 my-5">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button key={n} onClick={() => setStars(n)} aria-label={`${n} star`}>
+                    {n <= stars ? IC.star() : IC.starO()}
+                  </button>
+                ))}
+              </div>
+
+              <p className="text-[12px] font-semibold text-[#1A1A1A] mb-2">Add a tip</p>
+              <div className="flex gap-2">
+                {[0, 10, 20, 50].map((amount) => (
+                  <button key={amount} onClick={() => setTip(amount)}
+                    className={`flex-1 py-3 rounded-2xl text-[13px] font-semibold border ${tip === amount ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]' : 'border-[#EBEBEB] text-[#4A4A4A]'}`}>
+                    {amount === 0 ? 'No tip' : `R${amount}`}
+                  </button>
+                ))}
+              </div>
+
+              {toast && <p className="text-center text-[12px] font-semibold text-[#137333] mt-3">{toast}</p>}
+
+              <button disabled={busy} onClick={() => void finishTrip()}
+                className="w-full mt-5 bg-[#1A1A1A] text-white font-bold text-[15px] py-4 rounded-2xl disabled:opacity-50">
+                {busy ? 'Saving…' : 'Next'}
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
