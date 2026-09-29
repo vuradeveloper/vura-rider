@@ -60,7 +60,6 @@ import {
   publishLocation,
   RecentSearch,
   registerPaystackCard,
-  reverseGeocode,
   requestRide,
   resyncOnlineState,
   reverseGeocode,
