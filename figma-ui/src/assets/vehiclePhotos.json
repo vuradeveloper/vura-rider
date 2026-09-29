@@ -1,5 +1,4 @@
 {
-  "$comment": "Written by scripts/generate-vehicle-images.js — do not edit by hand. Keys are 'Make|Model|Colour', values are files under public/assets/vehicles/. Empty means: no photos generated yet, so the app draws the body-type SVG instead.",
-  "generatedAt": null,
+  "generatedAt": "2026-09-29T12:14:34.170Z",
   "images": {}
 }

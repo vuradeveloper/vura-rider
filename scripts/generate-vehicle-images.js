@@ -32,7 +32,12 @@ const LOG = path.join(ROOT, 'generated', 'generate.log')
 
 const CANVAS = { w: 900, h: 560 }
 const MAX_BYTES = 80 * 1024
-const MODELS = [process.env.GEMINI_IMAGE_MODEL, 'gemini-3.1-flash-image', 'gemini-2.5-flash-image'].filter(Boolean)
+const MODELS = [
+  process.env.GEMINI_IMAGE_MODEL,
+  'gemini-2.5-flash-image', // Nano Banana — usually the one a free-tier key may actually use
+  'gemini-3.1-flash-image',
+  'imagen-4.0-generate-001', // text-only model: no reference input, STYLE_WORDS carries the style
+].filter(Boolean)
 const VISION_MODELS = [process.env.GEMINI_VISION_MODEL, 'gemini-3-flash', 'gemini-2.5-flash'].filter(Boolean)
 
 /**
@@ -128,10 +133,26 @@ function firstImageBase64(res) {
   return null
 }
 
-const isQuota = (err) => {
-  const s = String(err?.message || err || '').toLowerCase()
-  return s.includes('429') || s.includes('resource_exhausted') || s.includes('quota') || s.includes('daily limit')
+/**
+ * A 429 means three very different things and each needs different handling:
+ *   'limit: 0'              -> the model is NOT IN YOUR PLAN      -> try the NEXT model
+ *   "retryDelay": N s       -> temporary per-minute rate limit    -> wait N s, retry same model
+ *   PerDay, limit > 0       -> the day's allowance is used up     -> stop the whole run
+ * Treating them all as fatal is what stopped the first real run on a model the
+ * key simply cannot use.
+ */
+function classify429(err) {
+  const s = String(err?.message || err || '')
+  const low = s.toLowerCase()
+  const limits = [...s.matchAll(/limit:\s*(\d+)/g)].map((m) => Number(m[1]))
+  const retry = Number((s.match(/"retryDelay":"(\d+)s"/) || [])[1] || 0)
+  if (limits.length && Math.max(...limits) === 0) return { kind: 'model-unavailable' }
+  if (/perday|per day/.test(low) || limits.some((n) => n > 0)) return { kind: 'daily' }
+  if (retry > 0 && retry <= 90) return { kind: 'rate', wait: retry }
+  return { kind: 'rate', wait: 20 }
 }
+
+const isQuota = (err) => classify429(err).kind === 'daily'
 
 /** Loads the reference ONCE as an inline part (style only — never copied/committed). */
 let refPart = null
@@ -155,19 +176,34 @@ async function generateRaw(ai, car, colour, year, tweak = '') {
   const parts = ref ? [{ text: prompt }, ref] : [{ text: prompt }]
   let lastErr = null
   for (const model of MODELS) {
-    const started = Date.now()
-    try {
-      logLine(`CALL model=${model} ${car.make} ${car.model} ${colour}${tweak ? ' [retry wording]' : ''}`)
-      const res = await ai.models.generateContent({ model, contents: [{ role: 'user', parts }] })
-      const b64 = firstImageBase64(res)
-      if (!b64) throw new Error('no image in the reply')
-      logLine(`OK   ${model} ${car.make} ${car.model} ${colour} ${Date.now() - started}ms`)
-      return Buffer.from(b64, 'base64')
-    } catch (err) {
-      lastErr = err
-      if (isQuota(err)) { logLine(`QUOTA: ${err.message}`); const e = new Error('quota'); e.quota = true; throw e }
-      logLine(`FAIL ${model}: ${err.message}`)
-      await new Promise((r) => setTimeout(r, 1200))
+    const isImagen = model.startsWith('imagen')
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const started = Date.now()
+      try {
+        logLine(`CALL model=${model} attempt=${attempt}${isImagen ? ' [text-only: style in words]' : ' [with reference image]'} ${car.make} ${car.model} ${colour}${tweak ? ' [retry wording]' : ''}`)
+        const res = isImagen
+          ? await ai.models.generateImages({ model, prompt, config: { numberOfImages: 1, aspectRatio: '16:9' } })
+          : await ai.models.generateContent({ model, contents: [{ role: 'user', parts }] })
+        const b64 = isImagen
+          ? res?.generatedImages?.[0]?.image?.imageBytes
+          : firstImageBase64(res)
+        if (!b64) throw new Error('no image in the reply')
+        logLine(`OK   ${model} ${car.make} ${car.model} ${colour} ${Date.now() - started}ms`)
+        return Buffer.from(b64, 'base64')
+      } catch (err) {
+        lastErr = err
+        const c = classify429(err)
+        if (c.kind === 'daily') {
+          logLine(`DAILY QUOTA REACHED on ${model}: ${err.message.slice(0, 200)}`)
+          const e = new Error('daily quota'); e.quota = true; throw e
+        }
+        if (c.kind === 'model-unavailable') {
+          logLine(`  ${model} is not in this plan (quota limit: 0) — trying the next model`)
+          break
+        }
+        logLine(`  ${model} rate-limited (attempt ${attempt}); waiting ${c.wait}s`)
+        await new Promise((r) => setTimeout(r, (c.wait + 2) * 1000))
+      }
     }
   }
   throw lastErr || new Error('all models failed')
