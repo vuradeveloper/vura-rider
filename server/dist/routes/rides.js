@@ -41,7 +41,7 @@ const AffiliateService_1 = require("../services/AffiliateService");
 const rideSim_1 = require("../services/rideSim");
 const dispatch_1 = require("../services/dispatch");
 const router = (0, express_1.Router)();
-// GET /api/rides/me/active-state — ONE call that rebuilds the app's world.
+// GET /api/rides/me/active-state â€” ONE call that rebuilds the app's world.
 //
 // The apps call this on launch, on returning to the foreground and on every socket
 // reconnect. The DB is the source of truth, so a force-quit mid-trip lands the user
@@ -70,7 +70,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
               d.profile_photo_url AS driver_photo_url,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               dp.vehicle_year, dp.body_type, dp.vehicle_category,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng,
               dp.current_heading AS driver_heading,
@@ -85,9 +85,9 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
         LIMIT 1`, [user.id]).catch(() => null);
         // The rider must see the ACTUAL car. If an approved photo exists for this
         // driver's make|model|generation|colour we hand the app OUR OWN stored URL
-        // (GET /api/vehicle-images/…), never a third-party link. Cached for 5 minutes
+        // (GET /api/vehicle-images/â€¦), never a third-party link. Cached for 5 minutes
         // because this endpoint is polled every second, and a failure here can never
-        // break the active-state response — the app just keeps its SVG.
+        // break the active-state response â€” the app just keeps its SVG.
         let ridePayload = ride ? mapRide(ride) : null;
         if (ridePayload && (ride.vehicle_make || ride.vehicle_model)) {
             try {
@@ -102,7 +102,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
                     ridePayload.vehicle_image_url = img.url;
             }
             catch {
-                /* no approved photo yet — the app draws the body-type SVG */
+                /* no approved photo yet â€” the app draws the body-type SVG */
             }
         }
         res.json({
@@ -126,7 +126,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// POST /api/rides/:id/accept — REST twin of the `driver:ride:accept` socket event.
+// POST /api/rides/:id/accept â€” REST twin of the `driver:ride:accept` socket event.
 // Idempotent + atomic (see services/dispatch.ts acceptRide): safe to retry, and two
 // drivers accepting at the same moment can never both win.
 router.post("/:id/accept", auth_1.requireAuth, async (req, res) => {
@@ -153,7 +153,7 @@ router.post("/:id/accept", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ ok: false, error: err.message });
     }
 });
-// POST /api/rides/:id/decline — REST twin of `driver:ride:decline`.
+// POST /api/rides/:id/decline â€” REST twin of `driver:ride:decline`.
 router.post("/:id/decline", auth_1.requireAuth, async (req, res) => {
     try {
         const io = global.__vuraIo;
@@ -193,11 +193,11 @@ function mapRide(row) {
         rating_score: row.rating_score ?? null,
         rating_comment: row.rating_comment ?? null,
         // The authoritative route the DRIVER is following (array of {lat,lng}),
-        // so the rider draws the EXACT same line — no per-app route mismatch.
+        // so the rider draws the EXACT same line â€” no per-app route mismatch.
         route: Array.isArray(row.route_data)
             ? row.route_data
             : row.route_data?.coordinates ?? null,
-        // Rider stops captured at booking time (pickup → stops… → drop-off). Sent
+        // Rider stops captured at booking time (pickup â†’ stopsâ€¦ â†’ drop-off). Sent
         // under both names so either app's normaliser finds them.
         waypoints: Array.isArray(row.waypoints) ? row.waypoints : null,
         stops: Array.isArray(row.waypoints) ? row.waypoints : null,
@@ -206,10 +206,10 @@ function mapRide(row) {
 // A ride is only "active" if it was created recently. If the app/server crashed
 // mid-ride (or a demo/test ride was never finished), a stuck "driver_arrived"
 // or "in_progress" row would otherwise be returned FOREVER and every login would
-// show "Trip in progress" → "Back to ride". We treat anything older than this as
+// show "Trip in progress" â†’ "Back to ride". We treat anything older than this as
 // dead so a fresh login never resurrects an ancient ride.
 const ACTIVE_RIDE_MAX_AGE_MINUTES = 240; // 4 hours
-// GET /api/rides/me/active — Get current user's active ride
+// GET /api/rides/me/active â€” Get current user's active ride
 router.get("/me/active", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
@@ -219,14 +219,14 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
             return;
         }
         // A single account may be BOTH a rider AND a driver (both apps can share one
-        // login). We must NOT pick the column from role — otherwise a dual-role rider
+        // login). We must NOT pick the column from role â€” otherwise a dual-role rider
         // never finds their passenger rides here and stays stuck on "Finding your
         // driver" even after a driver accepts. Look for the latest active ride where
         // this user is passenger OR driver.
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data
@@ -261,7 +261,7 @@ async function cleanupStaleRides() {
         return 0;
     }
 }
-// GET /api/rides/history — Get ride history with pagination
+// GET /api/rides/history â€” Get ride history with pagination
 router.get("/history", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
@@ -278,7 +278,7 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               rat.score AS rating_score, rat.comment AS rating_comment
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
@@ -302,7 +302,7 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// GET /api/rides/available — Rides still searching for a driver (driver-side poll)
+// GET /api/rides/available â€” Rides still searching for a driver (driver-side poll)
 router.get("/available", auth_1.requireAuth, async (_req, res) => {
     try {
         // Newest first so a fresh booking is NEVER hidden behind old stale
@@ -310,7 +310,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         // 30 minutes so abandoned/stuck requests drop out automatically.
         // Also surfaces upcoming SCHEDULED rides so drivers can accept them
         // BEFORE the pickup time (driver pre-accept). Drivers see them with a
-        // "Scheduled" badge and can claim them early — driver:ride:accept
+        // "Scheduled" badge and can claim them early â€” driver:ride:accept
         // accepts status 'scheduled' (see socket handlers).
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
@@ -328,7 +328,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// GET /api/rides/scheduled — Get upcoming scheduled rides
+// GET /api/rides/scheduled â€” Get upcoming scheduled rides
 router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
@@ -343,7 +343,7 @@ router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
         // driver name + phone + car details so the rider sees WHO is coming.
         const rides = await (0, database_1.query)(`SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
@@ -357,14 +357,14 @@ router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// GET /api/rides/:id — Get specific ride details
+// GET /api/rides/:id â€” Get specific ride details
 router.get("/:id", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data
@@ -385,7 +385,7 @@ router.get("/:id", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// GET /api/rides/:id/receipt — Get ride receipt
+// GET /api/rides/:id/receipt â€” Get ride receipt
 router.get("/:id/receipt", auth_1.requireAuth, async (req, res) => {
     try {
         const ride = await (0, database_1.queryOne)(`SELECT r.id, r.id AS ride_id, r.pickup_address, r.destination_address,
@@ -412,12 +412,12 @@ router.get("/:id/receipt", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// POST /api/rides/schedule — Schedule a future ride
+// POST /api/rides/schedule â€” Schedule a future ride
 router.post("/schedule", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
         const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, scheduledAt, tier, estimatedFare, waypoints, stops } = req.body;
-        // Stops for the reservation, normalised to { address, lat, lng } — same
+        // Stops for the reservation, normalised to { address, lat, lng } â€” same
         // shape and limits as the live booking path.
         const rideWaypoints = (Array.isArray(waypoints) ? waypoints : Array.isArray(stops) ? stops : [])
             .filter((w) => w && Number.isFinite(Number(w?.lat)) && Number.isFinite(Number(w?.lng)))
@@ -432,7 +432,7 @@ router.post("/schedule", auth_1.requireAuth, async (req, res) => {
             res.status(400).json({ error: "Scheduled time must be in the future" });
             return;
         }
-        // ── Reservation window (mirrors Uber Reserve) ──────────────────────────
+        // â”€â”€ Reservation window (mirrors Uber Reserve) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // A reservation must be made at least 30 minutes ahead (so a driver can be
         // lined up in advance) and at most 90 days ahead.
         const MIN_LEAD_MS = 30 * 60 * 1000;
@@ -493,9 +493,9 @@ router.post("/schedule", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// POST /api/rides/scheduled/:id/cancel — Cancel a scheduled ride
-// Also accepts rides already in the live pipeline (searching/accepted/…) so the
-// rider can truly cancel a ride they no longer want — not just pre-booked ones.
+// POST /api/rides/scheduled/:id/cancel â€” Cancel a scheduled ride
+// Also accepts rides already in the live pipeline (searching/accepted/â€¦) so the
+// rider can truly cancel a ride they no longer want â€” not just pre-booked ones.
 // The status filter intentionally mirrors the "scheduled section" statuses.
 router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
     try {
@@ -539,7 +539,7 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// PATCH /api/rides/:id/pickup — Update the pickup location of an active ride
+// PATCH /api/rides/:id/pickup â€” Update the pickup location of an active ride
 router.patch("/:id/pickup", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
@@ -574,7 +574,7 @@ router.patch("/:id/pickup", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// PATCH /api/rides/:id/status — Update ride status for simulation
+// PATCH /api/rides/:id/status â€” Update ride status for simulation
 router.patch("/:id/status", auth_1.requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
@@ -599,9 +599,9 @@ router.patch("/:id/status", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// POST /api/rides/:id/route — The DRIVER saves the authoritative route line it
+// POST /api/rides/:id/route â€” The DRIVER saves the authoritative route line it
 // is following. The server stores it on the ride so the RIDER can draw the
-// EXACT same route (single source of truth — no more route mismatch between
+// EXACT same route (single source of truth â€” no more route mismatch between
 // driver and rider apps).
 router.post("/:id/route", auth_1.requireAuth, async (req, res) => {
     try {
@@ -636,7 +636,7 @@ router.post("/:id/route", auth_1.requireAuth, async (req, res) => {
 // Ensure columns added after the original schema exist (idempotent migrations).
 async function ensureRouteColumn() {
     await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS route_data JSONB`).catch(() => { });
-    // Rider stops captured at booking time (pickup → waypoints… → drop-off).
+    // Rider stops captured at booking time (pickup â†’ waypointsâ€¦ â†’ drop-off).
     await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB`).catch(() => { });
 }
 ensureRouteColumn();
