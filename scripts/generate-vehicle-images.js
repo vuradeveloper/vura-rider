@@ -43,7 +43,7 @@ const LOG = path.join(ROOT, 'generated', 'generate.log')
 
 const CANVAS = { w: 900, h: 560 }
 const MAX_BYTES = 80 * 1024
-const MODELS = [
+let MODELS = [
   process.env.GEMINI_IMAGE_MODEL,
   'gemini-2.5-flash-image', // Nano Banana — usually the one a free-tier key may actually use
   'gemini-3.1-flash-image',
@@ -433,6 +433,13 @@ async function main() {
       logLine('auth=AI Studio API key (note: the free tier serves no image models)')
     }
   } catch { console.error('Missing @google/genai. Run: npm i -D @google/genai'); process.exit(1) }
+
+  // Imagen is served by Vertex only: on an AI Studio key every call is a 404, so drop
+  // it from the chain instead of burning six pointless calls per car.
+  if (!usingVertex && MODELS.some((m) => m.startsWith('imagen'))) {
+    MODELS = MODELS.filter((m) => !m.startsWith('imagen'))
+    logLine('note: Imagen is Vertex-only, so it is not in the chain for an AI Studio key (set GEMINI_VERTEX=1 to use it)')
+  }
 
   if (args.includes('--probe')) {
     logLine('probe: which image models can this credential see? (uses no image quota)')
