@@ -1,7 +1,12 @@
 {
-  "$comment": "Input list for scripts/generate-vehicle-images.js. One entry per make+model; every model is generated in each colour you list, so keep colours short at first. Years are used inside the prompt only.",
+  "$comment": "Input for scripts/generate-vehicle-images.js. 'firstRun' is exactly the 3 cars to try first (each with its own colour). 'cars' is the full list; a car without its own 'colour' is generated in every colour in 'colours'.",
   "year": 2021,
   "colours": ["White", "Red", "Black"],
+  "firstRun": [
+    { "make": "Volkswagen", "model": "Polo Vivo", "colour": "White" },
+    { "make": "Toyota", "model": "Corolla Quest", "colour": "Silver" },
+    { "make": "Kia", "model": "Picanto", "colour": "Red" }
+  ],
   "cars": [
     { "make": "Volkswagen", "model": "Polo" },
     { "make": "Volkswagen", "model": "Polo Vivo" },
@@ -39,3 +44,4 @@
     { "make": "GWM", "model": "P-Series" }
   ]
 }
+

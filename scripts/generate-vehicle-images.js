@@ -33,17 +33,54 @@ const LOG = path.join(ROOT, 'generated', 'generate.log')
 const CANVAS = { w: 900, h: 560 }
 const MAX_BYTES = 80 * 1024
 const MODELS = [process.env.GEMINI_IMAGE_MODEL, 'gemini-3.1-flash-image', 'gemini-2.5-flash-image'].filter(Boolean)
+const VISION_MODELS = [process.env.GEMINI_VISION_MODEL, 'gemini-3-flash', 'gemini-2.5-flash'].filter(Boolean)
+
+/**
+ * STYLE REFERENCE (your screenshot of a white Honda Civic).
+ *
+ * It is passed to the model as an INPUT next to the text, so the angle, framing,
+ * lighting and photographic style are copied — and the prompt says explicitly NOT to
+ * copy the car itself. It is NEVER copied into the repo, NEVER bundled in the app and
+ * NEVER edited into a result: this script only reads it from disk at run time.
+ * Override the path with REFERENCE_IMAGE if you move it.
+ */
+const REFERENCE = process.env.REFERENCE_IMAGE || 'C:\\Users\\mbofh\\OneDrive\\Pictures\\Screenshots\\Screenshot 2026-09-29 093104.png'
+
+/**
+ * The style in WORDS as well, because the reference is small and low resolution —
+ * this must stand on its own if the model ignores the image.
+ */
+const STYLE_WORDS =
+  'Photorealistic cut-out studio shot on a pure white seamless background. Camera at roughly ' +
+  "wheel-arch height, front three-quarter view from the driver's side with the nose pointing left. " +
+  'The whole car is inside the frame, centred, with a small even margin around it. Soft, even, ' +
+  'large-source studio lighting, a gentle highlight along the bonnet and roof, realistic paint and ' +
+  'glass reflections, dark tinted windows, correctly round wheels with visible rims, headlights and ' +
+  'grille clearly modelled, and a subtle soft contact shadow under the tyres. No road, no scenery, ' +
+  'no props, no people, no text, no logos, no watermark.'
 
 const TEMPLATE =
   'A high-resolution studio photograph of a {colour} {year} {make} {model}, front three-quarter view ' +
   "from the driver's side, car facing left, centred, full car visible, plain pure white background, " +
   'soft studio lighting, realistic proportions, accurate {make} {model} body shape, no text, no people, ' +
-  'no other objects.'
+  'no other objects. Match the camera angle, framing, lighting, background and photographic style of the ' +
+  'reference image exactly, but depict a {colour} {year} {make} {model} instead. Do not copy the reference car. ' +
+  STYLE_WORDS
+
+/** Used on a quality retry, so a rejection is not simply repeated word-for-word. */
+const RETRY_TWEAKS = [
+  '',
+  ' Emphasise the exact camera height and distance of the reference so the car fills the frame the same way.',
+  ' Keep the body shape strictly true to a {year} {make} {model} and keep every wheel, door and mirror correct.',
+]
 
 const args = process.argv.slice(2)
 const val = (f) => { const h = args.find((a) => a.startsWith(f + '=')); return h ? h.slice(f.length + 1) : null }
 const LIMIT = Number(val('--limit') || 0)
 const ONLY = val('--only')
+const FIRST_RUN = args.includes('--first-run')
+const SKIP_CHECKS = args.includes('--no-checks')
+
 
 const SETUP = `
 DO THIS YOURSELF (the app never does any of it)
@@ -61,9 +98,12 @@ DO THIS YOURSELF (the app never does any of it)
  4. Docs (names change): https://ai.google.dev/gemini-api/docs/image-generation
       Override: $env:GEMINI_IMAGE_MODEL="gemini-3.1-flash-image"
  5. node scripts/generate-vehicle-images.js --limit=3
- 6. Open generated/contact-sheet.html, delete bad .webp files, re-run.
+ 6. Open generated/contact-sheet.html (your reference on the left, every generated car
+    beside it), delete the .webp files you do not like, then re-run for those models.
  7. Commit ONLY figma-ui/public/assets/vehicles/*.webp + figma-ui/src/assets/vehiclePhotos.json,
-    and add generated/ to .gitignore.
+    and add generated/ to .gitignore. The reference screenshot is NEVER committed.
+ 8. FIRST RUN (3 cars, then stop):  node scripts/generate-vehicle-images.js --first-run
+    -> a white VW Polo Vivo, a silver Toyota Corolla Quest, a red Kia Picanto.
 `
 
 function logLine(s) {
@@ -93,26 +133,41 @@ const isQuota = (err) => {
   return s.includes('429') || s.includes('resource_exhausted') || s.includes('quota') || s.includes('daily limit')
 }
 
-/** Gemini call with model fallback + one retry per model on transient errors. */
-async function generateRaw(ai, car, colour, year) {
-  const prompt = promptFor(car, colour, year)
+/** Loads the reference ONCE as an inline part (style only — never copied/committed). */
+let refPart = null
+function loadReference() {
+  if (refPart) return refPart
+  if (!fs.existsSync(REFERENCE)) {
+    logLine(`reference NOT found: ${REFERENCE} — continuing with the words-only style description`)
+    return null
+  }
+  const lower = REFERENCE.toLowerCase()
+  const mime = lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
+  refPart = { inlineData: { mimeType: mime, data: fs.readFileSync(REFERENCE).toString('base64') } }
+  logLine(`reference loaded: ${path.basename(REFERENCE)} — style guide only, never bundled, never committed`)
+  return refPart
+}
+
+/** Gemini call: the TEXT plus the reference IMAGE as inputs, with a retry wording. */
+async function generateRaw(ai, car, colour, year, tweak = '') {
+  const prompt = promptFor(car, colour, year) + tweak
+  const ref = loadReference()
+  const parts = ref ? [{ text: prompt }, ref] : [{ text: prompt }]
   let lastErr = null
   for (const model of MODELS) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const started = Date.now()
-      try {
-        logLine(`CALL model=${model} attempt=${attempt} ${car.make} ${car.model} ${colour}`)
-        const res = await ai.models.generateContent({ model, contents: prompt })
-        const b64 = firstImageBase64(res)
-        if (!b64) throw new Error('no image in the reply')
-        logLine(`OK   ${model} ${car.make} ${car.model} ${colour} ${Date.now() - started}ms`)
-        return Buffer.from(b64, 'base64')
-      } catch (err) {
-        lastErr = err
-        if (isQuota(err)) { logLine(`QUOTA: ${err.message}`); const e = new Error('quota'); e.quota = true; throw e }
-        logLine(`FAIL ${model} attempt=${attempt}: ${err.message}`)
-        await new Promise((r) => setTimeout(r, 1500 * attempt))
-      }
+    const started = Date.now()
+    try {
+      logLine(`CALL model=${model} ${car.make} ${car.model} ${colour}${tweak ? ' [retry wording]' : ''}`)
+      const res = await ai.models.generateContent({ model, contents: [{ role: 'user', parts }] })
+      const b64 = firstImageBase64(res)
+      if (!b64) throw new Error('no image in the reply')
+      logLine(`OK   ${model} ${car.make} ${car.model} ${colour} ${Date.now() - started}ms`)
+      return Buffer.from(b64, 'base64')
+    } catch (err) {
+      lastErr = err
+      if (isQuota(err)) { logLine(`QUOTA: ${err.message}`); const e = new Error('quota'); e.quota = true; throw e }
+      logLine(`FAIL ${model}: ${err.message}`)
+      await new Promise((r) => setTimeout(r, 1200))
     }
   }
   throw lastErr || new Error('all models failed')
@@ -147,20 +202,126 @@ function writeAppMap(map) {
   logLine(`app map: ${Object.keys(map).length} entries -> ${path.relative(ROOT, APP_MAP)}`)
 }
 
-function writeContactSheet(map) {
+function writeContactSheet(map, rejected = []) {
+  const refUrl = fs.existsSync(REFERENCE)
+    ? 'file:///' + REFERENCE.replace(/\\/g, '/').replace(/ /g, '%20')
+    : ''
   const cards = Object.entries(map).sort().map(([key, rel]) => {
     const file = path.basename(rel)
     return `<figure><img src="../figma-ui/public/assets/vehicles/${file}" alt="${key}"><figcaption>${key}<br><small>${file}</small></figcaption></figure>`
   }).join('\n')
-  const html = `<!doctype html><meta charset="utf-8"><title>Vehicle images</title>
-<style>body{font:14px system-ui;background:#f7f7f7;margin:24px}figure{display:inline-block;margin:8px;padding:8px;background:#fff;border:1px solid #e5e5e5;border-radius:12px;width:300px;vertical-align:top}
-img{width:100%;background:repeating-linear-gradient(45deg,#fafafa,#fafafa 10px,#f0f0f0 10px,#f0f0f0 20px)}figcaption{margin-top:6px;font-weight:600}</style>
-<h1>Vehicle images — ${Object.keys(map).length} file(s)</h1>
-<p>Delete the .webp files you do not want, then re-run the script for those models.</p>
-${cards}`
+  const rej = rejected.length
+    ? `<h2>Rejected — not used by the app (kept for inspection in generated/rejected/)</h2><ul>${rejected.map((r) => `<li>${r}</li>`).join('')}</ul>`
+    : ''
+  const html = `<!doctype html><meta charset="utf-8"><title>Vehicle images — review</title>
+<style>
+body{font:14px system-ui;background:#f7f7f7;margin:24px}
+.wrap{display:flex;gap:20px;align-items:flex-start}
+.ref{position:sticky;top:24px;width:340px;flex:0 0 340px;background:#fff;border:1px solid #e5e5e5;border-radius:14px;padding:10px}
+.ref img{width:100%;background:#fff;border-radius:8px}
+.grid{flex:1;display:flex;flex-wrap:wrap;gap:12px}
+figure{margin:0;padding:10px;background:#fff;border:1px solid #e5e5e5;border-radius:12px;width:300px}
+img{width:100%;background:repeating-linear-gradient(45deg,#fafafa,#fafafa 10px,#f0f0f0 10px,#f0f0f0 20px);border-radius:8px}
+figcaption{margin-top:6px;font-weight:600;word-break:break-all}
+small{color:#888;font-weight:400}
+</style>
+<h1>Vehicle images — review against the reference</h1>
+<p>Delete the .webp files you do not want, then re-run the script for those models. Nothing is auto-approved.</p>
+<div class="wrap">
+  <div class="ref">${refUrl ? `<img src="${refUrl}" alt="style reference">` : '<em>Reference image not found — style words were used.</em>'}
+    <p><strong>Style reference</strong><br><small>${path.basename(REFERENCE)} — used as a style guide only, never bundled.</small></p>
+  </div>
+  <div class="grid">${cards}</div>
+</div>
+${rej}`
   fs.mkdirSync(path.dirname(SHEET), { recursive: true })
   fs.writeFileSync(SHEET, html)
-  logLine(`contact sheet -> ${path.relative(ROOT, SHEET)}`)
+  logLine(`contact sheet (reference on the left) -> ${path.relative(ROOT, SHEET)}`)
+}
+
+/** The 12 colours, in step with the server catalogue (used for the pixel check). */
+const PALETTE = {
+  White: '#F5F5F5', Black: '#1C1C1E', Silver: '#C0C4C8', Grey: '#7A7F85', Red: '#C62828',
+  Blue: '#1E4FA3', Green: '#2E7D32', Brown: '#6D4C41', Gold: '#C9A227', Orange: '#EF6C00',
+  Yellow: '#F9C80E', Beige: '#D9C7A3',
+}
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
+
+/**
+ * Offline checks on the cut-out (no model needed): whole car inside the frame,
+ * no white halo, and the body colour actually matches the requested hex.
+ */
+async function checkPixels(sharp, png, colour) {
+  const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+  const { width: w, height: h, channels: ch } = info
+  let minX = w, minY = h, maxX = -1, maxY = -1, opaque = 0, halo = 0
+  const body = []
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * ch
+      if (data[i + 3] < 40) continue
+      opaque++
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+      const r = data[i], g = data[i + 1], b = data[i + 2]
+      if (r > 238 && g > 238 && b > 238) halo++
+      if (y < maxY - h * 0.12 && (r + g + b) / 3 > 60) body.push([r, g, b])
+    }
+  }
+  const reasons = []
+  if (!opaque) return ['nothing visible after background removal']
+  if (Math.min(minX, w - 1 - maxX) / w < 0.015 || Math.min(minY, h - 1 - maxY) / h < 0.015) {
+    reasons.push('car touches the frame edge — something is cropped')
+  }
+  if (halo / opaque > 0.02) reasons.push('white halo around the cut-out')
+  if (body.length > 50) {
+    const mean = body.reduce((a, s) => [a[0] + s[0], a[1] + s[1], a[2] + s[2]], [0, 0, 0]).map((v) => v / body.length)
+    const [tr, tg, tb] = hexRgb(PALETTE[colour] || PALETTE.Silver)
+    const off = Math.max(Math.abs(mean[0] - tr), Math.abs(mean[1] - tg), Math.abs(mean[2] - tb))
+    if (off > 95) reasons.push(`body colour is ${Math.round(off)} off ${colour} (${PALETTE[colour] || PALETTE.Silver})`)
+  }
+  return reasons
+}
+
+/** Vision check against the reference: angle, direction, framing, wheels, shape. */
+async function checkWithModel(ai, png, car, colour) {
+  const ref = loadReference()
+  const parts = [
+    {
+      text: 'Check this generated car photo against the style reference.\n' +
+        `The generated car must be a ${colour} ${car.make} ${car.model}, front three-quarter view from the ` +
+        "driver's side with the nose pointing LEFT, the whole car in frame, plain white background, " +
+        'no text, no logos, no watermark.\n' +
+        'Reply with JSON only: {"angle_ok":true,"facing_left":true,"whole_car":true,"colour_ok":true,' +
+        '"wheels_ok":true,"model_shape_ok":true,"text_or_logo":false,"notes":"short reason"}',
+    },
+    { inlineData: { mimeType: 'image/png', data: png.toString('base64') } },
+  ]
+  if (ref) parts.push(ref)
+  for (const model of VISION_MODELS) {
+    try {
+      const res = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts }],
+        config: { responseMimeType: 'application/json' },
+      })
+      const rp = res?.candidates?.[0]?.content?.parts || []
+      const txt = String(res?.text || rp.map((p) => p.text).filter(Boolean).join('') || '').trim()
+      const j = JSON.parse(txt.replace(/^```json\s*|```$/g, ''))
+      const bad = []
+      if (j.angle_ok === false) bad.push('angle differs from the reference')
+      if (j.facing_left === false) bad.push('car does not face left like the reference')
+      if (j.whole_car === false) bad.push('car is not fully in frame')
+      if (j.colour_ok === false) bad.push('colour does not match the request')
+      if (j.wheels_ok === false) bad.push('wheels/tyres look wrong')
+      if (j.model_shape_ok === false) bad.push(`does not look like a ${car.make} ${car.model}`)
+      if (j.text_or_logo === true) bad.push('contains text or a logo')
+      return { bad, notes: j.notes || '' }
+    } catch (err) { logLine(`vision check failed on ${model}: ${err.message}`) }
+  }
+  return null // no vision model available — the pixel checks still apply
 }
 
 async function main() {
@@ -168,9 +329,15 @@ async function main() {
 
   const source = JSON.parse(fs.readFileSync(SRC, 'utf8'))
   const year = source.year || new Date().getFullYear()
-  const colours = source.colours || ['White']
-  let cars = source.cars || []
+  const defaultColours = source.colours || ['White']
+  // --first-run: exactly the 3 review cars from the config, each with its own colour.
+  let cars = FIRST_RUN ? (source.firstRun || []) : (source.cars || [])
   if (ONLY) cars = cars.filter((c) => `${c.make} ${c.model}`.toLowerCase().includes(String(ONLY).toLowerCase()))
+  const jobs = []
+  for (const car of cars) for (const colour of (car.colour ? [car.colour] : defaultColours)) jobs.push({ car, colour })
+  const REJECT_DIR = path.join(ROOT, 'generated', 'rejected')
+  fs.mkdirSync(REJECT_DIR, { recursive: true })
+  const rejected = []
 
   fs.mkdirSync(RAW_DIR, { recursive: true })
   fs.mkdirSync(OUT_DIR, { recursive: true })
@@ -190,35 +357,62 @@ async function main() {
     ai = new GoogleGenAI({ apiKey: key })
   } catch { console.error('Missing @google/genai. Run: npm i -D @google/genai'); process.exit(1) }
 
-  logLine(`start: ${cars.length} model(s) x ${colours.length} colour(s), models=${MODELS.join(',')}`)
+  logLine(`start: ${jobs.length} job(s)${FIRST_RUN ? ' [FIRST RUN]' : ''} models=${MODELS.join(',')} reference=${fs.existsSync(REFERENCE) ? 'yes' : 'NO'}`)
   let made = 0
 
-  for (const car of cars) {
-    for (const colour of colours) {
-      const file = `${slug(car.make)}-${slug(car.model)}-${slug(colour)}.webp`
-      const abs = path.join(OUT_DIR, file)
-      if (fs.existsSync(abs)) { map[`${car.make}|${car.model}|${colour}`] = `assets/vehicles/${file}`; continue }
-      if (LIMIT && made >= LIMIT) { logLine('limit reached'); writeAppMap(map); writeContactSheet(map); return }
+  for (const job of jobs) {
+    const { car, colour } = job
+    const file = `${slug(car.make)}-${slug(car.model)}-${slug(colour)}.webp`
+    const abs = path.join(OUT_DIR, file)
+    if (fs.existsSync(abs)) { map[`${car.make}|${car.model}|${colour}`] = `assets/vehicles/${file}`; continue }
+    if (LIMIT && made >= LIMIT) { logLine('limit reached'); break }
 
+    // Up to 3 attempts; each rejection rewords the prompt instead of repeating it.
+    let saved = false
+    for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+      const tweak = RETRY_TWEAKS[Math.min(attempt, RETRY_TWEAKS.length - 1)]
+        .replace(/\{year\}/g, String(year)).replace(/\{make\}/g, car.make).replace(/\{model\}/g, car.model)
       try {
-        const raw = await generateRaw(ai, car, colour, year)
-        fs.writeFileSync(path.join(RAW_DIR, file.replace('.webp', '.png')), raw)
+        const raw = await generateRaw(ai, car, colour, year, tweak)
+        const rawPath = path.join(RAW_DIR, file.replace('.webp', `-try${attempt + 1}.png`))
+        fs.writeFileSync(rawPath, raw)
         const cut = await removeBackground(raw)
+
+        // ── quality checks before saving (the file is only published if it passes) ──
+        const problems = await checkPixels(sharp, cut, colour)
+        if (!SKIP_CHECKS) {
+          const verdict = await checkWithModel(ai, cut, car, colour)
+          if (verdict?.bad?.length) problems.push(...verdict.bad)
+          if (verdict?.notes) logLine(`vision notes: ${verdict.notes}`)
+        }
+        if (problems.length) {
+          logLine(`REJECT try${attempt + 1} ${file}: ${problems.join('; ')}`)
+          fs.writeFileSync(path.join(REJECT_DIR, `${file.replace('.webp', '')}-try${attempt + 1}.png`), cut)
+          if (attempt === 2) rejected.push(`${file} — ${problems.join('; ')}`)
+          continue
+        }
+
         const { buffer, quality } = await toWebp(sharp, cut)
         fs.writeFileSync(abs, buffer)
         map[`${car.make}|${car.model}|${colour}`] = `assets/vehicles/${file}`
         made++
-        logLine(`SAVED ${file} ${(buffer.length / 1024).toFixed(1)} KB q=${quality}`)
+        saved = true
+        logLine(`SAVED ${file} ${(buffer.length / 1024).toFixed(1)} KB q=${quality} (try${attempt + 1})`)
       } catch (err) {
-        if (err?.quota) { logLine('stopping on quota'); writeAppMap(map); writeContactSheet(map); return }
-        logLine(`SKIP ${file}: ${err.message}`)
+        if (err?.quota) {
+          logLine('stopping: daily quota reached')
+          writeAppMap(map); writeContactSheet(map, rejected); return
+        }
+        logLine(`ERROR ${file} try${attempt + 1}: ${err.message}`)
       }
     }
+    if (!saved) logLine(`GIVING UP on ${file} after 3 attempts — the app keeps the SVG for this car`)
   }
 
   writeAppMap(map)
-  writeContactSheet(map)
-  logLine(`done: ${made} new image(s), ${Object.keys(map).length} mapped in total`)
+  writeContactSheet(map, rejected)
+  logLine(`done: ${made} new image(s), ${Object.keys(map).length} mapped, ${rejected.length} rejected`)
+
 }
 
 main().catch((err) => { logLine(`FATAL ${err.message}`); process.exit(1) })
