@@ -145,5 +145,6 @@ export declare function importSeedImage(input: {
     candidate: Candidate;
     budget: CarsxeBudget;
 }>;
+export declare function resolveVehicleImageCached(v?: VehicleLike | null): Promise<ResolvedVehicleImage>;
 export declare function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage>;
 //# sourceMappingURL=vehicleImages.d.ts.map

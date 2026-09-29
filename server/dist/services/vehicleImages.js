@@ -53,6 +53,7 @@ exports.listVehicleImages = listVehicleImages;
 exports.approveVehicleImage = approveVehicleImage;
 exports.rejectVehicleImage = rejectVehicleImage;
 exports.importSeedImage = importSeedImage;
+exports.resolveVehicleImageCached = resolveVehicleImageCached;
 exports.noteDriverVehicle = noteDriverVehicle;
 // ─────────────────────────────────────────────────────────────────────────────
 // vehicleImages.ts — the vehicle PHOTO cache (CarsXE-backed, but the API key
@@ -521,6 +522,24 @@ async function importSeedImage(input) {
         await logCarsxeCall(cacheKey, (input.candidates || []).length + 1, 200, "imported from dashboard search");
     }
     return { row, candidate, budget: await carsxeUsage() };
+}
+// ── cached resolver for the POLLED endpoints ─────────────────────────────────
+// /api/rides/me/active-state is polled roughly once a second while the trip card
+// is open, so the three lookup queries above must not run on every poll. Five
+// minutes of TTL costs nothing and a stale entry only means a freshly approved
+// photo shows up to five minutes later (the admin approve/reject endpoints do not
+// need to clear it: the app is relaunched far more often than that).
+const resolveCache = new Map();
+const RESOLVE_TTL_MS = 5 * 60 * 1000;
+async function resolveVehicleImageCached(v) {
+    const key = vehicleImageCacheKey(v);
+    const hit = resolveCache.get(key);
+    if (hit && Date.now() - hit.at < RESOLVE_TTL_MS) {
+        return { url: hit.url, cacheKey: key, matched: hit.url ? "exact" : "none" };
+    }
+    const resolved = await resolveVehicleImage(v);
+    resolveCache.set(key, { url: resolved.url, at: Date.now() });
+    return resolved;
 }
 async function noteDriverVehicle(v) {
     const resolved = await resolveVehicleImage(v);

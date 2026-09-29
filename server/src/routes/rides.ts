@@ -62,6 +62,27 @@ router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Respon
       [user.id]
     ).catch(() => null);
 
+    // The rider must see the ACTUAL car. If an approved photo exists for this
+    // driver's make|model|generation|colour we hand the app OUR OWN stored URL
+    // (GET /api/vehicle-images/…), never a third-party link. Cached for 5 minutes
+    // because this endpoint is polled every second, and a failure here can never
+    // break the active-state response — the app just keeps its SVG.
+    let ridePayload: any = ride ? mapRide(ride) : null;
+    if (ridePayload && (ride.vehicle_make || ride.vehicle_model)) {
+      try {
+        const { resolveVehicleImageCached } = await import("../services/vehicleImages");
+        const img = await resolveVehicleImageCached({
+          make: ride.vehicle_make,
+          model: ride.vehicle_model,
+          year: ride.vehicle_year,
+          colour: ride.vehicle_color,
+        });
+        if (img.url) ridePayload.vehicle_image_url = img.url;
+      } catch {
+        /* no approved photo yet — the app draws the body-type SVG */
+      }
+    }
+
     res.json({
       role: user.role,
       offer: offer
@@ -74,7 +95,7 @@ router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Respon
             ride: mapRide(offer),
           }
         : null,
-      ride: ride ? mapRide(ride) : null,
+      ride: ridePayload,
       serverTime: new Date().toISOString(),
     });
   } catch (err: any) {

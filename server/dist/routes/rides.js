@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cleanupStaleRides = cleanupStaleRides;
 const express_1 = require("express");
@@ -50,6 +83,28 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
           AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
         ORDER BY r.created_at DESC
         LIMIT 1`, [user.id]).catch(() => null);
+        // The rider must see the ACTUAL car. If an approved photo exists for this
+        // driver's make|model|generation|colour we hand the app OUR OWN stored URL
+        // (GET /api/vehicle-images/…), never a third-party link. Cached for 5 minutes
+        // because this endpoint is polled every second, and a failure here can never
+        // break the active-state response — the app just keeps its SVG.
+        let ridePayload = ride ? mapRide(ride) : null;
+        if (ridePayload && (ride.vehicle_make || ride.vehicle_model)) {
+            try {
+                const { resolveVehicleImageCached } = await Promise.resolve().then(() => __importStar(require("../services/vehicleImages")));
+                const img = await resolveVehicleImageCached({
+                    make: ride.vehicle_make,
+                    model: ride.vehicle_model,
+                    year: ride.vehicle_year,
+                    colour: ride.vehicle_color,
+                });
+                if (img.url)
+                    ridePayload.vehicle_image_url = img.url;
+            }
+            catch {
+                /* no approved photo yet — the app draws the body-type SVG */
+            }
+        }
         res.json({
             role: user.role,
             offer: offer
@@ -62,7 +117,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
                     ride: mapRide(offer),
                 }
                 : null,
-            ride: ride ? mapRide(ride) : null,
+            ride: ridePayload,
             serverTime: new Date().toISOString(),
         });
     }

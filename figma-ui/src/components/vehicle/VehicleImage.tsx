@@ -192,10 +192,20 @@ export function resolveVehicleImage(vehicle?: {
   vehicle_body_type?: string | null
   vehicle_make?: string | null
   vehicle_model?: string | null
+  /** The photo the SERVER resolved for this car (approved in the review page). */
+  vehicle_image_url?: string | null
+  image_url?: string | null
 } | null): VehicleImageSpec {
   const make = String(vehicle?.make || vehicle?.vehicle_make || '').trim()
   const model = String(vehicle?.model || vehicle?.vehicle_model || '').trim()
   const colour = colourNameOf(vehicle?.colour || vehicle?.vehicle_color)
+
+  // 0. a PHOTO THE SERVER RESOLVED for this car — an approved, background-removed
+  //    copy stored in our own bucket. It outranks everything below: it is a real
+  //    car, in the driver's colour, approved by a human. (Served by
+  //    GET /api/vehicle-images/<file>.webp, never hotlinked from a third party.)
+  const serverUrl = String(vehicle?.vehicle_image_url || vehicle?.image_url || '').trim()
+  if (serverUrl) return { type: 'url', url: serverUrl }
 
   // 1. a real photo for this exact car, if one was generated
   const images = ((photoMap as any)?.images || {}) as Record<string, string>

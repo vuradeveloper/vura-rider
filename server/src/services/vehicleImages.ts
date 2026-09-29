@@ -590,6 +590,28 @@ export async function importSeedImage(input: {
 
   return { row, candidate, budget: await carsxeUsage() };
 }
+
+// ── cached resolver for the POLLED endpoints ─────────────────────────────────
+// /api/rides/me/active-state is polled roughly once a second while the trip card
+// is open, so the three lookup queries above must not run on every poll. Five
+// minutes of TTL costs nothing and a stale entry only means a freshly approved
+// photo shows up to five minutes later (the admin approve/reject endpoints do not
+// need to clear it: the app is relaunched far more often than that).
+const resolveCache = new Map<string, { url: string | null; at: number }>();
+const RESOLVE_TTL_MS = 5 * 60 * 1000;
+
+export async function resolveVehicleImageCached(
+  v?: VehicleLike | null
+): Promise<ResolvedVehicleImage> {
+  const key = vehicleImageCacheKey(v);
+  const hit = resolveCache.get(key);
+  if (hit && Date.now() - hit.at < RESOLVE_TTL_MS) {
+    return { url: hit.url, cacheKey: key, matched: hit.url ? "exact" : "none" };
+  }
+  const resolved = await resolveVehicleImage(v);
+  resolveCache.set(key, { url: resolved.url, at: Date.now() });
+  return resolved;
+}
 export async function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage> {
   const resolved = await resolveVehicleImage(v);
   if (resolved.url) return resolved;
