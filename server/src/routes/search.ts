@@ -236,6 +236,66 @@ function wantsDistanceSort(value: unknown, hasAt: boolean): boolean {
   return hasAt;
 }
 
+/**
+ * WeGo's list is HERE's own relevance order - which is already proximity-aware because we
+ * always send `at` - with the distance shown as a badge. Re-ranking here was tempting and
+ * wrong: any heuristic that promotes "nearest" can bury the place the rider meant (the
+ * canonical Fourways Farmers Market lost to a small shop 60 km out when we sorted by
+ * distance alone). So the provider's order is preserved, exactly.
+ */
+
+export interface SearchBias {
+  lat: number;
+  lng: number;
+  /** client | last_ride | last_search - shown in the response so this is never a mystery. */
+  source: string;
+}
+
+/**
+ * The point a search is ranked against, and the fix for the worst search bug we had:
+ * a rider without a GPS fix sent NO `at`, HERE was asked an unranked question, returned
+ * nothing usable and the server quietly answered from OpenStreetMap - which is how
+ * "Farmers" produced a list of farm associations in KwaZulu-Natal.
+ *
+ * Every fallback is keyed on the rider's PRIMARY KEY (users.id), so it can never pick up
+ * somebody else's place: their own last ride pickup first, then their own last saved
+ * search. With no history at all there is no bias, and the response says so.
+ */
+async function resolveBias(firebaseUid: string, lat: number, lng: number): Promise<SearchBias | null> {
+  if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng, source: "client" };
+
+  const user = await queryOne<{ id: string }>("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]).catch(
+    () => null
+  );
+  if (!user) return null;
+
+  const ride = await queryOne<{ lat: number; lng: number }>(
+    `SELECT pickup_lat AS lat, pickup_lng AS lng
+       FROM rides
+      WHERE passenger_id = $1 AND pickup_lat IS NOT NULL AND pickup_lng IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [user.id]
+  ).catch(() => null);
+  if (ride && Number.isFinite(Number(ride.lat)) && Number.isFinite(Number(ride.lng))) {
+    return { lat: Number(ride.lat), lng: Number(ride.lng), source: "last_ride" };
+  }
+
+  const saved = await queryOne<{ lat: number; lng: number }>(
+    `SELECT lat, lng
+       FROM recent_searches
+      WHERE user_id = $1 AND lat IS NOT NULL AND lng IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [user.id]
+  ).catch(() => null);
+  if (saved && Number.isFinite(Number(saved.lat)) && Number.isFinite(Number(saved.lng))) {
+    return { lat: Number(saved.lat), lng: Number(saved.lng), source: "last_search" };
+  }
+
+  return null;
+}
+
 // GET /api/search/geocode?q=..&lat=..&lng=..&limit=..&sort=..&country=..
 // HERE WeGo-exact search: Autosuggest ranking + Discover canonical top-up,
 // confined to South Africa and returned closest-first, with OpenStreetMap
@@ -246,9 +306,11 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
   const limit = Math.max(1, Math.min(15, parseInt((req.query.limit as string) || "10", 10)));
-  const hasAt = Number.isFinite(lat) && Number.isFinite(lng);
-  // Closest-first by default while the rider's location is known, and always
-  // restricted to South Africa unless the caller widens it.
+  // Ranked against the rider's own point. Never unranked: see resolveBias().
+  const bias = await resolveBias(req.userId!, lat, lng);
+  const hasAt = Boolean(bias);
+  // Closest-first only when explicitly asked for; the default is HERE's relevance order
+  // with the nearby branch floated to the top (rankNearbyFirst), which is what WeGo does.
   const wantsDistance = wantsDistanceSort(req.query.sort, hasAt);
   const inFilter = countryInFilter(req.query.country);
   if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
@@ -256,8 +318,12 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const HERE_KEY = process.env.HERE_API_KEY || "";
     if (HERE_KEY) {
-      const shared = new URLSearchParams({ q, limit: "15", lang: "eng" });
-      if (hasAt) shared.set("at", `${lat},${lng}`);
+      // A bigger pool than we return: HERE mixes in category/chain rows that carry no
+      // position, and those are dropped below. Slicing to `limit` first is what used to
+      // hand the app a short list - or, with nothing left, a silent OSM fallback.
+      const pool = String(Math.min(50, Math.max(limit * 3, 20)));
+      const shared = new URLSearchParams({ q, limit: pool, lang: "en" });
+      if (bias) shared.set("at", `${bias.lat},${bias.lng}`);
       if (inFilter) shared.set("in", inFilter);
       const suggestParams = new URLSearchParams(shared);
       suggestParams.set("termsLimit", "5");
@@ -286,11 +352,20 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
       // 2) Then any canonical Discover place Autosuggest did not return.
       (discover?.items || []).forEach(add);
 
-      if (items.length > 0) {
-        const ordered = wantsDistance ? sortByStraightLineDistance(items) : items;
+      // Only real places reach the app. An item with no position is a "Restaurants"-style
+      // query suggestion the app cannot show, and it used to consume one of the slots in
+      // a list that was sliced BEFORE this filter even existed.
+      const places = items.filter(
+        (i) => Number.isFinite(Number(i.lat)) && Number.isFinite(Number(i.lng))
+      );
+
+      if (places.length > 0) {
+        // HERE's order, exactly as WeGo lists it (never re-sorted here).
+        const ordered = wantsDistance ? sortByStraightLineDistance(places) : places;
         res.json({
           provider: "here",
           sort: wantsDistance ? "distance" : "relevance",
+          bias: bias?.source || "none",
           items: ordered.slice(0, limit),
           queryTerms: (suggest?.queryTerms || [])
             .map((t: any) => (typeof t === "string" ? t : t?.term))
@@ -298,7 +373,9 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
         });
         return;
       }
-      console.warn("[search] HERE returned nothing, falling back to OSM");
+      console.warn(
+        `[search] HERE returned no usable place for "${q}" (bias=${bias?.source || "none"}) - falling back to OSM`
+      );
     }
 
     const base = (
@@ -307,7 +384,7 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
     );
     const raw = (await fetch(
       `${base}/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
-        (Number.isFinite(lat) && Number.isFinite(lng) ? `&lat=${lat}&lon=${lng}` : "") +
+        (bias ? `&lat=${bias.lat}&lon=${bias.lng}` : "") +
         (osmCountryCodes(inFilter) ? `&countrycodes=${osmCountryCodes(inFilter)}` : ""),
       { headers: { "User-Agent": "VuraRiderServer/1.0" } }
     )
@@ -322,7 +399,7 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
       resultType: "address",
     })).slice(0, limit);
 
-    res.json({ provider: "nominatim", items, queryTerms: [] });
+    res.json({ provider: "nominatim", bias: bias?.source || "none", items, queryTerms: [] });
   } catch (err: any) {
     console.error("Search geocode error:", err.message);
     res.status(502).json({ error: "Search failed. Please try again." });
@@ -337,7 +414,8 @@ router.get("/discover", requireAuth, async (req: AuthRequest, res: Response) => 
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
   const limit = Math.max(1, Math.min(15, parseInt((req.query.limit as string) || "10", 10)));
-  const hasAt = Number.isFinite(lat) && Number.isFinite(lng);
+  const bias = await resolveBias(req.userId!, lat, lng);
+  const hasAt = Boolean(bias);
   const wantsDistance = wantsDistanceSort(req.query.sort, hasAt);
   const inFilter = countryInFilter(req.query.country);
   if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
@@ -350,8 +428,9 @@ router.get("/discover", requireAuth, async (req: AuthRequest, res: Response) => 
       return;
     }
 
-    const shared = new URLSearchParams({ q, limit: "15", lang: "eng" });
-    if (hasAt) shared.set("at", `${lat},${lng}`);
+    const pool = String(Math.min(50, Math.max(limit * 3, 20)));
+    const shared = new URLSearchParams({ q, limit: pool, lang: "en" });
+    if (bias) shared.set("at", `${bias.lat},${bias.lng}`);
     if (inFilter) shared.set("in", inFilter);
     const hereKey = encodeURIComponent(HERE_KEY);
 
@@ -376,10 +455,12 @@ router.get("/discover", requireAuth, async (req: AuthRequest, res: Response) => 
     // …with Autosuggest filling the gaps (category/chain rows, entrances).
     (suggest?.items || []).forEach(add);
 
-    const ordered = wantsDistance ? sortByStraightLineDistance(items) : items;
+    const places = items.filter((i) => Number.isFinite(Number(i.lat)) && Number.isFinite(Number(i.lng)));
+    const ordered = wantsDistance ? sortByStraightLineDistance(places) : places;
     res.json({
       provider: "here",
       sort: wantsDistance ? "distance" : "relevance",
+      bias: bias?.source || "none",
       items: ordered.slice(0, limit),
       queryTerms: [],
     });
@@ -403,7 +484,7 @@ router.get("/reverse", requireAuth, async (req: AuthRequest, res: Response) => {
     const HERE_KEY = process.env.HERE_API_KEY || "";
     if (HERE_KEY) {
       const here: any = await fetch(
-        `https://revgeocode.search.hereapi.com/v1/revgeocode?at=${lat},${lng}&limit=1&lang=eng&apiKey=${encodeURIComponent(HERE_KEY)}`,
+        `https://revgeocode.search.hereapi.com/v1/revgeocode?at=${lat},${lng}&limit=1&lang=en&apiKey=${encodeURIComponent(HERE_KEY)}`,
         { headers: { "User-Agent": "VuraRiderServer/1.0" } }
       )
         .then((r) => (r.ok ? r.json() : null))
