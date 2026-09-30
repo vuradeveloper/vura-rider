@@ -550,27 +550,39 @@ router.get("/driver/earnings/pending", auth_1.requireAuth, async (req, res) => {
             res.json({ total_rides: 0, total_earnings: 0 });
             return;
         }
-        // Real available earnings for the driver: the sum of completed-ride fares
-        // that were NOT paid in cash. Cash rides are excluded because the driver
-        // already received that money by hand at the end of the trip — including
-        // them in the wallet would let the driver withdraw the same amount twice
-        // (once in cash + once via payout). Card / affiliate / pay-later rides flow
-        // through Vura, so their fares are the true withdrawable balance.
+        // Real available earnings for the driver: the fares riders actually PAID BY CARD on
+        // completed rides, minus what has already been paid out. Cash is excluded because the
+        // driver already received that money by hand at the end of the trip - counting it here
+        // would let the same fare be withdrawn twice (once in cash, once as a payout).
         //
-        // Ensure the payouts table exists — if it's missing the subquery below
-        // would 500 ("relation payouts does not exist") and the app falls back to
-        // showing R0.00 instead of the real balance.
+        // COALESCE(actual_fare, estimated_fare, 0) is what stops this reading R0.00: a ride
+        // that completed without actual_fare ever being written still shows the fare the rider
+        // was charged. The same expression is used by POST /api/payouts/request, so the wallet
+        // figure and the withdrawal limit can never drift apart again.
+        //
+        // Ensure the payouts table exists - if it's missing the subquery below would 500
+        // ("relation payouts does not exist") and the app falls back to R0.00.
         await (0, payouts_1.ensurePayoutsTable)();
         const earnings = await (0, database_1.queryOne)(`SELECT
-         (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
+         (SELECT COALESCE(SUM(COALESCE(actual_fare, estimated_fare, 0)), 0)::float FROM rides
            WHERE driver_id = $1 AND status = 'completed'
-             AND COALESCE(payment_method, '') <> 'cash')
-         - (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
-           WHERE driver_id = $1 AND status = 'success') AS total_earnings,
+             AND LOWER(COALESCE(payment_method, '')) = 'card') AS card_earnings,
+         (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
+           WHERE driver_id = $1 AND status = 'success') AS paid_out,
          (SELECT COUNT(*)::int FROM rides
            WHERE driver_id = $1 AND status = 'completed'
-             AND COALESCE(payment_method, '') <> 'cash') AS total_rides`, [user.id]);
-        res.json(earnings || { total_rides: 0, total_earnings: 0 });
+             AND LOWER(COALESCE(payment_method, '')) = 'card') AS total_rides`, [user.id]);
+        const cardEarnings = Number(earnings?.card_earnings || 0);
+        const paidOut = Number(earnings?.paid_out || 0);
+        const balance = Math.max(0, cardEarnings - paidOut);
+        res.json({
+            ...(earnings || {}),
+            card_earnings: cardEarnings,
+            paid_out: paidOut,
+            total_earnings: balance,
+            balance,
+            total_rides: Number(earnings?.total_rides || 0),
+        });
     }
     catch (err) {
         console.error("Pending earnings error:", err);

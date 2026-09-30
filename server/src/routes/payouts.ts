@@ -127,20 +127,29 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
-    // Available balance = what the driver actually earned on completed rides
-    // minus what has already been paid out in successful withdrawals. Mirrors
-    // the home-screen figure (rides.actual_fare) and the wallet endpoint so a
-    // driver can always cash out the real number they see on their dashboard.
-    const earnings = await queryOne<{ total: number }>(
+    // Withdrawable balance = the fares riders actually PAID BY CARD on completed rides,
+    // minus what has already been paid out. This is deliberately the SAME expression the
+    // wallet endpoint uses, so the figure on the driver's screen is exactly the figure
+    // they can cash out.
+    //
+    // Two corrections to what this used to do: cash rides are excluded (the driver already
+    // holds that money, and counting it let the same fare be taken twice), and
+    // COALESCE(actual_fare, estimated_fare, 0) means a completed ride whose actual_fare was
+    // never written still counts instead of silently reading R0.00.
+    const earnings = await queryOne<{ card_earnings: number; paid_out: number }>(
       `SELECT
-         (SELECT COALESCE(SUM(actual_fare), 0)::float FROM rides
-           WHERE driver_id = $1 AND status = 'completed')
-         - (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
-           WHERE driver_id = $1 AND status = 'success') AS total`,
+         (SELECT COALESCE(SUM(COALESCE(actual_fare, estimated_fare, 0)), 0)::float FROM rides
+           WHERE driver_id = $1 AND status = 'completed'
+             AND LOWER(COALESCE(payment_method, '')) = 'card') AS card_earnings,
+         (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
+           WHERE driver_id = $1 AND status = 'success') AS paid_out`,
       [user.id]
     );
 
-    const available = Number(earnings?.total || 0);
+    const available = Math.max(
+      0,
+      Number(earnings?.card_earnings || 0) - Number(earnings?.paid_out || 0)
+    );
     if (amountRands > available) {
       res.status(400).json({ error: `Insufficient balance. You have R${available.toFixed(2)} available to cash out.` });
       return;
