@@ -43,6 +43,8 @@ export interface Candidate {
   bytes: number;
   score: number;
   note: string;
+  /** Share of the outer border that was transparent/white in the RAW download (0..1). */
+  borderWhite?: number;
 }
 
 export interface VehicleLike {
@@ -359,6 +361,99 @@ export async function processVehicleImage(input: Buffer): Promise<Buffer> {
   return out;
 }
 
+// ── is this a studio shot on a plain backdrop, or a photo with a real scene? ───
+
+/**
+ * How much of the picture is a plain, keyable background?
+ *
+ * Only the OUTER BORDER RING and the four CORNERS of a small thumbnail are
+ * measured, and a pixel counts as background when it is either transparent or
+ * near-pure white - the very same test the keying loop in processVehicleImage()
+ * uses. A studio shot on a white/transparent backdrop scores ~1.0; a forecourt,
+ * press or street photo has road, sky, grass or a building along the border and
+ * scores low. Measuring the ring rather than the whole frame is deliberate: a
+ * WHITE CAR sits inside the frame, not on its border, so it cannot inflate the
+ * number the way a "count the white pixels" rule would.
+ *
+ * Must run on the RAW download, before processVehicleImage(): the stored WebP has
+ * its background already keyed to transparent, so measuring that file would make
+ * every candidate look like a studio shot.
+ */
+export async function measureStudioBackground(
+  input: Buffer
+): Promise<{ borderWhite: number; corners: number }> {
+  const sharp = (await import("sharp")).default;
+  const { data, info } = await sharp(input)
+    .rotate()
+    .resize(160, 160, { fit: "inside" })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  const band = Math.max(2, Math.round(Math.min(w, h) * 0.05));
+  const cw = Math.max(2, Math.round(w * 0.12));
+  const ch = Math.max(2, Math.round(h * 0.12));
+
+  /** 1 = keyable background, 0.5 = near-white (the feathered band), 0 = content. */
+  const weight = (x: number, y: number): number => {
+    const i = (y * w + x) * 4;
+    const a = data[i + 3];
+    // Transparent wins outright: CarsXE's `transparent` filter hands us cut-outs, and
+    // lossy WebP/PNG alpha edges are noisy, so anything clearly see-through counts (a
+    // real background pixel is alpha 255, which leaves 40 a wide margin).
+    if (a < 40) return 1;
+    if (a < 160) return 0.5; // soft/fringed edge of a cut-out
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const min = Math.min(r, g, b);
+    const spread = Math.max(r, g, b) - min;
+    if (min >= 236 && spread <= 14) return 1;
+    if (min >= 205 && spread <= 20) return 0.5;
+    return 0;
+  };
+
+  let ringSum = 0;
+  let ringN = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x >= band && x < w - band && y >= band && y < h - band) continue;
+      ringN += 1;
+      ringSum += weight(x, y);
+    }
+  }
+
+  let cornerSum = 0;
+  let cornerN = 0;
+  for (const [x0, y0] of [[0, 0], [w - cw, 0], [0, h - ch], [w - cw, h - ch]]) {
+    for (let y = y0; y < y0 + ch; y++) {
+      for (let x = x0; x < x0 + cw; x++) {
+        cornerN += 1;
+        cornerSum += weight(x, y);
+      }
+    }
+  }
+
+  return {
+    borderWhite: ringN ? ringSum / ringN : 0,
+    corners: cornerN ? cornerSum / cornerN : 0,
+  };
+}
+
+/**
+ * Points added to a candidate's text score for looking like a studio shot.
+ *
+ * Both the ring AND the corners have to be clean for the full bonus: a car shot
+ * against a bright sky has a white top border but a road along the bottom and dark
+ * corners, which is not the clean catalogue look the rider card wants.
+ */
+export function studioBonus(m: { borderWhite: number; corners: number }): number {
+  if (m.borderWhite >= 0.85 && m.corners >= 0.7) return 10;
+  if (m.borderWhite >= 0.6) return 4;
+  if (m.borderWhite <= 0.2) return -4;
+  return 0;
+}
+
 // ── the one and only CarsXE call, guarded by the budget ───────────────────────
 
 /**
@@ -420,7 +515,11 @@ export async function runCarsxeFetch(cacheKey: string): Promise<void> {
   const stored: Candidate[] = [];
   for (const [i, pick] of picks.entries()) {
     try {
-      const webp = await processVehicleImage(await downloadImage(pick.link!));
+      const raw = await downloadImage(pick.link!);
+      // Measured on the RAW bytes: this is what decides studio vs busy background.
+      const bg = await measureStudioBackground(raw);
+      const bonus = studioBonus(bg);
+      const webp = await processVehicleImage(raw);
       const storageKey = storageKeyFor(cacheKey, i);
       const up = await uploadToS3(storageKey, webp.toString("base64"), "image/webp");
       const meta = await sharp(webp).metadata();
@@ -432,8 +531,15 @@ export async function runCarsxeFetch(cacheKey: string): Promise<void> {
         width: meta.width || CANVAS.w,
         height: meta.height || CANVAS.h,
         bytes: up.size,
-        score: pick.score,
-        note: pick.note,
+        score: pick.score + bonus,
+        note: [
+          pick.note,
+          `white border ${(bg.borderWhite * 100).toFixed(0)}%`,
+          bonus >= 10 ? "studio-style" : bonus < 0 ? "busy background" : "",
+        ]
+          .filter(Boolean)
+          .join(" | "),
+        borderWhite: Math.round(bg.borderWhite * 100) / 100,
       });
     } catch (err: any) {
       console.warn(`[vehicleImages] candidate ${i + 1} for ${cacheKey} failed:`, err?.message || err);
@@ -444,6 +550,12 @@ export async function runCarsxeFetch(cacheKey: string): Promise<void> {
     await execute(`UPDATE vehicle_images SET status = 'none_found', api_calls_used = 1 WHERE id = $1`, [row.id]);
     return;
   }
+
+  // Order AFTER the pixels are known. The text score alone ties constantly (three
+  // candidates at score 6 is normal - measured on the live Polo row), which used to
+  // let the widest photo win even when a clean studio shot sat right beside it.
+  // With the border measurement folded in, the studio shot now leads.
+  stored.sort((a, b) => b.score - a.score || (b.width || 0) - (a.width || 0));
 
   const best = stored[0];
   await execute(

@@ -14,6 +14,8 @@ export interface Candidate {
     bytes: number;
     score: number;
     note: string;
+    /** Share of the outer border that was transparent/white in the RAW download (0..1). */
+    borderWhite?: number;
 }
 export interface VehicleLike {
     make?: string | null;
@@ -104,6 +106,37 @@ export declare function downloadImage(url: string): Promise<Buffer>;
  * WebP quality down until it fits 80 KB.
  */
 export declare function processVehicleImage(input: Buffer): Promise<Buffer>;
+/**
+ * How much of the picture is a plain, keyable background?
+ *
+ * Only the OUTER BORDER RING and the four CORNERS of a small thumbnail are
+ * measured, and a pixel counts as background when it is either transparent or
+ * near-pure white - the very same test the keying loop in processVehicleImage()
+ * uses. A studio shot on a white/transparent backdrop scores ~1.0; a forecourt,
+ * press or street photo has road, sky, grass or a building along the border and
+ * scores low. Measuring the ring rather than the whole frame is deliberate: a
+ * WHITE CAR sits inside the frame, not on its border, so it cannot inflate the
+ * number the way a "count the white pixels" rule would.
+ *
+ * Must run on the RAW download, before processVehicleImage(): the stored WebP has
+ * its background already keyed to transparent, so measuring that file would make
+ * every candidate look like a studio shot.
+ */
+export declare function measureStudioBackground(input: Buffer): Promise<{
+    borderWhite: number;
+    corners: number;
+}>;
+/**
+ * Points added to a candidate's text score for looking like a studio shot.
+ *
+ * Both the ring AND the corners have to be clean for the full bonus: a car shot
+ * against a bright sky has a white top border but a road along the bottom and dark
+ * corners, which is not the clean catalogue look the rider card wants.
+ */
+export declare function studioBonus(m: {
+    borderWhite: number;
+    corners: number;
+}): number;
 /**
  * Runs for a row that is already 'queued' — the caller must have WON the claim,
  * so there is exactly one of these per cache_key. Logs the call (status and count
