@@ -12,6 +12,25 @@
 
 export const API_URL = "https://api.ridevura.com";
 
+/**
+ * Make a server-supplied path absolute so the WebView can actually load it.
+ *
+ * WHY THIS EXISTS: the vehicle-photo service hands out
+ * `/api/vehicle-images/<file>.webp` whenever PUBLIC_API_BASE is not set on the
+ * server (server/src/services/vehicleImages.ts, imageBaseUrl()). Inside the
+ * Capacitor app the page origin is `https://localhost`, so that relative path was
+ * requested from `https://localhost/api/vehicle-images/...` — the app's own bundle
+ * server, which has no such file — and the rider's car card silently fell back to
+ * the drawing. That is the "car photo never shows" bug. Absolute URLs
+ * (http/https, protocol-relative, data:, blob:) pass through untouched.
+ */
+export function absoluteApiUrl(pathOrUrl?: string | null): string {
+  const raw = String(pathOrUrl || "").trim();
+  if (!raw) return "";
+  if (/^(https?:)?\/\//i.test(raw) || raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
+  return `${API_URL.replace(/\/+$/, "")}/${raw.replace(/^\/+/, "")}`;
+}
+
 // ─── HTTP transport ──────────────────────────────────────────────────────────
 // Single entry point for every network call the app makes.
 //

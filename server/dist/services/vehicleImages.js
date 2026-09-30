@@ -278,8 +278,13 @@ function scoreCandidates(images) {
 }
 // ── download, key out the studio background, trim, canvas, webp under 80 KB ───
 function imageBaseUrl() {
-    const base = (process.env.PUBLIC_API_BASE || "").replace(/\/+$/, "");
-    return base ? `${base}/api/vehicle-images` : "/api/vehicle-images";
+    // PUBLIC_API_BASE wins when set. Otherwise fall back to the production host
+    // instead of a bare path: a relative path only works for our own server-rendered
+    // pages, and inside the Capacitor WebView it resolved against https://localhost,
+    // so the rider's car photo could never load. With an absolute URL here, both the
+    // app builds already installed and the new ones can fetch the image.
+    const base = (process.env.PUBLIC_API_BASE || "https://api.ridevura.com").replace(/\/+$/, "");
+    return `${base}/api/vehicle-images`;
 }
 const fileFor = (cacheKey, index = 0) => `${cacheKey.replace(/\|/g, "-").replace(/[^a-z0-9.\-]/gi, "_")}${index ? `-${index + 1}` : ""}.webp`;
 const storageKeyFor = (cacheKey, index = 0) => `vehicle-images/${fileFor(cacheKey, index)}`;

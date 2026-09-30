@@ -178,6 +178,7 @@ export default function VehicleImage({ bodyType, colour, size = 200, missing, cl
  * change this function's return value.
  */
 import photoMap from '../../assets/vehiclePhotos.json'
+import { absoluteApiUrl } from '../../lib/backend'
 
 export type VehicleImageSpec =
   | { type: 'svg'; bodyType: BodyType; colourHex: string }
@@ -204,7 +205,12 @@ export function resolveVehicleImage(vehicle?: {
   //    copy stored in our own bucket. It outranks everything below: it is a real
   //    car, in the driver's colour, approved by a human. (Served by
   //    GET /api/vehicle-images/<file>.webp, never hotlinked from a third party.)
-  const serverUrl = String(vehicle?.vehicle_image_url || vehicle?.image_url || '').trim()
+  // The URL is absolutised before use. When PUBLIC_API_BASE is unset the server
+  // sends a path like /api/vehicle-images/x.webp, and inside the WebView that
+  // resolved to https://localhost/api/... (the app's own bundle server, which has
+  // no such file), so the photo never appeared. absoluteApiUrl() prefixes the API
+  // host, so the card shows the photo regardless of how the server is configured.
+  const serverUrl = absoluteApiUrl(vehicle?.vehicle_image_url || vehicle?.image_url)
   if (serverUrl) return { type: 'url', url: serverUrl }
 
   // 1. a real photo for this exact car, if one was generated
