@@ -70,7 +70,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
               d.profile_photo_url AS driver_photo_url,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               dp.vehicle_year, dp.body_type, dp.vehicle_category,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng,
               dp.current_heading AS driver_heading,
@@ -226,7 +226,7 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data
@@ -278,7 +278,7 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               rat.score AS rating_score, rat.comment AS rating_comment
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
@@ -343,7 +343,7 @@ router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
         // driver name + phone + car details so the rider sees WHO is coming.
         const rides = await (0, database_1.query)(`SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
@@ -364,7 +364,7 @@ router.get("/:id", auth_1.requireAuth, async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data

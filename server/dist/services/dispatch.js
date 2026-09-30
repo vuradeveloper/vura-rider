@@ -300,7 +300,7 @@ async function acceptRide(io, params) {
 }
 /** Single source of truth for the rider-facing "driver accepted" event. */
 async function emitRideAccepted(io, rideId, driverId, version) {
-    const driver = await (0, database_1.queryOne)(`SELECT u.full_name, u.phone, u.profile_photo_url, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.make)=lower(dp.vehicle_make) AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url,
+    const driver = await (0, database_1.queryOne)(`SELECT u.full_name, u.phone, u.profile_photo_url, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url,
             dp.vehicle_year, dp.body_type, dp.vehicle_category,
             dp.license_plate, COALESCE(dp.rating_avg, 0)::float AS rating_avg
        FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id
