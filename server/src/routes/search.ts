@@ -297,9 +297,11 @@ async function resolveBias(firebaseUid: string, lat: number, lng: number): Promi
 }
 
 // GET /api/search/geocode?q=..&lat=..&lng=..&limit=..&sort=..&country=..
-// HERE WeGo-exact search: Autosuggest ranking + Discover canonical top-up,
-// confined to South Africa and returned closest-first, with OpenStreetMap
-// (Nominatim) as the silent last-resort fallback.
+// HERE WeGo-exact search: Autosuggest ranking + Discover canonical top-up, confined to
+// South Africa, ranked against the rider's own point (see resolveBias) and returned in
+// HERE's own order unless the caller explicitly asks for `sort=distance`. OpenStreetMap
+// (Nominatim) answers only when HERE has nothing usable - never because we forgot to send
+// a location, which is what used to turn "Farmers" into a list of farm associations.
 
 router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || "").trim();
@@ -309,8 +311,8 @@ router.get("/geocode", requireAuth, async (req: AuthRequest, res: Response) => {
   // Ranked against the rider's own point. Never unranked: see resolveBias().
   const bias = await resolveBias(req.userId!, lat, lng);
   const hasAt = Boolean(bias);
-  // Closest-first only when explicitly asked for; the default is HERE's relevance order
-  // with the nearby branch floated to the top (rankNearbyFirst), which is what WeGo does.
+  // Closest-first only when explicitly asked for; the default is HERE's own relevance
+  // order, which is already proximity-aware because `at` is always sent.
   const wantsDistance = wantsDistanceSort(req.query.sort, hasAt);
   const inFilter = countryInFilter(req.query.country);
   if (!q) { res.json({ provider: "here", items: [], queryTerms: [] }); return; }
