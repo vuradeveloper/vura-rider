@@ -143,7 +143,9 @@ export declare function studioBonus(m: {
  * only — never the URL, which carries the key), stores up to three processed
  * candidates as 'pending' and leaves the row for human approval.
  */
-export declare function runCarsxeFetch(cacheKey: string): Promise<void>;
+export declare function runCarsxeFetch(cacheKey: string, options?: {
+    keepStatus?: boolean;
+}): Promise<void>;
 export declare function startVehicleImageWorker(intervalMs?: number): NodeJS.Timeout;
 export declare function stopVehicleImageWorker(): void;
 export declare function listVehicleImages(status?: string): Promise<any[]>;
@@ -152,6 +154,24 @@ export declare function approveVehicleImage(id: string, candidateIndex?: number)
     id: string;
     candidateIndex: number;
     imageUrl: any;
+} | null>;
+/**
+ * Re-runs the (single) CarsXE call for a row that already exists, so a car approved
+ * before the studio-shot picker existed can be re-picked. Costs ONE API call.
+ *
+ * For an approved row the live image stays up until the operator approves one of the
+ * fresh candidates (see runCarsxeFetch keepStatus). Any other status is re-queued
+ * first, which is exactly what a first fetch does.
+ */
+export declare function refetchVehicleImage(id: string): Promise<{
+    id: string;
+    cacheKey: string;
+    statusKept: boolean;
+    status: any;
+    liveImage: any;
+    candidates: number;
+    bestWhiteBorder: number | null;
+    budget: CarsxeBudget;
 } | null>;
 export declare function rejectVehicleImage(id: string): Promise<{
     id: string;

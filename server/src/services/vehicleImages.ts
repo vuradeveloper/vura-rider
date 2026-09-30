@@ -24,7 +24,18 @@ export const CANVAS = { w: 900, h: 560 };
 export const MAX_BYTES = 80 * 1024;
 const CARSXE_URL = "https://api.carsxe.com/images";
 const DEFAULT_MAX_CALLS = 90; // of the 100-call budget; the rest is headroom
-const MAX_CANDIDATES = 3;
+const MAX_CANDIDATES = 3; // kept for review (and uploaded)
+/**
+ * How many candidates are DOWNLOADED and measured, before keeping MAX_CANDIDATES.
+ *
+ * The text score cannot see a background, and it penalises dealer/classifieds pages
+ * by 6 points - which is exactly where clean studio cut-outs usually live. A studio
+ * shot can therefore sit 4th-6th in that order. Downloading and measuring costs no
+ * API call (the search response is already paid for) and only the winners are
+ * uploaded, so examining more than we keep is free and stops the good shot from
+ * being filtered out before it is ever looked at.
+ */
+const MEASURE_CANDIDATES = 6;
 
 export type VehicleImageStatus =
   | "queued"
@@ -462,18 +473,31 @@ export function studioBonus(m: { borderWhite: number; corners: number }): number
  * only — never the URL, which carries the key), stores up to three processed
  * candidates as 'pending' and leaves the row for human approval.
  */
-export async function runCarsxeFetch(cacheKey: string): Promise<void> {
+export async function runCarsxeFetch(
+  cacheKey: string,
+  options?: { keepStatus?: boolean }
+): Promise<void> {
   await ensureVehicleImageTables();
   const row = await queryOne<any>(
     `SELECT id, make, model, year, colour, status FROM vehicle_images WHERE cache_key = $1`,
     [cacheKey]
   );
-  if (!row || row.status !== "queued") return;
+  // A re-fetch of an ALREADY APPROVED row is allowed (keepStatus), so the live image
+  // stays up while the operator reviews fresh candidates. Everything else still has to
+  // win the 'queued' claim, which is what keeps this to one CarsXE call per key.
+  const keepStatus = Boolean(options?.keepStatus);
+  if (!row || (row.status !== "queued" && !(keepStatus && row.status === "approved"))) return;
+
+  /** Never demote a live approved row - it keeps serving until a human approves. */
+  const markNoneFound = async () => {
+    if (keepStatus) return;
+    await execute(`UPDATE vehicle_images SET status = 'none_found', api_calls_used = 1 WHERE id = $1`, [row.id]);
+  };
 
   const key = process.env.CARSXE_API_KEY;
   if (!key) {
     console.warn("[vehicleImages] CARSXE_API_KEY is not set — no photo for", cacheKey);
-    await execute(`UPDATE vehicle_images SET status = 'none_found' WHERE id = $1`, [row.id]);
+    await markNoneFound();
     return;
   }
 
@@ -483,7 +507,7 @@ export async function runCarsxeFetch(cacheKey: string): Promise<void> {
       `[vehicleImages] CarsXE budget reached (${budget.used}/${budget.max}) — no call for ${cacheKey}. ` +
         `Raise CARSXE_MAX_CALLS only if you really have budget left.`
     );
-    await execute(`UPDATE vehicle_images SET status = 'none_found' WHERE id = $1`, [row.id]);
+    await markNoneFound();
     return;
   }
 
@@ -506,20 +530,49 @@ export async function runCarsxeFetch(cacheKey: string): Promise<void> {
     await logCarsxeCall(cacheKey, images.length, httpStatus, "carsxe images lookup");
   } catch (err: any) {
     await logCarsxeCall(cacheKey, null, httpStatus, `request failed: ${err?.message || err}`);
-    await execute(`UPDATE vehicle_images SET status = 'none_found', api_calls_used = 1 WHERE id = $1`, [row.id]);
+    await markNoneFound();
     return;
   }
 
   const sharp = (await import("sharp")).default;
-  const picks = scoreCandidates(images).slice(0, MAX_CANDIDATES);
-  const stored: Candidate[] = [];
-  for (const [i, pick] of picks.entries()) {
+
+  // Step 1: download and MEASURE more candidates than we keep. The text score cannot
+  // see a background, so the studio shot can easily sit 4th-6th in its order; reading
+  // the pixels costs no extra API call (the search results are already paid for) and
+  // only the winners below are uploaded to S3.
+  const examined = scoreCandidates(images).slice(0, MEASURE_CANDIDATES);
+  const measured: Array<{
+    pick: (typeof examined)[number];
+    buffer: Buffer;
+    bg: { borderWhite: number; corners: number };
+    bonus: number;
+  }> = [];
+  for (const pick of examined) {
     try {
-      const raw = await downloadImage(pick.link!);
-      // Measured on the RAW bytes: this is what decides studio vs busy background.
-      const bg = await measureStudioBackground(raw);
-      const bonus = studioBonus(bg);
-      const webp = await processVehicleImage(raw);
+      const buffer = await downloadImage(pick.link!);
+      const bg = await measureStudioBackground(buffer);
+      measured.push({ pick, buffer, bg, bonus: studioBonus(bg) });
+    } catch (err: any) {
+      console.warn(`[vehicleImages] a candidate for ${cacheKey} could not be read:`, err?.message || err);
+    }
+  }
+  if (!measured.length) {
+    await markNoneFound();
+    return;
+  }
+
+  // Step 2: best first - studio-style shot, then the text score, then width.
+  measured.sort(
+    (a, b) =>
+      b.pick.score + b.bonus - (a.pick.score + a.bonus) ||
+      (Number(b.pick.width) || 0) - (Number(a.pick.width) || 0)
+  );
+
+  const stored: Candidate[] = [];
+  for (const [i, entry] of measured.slice(0, MAX_CANDIDATES).entries()) {
+    const { pick, buffer, bg, bonus } = entry;
+    try {
+      const webp = await processVehicleImage(buffer);
       const storageKey = storageKeyFor(cacheKey, i);
       const up = await uploadToS3(storageKey, webp.toString("base64"), "image/webp");
       const meta = await sharp(webp).metadata();
@@ -547,7 +600,7 @@ export async function runCarsxeFetch(cacheKey: string): Promise<void> {
   }
 
   if (!stored.length) {
-    await execute(`UPDATE vehicle_images SET status = 'none_found', api_calls_used = 1 WHERE id = $1`, [row.id]);
+    await markNoneFound();
     return;
   }
 
@@ -558,6 +611,22 @@ export async function runCarsxeFetch(cacheKey: string): Promise<void> {
   stored.sort((a, b) => b.score - a.score || (b.width || 0) - (a.width || 0));
 
   const best = stored[0];
+
+  if (keepStatus) {
+    // A re-fetch of an approved car: the candidates are replaced for review, but the
+    // approved status and the live image stay exactly as they were, so riders keep
+    // seeing a photo until the operator approves one of the fresh candidates.
+    await execute(
+      `UPDATE vehicle_images SET candidates = $2::jsonb, api_calls_used = api_calls_used + 1 WHERE id = $1`,
+      [row.id, JSON.stringify(stored)]
+    );
+    console.log(
+      `[vehicleImages] ${cacheKey}: ${stored.length} fresh candidate(s) for review ` +
+        `(best white border ${Math.round((best.borderWhite ?? 0) * 100)}%); live image unchanged`
+    );
+    return;
+  }
+
   await execute(
     `UPDATE vehicle_images
         SET status = 'pending', image_url = $2, storage_key = $3, source_url = $4,
@@ -628,6 +697,40 @@ export async function approveVehicleImage(id: string, candidateIndex = 0) {
     if (i !== candidateIndex && c?.storageKey) await deleteFromS3(c.storageKey).catch(() => {});
   }
   return { id, candidateIndex, imageUrl: chosen?.url || row.image_url };
+}
+
+/**
+ * Re-runs the (single) CarsXE call for a row that already exists, so a car approved
+ * before the studio-shot picker existed can be re-picked. Costs ONE API call.
+ *
+ * For an approved row the live image stays up until the operator approves one of the
+ * fresh candidates (see runCarsxeFetch keepStatus). Any other status is re-queued
+ * first, which is exactly what a first fetch does.
+ */
+export async function refetchVehicleImage(id: string) {
+  await ensureVehicleImageTables();
+  const row = await queryOne<{ cache_key: string; status: string }>(
+    `SELECT cache_key, status FROM vehicle_images WHERE id = $1`,
+    [id]
+  );
+  if (!row) return null;
+
+  const approved = row.status === "approved";
+  if (!approved) await execute(`UPDATE vehicle_images SET status = 'queued' WHERE id = $1`, [id]);
+  await runCarsxeFetch(row.cache_key, { keepStatus: approved });
+
+  const after = await queryOne<any>(`SELECT status, image_url, candidates FROM vehicle_images WHERE id = $1`, [id]);
+  const candidates: Candidate[] = Array.isArray(after?.candidates) ? after.candidates : [];
+  return {
+    id,
+    cacheKey: row.cache_key,
+    statusKept: approved,
+    status: after?.status ?? null,
+    liveImage: after?.image_url ?? null,
+    candidates: candidates.length,
+    bestWhiteBorder: candidates[0]?.borderWhite ?? null,
+    budget: await carsxeUsage(),
+  };
 }
 
 export async function rejectVehicleImage(id: string) {

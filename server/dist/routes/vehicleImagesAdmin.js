@@ -102,6 +102,9 @@ router.get("/admin/vehicle-images", async (req, res) => {
         <form method="post" action="/api/admin/vehicle-images/${esc(row.id)}/reject">
           <button class="danger" type="submit">Reject (never retried automatically)</button>
         </form>
+        <form method="post" action="/api/admin/vehicle-images/${esc(row.id)}/refetch">
+          <button type="submit">Re-fetch from CarsXE (1 call &#183; keeps the live image)</button>
+        </form>
       </div></section>`;
     };
     const css = "body{font:15px/1.5 system-ui,sans-serif;margin:0;background:#f5f6f8;color:#15181d}" +
@@ -154,6 +157,31 @@ router.post("/admin/vehicle-images/:id/reject", async (req, res) => {
         return;
     }
     res.json({ success: true, ...out });
+});
+/**
+ * Re-fetch an existing row (1 CarsXE call) so a car that was approved before the
+ * studio-shot picker existed can be re-picked. The live image stays up while the
+ * fresh candidates wait for approval.
+ */
+router.post("/admin/vehicle-images/:id/refetch", async (req, res) => {
+    if (!requireAdmin(req, res))
+        return;
+    try {
+        const out = await (0, vehicleImages_1.refetchVehicleImage)(String(req.params.id));
+        if (!out) {
+            res.status(404).json({ error: "not found" });
+            return;
+        }
+        if (req.headers.accept?.includes("text/html")) {
+            res.redirect("/api/admin/vehicle-images");
+            return;
+        }
+        res.json({ success: true, ...out });
+    }
+    catch (err) {
+        console.error("Refetch error:", err?.message || err);
+        res.status(500).json({ error: err?.message || "refetch failed" });
+    }
 });
 /** Step 0 — the local importer posts the finished WebP here. No CarsXE call. */
 router.post("/admin/vehicle-images/seed", async (req, res) => {
