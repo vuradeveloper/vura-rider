@@ -320,11 +320,21 @@ async function createTransferRecipient(input) {
         throw new Error("Paystack is not configured.");
     }
     // Resolve the account name first so we can display + confirm it to the driver.
-    const resolved = await paystackFetch(`/bank/resolve?account_number=${encodeURIComponent(input.accountNumber)}&bank_code=${encodeURIComponent(input.bankCode)}`);
+    //
+    // currency=ZAR is REQUIRED for South African bank codes. Without it Paystack
+    // assumes NGN, tries to resolve a South African code (e.g. Capitec 470010) as a
+    // Nigerian bank, and answers "Please supply one of the following valid
+    // currencies: NGN, USD, GHS, KES" - which reads like a Paystack fault but is
+    // really this missing parameter.
+    const resolved = await paystackFetch(`/bank/resolve?account_number=${encodeURIComponent(input.accountNumber)}` +
+        `&bank_code=${encodeURIComponent(input.bankCode)}&currency=ZAR`);
     const recipient = await paystackFetch("/transferrecipient", {
         method: "POST",
         body: JSON.stringify({
-            type: "nuban",
+            // "basa" is the South African (BASA) recipient type that belongs with
+            // currency: "ZAR". "nuban" is Nigeria-only, so pairing it with ZAR would be
+            // rejected by Paystack even once the resolve above succeeds.
+            type: "basa",
             name: resolved?.data?.account_name || input.name,
             account_number: input.accountNumber,
             bank_code: input.bankCode,
