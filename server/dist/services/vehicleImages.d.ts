@@ -16,6 +16,8 @@ export interface Candidate {
     note: string;
     /** Share of the outer border that was transparent/white in the RAW download (0..1). */
     borderWhite?: number;
+    /** studioBonus() of that same measurement: +10 clean ring and corners, -4 busy. */
+    studioBonus?: number;
 }
 export interface VehicleLike {
     make?: string | null;
@@ -49,6 +51,19 @@ export declare function carsxeUsage(): Promise<CarsxeBudget>;
  * Records one call. NEVER pass the request URL here — it carries the API key.
  */
 export declare function logCarsxeCall(cacheKey: string, resultCount: number | null, httpStatus: number | null, note: string): Promise<void>;
+export interface CarsxeCallRow {
+    cache_key: string | null;
+    called_at: string;
+    result_count: number | null;
+    http_status: number | null;
+    note: string | null;
+}
+/**
+ * The most recent calls, newest first. This is the answer to "why did that search find
+ * nothing?": it shows the result count and the HTTP status of every call, including the
+ * fallbacks, without ever exposing the API key (the key only ever travels in the URL).
+ */
+export declare function recentCarsxeCalls(limit?: number): Promise<CarsxeCallRow[]>;
 export interface ResolvedVehicleImage {
     url: string | null;
     cacheKey: string;
@@ -63,12 +78,17 @@ export interface ResolvedVehicleImage {
  */
 export declare function resolveVehicleImage(v?: VehicleLike | null): Promise<ResolvedVehicleImage>;
 /**
- * Returns true ONLY for the caller that created the row. Two drivers saving the
- * same car in the same second therefore queue exactly ONE CarsXE call — the
+ * Returns true ONLY for the caller that won a fetch for this key. Two drivers saving
+ * the same car in the same second therefore queue exactly ONE CarsXE call, because the
  * unique constraint on cache_key decides the winner, not application logic.
- * A pre-existing row of ANY status (pending/rejected/none_found) is left alone,
- * which is what makes "never retry a rejected or none_found key automatically"
- * true without a second check.
+ *
+ * A 'none_found' row may be RETRIED, under three guards, because a search that returns
+ * nothing today (Kia Picanto 2017 asked with the colour filter returned zero images)
+ * must not leave that car on an SVG icon for ever:
+ *   - only when a driver saves that car again (i.e. somebody actually wants it),
+ *   - at most MAX_FETCH_ATTEMPTS times (counted per CarsXE call, in runCarsxeFetch),
+ *   - never more often than RETRY_COOLDOWN_MINUTES.
+ * Pending, rejected and approved rows are still left alone.
  */
 export declare function claimVehicleImageFetch(v: VehicleLike): Promise<boolean>;
 export interface RawCarsxeImage {

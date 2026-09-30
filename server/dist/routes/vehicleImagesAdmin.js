@@ -73,6 +73,7 @@ router.get("/admin/vehicle-images", async (req, res) => {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     const rows = await (0, vehicleImages_1.listVehicleImages)(status);
     const budget = await (0, vehicleImages_1.carsxeUsage)();
+    const calls = await (0, vehicleImages_1.recentCarsxeCalls)(12);
     const ref = process.env.VEHICLE_STYLE_REFERENCE_URL || "";
     const card = (row) => {
         const candidates = Array.isArray(row.candidates) ? row.candidates : [];
@@ -94,7 +95,7 @@ router.get("/admin/vehicle-images", async (req, res) => {
         <p><b>cache_key</b> ${esc(row.cache_key)}<br>
            <b>source page</b> ${row.context_link ? `<a href="${esc(row.context_link)}" target="_blank" rel="noopener">${esc(row.context_link)}</a>` : "—"}<br>
            <b>stored copy</b> ${esc(row.image_url)}<br>
-           <b>size</b> ${esc(row.width)}×${esc(row.height)} · <b>calls</b> ${esc(row.api_calls_used)}</p>
+           <b>size</b> ${esc(row.width)}×${esc(row.height)} · <b>calls</b> ${esc(row.api_calls_used)} · <b>attempts</b> ${esc(row.attempts ?? 0)}</p>
         <form method="post" action="/api/admin/vehicle-images/${esc(row.id)}/approve">
           <div class="cands">${thumbs || "<i>no candidates</i>"}</div>
           <button type="submit">Approve the chosen candidate</button>
@@ -129,7 +130,31 @@ router.get("/admin/vehicle-images", async (req, res) => {
 <span class="pill">CarsXE calls used: ${budget.used} / ${budget.max} (${budget.left} left)</span>
 <span class="pill">${rows.length} row(s)${status ? ` · ${esc(status)}` : ""}</span><span>${nav}</span></header>
 ${rows.length ? rows.map(card).join("") : "<p style='margin:20px'>Nothing here yet — import a dashboard search, or register a driver vehicle.</p>"}
+<section class="row"><div class="meta">
+<h3>Recent CarsXE calls <span class="pill">${calls.length}</span></h3>
+<p class="note">Every CarsXE request this server made, newest first. Row a car up against
+<b>results 0</b> and the search itself came back empty — that is why the app shows the SVG icon
+instead of a photo. A "fallback" line means the colour, then the year, was dropped to find anything at all.</p>
+<table style="border-collapse:collapse;font-size:13px">
+<tr><th style="text-align:left;padding:3px 10px 3px 0">when (UTC)</th><th style="text-align:left;padding:3px 10px 3px 0">car</th><th style="text-align:left;padding:3px 10px 3px 0">results</th><th style="text-align:left;padding:3px 10px 3px 0">http</th><th style="text-align:left">note</th></tr>
+${calls
+        .map((c) => `<tr><td style="padding:3px 10px 3px 0">${esc(String(c.called_at).replace("T", " ").slice(0, 19))}</td><td style="padding:3px 10px 3px 0">${esc(c.cache_key || "—")}</td><td style="padding:3px 10px 3px 0">${c.result_count === null ? "?" : esc(c.result_count)}</td><td style="padding:3px 10px 3px 0">${esc(c.http_status ?? "—")}</td><td class="note">${esc(c.note || "")}</td></tr>`)
+        .join("")}
+</table></div></section>
 </body></html>`);
+});
+/**
+ * Read-only JSON of the last CarsXE calls (0 calls spent). The fastest way to answer
+ * "did the search actually find anything?" without opening a database console.
+ */
+router.get("/admin/vehicle-images/log", async (req, res) => {
+    if (!requireAdmin(req, res))
+        return;
+    const limit = parseInt(String(req.query.limit ?? "25"), 10);
+    res.json({
+        budget: await (0, vehicleImages_1.carsxeUsage)(),
+        calls: await (0, vehicleImages_1.recentCarsxeCalls)(Number.isFinite(limit) ? limit : 25),
+    });
 });
 // ── actions ──────────────────────────────────────────────────────────────────
 router.post("/admin/vehicle-images/:id/approve", async (req, res) => {

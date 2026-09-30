@@ -40,6 +40,7 @@ exports.ensureVehicleImageTables = ensureVehicleImageTables;
 exports.carsxeMaxCalls = carsxeMaxCalls;
 exports.carsxeUsage = carsxeUsage;
 exports.logCarsxeCall = logCarsxeCall;
+exports.recentCarsxeCalls = recentCarsxeCalls;
 exports.resolveVehicleImage = resolveVehicleImage;
 exports.claimVehicleImageFetch = claimVehicleImageFetch;
 exports.scoreCandidates = scoreCandidates;
@@ -96,6 +97,14 @@ const MAX_CANDIDATES = 3; // kept for review (and uploaded)
  * being filtered out before it is ever looked at.
  */
 const MEASURE_CANDIDATES = 6;
+/**
+ * A key whose search found nothing may be tried again - but only this many times, and
+ * only after a cooldown, so one hopeless make|model|colour can never eat the budget.
+ * Without a retry the car keeps the SVG icon for ever (a Kia Picanto 2017 search
+ * returned zero images, and nothing would ever have asked CarsXE again).
+ */
+const MAX_FETCH_ATTEMPTS = 3;
+const RETRY_COOLDOWN_MINUTES = 10;
 // ── cache keys ───────────────────────────────────────────────────────────────
 /**
  * The "generation" bucket of a model year. 2017, 2018, 2019 and 2020 all land in
@@ -150,6 +159,10 @@ async function ensureVehicleImageTables() {
       approved_at TIMESTAMPTZ
     )
   `);
+    // Retry bookkeeping for keys whose fetch came back with nothing. Added with
+    // IF NOT EXISTS so it is safe against a table created by an earlier build.
+    await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0`);
+    await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ`);
     await (0, database_1.execute)(`
     CREATE TABLE IF NOT EXISTS carsxe_usage_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -184,6 +197,19 @@ async function logCarsxeCall(cacheKey, resultCount, httpStatus, note) {
      VALUES ($1, $2, $3, $4)`, [cacheKey, resultCount, httpStatus, note]);
 }
 /**
+ * The most recent calls, newest first. This is the answer to "why did that search find
+ * nothing?": it shows the result count and the HTTP status of every call, including the
+ * fallbacks, without ever exposing the API key (the key only ever travels in the URL).
+ */
+async function recentCarsxeCalls(limit = 25) {
+    await ensureVehicleImageTables();
+    const n = Math.min(Math.max(1, Math.floor(limit) || 25), 200);
+    return (0, database_1.query)(`SELECT cache_key, called_at, result_count, http_status, note
+       FROM carsxe_usage_log
+      ORDER BY called_at DESC, id DESC
+      LIMIT ${n}`);
+}
+/**
  * Fallback order, resolved server-side so every client agrees:
  *   1. approved, exact make+model+generation+colour
  *   2. approved, same make+model+colour, another generation   (the 2019 -> 2018 image)
@@ -216,12 +242,17 @@ async function resolveVehicleImage(v) {
     return { url: null, cacheKey, matched: "none" };
 }
 /**
- * Returns true ONLY for the caller that created the row. Two drivers saving the
- * same car in the same second therefore queue exactly ONE CarsXE call — the
+ * Returns true ONLY for the caller that won a fetch for this key. Two drivers saving
+ * the same car in the same second therefore queue exactly ONE CarsXE call, because the
  * unique constraint on cache_key decides the winner, not application logic.
- * A pre-existing row of ANY status (pending/rejected/none_found) is left alone,
- * which is what makes "never retry a rejected or none_found key automatically"
- * true without a second check.
+ *
+ * A 'none_found' row may be RETRIED, under three guards, because a search that returns
+ * nothing today (Kia Picanto 2017 asked with the colour filter returned zero images)
+ * must not leave that car on an SVG icon for ever:
+ *   - only when a driver saves that car again (i.e. somebody actually wants it),
+ *   - at most MAX_FETCH_ATTEMPTS times (counted per CarsXE call, in runCarsxeFetch),
+ *   - never more often than RETRY_COOLDOWN_MINUTES.
+ * Pending, rejected and approved rows are still left alone.
  */
 async function claimVehicleImageFetch(v) {
     await ensureVehicleImageTables();
@@ -233,7 +264,16 @@ async function claimVehicleImageFetch(v) {
      VALUES ($1, $2, $3, $4, $5, 'queued')
      ON CONFLICT (cache_key) DO NOTHING
      RETURNING id`, [cacheKey, make, model, Number(v?.year ?? v?.vehicle_year) || null, colour]);
-    return Boolean(created);
+    if (created)
+        return true;
+    const retried = await (0, database_1.queryOne)(`UPDATE vehicle_images
+        SET status = 'queued'
+      WHERE cache_key = $1
+        AND status = 'none_found'
+        AND attempts < $2
+        AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - ($3 || ' minutes')::interval)
+      RETURNING id`, [cacheKey, MAX_FETCH_ATTEMPTS, String(RETRY_COOLDOWN_MINUTES)]);
+    return Boolean(retried);
 }
 // ── picking the best of the returned images (no extra calls) ──────────────────
 const DEALER_PAGE = /(autotrader|gumtree|olx|facebook|marketplace|carfind|weelee|dealer|classified|bid|auction)/i;
@@ -464,7 +504,7 @@ async function runCarsxeFetch(cacheKey, options) {
     const markNoneFound = async () => {
         if (keepStatus)
             return;
-        await (0, database_1.execute)(`UPDATE vehicle_images SET status = 'none_found', api_calls_used = 1 WHERE id = $1`, [row.id]);
+        await (0, database_1.execute)(`UPDATE vehicle_images SET status = 'none_found', api_calls_used = 1, last_attempt_at = NOW() WHERE id = $1`, [row.id]);
     };
     const key = process.env.CARSXE_API_KEY;
     if (!key) {
@@ -479,22 +519,50 @@ async function runCarsxeFetch(cacheKey, options) {
         await markNoneFound();
         return;
     }
-    const qs = new URLSearchParams({
-        key,
-        make: String(row.make || ""),
-        model: String(row.model || ""),
-        ...(row.year ? { year: String(row.year) } : {}),
-        ...(row.colour ? { color: String(row.colour) } : {}),
-    });
+    // One fetch = one attempt, counted against the retry budget used in
+    // claimVehicleImageFetch. Counting here (not in the claim) keeps the number exactly
+    // equal to the CarsXE calls this key has cost.
+    await (0, database_1.execute)(`UPDATE vehicle_images SET attempts = attempts + 1, last_attempt_at = NOW() WHERE id = $1`, [row.id]).catch(() => { });
     let httpStatus = null;
     let images = [];
+    let exactMatch = false;
+    // The first query is the exact one. A colour filter can legitimately come back empty
+    // (Kia Picanto 2017 in "red" returned zero images, which is what left that car on its
+    // SVG icon), so the colour is dropped, then the year, before giving up with a
+    // 'none_found' the driver could never be rescued from. Each fallback is a real call, so
+    // it only runs when the previous query found NOTHING, and the budget is re-checked
+    // before every call.
+    const queries = [
+        { ...(row.year ? { year: String(row.year) } : {}), ...(row.colour ? { color: String(row.colour) } : {}) },
+        ...(row.colour ? [{ ...(row.year ? { year: String(row.year) } : {}) }] : []),
+        ...(row.year ? [{}] : []),
+    ];
     try {
-        const res = await fetch(`${CARSXE_URL}?${qs.toString()}`);
-        httpStatus = res.status;
-        const body = await res.json().catch(() => null);
-        images = Array.isArray(body?.images) ? body.images : [];
-        // ⚠ the request URL carries the key: log the status and the count, nothing else.
-        await logCarsxeCall(cacheKey, images.length, httpStatus, "carsxe images lookup");
+        for (const [i, extra] of queries.entries()) {
+            if (i > 0 && (await carsxeUsage()).blocked)
+                break;
+            const qs = new URLSearchParams({
+                key,
+                make: String(row.make || ""),
+                model: String(row.model || ""),
+                ...extra,
+            });
+            const res = await fetch(`${CARSXE_URL}?${qs.toString()}`);
+            httpStatus = res.status;
+            const body = await res.json().catch(() => null);
+            images = Array.isArray(body?.images) ? body.images : [];
+            // the request URL carries the key: log the status and the count, nothing else.
+            const label = i === 0
+                ? "carsxe images lookup"
+                : `carsxe fallback ${i} (${Object.keys(extra).join("+") || "make+model"})`;
+            await logCarsxeCall(cacheKey, images.length, httpStatus, label);
+            if (images.length) {
+                // Only the exact query counts as a match. A fallback dropped the colour (or the
+                // year), so its photos are for a human to look at, never an automatic pick.
+                exactMatch = i === 0;
+                break;
+            }
+        }
     }
     catch (err) {
         await logCarsxeCall(cacheKey, null, httpStatus, `request failed: ${err?.message || err}`);
@@ -555,6 +623,7 @@ async function runCarsxeFetch(cacheKey, options) {
                     .filter(Boolean)
                     .join(" | "),
                 borderWhite: Math.round(bg.borderWhite * 100) / 100,
+                studioBonus: bonus,
             });
         }
         catch (err) {
@@ -580,11 +649,40 @@ async function runCarsxeFetch(cacheKey, options) {
             `(best white border ${Math.round((best.borderWhite ?? 0) * 100)}%); live image unchanged`);
         return;
     }
+    // ── auto-apply a CONFIDENT studio pick ───────────────────────────────────────
+    // This is what makes "press Save Vehicle and the car gets its photo" true without a
+    // human in the loop. The measurement above is deterministic - the outer ring and the
+    // four corners of the RAW download - so a shot that is at least 85% clean around the
+    // border AND scored the full studio bonus (+10: clean ring AND clean corners) is a
+    // catalogue-style cut-out on a white background, which is exactly what the app shows.
+    //
+    // Two guard rails: only an EXACT query (same colour, same year) may auto-apply, and
+    // anything less confident still lands as 'pending' on the review page, so a doubtful
+    // photo can never reach a rider unreviewed. VEHICLE_IMAGE_AUTO_APPROVE=off puts every
+    // pick back in front of a human without a redeploy of anything else.
+    const autoApproveEnabled = String(process.env.VEHICLE_IMAGE_AUTO_APPROVE ?? "").toLowerCase() !== "off";
+    const confidentStudio = exactMatch && Number(best.borderWhite ?? 0) >= 0.85 && Number(best.studioBonus ?? 0) >= 10;
+    const autoApproved = autoApproveEnabled && confidentStudio;
     await (0, database_1.execute)(`UPDATE vehicle_images
-        SET status = 'pending', image_url = $2, storage_key = $3, source_url = $4,
+        SET status = $9,
+            approved_at = CASE WHEN $9 = 'approved' THEN NOW() ELSE approved_at END,
+            image_url = $2, storage_key = $3, source_url = $4,
             context_link = $5, width = $6, height = $7, candidates = $8::jsonb, api_calls_used = 1
-      WHERE id = $1`, [row.id, best.url, best.storageKey, best.sourceUrl, best.contextLink, best.width, best.height, JSON.stringify(stored)]);
-    console.log(`[vehicleImages] ${cacheKey}: ${stored.length} candidate(s) waiting for approval`);
+      WHERE id = $1`, [
+        row.id, best.url, best.storageKey, best.sourceUrl, best.contextLink, best.width, best.height,
+        JSON.stringify(stored), autoApproved ? "approved" : "pending",
+    ]);
+    if (autoApproved) {
+        // The candidates that were not chosen are dead weight in the bucket.
+        for (const c of stored.slice(1))
+            if (c.storageKey)
+                await (0, s3_1.deleteFromS3)(c.storageKey).catch(() => { });
+        console.log(`[vehicleImages] ${cacheKey}: auto-approved the top pick ` +
+            `(white border ${Math.round((best.borderWhite ?? 0) * 100)}%, studio bonus ${best.studioBonus ?? 0})`);
+    }
+    else {
+        console.log(`[vehicleImages] ${cacheKey}: ${stored.length} candidate(s) waiting for approval`);
+    }
 }
 // ── background worker: drains 'queued' rows, one call per key, budget-aware ───
 let worker = null;
