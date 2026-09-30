@@ -91,8 +91,12 @@ export declare function getDefaultCardToken(userId: string): Promise<{
     last4: string;
 } | null>;
 /**
- * Resolves a bank account number/name via Paystack Transfers and creates (or
- * returns) a transfer recipient for repeated payouts.
+ * Creates (or returns) a transfer recipient for repeated payouts.
+ *
+ * The account holder's name is best-effort: Paystack's /bank/resolve only
+ * understands NGN, USD, GHS and KES, so for a South African account it can never
+ * confirm a name (see the note inside). The recipient itself is the authority on
+ * bank_name, and the driver's own name is kept when no name can be confirmed.
  */
 export declare function createTransferRecipient(input: {
     bankCode: string;
@@ -102,6 +106,7 @@ export declare function createTransferRecipient(input: {
     recipient_code: string;
     account_name: string;
     bank_name?: string;
+    verified: boolean;
 }>;
 /**
  * Initiates a Paystack bank transfer (payout) of amountRands to a recipient.

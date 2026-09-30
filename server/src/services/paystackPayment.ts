@@ -356,55 +356,80 @@ export async function getDefaultCardToken(userId: string): Promise<{
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Resolves a bank account number/name via Paystack Transfers and creates (or
- * returns) a transfer recipient for repeated payouts.
+ * Creates (or returns) a transfer recipient for repeated payouts.
+ *
+ * The account holder's name is best-effort: Paystack's /bank/resolve only
+ * understands NGN, USD, GHS and KES, so for a South African account it can never
+ * confirm a name (see the note inside). The recipient itself is the authority on
+ * bank_name, and the driver's own name is kept when no name can be confirmed.
  */
 export async function createTransferRecipient(input: {
   bankCode: string;
   accountNumber: string;
   name: string;
-}): Promise<{ recipient_code: string; account_name: string; bank_name?: string }> {
+}): Promise<{ recipient_code: string; account_name: string; bank_name?: string; verified: boolean }> {
   if (paymentsMode() === "mock") {
     return {
       recipient_code: `RCP_MOCK_${input.accountNumber.slice(-6)}`,
       account_name: input.name,
       bank_name: "Mock Bank",
+      verified: true,
     };
   }
   if (!isPaystackConfigured()) {
     throw new Error("Paystack is not configured.");
   }
 
-  // Resolve the account name first so we can display + confirm it to the driver.
+  // Try to have Paystack name the account, but never fail because of it.
   //
-  // currency=ZAR is REQUIRED for South African bank codes. Without it Paystack
-  // assumes NGN, tries to resolve a South African code (e.g. Capitec 470010) as a
-  // Nigerian bank, and answers "Please supply one of the following valid
-  // currencies: NGN, USD, GHS, KES" - which reads like a Paystack fault but is
-  // really this missing parameter.
-  const resolved = await paystackFetch<any>(
-    `/bank/resolve?account_number=${encodeURIComponent(input.accountNumber)}` +
-      `&bank_code=${encodeURIComponent(input.bankCode)}&currency=ZAR`
-  );
+  // /bank/resolve only understands NGN, USD, GHS and KES. For a South African
+  // (ZAR) account it always answers "Please supply one of the following valid
+  // currencies: NGN, USD, GHS, KES" - with or without a currency parameter - and
+  // a basa recipient comes back with details.account_name = null, so Paystack
+  // offers no name lookup for ZA banks at all. Measured directly against the live
+  // key on 30 Sep 2026 (the ZA bank list itself works fine: 33 banks, Capitec
+  // 470010 is type basa / supports_transfer true).
+  //
+  // So this step is best-effort: when the provider can name the account we show
+  // that name, otherwise we keep the driver's own. A wrong account number is
+  // rejected by the bank on the transfer itself and the money stays in the
+  // Paystack balance, which is why a failed lookup must not block the payout.
+  let resolvedName: string | null = null;
+  try {
+    const resolved = await paystackFetch<any>(
+      `/bank/resolve?account_number=${encodeURIComponent(input.accountNumber)}` +
+        `&bank_code=${encodeURIComponent(input.bankCode)}&currency=ZAR`
+    );
+    resolvedName = resolved?.data?.account_name || null;
+  } catch (err: any) {
+    console.warn(
+      `[payouts] bank name lookup unavailable for ${input.bankCode}/${input.accountNumber}: ` +
+        `${err?.message || err} - continuing with a basa recipient`
+    );
+  }
 
   const recipient = await paystackFetch<any>("/transferrecipient", {
     method: "POST",
     body: JSON.stringify({
       // "basa" is the South African (BASA) recipient type that belongs with
-      // currency: "ZAR". "nuban" is Nigeria-only, so pairing it with ZAR would be
-      // rejected by Paystack even once the resolve above succeeds.
+      // currency: "ZAR". "nuban" is Nigeria-only.
       type: "basa",
-      name: resolved?.data?.account_name || input.name,
+      name: resolvedName || input.name,
       account_number: input.accountNumber,
       bank_code: input.bankCode,
       currency: "ZAR",
     }),
   });
 
+  const providerName = recipient?.data?.details?.account_name || null;
+
   return {
     recipient_code: recipient?.data?.recipient_code || "",
-    account_name: resolved?.data?.account_name || input.name,
+    // Show the provider's name when there is one, otherwise the driver's own.
+    account_name: providerName || resolvedName || input.name,
     bank_name: recipient?.data?.details?.bank_name,
+    // False for every ZA bank: the name was not confirmed by Paystack.
+    verified: Boolean(providerName || resolvedName),
   };
 }
 
