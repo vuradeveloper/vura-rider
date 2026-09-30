@@ -100,6 +100,11 @@ app.use((0, cors_1.default)({
 // Body parsing — 30MB so base64 document uploads (≤15MB binary → ~20MB)
 // fit without a 413. Regular API calls are tiny; the extra headroom is cheap.
 app.use(express_1.default.json({ limit: "30mb" }));
+// The vehicle-image review page is a plain HTML form, so its "approve the chosen
+// candidate" radios post application/x-www-form-urlencoded, not JSON. Without this
+// parser req.body is undefined, the route falls back to candidateIndex "0" and the
+// FIRST candidate is approved no matter which radio was picked.
+app.use(express_1.default.urlencoded({ extended: false, limit: "1mb" }));
 app.use(express_1.default.urlencoded({ extended: true }));
 // Logging
 app.use((0, morgan_1.default)(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
