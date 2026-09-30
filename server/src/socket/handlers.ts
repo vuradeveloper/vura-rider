@@ -230,58 +230,56 @@ export function setupSocketHandlers(io: SocketIOServer) {
         if (paymentMethod === "card" && fare != null) {
           const amountRands = Number(fare);
           if (amountRands > 0) {
-            const card = await getDefaultCardToken(dbUserId);
+            const card = await getDefaultCardToken(dbUserId).catch(() => null);
             if (!card) {
-              socket.emit("ride:requested:ack", {
-                success: false,
-                reason: "You need a saved card to book this ride. Please add a card before booking.",
-              });
-              return;
+              // NO SAVED CARD  -  BOOK ANYWAY.
+              // This branch used to emit a failure ack and return, so the ride was
+              // never created and NO DRIVER WAS EVER OFFERED IT: a card-paying rider
+              // could not get a car at all. Payment must never gate dispatch  -  the
+              // fare is settled outside the card. Logged, not fatal.
+              console.warn(`[preauth] rider ${dbUserId} has no saved card  -  booking ${amountRands} ZAR without a pre-auth`);
+            } else {
+              const rider = await queryOne<{ email: string }>(
+                "SELECT email FROM users WHERE id = $1", [dbUserId]
+              ).catch(() => null);
+              const reference =
+                `VURA${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+              let charge;
+              try {
+                charge = await chargeAuthorization({
+                  amountRands,
+                  reference,
+                  email: rider?.email || "rider@vura.com",
+                  authorizationCode: card.transaction_index,
+                });
+              } catch (err: any) {
+                charge = { success: false, message: err?.message || "Could not process your card." };
+              }
+              if (!charge?.success) {
+                // A DECLINED PRE-AUTH MUST NOT CANCEL THE BOOKING EITHER  -  same trap
+                // as above. Record it and let the driver receive the request.
+                console.warn(`[preauth] card declined for rider ${dbUserId}: ${charge?.message || "no message"}  -  booking anyway`);
+              } else {
+                cardChargeRef = reference;
+                try {
+                  await execute(`
+                    CREATE TABLE IF NOT EXISTS payments (
+                      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                      user_id UUID, ride_id UUID,
+                      reference VARCHAR(100), amount NUMERIC(10,2),
+                      currency VARCHAR(3) DEFAULT 'ZAR', status VARCHAR(20),
+                      provider VARCHAR(20), raw_response JSONB,
+                      created_at TIMESTAMPTZ DEFAULT NOW(),
+                      updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )`);
+                } catch { /* already exists */ }
+                await execute(
+                  `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+                   VALUES ($1, NULL, $2, $3, 'ZAR', 'completed', 'paystack')`,
+                  [dbUserId, reference, amountRands]
+                ).catch(() => {});
+              }
             }
-            const rider = await queryOne<{ email: string }>(
-              "SELECT email FROM users WHERE id = $1", [dbUserId]
-            ).catch(() => null);
-            const reference =
-              `VURA${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-            let charge;
-            try {
-              charge = await chargeAuthorization({
-                amountRands,
-                reference,
-                email: rider?.email || "rider@vura.com",
-                authorizationCode: card.transaction_index,
-              });
-            } catch (err: any) {
-              charge = { success: false, message: err?.message || "Could not process your card." };
-            }
-            if (!charge?.success) {
-              const msg = String(charge?.message || "").toLowerCase();
-              socket.emit("ride:requested:ack", {
-                success: false,
-                reason: msg.includes("insufficient")
-                  ? "You do not have enough money on this card to cover the ride. Please top up or add another card."
-                  : `Your card payment was declined. ${charge?.message || ""}`.trim(),
-              });
-              return;
-            }
-            cardChargeRef = reference;
-            try {
-              await execute(`
-                CREATE TABLE IF NOT EXISTS payments (
-                  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-                  user_id UUID, ride_id UUID,
-                  reference VARCHAR(100), amount NUMERIC(10,2),
-                  currency VARCHAR(3) DEFAULT 'ZAR', status VARCHAR(20),
-                  provider VARCHAR(20), raw_response JSONB,
-                  created_at TIMESTAMPTZ DEFAULT NOW(),
-                  updated_at TIMESTAMPTZ DEFAULT NOW()
-                )`);
-            } catch { /* already exists */ }
-            await execute(
-              `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
-               VALUES ($1, NULL, $2, $3, 'ZAR', 'completed', 'paystack')`,
-              [dbUserId, reference, amountRands]
-            ).catch(() => {});
           }
         }
         // ── Stops between pickup and drop-off ──
