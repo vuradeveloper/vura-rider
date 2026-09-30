@@ -91,8 +91,8 @@ export declare function scoreCandidates(images: RawCarsxeImage[]): Array<RawCars
     note: string;
 }>;
 export declare function imageBaseUrl(): string;
-export declare const storageKeyFor: (cacheKey: string, index?: number) => string;
-export declare const fileNameFor: (cacheKey: string, index?: number) => string;
+export declare const storageKeyFor: (cacheKey: string, index?: number, hash?: string) => string;
+export declare const fileNameFor: (cacheKey: string, index?: number, hash?: string) => string;
 /**
  * Downloads a candidate ONCE. Never hotlinks: the bytes are re-uploaded to our
  * own bucket and only our own URL is ever stored or shown.

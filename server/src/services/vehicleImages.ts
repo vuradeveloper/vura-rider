@@ -19,6 +19,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { query, queryOne, execute } from "../config/database";
 import { uploadToS3, deleteFromS3 } from "../lib/s3";
+import { createHash } from "crypto";
 
 export const CANVAS = { w: 900, h: 560 };
 export const MAX_BYTES = 80 * 1024;
@@ -316,10 +317,13 @@ export function imageBaseUrl(): string {
   return `${base}/api/vehicle-images`;
 }
 
-const fileFor = (cacheKey: string, index = 0) =>
-  `${cacheKey.replace(/\|/g, "-").replace(/[^a-z0-9.\-]/gi, "_")}${index ? `-${index + 1}` : ""}.webp`;
+const fileFor = (cacheKey: string, index = 0, hash?: string) =>
+  `${cacheKey.replace(/\|/g, "-").replace(/[^a-z0-9.\-]/gi, "_")}${index ? `-${index + 1}` : ""}${
+    hash ? `-${hash}` : ""
+  }.webp`;
 
-export const storageKeyFor = (cacheKey: string, index = 0) => `vehicle-images/${fileFor(cacheKey, index)}`;
+export const storageKeyFor = (cacheKey: string, index = 0, hash?: string) =>
+  `vehicle-images/${fileFor(cacheKey, index, hash)}`;
 
 export const fileNameFor = fileFor;
 
@@ -573,11 +577,16 @@ export async function runCarsxeFetch(
     const { pick, buffer, bg, bonus } = entry;
     try {
       const webp = await processVehicleImage(buffer);
-      const storageKey = storageKeyFor(cacheKey, i);
+      // Content-hashed name on purpose: a re-fetch of a car must never overwrite a
+      // file that Cloudflare (public, max-age=1 year, immutable) and the installed
+      // apps still cache - otherwise the operator approves a fresh photo and every
+      // phone keeps showing the old one. A new name means a new URL, so it just works.
+      const hash = createHash("sha1").update(webp).digest("hex").slice(0, 8);
+      const storageKey = storageKeyFor(cacheKey, i, hash);
       const up = await uploadToS3(storageKey, webp.toString("base64"), "image/webp");
       const meta = await sharp(webp).metadata();
       stored.push({
-        url: `${imageBaseUrl()}/${fileNameFor(cacheKey, i)}`,
+        url: `${imageBaseUrl()}/${fileNameFor(cacheKey, i, hash)}`,
         storageKey,
         sourceUrl: pick.link!,
         contextLink: String(pick.contextLink || ""),

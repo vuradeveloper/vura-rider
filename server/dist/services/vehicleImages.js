@@ -79,6 +79,7 @@ exports.noteDriverVehicle = noteDriverVehicle;
 // ─────────────────────────────────────────────────────────────────────────────
 const database_1 = require("../config/database");
 const s3_1 = require("../lib/s3");
+const crypto_1 = require("crypto");
 exports.CANVAS = { w: 900, h: 560 };
 exports.MAX_BYTES = 80 * 1024;
 const CARSXE_URL = "https://api.carsxe.com/images";
@@ -300,8 +301,8 @@ function imageBaseUrl() {
     const base = (process.env.PUBLIC_API_BASE || "https://api.ridevura.com").replace(/\/+$/, "");
     return `${base}/api/vehicle-images`;
 }
-const fileFor = (cacheKey, index = 0) => `${cacheKey.replace(/\|/g, "-").replace(/[^a-z0-9.\-]/gi, "_")}${index ? `-${index + 1}` : ""}.webp`;
-const storageKeyFor = (cacheKey, index = 0) => `vehicle-images/${fileFor(cacheKey, index)}`;
+const fileFor = (cacheKey, index = 0, hash) => `${cacheKey.replace(/\|/g, "-").replace(/[^a-z0-9.\-]/gi, "_")}${index ? `-${index + 1}` : ""}${hash ? `-${hash}` : ""}.webp`;
+const storageKeyFor = (cacheKey, index = 0, hash) => `vehicle-images/${fileFor(cacheKey, index, hash)}`;
 exports.storageKeyFor = storageKeyFor;
 exports.fileNameFor = fileFor;
 /**
@@ -529,11 +530,16 @@ async function runCarsxeFetch(cacheKey, options) {
         const { pick, buffer, bg, bonus } = entry;
         try {
             const webp = await processVehicleImage(buffer);
-            const storageKey = (0, exports.storageKeyFor)(cacheKey, i);
+            // Content-hashed name on purpose: a re-fetch of a car must never overwrite a
+            // file that Cloudflare (public, max-age=1 year, immutable) and the installed
+            // apps still cache - otherwise the operator approves a fresh photo and every
+            // phone keeps showing the old one. A new name means a new URL, so it just works.
+            const hash = (0, crypto_1.createHash)("sha1").update(webp).digest("hex").slice(0, 8);
+            const storageKey = (0, exports.storageKeyFor)(cacheKey, i, hash);
             const up = await (0, s3_1.uploadToS3)(storageKey, webp.toString("base64"), "image/webp");
             const meta = await sharp(webp).metadata();
             stored.push({
-                url: `${imageBaseUrl()}/${(0, exports.fileNameFor)(cacheKey, i)}`,
+                url: `${imageBaseUrl()}/${(0, exports.fileNameFor)(cacheKey, i, hash)}`,
                 storageKey,
                 sourceUrl: pick.link,
                 contextLink: String(pick.contextLink || ""),
