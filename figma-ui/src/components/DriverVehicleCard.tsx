@@ -1,5 +1,5 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// <DriverVehicleCard /> — ONE component for every rider-facing driver/car card, so
+﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// <DriverVehicleCard /> â€” ONE component for every rider-facing driver/car card, so
 // the accepted, arriving, arrived, in-progress, completed and history screens can
 // never drift apart.
 //
@@ -9,7 +9,7 @@
 //
 // The plate is the real identifier and stays the most prominent text: the drawing
 // shows the right SHAPE in the right COLOUR, not the exact model.
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { useState } from 'react'
 import VehicleImage, { resolveVehicleImage } from './vehicle/VehicleImage'
 import { colourNameOf } from './vehicle/palette'
@@ -32,6 +32,7 @@ export type VehicleInfo = {
   license_plate?: string | null
   body_type?: string | null
   vehicle_body_type?: string | null
+  image_url?: string | null
 } | null
 
 export default function DriverVehicleCard({
@@ -111,15 +112,15 @@ export default function DriverVehicleCard({
         className={`text-center font-bold text-[#1A1A1A] tracking-[0.28em] ${compact ? 'text-[18px] mt-1' : 'text-[24px] mt-2'}`}
         style={{ fontFamily: 'JetBrains Mono, monospace' }}
       >
-        {plate || '—'}
+        {plate || 'â€”'}
       </p>
 
       <p className="text-center text-[13px] text-[#4A4A4A] font-semibold mt-1 capitalize">
-        {first} · {desc}
+        {first} Â· {desc}
       </p>
       {driver?.rating ? (
         <p className="text-center text-[12px] text-[#6B6B6B] mt-0.5">
-          ★ {Number(driver.rating).toFixed(2)}
+          â˜… {Number(driver.rating).toFixed(2)}
         </p>
       ) : null}
 
@@ -142,7 +143,7 @@ export default function DriverVehicleCard({
             aria-label="More options"
             className="w-12 border border-[#EBEBEB] rounded-2xl py-3 text-[13px] font-semibold text-[#1A1A1A] active:bg-[#F7F7F7]"
           >
-            ⋯
+            â‹¯
           </button>
         </div>
       )}
