@@ -17,7 +17,7 @@ import VehicleLinkScreen from './components/VehicleLinkScreen'
 // `getRoute` is what useRouteLine() calls to turn pickups/stops/drop-offs into a
 // road-following polyline. It existed in the backend lib all along but was never
 // imported here, so the map's route effect threw `getRoute is not defined` the
-// moment a screen rendered with two or more points — one of the white screens.
+// moment a screen rendered with two or more points â€” one of the white screens.
 import { getRoute } from './lib/backend'
 import WalletScreen from './components/WalletScreen'
 import { initPushNotifications, notifyRide } from './lib/notify'
@@ -25,7 +25,7 @@ import type { Earnings as EarningsSummary } from './lib/backend'
 import {
   acceptRide,
   AuthUser,
-  // ── rider ──
+  // â”€â”€ rider â”€â”€
   cancelRide,
   completeTrip,
   declineRide,
@@ -57,9 +57,9 @@ import {
   NotificationRow,
   on,
   openWaze,
-  // ── payment methods (booking screen) ──
+  // â”€â”€ payment methods (booking screen) â”€â”€
   PaymentMethod,
-  // (getStoredProfileInfo is already imported above — listed once only)
+  // (getStoredProfileInfo is already imported above â€” listed once only)
   Place,
   publishLocation,
   RecentSearch,
@@ -113,14 +113,14 @@ const rideOptions = [
 // sees are all the same number.
 const RIDE_FARE = 0.2
 
-// ── Date helpers, copied from the React Native app (earnings.tsx / trips.tsx) ──
+// â”€â”€ Date helpers, copied from the React Native app (earnings.tsx / trips.tsx) â”€â”€
 
 /** JS Sun=0..Sat=6 shifted to Mon=0..Sun=6, so the bars start on Monday. */
 function dayIndex(d: Date) {
   return (d.getDay() + 6) % 7
 }
 
-/** "Today · 14:32", "Yesterday · 09:05", or "12 Aug · 18:40". */
+/** "Today Â· 14:32", "Yesterday Â· 09:05", or "12 Aug Â· 18:40". */
 function fmtTripTime(iso: string | null) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -129,9 +129,9 @@ function fmtTripTime(iso: string | null) {
   const yest = new Date(now)
   yest.setDate(now.getDate() - 1)
   const time = d.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })
-  if (d.toDateString() === now.toDateString()) return `Today · ${time}`
-  if (d.toDateString() === yest.toDateString()) return `Yesterday · ${time}`
-  return `${d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })} · ${time}`
+  if (d.toDateString() === now.toDateString()) return `Today Â· ${time}`
+  if (d.toDateString() === yest.toDateString()) return `Yesterday Â· ${time}`
+  return `${d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })} Â· ${time}`
 }
 
 /**
@@ -168,7 +168,7 @@ function coordsOf(lat: any, lng: any): LatLng | null {
 /**
  * Waypoints in the order the driver will visit them. The server ignores
  * `waypoints` on a ride request (see the probe notes in lib/backend.ts), so on a
- * live ride these come back only if the row carries them — hence the several
+ * live ride these come back only if the row carries them â€” hence the several
  * spellings, and the empty array when there are none.
  */
 function stopsOf(row: any): LatLng[] {
@@ -180,7 +180,7 @@ function stopsOf(row: any): LatLng[] {
 }
 
 /**
- * Every leg of a trip, in order: pickup → stops → drop-off. Anything missing is
+ * Every leg of a trip, in order: pickup â†’ stops â†’ drop-off. Anything missing is
  * dropped rather than guessed, so the drawn line can never contradict the
  * addresses printed beside it.
  */
@@ -201,7 +201,7 @@ function tripPoints(pickup: LatLng | null, stops: LatLng[], dropoff: LatLng | nu
 function useRouteLine(points: LatLng[]): LatLng[] {
   const [line, setLine] = useState<LatLng[]>([])
   // A fresh array identity arrives on every render, so the effect keys off the
-  // coordinates instead — otherwise it would re-request the route forever.
+  // coordinates instead â€” otherwise it would re-request the route forever.
   const key = points.map((p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`).join('|')
   useEffect(() => {
     if (points.length < 2) { setLine([]); return }
@@ -215,7 +215,7 @@ function useRouteLine(points: LatLng[]): LatLng[] {
   return line
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // ????????? Icons ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 const IC = {
@@ -247,7 +247,7 @@ const IC = {
  * Opens a URL for card checkout.
  *
  * Capacitor's Browser plugin renders the page in a Custom Tab ON TOP of the app,
- * so the rider never gets thrown out to a separate browser app — that in-app
+ * so the rider never gets thrown out to a separate browser app â€” that in-app
  * feeling is what the old React Native app had (it used an in-app WebView).
  *
  * An iframe cannot be used instead: the Paystack checkout returns
@@ -261,7 +261,7 @@ async function openExternal(url: string) {
     await Browser.open({ url })
     return
   } catch {
-    /* plugin missing (e.g. running as a plain web build) — fall through */
+    /* plugin missing (e.g. running as a plain web build) â€” fall through */
   }
   const w = window.open(url, '_system')
   if (w) return
@@ -290,10 +290,10 @@ function MapCanvas({
 }: {
   dark?: boolean
   /**
-   * Polyline to draw (pickup → stops → drop-off), normally from getRoute().
+   * Polyline to draw (pickup â†’ stops â†’ drop-off), normally from getRoute().
    *
    * This REPLACES the old `showRoute?: boolean` prop, which was declared and passed
-   * by three screens but never destructured or forwarded — so `showRoute` did
+   * by three screens but never destructured or forwarded â€” so `showRoute` did
    * nothing at all and no map in the app ever drew a route.
    */
   route?: LatLng[]
@@ -312,10 +312,10 @@ function MapCanvas({
     // `isolate` (CSS `isolation: isolate`) is REQUIRED here, not cosmetic: it makes
     // this wrapper a stacking context, which traps Leaflet's internal panes inside it.
     //
-    // Leaflet ships `.leaflet-tile-pane{z-index:200}` … `.leaflet-popup-pane{z-index:700}`
-    // … `.leaflet-control{z-index:800}`, and with no stacking context above them those
+    // Leaflet ships `.leaflet-tile-pane{z-index:200}` â€¦ `.leaflet-popup-pane{z-index:700}`
+    // â€¦ `.leaflet-control{z-index:800}`, and with no stacking context above them those
     // raw values leak into the app's ROOT stacking order. That painted the map over
-    // every overlay (all z-10 — the search bar, the Online/Offline pill, the rider↔driver
+    // every overlay (all z-10 â€” the search bar, the Online/Offline pill, the riderâ†”driver
     // switch, the back buttons) and over the bottom nav (z-50), which is exactly why
     // those controls stopped showing once real tiles started loading.
     //
@@ -323,15 +323,15 @@ function MapCanvas({
     // document order, so the overlays beside it stack normally again.
     <div className="absolute inset-0 overflow-hidden bg-[#EEF2F7] isolate">
       {/* The pin is drawn by Leaflet at the driver's REAL coordinates. The old
-          hard-coded centre pin that sat here is gone — it always pointed at the
+          hard-coded centre pin that sat here is gone â€” it always pointed at the
           middle of the screen no matter where the driver actually was. */}
       <LeafletMap dark={dark} marker={marker} zoom={zoom} follow={follow} controls={controls} controlsBottom={controlsBottom} route={route} />
     </div>
   )
 }
 
-// The rider↔driver mode pill used to live here. It has been REMOVED: these are two
-// separate apps — this one is rider-only — and the switch only added a way to land
+// The riderâ†”driver mode pill used to live here. It has been REMOVED: these are two
+// separate apps â€” this one is rider-only â€” and the switch only added a way to land
 // in screens that cannot do the job of the other app.
 
 // ????????? RIDER ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
@@ -360,7 +360,7 @@ function PlaceIcon({ type }: { type: string }) {
 
 function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode: AppMode; onMode: (m: AppMode) => void }) {
   const [me, setMe] = useState<LatLng | null>(null)
-  const [placeLabel, setPlaceLabel] = useState('Locating you…')
+  const [placeLabel, setPlaceLabel] = useState('Locating youâ€¦')
   const [places, setPlaces] = useState<SavedPlace[]>(() => getSavedPlaces())
   const [adding, setAdding] = useState(false)
   const [newLabel, setNewLabel] = useState('')
@@ -369,7 +369,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
   const [searching, setSearching] = useState(false)
   const [recents, setRecents] = useState<RecentSearch[]>([])
 
-  // Real GPS fix — the rider's actual position, used for the pickup point and
+  // Real GPS fix â€” the rider's actual position, used for the pickup point and
   // the map centre (the same geolocation the native app uses via expo-location).
   useEffect(() => {
     getMyLocation()
@@ -383,10 +383,10 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
         const real = r?.address || r?.name
         setPlaceLabel(real ? String(real) : 'My Current Location')
       })
-      .catch(() => setPlaceLabel('Location unavailable — check permissions'))
+      .catch(() => setPlaceLabel('Location unavailable â€” check permissions'))
   }, [])
 
-  // Real destination search, with the SAME ranking parameters the old app used —
+  // Real destination search, with the SAME ranking parameters the old app used â€”
   // biased to the rider's position, closest-first, South Africa only. This is what
   // made the old search accurate; sending only ?q= gave vaguer, farther results.
   useEffect(() => {
@@ -403,7 +403,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
     return () => { alive = false; clearTimeout(t) }
   }, [query, me])
 
-  // Recent searches — GET /api/searches, with the device as a fallback
+  // Recent searches â€” GET /api/searches, with the device as a fallback
   // (exactly the old SearchService behaviour).
   useEffect(() => {
     getRecentSearches()
@@ -465,11 +465,11 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
               className="flex-1 bg-transparent text-[14px] text-[#1A1A1A] outline-none placeholder:text-[#ADADAD]"
             />
             {query ? (
-              <button onClick={() => setQuery('')} className="text-[#ADADAD] text-[16px] leading-none">×</button>
+              <button onClick={() => setQuery('')} className="text-[#ADADAD] text-[16px] leading-none">Ã—</button>
             ) : null}
           </div>
 
-          {searching && <p className="text-[12px] text-[#ADADAD] mb-3 px-1">Searching…</p>}
+          {searching && <p className="text-[12px] text-[#ADADAD] mb-3 px-1">Searchingâ€¦</p>}
 
           {results.length > 0 && (
             <div className="mb-5 rounded-2xl border border-[#F0F0F0] overflow-hidden">
@@ -484,7 +484,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
                     <p className="text-[14px] text-[#1A1A1A] font-semibold truncate">{r.name}</p>
                     <p className="text-[12px] text-[#ADADAD] truncate mt-0.5">{r.address}</p>
                   </div>
-                  {/* Distance badge — the provider returns metres from the rider,
+                  {/* Distance badge â€” the provider returns metres from the rider,
                       which is what makes "closest first" visible. */}
                   {Number.isFinite(Number(r.distance)) && Number(r.distance) > 0 && (
                     <span className="text-[11px] text-[#ADADAD] shrink-0 font-medium">
@@ -498,7 +498,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
             </div>
           )}
 
-          {/* Recent searches — GET /api/searches, the old app's behaviour. */}
+          {/* Recent searches â€” GET /api/searches, the old app's behaviour. */}
           {query.trim().length === 0 && recents.length > 0 && (
             <div className="mb-5">
               <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mb-2">Recent</p>
@@ -521,7 +521,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
           )}
           {/* __SAVED__ */}
 
-          {/* Quick picks — Home / Work / Airport, backed by saved places */}
+          {/* Quick picks â€” Home / Work / Airport, backed by saved places */}
           <div className="flex gap-2.5 mb-6">
             {[{ label: 'Home', type: 'home' }, { label: 'Work', type: 'work' }, { label: 'Airport', type: 'airport' }].map(q => {
               const saved = places.find((p) => p.label.toLowerCase() === q.label.toLowerCase())
@@ -574,7 +574,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
                       <p className="text-[12px] text-[#ADADAD] truncate mt-0.5">{p.label}</p>
                     </div>
                   </button>
-                  <button onClick={() => removePlace(p.id)} className="text-[#C4C4C4] text-[16px] px-2 active:text-[#EA4335]">×</button>
+                  <button onClick={() => removePlace(p.id)} className="text-[#C4C4C4] text-[16px] px-2 active:text-[#EA4335]">Ã—</button>
                 </div>
               ))}
             </div>
@@ -597,7 +597,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   const destName = destLabel(destination)
   const ride = rideOptions.find(r => r.id === sel)!
 
-  // ── Payment method ─────────────────────────────────────────────────────────
+  // â”€â”€ Payment method â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // `pay` is PAY_CASH or a saved card's id. Only 'cash' vs 'card' is sent with
   // the ride (that is what the server stores and the driver screen shows); the
   // card id is kept so the chosen card can be shown back to the rider.
@@ -622,13 +622,13 @@ function BookingScreen({ destination, onBack, onConfirm }: {
    * Adds a card through Paystack's hosted checkout.
    *
    * The checkout is opened in the OS browser (3-D Secure / OTP cannot complete in
-   * an in-app view), then the card is confirmed by polling the server — the same
+   * an in-app view), then the card is confirmed by polling the server â€” the same
    * two-step flow as the native app (app/add-payment-method.tsx).
    */
   async function addCard() {
     if (addingCard) return
     setAddingCard(true)
-    setCardMsg('Opening the secure payment page…')
+    setCardMsg('Opening the secure payment pageâ€¦')
     try {
       const reg = await registerPaystackCard()
       if (!reg?.reference || !reg?.authorizationUrl) {
@@ -636,7 +636,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
         return
       }
       await openExternal(reg.authorizationUrl)
-      setCardMsg('Waiting for your bank to confirm…')
+      setCardMsg('Waiting for your bank to confirmâ€¦')
       const saved = await pollCardSaved(reg.reference)
       if (saved) {
         // Close the checkout tab so the rider lands back on the booking screen.
@@ -659,7 +659,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
    * 3s for up to 5 minutes.
    *
    * `abandoned` is Paystack's RESTING status for a checkout that has not been paid
-   * yet, so it only counts as final after a 2-minute grace — treating it as an
+   * yet, so it only counts as final after a 2-minute grace â€” treating it as an
    * immediate failure ends the flow seconds after opening, before the rider could
    * possibly have typed anything. `failed` is a genuine decline and is immediate.
    */
@@ -693,7 +693,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     }
   }
 
-  // ── Stops ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Stops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [stops, setStops] = useState<Waypoint[]>([])
   const [pickStop, setPickStop] = useState(false)
   const [stopQ, setStopQ] = useState('')
@@ -709,7 +709,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
       .catch(() => { })
   }, [])
 
-  // The real road route for the map: current location → stops → destination.
+  // The real road route for the map: current location â†’ stops â†’ destination.
   // Missing pieces are simply skipped, so adding a stop redraws the line through
   // it and the map never shows a route to nowhere.
   const mapRoute = useRouteLine(tripPoints(
@@ -718,7 +718,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     destCoords(destination),
   ))
 
-  // Search as the rider types, biased to where they are — the same helper and
+  // Search as the rider types, biased to where they are â€” the same helper and
   // ordering the home screen uses, so results match.
   useEffect(() => {
     if (!pickStop) return
@@ -766,7 +766,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     ? 'Cash'
     : (() => {
       const c = cards.find((x) => x.id === pay)
-      return c ? `${(c.card_type || 'Card').toUpperCase()} •••• ${c.last4 || '····'}` : 'Card'
+      return c ? `${(c.card_type || 'Card').toUpperCase()} â€¢â€¢â€¢â€¢ ${c.last4 || 'Â·Â·Â·Â·'}` : 'Card'
     })()
 
   return (
@@ -806,23 +806,23 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                     <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">Stop {i + 1}</p>
                     <p className="text-[13px] text-[#1A1A1A] font-semibold truncate">{destLabel(s.address)}</p>
                   </div>
-                  {/* Reorder — the driver visits stops in this order. */}
+                  {/* Reorder â€” the driver visits stops in this order. */}
                   <div className="shrink-0 flex flex-col">
                     <button onClick={() => moveStop(i, -1)} disabled={i === 0}
                       aria-label={`Move stop ${i + 1} earlier`}
                       className={`w-7 h-5 flex items-center justify-center text-[10px] leading-none rounded-t-md ${i === 0 ? 'text-[#DADADA]' : 'text-[#6B6B6B] active:bg-[#EDEDED]'}`}>
-                      ▲
+                      â–²
                     </button>
                     <button onClick={() => moveStop(i, 1)} disabled={i === stops.length - 1}
                       aria-label={`Move stop ${i + 1} later`}
                       className={`w-7 h-5 flex items-center justify-center text-[10px] leading-none rounded-b-md ${i === stops.length - 1 ? 'text-[#DADADA]' : 'text-[#6B6B6B] active:bg-[#EDEDED]'}`}>
-                      ▼
+                      â–¼
                     </button>
                   </div>
                   <button onClick={() => setStops((rows) => rows.filter((_, x) => x !== i))}
                     aria-label={`Remove stop ${i + 1}`}
                     className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[#9E9E9E] text-[16px] leading-none active:bg-[#EDEDED]">
-                    ×
+                    Ã—
                   </button>
                 </div>
               ))}
@@ -833,7 +833,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
           </div>
 
-          {/* Add stop — sits with the route, since a stop is part of the trip. */}
+          {/* Add stop â€” sits with the route, since a stop is part of the trip. */}
           <button onClick={() => setPickStop(true)}
             className="mt-3 w-full flex items-center gap-2.5 py-2.5 px-1 rounded-xl active:bg-[#F7F7F7] transition-colors">
             <span className="w-6 h-6 rounded-full bg-[#1A1A1A] text-white text-[15px] font-bold flex items-center justify-center leading-none">+</span>
@@ -869,7 +869,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
           </div>
         </div>
 
-        {/* Payment — on THIS page, so the rider picks how they pay before the
+        {/* Payment â€” on THIS page, so the rider picks how they pay before the
             request goes out, exactly as the old app did. Cash is always offered;
             saved cards come from the server, and Add card runs the Paystack
             checkout. */}
@@ -882,7 +882,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
               onSelect={() => setPay(PAY_CASH)}
               title="Cash"
               subtitle="Pay the driver directly"
-              icon={<span className="text-[16px]">💵</span>}
+              icon={<span className="text-[16px]">ðŸ’µ</span>}
             />
 
             {cards.map((c) => (
@@ -890,7 +890,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                 key={c.id}
                 selected={pay === c.id}
                 onSelect={() => setPay(c.id)}
-                title={`${(c.card_type || 'Card').toUpperCase()} •••• ${c.last4 || '····'}`}
+                title={`${(c.card_type || 'Card').toUpperCase()} â€¢â€¢â€¢â€¢ ${c.last4 || 'Â·Â·Â·Â·'}`}
                 subtitle={c.bank || 'Saved card'}
                 icon={IC.wallet()}
                 onRemove={() => removeCard(c.id)}
@@ -903,7 +903,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                 ? <div className="w-4 h-4 rounded-full border-2 border-[#D0D0D0] border-t-[#EA4335] animate-spin" />
                 : <span className="w-6 h-6 rounded-full bg-[#1A1A1A] text-white text-[15px] font-bold flex items-center justify-center leading-none">+</span>}
               <span className="text-[13px] text-[#1A1A1A] font-semibold">
-                {addingCard ? 'Waiting for your bank…' : 'Add card'}
+                {addingCard ? 'Waiting for your bankâ€¦' : 'Add card'}
               </span>
             </button>
           </div>
@@ -919,7 +919,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             Confirm {ride.name}
           </button>
           <p className="text-[11px] text-[#ADADAD] text-center mt-2.5">
-            {payLabel}{stops.length > 0 ? ` · ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
+            {payLabel}{stops.length > 0 ? ` Â· ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
           </p>
         </div>
       </div>
@@ -956,7 +956,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
               {stopQ.trim().length < 2 ? (
                 <p className="text-[12px] text-[#ADADAD] py-4">Type at least two letters to search.</p>
               ) : stopRes.length === 0 && !stopBusy ? (
-                <p className="text-[12px] text-[#ADADAD] py-4">No places found for “{stopQ.trim()}”.</p>
+                <p className="text-[12px] text-[#ADADAD] py-4">No places found for â€œ{stopQ.trim()}â€.</p>
               ) : (
                 stopRes.map((p) => (
                   <button key={String(p.id ?? p.name)} onClick={() => chooseStop(p)}
@@ -1010,7 +1010,7 @@ function PayRow({
       {onRemove && (
         <button onClick={onRemove} aria-label={`Remove ${title}`}
           className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[#9E9E9E] text-[16px] leading-none active:bg-[#EDEDED]">
-          ×
+          Ã—
         </button>
       )}
     </div>
@@ -1020,7 +1020,7 @@ function PayRow({
 function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onMatched }: {
   destination: string
   tier?: string
-  /** 'cash' | 'card' — chosen on the booking screen and sent with the request. */
+  /** 'cash' | 'card' â€” chosen on the booking screen and sent with the request. */
   paymentMethod?: string
   /** Stops added on the booking screen, sent as the ride's waypoints. */
   stops?: Waypoint[]
@@ -1120,7 +1120,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
           }
           const from = mine
           // The driver's trip card and Earnings show the ride's pickup_address, so
-          // it has to be the rider's REAL address — the literal words "Current
+          // it has to be the rider's REAL address â€” the literal words "Current
           // location" told the driver nothing. Resolve the fix to a street address
           // (GET /api/search/reverse) and only fall back to a coordinate pin if the
           // lookup fails, so the ride is never blocked by a geocoder problem.
@@ -1165,7 +1165,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
   useEffect(() => {
     const off = on('ride:accepted', (d: any) => {
       if (d?.id) {
-        void notifyRide('Driver accepted', 'Your driver is on the way — tap to see the trip.')
+        void notifyRide('Driver accepted', 'Your driver is on the way â€” tap to see the trip.')
         onMatched(String(d.id))
       }
     })
@@ -1254,7 +1254,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
             <p className="text-[13px] text-[#ADADAD] mt-1.5">{destName}</p>
             <p className="text-[12px] text-[#ADADAD] mt-1">
               Paying by {paymentMethod === 'cash' ? 'cash' : 'card'}
-              {stops && stops.length > 0 ? ` · ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
+              {stops && stops.length > 0 ? ` Â· ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
             </p>
             {error && (
               <p className="text-[12px] text-[#C5221F] font-semibold mt-2.5">{error}</p>
@@ -1342,7 +1342,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
   /**
    * The live route to draw. It prefers the coordinates the SERVER holds for this
-   * ride (pickup → stops → drop-off) and falls back to the rider's own fix →
+   * ride (pickup â†’ stops â†’ drop-off) and falls back to the rider's own fix â†’
    * the destination they picked, so the map always has a first and last point
    * even before the driver accepts.
    */
@@ -1369,7 +1369,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   }, [rideId])
 
   // Follow the ride's REAL status and the driver's live position over the socket
-  // — the same events the native track screen listens to (lib/socket.ts).
+  // â€” the same events the native track screen listens to (lib/socket.ts).
   useEffect(() => {
     const offs = [
       on('ride:driver:arrived', () => {
@@ -1401,7 +1401,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   }, [])
 
   // Same safety net as the matching screen (3s + foreground resume + reconnect):
-  // if an event was missed — or the phone was locked when the driver arrived — the
+  // if an event was missed â€” or the phone was locked when the driver arrived â€” the
   // server still knows the truth, so the rider's screen catches up regardless.
   useEffect(() => {
     if (!rideId) return
@@ -1433,7 +1433,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
   const driverName = ride?.driver_name || 'Your driver'
   const vehicle = [ride?.vehicle_make, ride?.vehicle_model].filter(Boolean).join(' ') || 'Vehicle'
-  const plate = ride?.driver_plate || ride?.license_plate || '—'
+  const plate = ride?.driver_plate || ride?.license_plate || 'â€”'
   const rating = Number(ride?.driver_rating || 0)
   const done = status === 'completed'
   const cancelled = status === 'cancelled'
@@ -1447,14 +1447,14 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   async function finishTrip() {
     if (!rideId) { setSheet(false); onDone(); return }
     setBusy(true)
-    // Rating first (POST /api/ratings), then the tip (POST /api/tips) — the tip is
+    // Rating first (POST /api/ratings), then the tip (POST /api/tips) â€” the tip is
     // best-effort so a rider without a saved card still leaves this screen.
     await submitRating(rideId, stars).catch((e: any) =>
       setToast(`Rating not saved: ${e?.message || 'error'}`)
     )
     if (tip > 0) {
       await sendTip(rideId, tip).catch(() =>
-        setToast('Tip not saved — add a card in Account → Wallet')
+        setToast('Tip not saved â€” add a card in Account â†’ Wallet')
       )
     }
     setBusy(false)
@@ -1501,9 +1501,9 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
   return (
     <div className="flex flex-col h-screen">
-      {/* rideRoute is the server's road route for this ride (pickup → stops →
+      {/* rideRoute is the server's road route for this ride (pickup â†’ stops â†’
           drop-off). It replaces the old dead `showRoute` flag, which the map
-          ignored — see MapCanvas above. */}
+          ignored â€” see MapCanvas above. */}
       <div className="relative flex-1"><MapCanvas route={rideRoute} /></div>
       <div className="bg-white rounded-t-3xl shadow-[0_-4px_24px_rgba(0,0,0,0.08)] px-5 pt-5 pb-8 z-10">
         <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
@@ -1513,7 +1513,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-[#ADADAD]">{done ? 'Arrived' : STATUS_TEXT[status] || 'Driver on the way'}</p>
             <p className="text-[28px] font-bold text-[#1A1A1A] leading-none mt-0.5" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              {done ? '✓' : eta > 0 ? `${eta} min` : STATUS_TEXT[status] || ''}
+              {done ? 'âœ“' : eta > 0 ? `${eta} min` : STATUS_TEXT[status] || ''}
             </p>
           </div>
           <div className="text-right">
@@ -1527,7 +1527,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           <div className="h-full bg-[#EA4335] rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
         </div>
 
-        {/* Driver — real name, rating, vehicle and plate from the ride row, plus
+        {/* Driver â€” real name, rating, vehicle and plate from the ride row, plus
             working call / message / emergency actions. */}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-11 h-11 rounded-full bg-[#EA4335] flex items-center justify-center overflow-hidden shrink-0">
@@ -1540,7 +1540,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
             <div className="flex items-center gap-1 mt-0.5">
               {IC.star()}
               <span className="text-[12px] text-[#6B6B6B] font-medium truncate">
-                {rating > 0 ? `${rating.toFixed(2)} · ` : ''}{vehicle}
+                {rating > 0 ? `${rating.toFixed(2)} Â· ` : ''}{vehicle}
               </span>
             </div>
           </div>
@@ -1556,7 +1556,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           </div>
         </div>
 
-        {/* The car, the plate and who is driving — one shared card on every stage
+        {/* The car, the plate and who is driving â€” one shared card on every stage
             (Uber-style), rebuilt from the ride row so a relaunch mid-trip redraws it. */}
         <DriverVehicleCard
           driver={{ name: driverName, photo_url: ride?.driver_photo_url, rating }}
@@ -1665,7 +1665,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
               <button disabled={busy} onClick={() => void finishTrip()}
                 className="w-full mt-5 bg-[#1A1A1A] text-white font-bold text-[15px] py-4 rounded-2xl disabled:opacity-50">
-                {busy ? 'Saving…' : 'Next'}
+                {busy ? 'Savingâ€¦' : 'Next'}
               </button>
             </div>
           </div>
@@ -1681,7 +1681,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
   const [error, setError] = useState('')
   const [rating, setRating] = useState<{ rideId: string; score: number } | null>(null)
 
-  // Real history — GET /api/rides/history (the native app's RideService
+  // Real history â€” GET /api/rides/history (the native app's RideService
   // getRideHistory). Shows exactly the trips this rider has taken.
   useEffect(() => {
     let alive = true
@@ -1694,7 +1694,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
 
   async function rate(rideId: string, score: number) {
     setRating({ rideId, score })
-    // POST /api/ratings — the same call the native app makes after a trip.
+    // POST /api/ratings â€” the same call the native app makes after a trip.
     await submitRating(rideId, score).catch((e: any) =>
       setError(`Could not save your rating: ${e?.message || 'unknown error'}`)
     )
@@ -1710,7 +1710,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
           <div className="rounded-xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-3 text-[12px] font-semibold text-[#C5221F]">{error}</div>
         )}
         {loading ? (
-          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your trips…</p>
+          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your tripsâ€¦</p>
         ) : rides.length === 0 ? (
           <div className="bg-white rounded-2xl border border-[#F0F0F0] px-4 py-8 text-center shadow-sm">
             <p className="text-[14px] font-bold text-[#1A1A1A]">No trips yet</p>
@@ -1737,7 +1737,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                     <p className="text-[15px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{formatRand(fare)}</p>
                   </div>
                 </div>
-                {/* The car that did THIS trip — painted from the snapshot stamped on
+                {/* The car that did THIS trip â€” painted from the snapshot stamped on
                     the ride at accept time, so it stays correct even after the driver
                     changes cars later. */}
                 <div className="flex items-center gap-3 pt-3">
@@ -1750,7 +1750,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                   <div className="min-w-0">
                     <p className="text-[14px] font-bold text-[#1A1A1A] tracking-[0.18em]"
                       style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-                      {t.license_plate || '—'}
+                      {t.license_plate || 'â€”'}
                     </p>
                     <p className="text-[11px] text-[#6B6B6B] font-semibold truncate capitalize">
                       {[colourNameOf(t.vehicle_color), t.vehicle_make, t.vehicle_model].filter(Boolean).join(' ') || 'Vehicle details pending'}
@@ -1766,7 +1766,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                   </div>
                 </div>
 
-                {/* Rate the driver — real POST /api/ratings, only for completed trips
+                {/* Rate the driver â€” real POST /api/ratings, only for completed trips
                     that the rider hasn't already rated. */}
                 {String(t.status) === 'completed' && (
                   <div className="flex items-center gap-1.5 pt-3 mt-3 border-t border-[#F5F5F5]">
@@ -1792,7 +1792,7 @@ function RiderNotifications({ onBack }: { onBack: () => void }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  // GET /api/notifications/history — verified live (_flow.mjs).
+  // GET /api/notifications/history â€” verified live (_flow.mjs).
   useEffect(() => {
     let alive = true
     getNotifications()
@@ -1818,7 +1818,7 @@ function RiderNotifications({ onBack }: { onBack: () => void }) {
           <div className="rounded-xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-3 text-[12px] font-semibold text-[#C5221F] mb-3">{error}</div>
         )}
         {loading ? (
-          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading…</p>
+          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loadingâ€¦</p>
         ) : rows.length === 0 ? (
           <div className="bg-white rounded-2xl border border-[#F0F0F0] px-4 py-8 text-center shadow-sm">
             <p className="text-[14px] font-bold text-[#1A1A1A]">No notifications</p>
@@ -1858,7 +1858,7 @@ function RiderAccount({ mode, onMode, onSignOut, onNotifications, open }: {
 
   // Real history drives the stats. The rider app has no stats endpoint of its
   // own (the live server's /api/drivers/stats is driver-only), so trips and
-  // spend are computed from GET /api/rides/history — the same source the
+  // spend are computed from GET /api/rides/history â€” the same source the
   // Activity screen lists.
   useEffect(() => {
     getRideHistory(1, 50)
@@ -1895,9 +1895,9 @@ function RiderAccount({ mode, onMode, onSignOut, onNotifications, open }: {
         </div>
         <div className="mx-4 mt-3 grid grid-cols-3 gap-2.5">
           {[
-            { l: 'Trips', v: trips == null ? '—' : String(trips) },
-            { l: 'Spent', v: spent == null ? '—' : formatRand(spent) },
-            { l: 'Rating', v: '—' },
+            { l: 'Trips', v: trips == null ? 'â€”' : String(trips) },
+            { l: 'Spent', v: spent == null ? 'â€”' : formatRand(spent) },
+            { l: 'Rating', v: 'â€”' },
           ].map(s => (
             <div key={s.l} className="bg-white rounded-2xl border border-[#F0F0F0] p-3.5 text-center shadow-sm">
               <p className="text-[21px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{s.v}</p>
@@ -1969,7 +1969,7 @@ const ONLINE_CARD_HEIGHT = 145
 
 function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestData) => void; mode: AppMode; onMode: (m: AppMode) => void }) {
   // Restored from local storage, exactly like the native app
-  // (AsyncStorage "vura.driver.online") — so leaving and reopening the APK keeps
+  // (AsyncStorage "vura.driver.online") â€” so leaving and reopening the APK keeps
   // the driver online instead of silently resetting to Offline.
   const [online, setOnline] = useState(() => getStoredOnline())
   const [stats, setStats] = useState<DriverStats | null>(null)
@@ -2027,7 +2027,7 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
     <div className="flex flex-col h-screen bg-[#F7F7F7]">
       {/* Map */}
       <div className="relative" style={{ height: online ? '55%' : '42%' }}>
-        {/* Map — no explicit marker: it locks onto the device's REAL GPS fix and keeps
+        {/* Map â€” no explicit marker: it locks onto the device's REAL GPS fix and keeps
             following it as the driver moves (watchPosition), zoomed to street level.
             When online, the "Waiting for requests" card is pinned to the bottom of
             this area, so the map's own zoom/locate buttons are lifted to clear it. */}
@@ -2331,7 +2331,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
 
   // The line the map draws. On this prototype screen the driver's own GPS fix is
   // not carried in the request, so the route comes from the request's own
-  // pickup/drop-off coordinates — the same source the rider's screen uses.
+  // pickup/drop-off coordinates â€” the same source the rider's screen uses.
   const dropRoute = useRouteLine(tripPoints(
     coordsOf(request?.pickupLat, request?.pickupLng),
     [],
@@ -2369,7 +2369,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
             <Avatar name={request?.riderName || 'Rider'} size={38} bg="#EBEBEB" />
             <div className="flex-1">
               <p className="text-[14px] text-[#1A1A1A] font-semibold capitalize truncate">{request?.riderName || 'Rider'}</p>
-              <p className="text-[12px] text-[#ADADAD] mt-0.5">{request?.paymentMethod ? `${request.paymentMethod} · ` : ''}{formatRand(fare)}</p>
+              <p className="text-[12px] text-[#ADADAD] mt-0.5">{request?.paymentMethod ? `${request.paymentMethod} Â· ` : ''}{formatRand(fare)}</p>
             </div>
             <div className="flex gap-2">
               <button className="w-9 h-9 rounded-full bg-white border border-[#EBEBEB] flex items-center justify-center">{IC.phone()}</button>
@@ -2380,7 +2380,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
           {done
             ? <button onClick={onComplete} className="w-full bg-[#EA4335] text-white font-bold text-[15px] py-4 rounded-2xl active:bg-[#C5221F]"
               style={{ boxShadow: '0 4px 16px rgba(234,67,53,0.28)' }}>
-              Complete trip · {formatRand(fare)}
+              Complete trip Â· {formatRand(fare)}
             </button>
             : <div className="flex items-center justify-center gap-2 py-3">
               <div className="w-1.5 h-1.5 rounded-full bg-[#EA4335] animate-pulse" />
@@ -2394,7 +2394,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
 
 function TripComplete({ request, onDone }: { request: RideRequestData | null; onDone: () => void }) {
   // Pull the completed ride straight from the DB so the money shown here is the
-  // real actual_fare / platform_fee / driver_earned — not the old prototype's
+  // real actual_fare / platform_fee / driver_earned â€” not the old prototype's
   // hard-coded 38.40.
   const [ride, setRide] = useState<any>(null)
   useEffect(() => {
@@ -2414,7 +2414,7 @@ function TripComplete({ request, onDone }: { request: RideRequestData | null; on
           {IC.check('#34A853')}
         </div>
         <h2 className="text-[28px] font-bold text-[#1A1A1A] text-center" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Trip complete</h2>
-        <p className="text-[14px] text-[#ADADAD] mt-2 capitalize">{rider} · {destination}</p>
+        <p className="text-[14px] text-[#ADADAD] mt-2 capitalize">{rider} Â· {destination}</p>
         <div className="mt-6 flex items-baseline gap-1.5">
           <span className="text-[15px] text-[#ADADAD] font-medium">You earned</span>
           <span className="text-[44px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{formatRand(earned)}</span>
@@ -2511,7 +2511,7 @@ function Earnings() {
   const weekRides = Number(week?.totals?.rides ?? 0)
   const todayTotal = Number(stats?.today?.earned ?? 0)
   const perTrip = weekRides > 0 ? weekNet / weekRides : 0
-  // "% vs last week" — the same calculation the native earnings screen runs.
+  // "% vs last week" â€” the same calculation the native earnings screen runs.
   const prevNet = Number(week?.totals?.lastWeekNet ?? 0)
   const pct = weekNet > 0 && prevNet > 0 ? Math.round(((weekNet - prevNet) / prevNet) * 100) : null
   return (
@@ -2581,7 +2581,7 @@ function Earnings() {
           <p className="text-[11px] text-[#ADADAD] uppercase tracking-widest font-semibold mb-3">Trip history</p>
           <div className="bg-white rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
             {loading ? (
-              <p className="px-4 py-6 text-[12px] text-[#ADADAD] text-center">Loading your trips…</p>
+              <p className="px-4 py-6 text-[12px] text-[#ADADAD] text-center">Loading your tripsâ€¦</p>
             ) : trips.length === 0 ? (
               <p className="px-4 py-6 text-[12px] text-[#ADADAD] text-center">No completed trips yet.</p>
             ) : (
@@ -2607,8 +2607,8 @@ function Earnings() {
                   </div>
                   <p className="text-[11px] text-[#C4C4C4] mt-2.5" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
                     {fmtTripTime(trip.date)}
-                    {trip.distanceKm > 0 ? ` · ${trip.distanceKm.toFixed(1)} km` : ''}
-                    {trip.durationMins > 0 ? ` · ${Math.round(trip.durationMins)} min` : ''}
+                    {trip.distanceKm > 0 ? ` Â· ${trip.distanceKm.toFixed(1)} km` : ''}
+                    {trip.durationMins > 0 ? ` Â· ${Math.round(trip.durationMins)} min` : ''}
                   </p>
                 </div>
               ))
@@ -2621,7 +2621,7 @@ function Earnings() {
 }
 
 /**
- * Trip history — the port of the native app/driver/trips.tsx screen. Same two
+ * Trip history â€” the port of the native app/driver/trips.tsx screen. Same two
  * calls (GET /api/rides/history?limit=50 and GET /api/drivers/stats), so the
  * completed count and average rating come straight from the database.
  */
@@ -2662,7 +2662,7 @@ function TripHistory({ onBack }: { onBack: () => void }) {
         <div className="flex-1">
           <h1 className="text-[22px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Trips</h1>
           <p className="text-[11px] text-[#ADADAD] mt-0.5">
-            {completed} completed · {avg > 0 ? `${avg.toFixed(2)} avg rating` : 'no ratings yet'}
+            {completed} completed Â· {avg > 0 ? `${avg.toFixed(2)} avg rating` : 'no ratings yet'}
           </p>
         </div>
       </div>
@@ -2674,7 +2674,7 @@ function TripHistory({ onBack }: { onBack: () => void }) {
           </div>
         )}
         {loading ? (
-          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your trips…</p>
+          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your tripsâ€¦</p>
         ) : trips.length === 0 ? (
           <div className="bg-white rounded-2xl border border-[#F0F0F0] px-4 py-8 text-center shadow-sm">
             <p className="text-[14px] font-bold text-[#1A1A1A]">No trips yet</p>
@@ -2688,11 +2688,11 @@ function TripHistory({ onBack }: { onBack: () => void }) {
                   <Avatar name={t.partner} size={38} bg="#F2F2F2" />
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-bold text-[#1A1A1A] capitalize truncate">{t.partner}</p>
-                    <p className="text-[12px] text-[#ADADAD] mt-0.5 truncate">{t.pickup} → {t.destination}</p>
+                    <p className="text-[12px] text-[#ADADAD] mt-0.5 truncate">{t.pickup} â†’ {t.destination}</p>
                     <div className="flex items-center gap-1 mt-1">
                       {IC.star('#FBBC04')}
                       <span className="text-[11px] text-[#ADADAD]">
-                        {Number(t.rating) > 0 ? `${Number(t.rating).toFixed(1)} · ` : ''}{fmtTripTime(t.date)}
+                        {Number(t.rating) > 0 ? `${Number(t.rating).toFixed(1)} Â· ` : ''}{fmtTripTime(t.date)}
                       </span>
                     </div>
                   </div>
@@ -2732,7 +2732,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
     getMyProfile()
       .then((p) => setVehicle(p))
       .catch(() => { })
-    // Money available — the week's net, from /api/earnings.
+    // Money available â€” the week's net, from /api/earnings.
     getWalletBalance().then((d) => setBalance(Number(d?.total_earnings) || 0)).catch(() => { })
     // Pull every document already on file for this driver (same endpoint the
     // native app uses, so anything uploaded there shows up here).
@@ -2747,7 +2747,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
   const isVerified = ['verified', 'approved', 'active', 'complete'].includes(verifiedStatus)
 
   // Name from the sync row cached at login (the live server has no /api/users/me),
-  // falling back to the email prefix — the same fallback the native app uses.
+  // falling back to the email prefix â€” the same fallback the native app uses.
   const displayName = profile?.full_name
     ? String(profile.full_name)
     : (user?.email || 'Driver').split('@')[0].replace(/[._]/g, ' ')
@@ -2771,7 +2771,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
         </div>
 
         {/* Stats */}
-        {/* Stats — Rating, Trips and Money, all from the DB:
+        {/* Stats â€” Rating, Trips and Money, all from the DB:
             Rating -> /api/drivers/stats rating.average
             Trips  -> /api/drivers/stats allTime.rides (opens trip history)
             Money  -> /api/earnings week net (opening balance) */}
@@ -2830,7 +2830,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
           </button>
           {showDocs && (
             <div className="border-t border-[#F5F5F5]">
-              {/* Link your car — opens the vehicle + document upload screen. */}
+              {/* Link your car â€” opens the vehicle + document upload screen. */}
               <button
                 onClick={onLinkCar}
                 className="w-full flex items-center justify-between px-4 py-3 border-b border-[#F5F5F5] active:bg-[#F7F7F7]"
@@ -2844,7 +2844,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
                 {IC.chevRight()}
               </button>
 
-              {/* Real documents pulled from GET /api/documents/mine — anything
+              {/* Real documents pulled from GET /api/documents/mine â€” anything
                   uploaded in the native app appears here with its real file name
                   and review status. */}
               {docs.length === 0 ? (
@@ -2859,7 +2859,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
                       <p className="text-[11px] text-[#ADADAD] mt-0.5" style={{ wordBreak: 'break-all' }}>{d.file_name}</p>
                     </div>
                     <span className={`text-[11px] font-semibold ${d.status === 'approved' ? 'text-[#34A853]' : d.status === 'rejected' ? 'text-[#EA4335]' : 'text-[#FBBC04]'}`}>
-                      {d.status === 'approved' ? '✓ Verified' : d.status}
+                      {d.status === 'approved' ? 'âœ“ Verified' : d.status}
                     </span>
                   </div>
                 ))
@@ -2877,7 +2877,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
           )}
         </div>
 
-        {/* Payments and Withdrawals — card earnings, payout account, history. */}
+        {/* Payments and Withdrawals â€” card earnings, payout account, history. */}
         <div className="bg-white mx-4 mt-3 rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
           <button onClick={onWallet} className="w-full flex items-center justify-between px-4 py-3.5 active:bg-[#F7F7F7]">
             <div className="text-left">
@@ -2888,7 +2888,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
           </button>
         </div>
 
-        {/* Settings — Waze Navigation, Bank Account, Help Center, Report an Issue
+        {/* Settings â€” Waze Navigation, Bank Account, Help Center, Report an Issue
           all live behind this one button, as requested. */}
         <div className="bg-white mx-4 mt-3 rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
           <button onClick={onSettings} className="w-full flex items-center justify-between px-4 py-3.5 active:bg-[#F7F7F7]">
@@ -3097,7 +3097,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // Country code selector — the native signup defaults to +27 (South Africa)
+  // Country code selector â€” the native signup defaults to +27 (South Africa)
   // and lets the driver choose any country from the full ~240-country list.
   const [countryCode, setCountryCode] = useState('+27')
 
@@ -3119,7 +3119,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
       setOtp('')
       setError('')
       // Email the code via the same Resend endpoint the native signup uses. If
-      // delivery fails we fall back to showing the code on screen — exactly the
+      // delivery fails we fall back to showing the code on screen â€” exactly the
       // native app's behaviour.
       setSendingEmail(true)
       const sent = await sendVerificationEmail(email.trim(), newCode)
@@ -3138,7 +3138,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
     try {
       // Identical to the native app's register() call:
       //   full_name as ONE string, phone as countryCode + digits (spaces removed),
-      //   role "driver" — all sent to POST /api/users/sync by signUp().
+      //   role "driver" â€” all sent to POST /api/users/sync by signUp().
       await signUp(email.trim(), password, {
         fullName: `${firstName.trim()} ${lastName.trim()}`,
         phone: `${countryCode}${phone.replace(/\s/g, '')}`,
@@ -3251,12 +3251,12 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
           </div>
         </>) : (
           <>
-            {/* The code is only shown on screen when email delivery failed — the
+            {/* The code is only shown on screen when email delivery failed â€” the
                 native app does the same. Otherwise the rider reads it from their
                 inbox. */}
             {emailFailed ? (
               <div className="rounded-2xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-4">
-                <p className="text-[11px] uppercase tracking-widest text-[#C5221F] font-semibold mb-2">Email unavailable — your code</p>
+                <p className="text-[11px] uppercase tracking-widest text-[#C5221F] font-semibold mb-2">Email unavailable â€” your code</p>
                 <p className="text-[24px] font-bold text-[#1A1A1A] tracking-[0.3em]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{code}</p>
                 <button onClick={() => setOtp(code)} className="mt-2 w-full rounded-xl bg-[#FCE8E6] py-2 text-[12px] font-semibold text-[#C5221F]">
                   Tap to auto-fill code
@@ -3267,7 +3267,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
                 <p className="text-[16px] font-semibold text-[#1A1A1A]">Check your email</p>
                 <p className="text-[12px] text-[#ADADAD] mt-1">
                   We sent a 6-digit code to {email.trim()}. Enter it below.
-                  {sendingEmail ? ' Sending…' : ''}
+                  {sendingEmail ? ' Sendingâ€¦' : ''}
                 </p>
               </div>
             )}
@@ -3303,7 +3303,7 @@ export default function App() {
   // every launch ??? lib/backend persists the idToken in localStorage.
   const [authed, setAuthed] = useState(() => !!getStoredUser())
   // A stored session is NOT the same as a working one. Verify it on launch and,
-  // if it can't be renewed, drop it and send the driver to the login screen —
+  // if it can't be renewed, drop it and send the driver to the login screen â€”
   // otherwise every list (documents, earnings, trips) silently comes back empty.
   const [checkingSession, setCheckingSession] = useState(() => !!getStoredUser())
 
@@ -3334,9 +3334,9 @@ export default function App() {
   const [rideId, setRideId] = useState<string | null>(null)
   const [rScreen, setRScreen] = useState<RiderScreen>('home')
 
-    // ── Trip continuity: launch, resume and reconnect all rebuild from the DB ──
+    // â”€â”€ Trip continuity: launch, resume and reconnect all rebuild from the DB â”€â”€
     // The server is the source of truth, not the screen we happened to be on.
-    // Swiping the app away — or Android killing it — mid-trip must never dump the
+    // Swiping the app away â€” or Android killing it â€” mid-trip must never dump the
     // rider back on Home while a ride is still running, so on every cold start,
     // every return to the foreground and every reconnect we ask what this rider is
     // actually doing and jump straight to that ride.
@@ -3352,7 +3352,7 @@ export default function App() {
           setRideId(String(active.id))
           if (active.destination_address) setDest(String(active.destination_address))
           setRScreen('ride') // RideScreen re-reads the whole ride from this id
-        } catch { /* offline — stay wherever we are */ }
+        } catch { /* offline â€” stay wherever we are */ }
       }
       void restore()
       const onVisible = () => { if (document.visibilityState === 'visible') void restore() }
@@ -3394,7 +3394,7 @@ export default function App() {
         {checkingSession ? (
           <div className="h-screen flex flex-col items-center justify-center bg-white gap-3">
             <div className="w-9 h-9 rounded-full border-[3px] border-[#F0F0F0] border-t-[#EA4335] animate-spin" />
-            <p className="text-[13px] text-[#ADADAD]">Restoring your session…</p>
+            <p className="text-[13px] text-[#ADADAD]">Restoring your sessionâ€¦</p>
           </div>
         ) : auth === 'splash' && (
           <Splash
