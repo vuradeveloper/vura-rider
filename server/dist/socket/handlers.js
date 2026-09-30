@@ -37,7 +37,7 @@ function setupSocketHandlers(io) {
     });
     io.on("connection", (rawSocket) => {
         const socket = rawSocket;
-        console.log(`🔌 Socket: ${socket.id} (user: ${socket.userId})`);
+        console.log(`ðŸ”Œ Socket: ${socket.id} (user: ${socket.userId})`);
         if (socket.userId)
             socket.join(`user:${socket.userId}`);
         const getDbUserId = async () => {
@@ -74,10 +74,10 @@ function setupSocketHandlers(io) {
            created_at TIMESTAMPTZ DEFAULT NOW()
          )`).catch((err) => console.warn("chat_messages table init warning:", err.message));
         };
-        // ── Passenger: (re)connect — rejoin active ride room + current driver position ──
+        // â”€â”€ Passenger: (re)connect â€” rejoin active ride room + current driver position â”€â”€
         // IMPORTANT: also rejoin rides still in 'searching'/'scheduled'. If the rider's
         // socket reconnects mid-search (network blip, app backgrounded, token refresh),
-        // the room membership from passenger:ride:request is lost — without this, the
+        // the room membership from passenger:ride:request is lost â€” without this, the
         // rider would NEVER receive the ride:accepted broadcast and would stay stuck on
         // "Finding your driver" forever.
         socket.on("passenger:connect", async () => {
@@ -110,7 +110,7 @@ function setupSocketHandlers(io) {
                 console.error("passenger:connect error:", err.message);
             }
         });
-        // ── Passenger: request ride ──
+        // â”€â”€ Passenger: request ride â”€â”€
         socket.on("passenger:ride:request", async (data) => {
             try {
                 const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops } = data;
@@ -129,7 +129,7 @@ function setupSocketHandlers(io) {
                 if (!dbUserId) {
                     throw new Error("Passenger account not synced with database yet. Try again in a moment.");
                 }
-                // ── Fraud / abuse guard for Pay Later rides ──
+                // â”€â”€ Fraud / abuse guard for Pay Later rides â”€â”€
                 // Server-authoritative, NEVER trust the client: the rider must have an
                 // active, non-frozen Pay Later account, the fare must fit the remaining
                 // credit, they must not be blacklisted, and they must be under the
@@ -148,7 +148,7 @@ function setupSocketHandlers(io) {
                             });
                             return;
                         }
-                        // Velocity caps — block rapid rebooking / farming.
+                        // Velocity caps â€” block rapid rebooking / farming.
                         const { today = 0, month = 0 } = await (0, database_1.queryOne)(`SELECT
                  COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int AS today,
                  COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE))::int AS month
@@ -178,11 +178,11 @@ function setupSocketHandlers(io) {
                         return;
                     }
                 }
-                // ── Pre-booking payment (best-effort, non-blocking) ──
+                // â”€â”€ Pre-booking payment (best-effort, non-blocking) â”€â”€
                 // Ride creation is NEVER blocked by payment so riders can always find
                 // a driver. If they have a saved card we pre-authorize it as a safety
                 // check; if the check fails (no card, decline) we still create the
-                // ride — the real charge happens at pickup. This guarantees drivers
+                // ride â€” the real charge happens at pickup. This guarantees drivers
                 // always see booking requests.
                 let cardChargeRef = null;
                 if (paymentMethod === "card" && fare != null) {
@@ -238,7 +238,7 @@ function setupSocketHandlers(io) {
                VALUES ($1, NULL, $2, $3, 'ZAR', 'completed', 'paystack')`, [dbUserId, reference, amountRands]).catch(() => { });
                     }
                 }
-                // ── Stops between pickup and drop-off ──
+                // â”€â”€ Stops between pickup and drop-off â”€â”€
                 // Accept `waypoints` (current apps) and `stops` (older payloads); each
                 // entry is { address, lat, lng }. Stored in rides.waypoints (JSONB) so the
                 // stops survive the booking round-trip and can be re-drawn on BOTH maps.
@@ -286,7 +286,7 @@ function setupSocketHandlers(io) {
                 socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
                 if (ride)
                     socket.join(`ride:${ride.id}`);
-                // ── Notify nearby drivers about the new ride ──
+                // â”€â”€ Notify nearby drivers about the new ride â”€â”€
                 // Find all online drivers and emit ride:request to each one so the
                 // first to accept wins.
                 (async () => {
@@ -307,7 +307,7 @@ function setupSocketHandlers(io) {
                             destinationLng,
                             fare: fare != null ? Number(fare) : 0,
                             paymentMethod: paymentMethod || "cash",
-                            // Stops the rider added (pickup → stops… → drop-off). Both keys are
+                            // Stops the rider added (pickup â†’ stopsâ€¦ â†’ drop-off). Both keys are
                             // sent so DTOs/normalisers on either app pick them up.
                             waypoints: rideWaypoints,
                             stops: rideWaypoints,
@@ -335,7 +335,7 @@ function setupSocketHandlers(io) {
                 socket.emit("ride:requested:ack", { success: false, reason: err.message });
             }
         });
-        // ── Passenger: cancel ride ──
+        // â”€â”€ Passenger: cancel ride â”€â”€
         socket.on("passenger:ride:cancel", async (data) => {
             try {
                 const { rideId, reason } = data;
@@ -356,7 +356,7 @@ function setupSocketHandlers(io) {
                 }
                 await (0, database_1.execute)("UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW(), cancellation_fee = $3 WHERE id = $4 AND status IN ('searching','scheduled','no_drivers','accepted','driver_arrived')", [socket.userId, reason, fee, rideId]);
                 (0, rideSim_1.stopServerRideSim)(rideId);
-                // ── Cancelling while an offer is out ──
+                // â”€â”€ Cancelling while an offer is out â”€â”€
                 // The driver who was being asked gets told immediately (previously the
                 // Accept/Decline card stayed on their screen until they ignored it), and the
                 // driver who had accepted goes back to 'available' instead of staying
@@ -365,7 +365,7 @@ function setupSocketHandlers(io) {
                 const assigned = await (0, database_1.queryOne)("SELECT driver_id FROM rides WHERE id = $1", [rideId]).catch(() => null);
                 if (assigned?.driver_id)
                     await (0, dispatch_1.releaseDriver)(assigned.driver_id);
-                // Tell the rider instantly — no waiting on the refund API.
+                // Tell the rider instantly â€” no waiting on the refund API.
                 io.to(`ride:${rideId}`).emit("ride:cancelled", {
                     reason,
                     cancellation_fee: fee,
@@ -384,7 +384,7 @@ function setupSocketHandlers(io) {
                         notifyUser(drv.firebase_uid, "Ride cancelled", "The rider cancelled this ride.", { ride_id: rideId });
                     }
                 })();
-                // ── Auto-refund (async, non-blocking) ──
+                // â”€â”€ Auto-refund (async, non-blocking) â”€â”€
                 // If the rider cancels, refund the card payment taken at pickup. If a
                 // cancellation fee applies, keep the fee and refund the remainder.
                 // This runs in the background so the cancel is instant for the rider.
@@ -402,7 +402,7 @@ function setupSocketHandlers(io) {
                                 await (0, database_1.execute)("UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1", [payment.id]).catch(() => { });
                             }
                             else {
-                                console.log(`Cancellation fee R${fee} covers the full R${paid} — no refund due.`);
+                                console.log(`Cancellation fee R${fee} covers the full R${paid} â€” no refund due.`);
                             }
                         }
                         catch (e) {
@@ -426,7 +426,7 @@ function setupSocketHandlers(io) {
                 console.error("Cancel error:", err);
             }
         });
-        // ── Passenger: update pickup location ──
+        // â”€â”€ Passenger: update pickup location â”€â”€
         socket.on("passenger:ride:update_pickup", async (data) => {
             try {
                 const { rideId, address, lat, lng } = data;
@@ -459,7 +459,7 @@ function setupSocketHandlers(io) {
                 socket.emit("ride:pickup:updated:ack", { success: false, error: err.message });
             }
         });
-        // ── Chat ──
+        // â”€â”€ Chat â”€â”€
         socket.on("chat:join", async (data) => {
             try {
                 const { rideId } = data;
@@ -481,7 +481,7 @@ function setupSocketHandlers(io) {
                 console.error("Chat history error:", err);
             }
         });
-        // ── Chat ──
+        // â”€â”€ Chat â”€â”€
         socket.on("chat:leave", (data) => {
             if (data?.rideId)
                 socket.leave(`chat:${data.rideId}`);
@@ -507,7 +507,7 @@ function setupSocketHandlers(io) {
                 console.error("Chat error:", err);
             }
         });
-        // ── Split fare ──
+        // â”€â”€ Split fare â”€â”€
         socket.on("split:invite", async (data) => {
             try {
                 const { rideId, inviteeEmail, amount } = data;
@@ -547,7 +547,7 @@ function setupSocketHandlers(io) {
                 console.error("Split respond error:", err);
             }
         });
-        // ── Safety ──
+        // â”€â”€ Safety â”€â”€
         socket.on("safety:sos", async (data) => {
             try {
                 const { rideId } = data;
@@ -583,7 +583,7 @@ function setupSocketHandlers(io) {
                 console.error("share:generate error:", err?.message);
             }
         });
-        // ── Driver live location (persisted so public share pages can track it) ──
+        // â”€â”€ Driver live location (persisted so public share pages can track it) â”€â”€
         socket.on("driver:location", async (data) => {
             try {
                 const { lat, lng, heading } = data || {};
@@ -605,12 +605,12 @@ function setupSocketHandlers(io) {
            WHERE user_id = $4`, [lat, lng, heading ?? null, dbUserId]);
                 // Broadcast the driver's live position to the rider(s) of any ACTIVE
                 // ride this driver is on, so the rider's car follows the real driver
-                // (single source of truth — no per-app simulation).
+                // (single source of truth â€” no per-app simulation).
                 const activeRide = await (0, database_1.queryOne)(`SELECT id FROM rides
            WHERE driver_id = $1 AND status IN ('accepted','driver_arrived','in_progress')
            ORDER BY created_at DESC LIMIT 1`, [dbUserId]).catch(() => null);
                 if (activeRide?.id) {
-                    // The driver app is live — tell the server sim to back off so the rider
+                    // The driver app is live â€” tell the server sim to back off so the rider
                     // sees ONE car (the driver's real position), not a sim fighting it.
                     (0, rideSim_1.markDriverLivePing)(activeRide.id);
                     (0, rideSim_1.syncSimToDriver)(activeRide.id, Number(lat), Number(lng));
@@ -627,7 +627,7 @@ function setupSocketHandlers(io) {
                 console.error("Driver location error:", err);
             }
         });
-        // ── Driver: online/offline status ──
+        // â”€â”€ Driver: online/offline status â”€â”€
         socket.on("driver:online", async (data) => {
             try {
                 const { online } = data || {};
@@ -671,7 +671,7 @@ function setupSocketHandlers(io) {
                 console.error("Driver online error:", err);
             }
         });
-        // ── Driver: accept ride request ──
+        // â”€â”€ Driver: accept ride request â”€â”€
         socket.on("driver:ride:accept", async (data) => {
             try {
                 const { rideId, deviceId } = data;
@@ -681,7 +681,7 @@ function setupSocketHandlers(io) {
                 // Allow accepting both live 'searching' rides AND upcoming 'scheduled'
                 // rides so a driver can pre-claim a booking BEFORE the pickup time.
                 const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status, estimated_fare, device_id, scheduled_at FROM rides WHERE id = $1 AND status IN ('searching','scheduled')", [rideId]);
-                // Stops live in their own column, which an older database may not have —
+                // Stops live in their own column, which an older database may not have â€”
                 // a missing column must never break accepting a ride, so this read is
                 // isolated and its failure is swallowed.
                 const rideWaypoints = await (0, database_1.queryOne)("SELECT waypoints FROM rides WHERE id = $1", [rideId]).then((r) => (Array.isArray(r?.waypoints) ? r.waypoints : [])).catch(() => []);
@@ -689,11 +689,11 @@ function setupSocketHandlers(io) {
                     socket.emit("ride:accepted:ack", { success: false, error: "Ride no longer available" });
                     return;
                 }
-                // ── Self-collusion guard ──
+                // â”€â”€ Self-collusion guard â”€â”€
                 // Block a driver accepting their OWN ride request (same device = one
                 // person operating both rider + driver accounts to farm money/rewards).
                 if (ride.device_id && deviceId && ride.device_id === deviceId) {
-                    // Also check the driver's own device history — if this device has
+                    // Also check the driver's own device history â€” if this device has
                     // ever been used to create a passenger ride, block.
                     const driverDeviceUsedAsPassenger = await (0, database_1.queryOne)(`SELECT id FROM rides
              WHERE passenger_id = $1 AND device_id = $2
@@ -706,10 +706,10 @@ function setupSocketHandlers(io) {
                         return;
                     }
                 }
-                // ── Atomic claim (this used to be a read-then-write race) ──
+                // â”€â”€ Atomic claim (this used to be a read-then-write race) â”€â”€
                 // services/dispatch.acceptRide locks the ride row, verifies this driver's
                 // offer is still inside its 15s window, updates with a status guard and
-                // promotes the driver to 'on_trip' — all inside ONE transaction. Two drivers
+                // promotes the driver to 'on_trip' â€” all inside ONE transaction. Two drivers
                 // accepting at the same instant can no longer both win.
                 const claim = await (0, dispatch_1.acceptRide)(io, { rideId, driverId: dbUserId });
                 if (!claim.ok) {
@@ -736,7 +736,7 @@ function setupSocketHandlers(io) {
                         : `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`, { ride_id: rideId, scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined });
                 })();
                 socket.emit("ride:accepted:ack", { success: true, rideId });
-                // A ride was taken — refresh the rider-request count for drivers.
+                // A ride was taken â€” refresh the rider-request count for drivers.
                 await broadcastRiderQueue();
             }
             catch (err) {
@@ -749,12 +749,12 @@ function setupSocketHandlers(io) {
                 catch { /* socket already gone */ }
             }
         });
-        // ── Driver: cancel an accepted ride (or release a pre-claimed scheduled ride) ──
+        // â”€â”€ Driver: cancel an accepted ride (or release a pre-claimed scheduled ride) â”€â”€
         // Uber/Bolt style: when the driver cancels BEFORE pickup, the ride is NOT
-        // dead — it goes straight back into the dispatch pool ('searching') so a
+        // dead â€” it goes straight back into the dispatch pool ('searching') so a
         // different driver can accept it, and the driver's cancellation-rate
         // counter is incremented for quality control.
-        // ── Driver: decline an offer (or let the 15s countdown do it) ──
+        // â”€â”€ Driver: decline an offer (or let the 15s countdown do it) â”€â”€
         socket.on("driver:ride:decline", async (data) => {
             try {
                 const { rideId, reason } = data || {};
@@ -773,7 +773,7 @@ function setupSocketHandlers(io) {
                 socket.emit("ride:decline:ack", { success: false, error: "Could not decline right now." });
             }
         });
-        // ── Driver: heartbeat ──
+        // â”€â”€ Driver: heartbeat â”€â”€
         // Cheap liveness beacon the driver app sends every ~10s while online (and on
         // every foreground resume). Without it a force-quit driver stayed "available"
         // forever and absorbed offers that nobody could answer.
@@ -816,48 +816,33 @@ function setupSocketHandlers(io) {
                 catch (e) {
                     console.warn("Driver cancel counter update failed:", e);
                 }
-                // 2) Pre-pickup states → release back into the dispatch pool for rematch.
+                // 2) Pre-pickup states â†’ release back into the dispatch pool for rematch.
                 //    A mid-trip cancel (in_progress) is a hard cancel instead.
-                if (ride.status === "in_progress") {
-                    await (0, database_1.execute)(`UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW()
-             WHERE id = $3`, [dbUserId, reason || "Driver cancelled mid-trip", rideId]);
-                    (0, rideSim_1.stopServerRideSim)(rideId);
-                    io.to(`ride:${rideId}`).emit("ride:cancelled", { reason: "Your driver cancelled the trip." });
-                    await (0, dispatch_1.releaseDriver)(dbUserId);
-                    notifyUser((await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null))?.firebase_uid, "Ride cancelled", "Your driver cancelled. Your payment will be refunded.", { ride_id: rideId });
+                // 2) A driver cancel is a HARD cancel for both sides.
+                //    The previous code put pre-pickup rides back into the dispatch pool
+                //    ("Finding a new driverâ€¦"), which left the rider waiting for a driver
+                //    they never cancelled and trapped the driver on the trip screen. Now the
+                //    ride is cancelled, the rider is told over the socket AND with a push, and
+                //    both apps return to their home screens.
+                await (0, database_1.execute)(`UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW()
+           WHERE id = $3 AND status IN ('scheduled','searching','accepted','driver_arrived','in_progress')`, [dbUserId, reason || "Driver cancelled", rideId]);
+                (0, rideSim_1.stopServerRideSim)(rideId);
+                // Any offer still ringing for this ride stops immediately.
+                await (0, dispatch_1.cancelPendingOffers)(io, rideId, "driver_cancelled");
+                await (0, dispatch_1.releaseDriver)(dbUserId);
+                const cancelPayload = { rideId, reason: "Your driver cancelled the trip." };
+                // Instant delivery to the ride room (the rider is on the trip screen)â€¦
+                io.to(`ride:${rideId}`).emit("ride:cancelled", cancelPayload);
+                // â€¦and to the rider's personal room, which survives a socket reconnect.
+                const pax = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null);
+                if (pax?.firebase_uid) {
+                    io.to(`user:${pax.firebase_uid}`).emit("ride:cancelled", cancelPayload);
+                    notifyUser(pax.firebase_uid, "Ride cancelled", "Your driver cancelled the trip.", { ride_id: rideId });
                 }
-                else {
-                    // Release for rematch: clear the assigned driver so accept is possible again.
-                    await (0, database_1.execute)(`UPDATE rides SET status = 'searching', driver_id = NULL, updated_at = NOW()
-             WHERE id = $1 AND status IN ('scheduled','accepted','driver_arrived')`, [rideId]);
-                    // Hand the ride straight back to the dispatcher: kill any offer still
-                    // pending for it and immediately offer it to the next closest driver.
-                    await (0, dispatch_1.cancelPendingOffers)(io, rideId, "driver_cancelled");
-                    void (0, dispatch_1.startDispatch)(io, rideId);
-                    await (0, dispatch_1.releaseDriver)(dbUserId);
-                    io.to(`ride:${rideId}`).emit("ride:driver:cancelled", { reason: reason || "Your driver cancelled. Finding a new driver…" });
-                    // Push to the rider's personal room too (survives ride-room loss on reconnect).
-                    (async () => {
-                        const p = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null);
-                        if (p?.firebase_uid) {
-                            io.to(`user:${p.firebase_uid}`).emit("ride:driver:cancelled", { reason: "Finding a new driver…" });
-                            notifyUser(p.firebase_uid, "Driver changed", "Your driver cancelled — finding you a new driver.", { ride_id: rideId });
-                        }
-                    })();
-                    // Wake riders waiting in the dispatch pool — re-broadcast to online drivers.
-                    (async () => {
-                        const drivers = await (0, database_1.query)(`SELECT u.id, u.firebase_uid FROM users u
-               JOIN driver_profiles dp ON dp.user_id = u.id
-               WHERE u.role = 'driver' AND dp.is_online = true`);
-                        io.to("drivers").emit("ride:request:refresh", { rideId });
-                        for (const driver of drivers || []) {
-                            if (driver?.firebase_uid)
-                                io.to(`user:${driver.firebase_uid}`).emit("ride:request:refresh", { rideId });
-                        }
-                    })();
-                    await broadcastRiderQueue();
-                }
-                socket.emit("ride:cancel:ack", { success: true, rideId, rematched: ride.status !== "in_progress" });
+                // Drivers still holding an Accept card for this ride lose it immediately.
+                io.to("drivers").emit("ride:cancelled", cancelPayload);
+                broadcastRiderQueue().catch(() => { });
+                socket.emit("ride:cancel:ack", { success: true, rideId, rematched: false });
             }
             catch (err) {
                 console.error("Driver cancel error:", err);
@@ -867,7 +852,7 @@ function setupSocketHandlers(io) {
                 catch { }
             }
         });
-        // ── Driver: start trip (arrived at pickup) ──
+        // â”€â”€ Driver: start trip (arrived at pickup) â”€â”€
         socket.on("driver:ride:start", async (data) => {
             try {
                 const { rideId } = data;
@@ -900,7 +885,7 @@ function setupSocketHandlers(io) {
                 console.error("Driver start error:", err);
             }
         });
-        // ── Driver: begin trip to destination ──
+        // â”€â”€ Driver: begin trip to destination â”€â”€
         socket.on("driver:ride:begin", async (data) => {
             try {
                 const { rideId } = data;
@@ -912,7 +897,7 @@ function setupSocketHandlers(io) {
                     return;
                 await (0, database_1.execute)("UPDATE rides SET status = 'in_progress' WHERE id = $1", [rideId]);
                 io.to(`ride:${rideId}`).emit("ride:started");
-                // Redundant delivery to the rider's personal room — survives the rider's
+                // Redundant delivery to the rider's personal room â€” survives the rider's
                 // ride-room membership being lost (e.g. backgrounded socket reconnect).
                 (async () => {
                     const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
@@ -924,7 +909,7 @@ function setupSocketHandlers(io) {
                 console.error("Driver begin error:", err);
             }
         });
-        // ── Driver: complete trip ──
+        // â”€â”€ Driver: complete trip â”€â”€
         socket.on("driver:ride:complete", async (data) => {
             try {
                 const { rideId } = data;
@@ -962,7 +947,7 @@ function setupSocketHandlers(io) {
         socket.on("disconnect", async () => {
             // Heartbeat: a driver who drops off the network stops being a candidate, and
             // any offer they were holding is released so the ride moves to the next driver
-            // instead of waiting out the 15s window. A driver mid-trip is left alone —
+            // instead of waiting out the 15s window. A driver mid-trip is left alone â€”
             // the rider's trip must survive a dropped socket.
             try {
                 const dbUserId = socket.dbUserId;
@@ -972,7 +957,7 @@ function setupSocketHandlers(io) {
               LIMIT 1`, [dbUserId]).catch(() => null);
                     if (!onTrip) {
                         // NOTE: is_online is the driver's INTENT (the app's toggle) and stays as
-                        // it is — only the dispatch status drops. Flipping is_online here stranded
+                        // it is â€” only the dispatch status drops. Flipping is_online here stranded
                         // drivers: the shipped APK has no heartbeat and never re-announces, so the
                         // server said "offline" forever while the app said "Online", and that
                         // driver could never be offered a ride again until they toggled manually.
@@ -996,7 +981,7 @@ function setupSocketHandlers(io) {
             catch (err) {
                 console.warn("disconnect cleanup failed:", err?.message);
             }
-            console.log(`🔌 Disconnected: ${socket.id}`);
+            console.log(`ðŸ”Œ Disconnected: ${socket.id}`);
         });
     });
 }
