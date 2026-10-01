@@ -315,6 +315,12 @@ export interface AcceptResult {
   rideId?: string;
   version?: number;
   duplicate?: boolean;
+  /**
+   * Drivers who still held a pending offer for this ride when it was won, and so
+   * have to be told it is gone. Collected inside the accept transaction, acted on
+   * after it commits.
+   */
+  losers?: string[];
 }
 
 /**
@@ -393,9 +399,14 @@ export async function acceptRide(
     if ((upd.rowCount ?? 0) === 0) return { ok: false, error: "Ride no longer available" };
 
     // Everyone else stops being asked; this driver becomes busy.
-    await client.query(
+    // RETURNING captures WHO was still holding an offer, so they can be told once
+    // this transaction commits. The decision itself is already made by the guarded
+    // UPDATE above — this list is delivery only, and deliberately outside the
+    // transaction, because a socket emit or a push must never roll back a ride.
+    const losersRes = await client.query<{ driver_id: string }>(
       `UPDATE ride_offers SET status = 'expired', decline_reason = 'ride_taken', updated_at = NOW()
-        WHERE ride_id = $1 AND status = 'pending' AND driver_id <> $2`,
+        WHERE ride_id = $1 AND status = 'pending' AND driver_id <> $2
+        RETURNING driver_id`,
       [rideId, driverId]
     );
     await client.query(
@@ -403,7 +414,12 @@ export async function acceptRide(
       [driverId]
     );
 
-    return { ok: true, rideId, version: upd.rows[0]?.version ?? 0 };
+    return {
+      ok: true,
+      rideId,
+      version: upd.rows[0]?.version ?? 0,
+      losers: losersRes.rows.map((r) => r.driver_id),
+    };
   });
 
   if (!result.ok) return result;
@@ -413,6 +429,14 @@ export async function acceptRide(
   });
   if (!result.duplicate) {
     await emitRideAccepted(io, rideId, driverId, result.version ?? 0);
+    // Tell the drivers who were still looking at this ride that it is gone. The
+    // database already refused their accept, but a row flipping to 'expired' is
+    // invisible to a phone: without this their request screen keeps counting down
+    // on a trip somebody else is driving, and tapping Accept fails for no visible
+    // reason. That is the "two drivers, one ride" report.
+    if (result.losers?.length) {
+      await notifyLosingDrivers(io, rideId, result.losers);
+    }
   }
   return result;
 }
@@ -640,6 +664,82 @@ export async function sweepStaleDrivers(io: SocketIOServer): Promise<number> {
   return ids.length;
 }
 
+/**
+ * The copy for "this offer is gone", by reason.
+ *
+ * Kept in one place because the same event now carries three different truths, and
+ * a losing driver must be told WHICH one: another driver took it, the rider
+ * cancelled, or the driver's own trip died. Saying "the rider cancelled" when the
+ * truth is "another driver got there first" is how a working race starts looking
+ * like a broken app.
+ */
+function offerGoneCopy(reason: string): { type: string; title: string; body: string } {
+  switch (reason) {
+    case "ride_taken":
+      return {
+        type: "ride_taken",
+        title: "Ride taken",
+        body: "Another driver accepted this ride.",
+      };
+    case "driver_cancelled":
+      return {
+        type: "ride_cancelled",
+        title: "Trip cancelled",
+        body: "The driver cancelled this trip.",
+      };
+    default:
+      return {
+        type: "ride_cancelled",
+        title: "Ride cancelled",
+        body: "The rider cancelled this request.",
+      };
+  }
+}
+
+/**
+ * Tell drivers who lost the race that the ride is gone — over both channels.
+ *
+ * WHY NOT JUST THE DATABASE: acceptRide decides the winner in ONE transaction
+ * (correct — the row is the authority) and expires the losers' offers there. But a
+ * row going to 'expired' is invisible to a phone. Before this, the losing driver's
+ * request screen stayed up with a live countdown and tapping Accept failed with
+ * "Ride no longer available" and no explanation, which is indistinguishable from a
+ * broken app.
+ *
+ * Emits `ride:offer:cancelled` (what the native driver app already handles) AND
+ * `ride:taken` (the same fact in a flatter shape), so either client build can drop
+ * the request without a coordinated release.
+ */
+export async function notifyLosingDrivers(
+  io: SocketIOServer,
+  rideId: string,
+  driverUserIds: string[],
+  reason = "ride_taken"
+): Promise<number> {
+  if (driverUserIds.length === 0) return 0;
+
+  const drivers = await query<{ id: string; firebase_uid: string | null }>(
+    `SELECT id, firebase_uid FROM users WHERE id = ANY($1::uuid[])`,
+    [driverUserIds]
+  ).catch(() => [] as any[]);
+
+  const payload = { rideId, reason };
+  for (const d of drivers) {
+    if (d.firebase_uid) {
+      io.to(`user:${d.firebase_uid}`).emit("ride:offer:cancelled", payload);
+      io.to(`user:${d.firebase_uid}`).emit("ride:taken", payload);
+    }
+  }
+
+  void sendPushToUsers(driverUserIds, { ...offerGoneCopy(reason), rideId }).catch(() => 0);
+
+  await logRideEvent(rideId, null, "offers_superseded", {
+    reason,
+    drivers: driverUserIds.length,
+  });
+  return driverUserIds.length;
+}
+
 /** Rider cancelled (or the ride died): kill pending offers + tell those drivers. */
 export async function cancelPendingOffers(
   io: SocketIOServer,
@@ -660,16 +760,14 @@ export async function cancelPendingOffers(
     [driverIds]
   ).catch(() => [] as any[]);
 
+  const payload = { rideId, reason };
   for (const d of drivers) {
     if (d.firebase_uid) {
-      io.to(`user:${d.firebase_uid}`).emit("ride:offer:cancelled", { rideId, reason });
+      io.to(`user:${d.firebase_uid}`).emit("ride:offer:cancelled", payload);
+      // `ride:taken` is only truthful when another driver actually won the ride.
+      if (reason === "ride_taken") io.to(`user:${d.firebase_uid}`).emit("ride:taken", payload);
     }
-    void sendPushToUsers([d.id], {
-      type: "ride_cancelled",
-      title: "Ride cancelled",
-      body: "The rider cancelled this request.",
-      rideId,
-    }).catch(() => 0);
+    void sendPushToUsers([d.id], { ...offerGoneCopy(reason), rideId }).catch(() => 0);
   }
 
   await logRideEvent(rideId, null, "offers_cancelled", { reason, drivers: driverIds.length });

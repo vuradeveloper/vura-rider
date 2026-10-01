@@ -141,6 +141,56 @@ router.get("/", async (req: Request, res: Response) => {
     out.driverRoles = { error: String(err?.message || err) };
   }
 
+  // ── Why a driver is getting no rides ─────────────────────────────────────────
+  // The offer query needs FOUR things true at once, and when any one of them is
+  // false the driver simply never appears as a candidate: no error, no offer,
+  // nothing in the app. It is the quietest failure in the whole system, so every
+  // condition is reported separately instead of only the verdict. `is_candidate`
+  // repeats findCandidates' predicate exactly — if this says false while the driver
+  // is online with a good GPS fix, the difference between the two queries is the bug.
+  try {
+    out.dispatch = await query<any>(
+      `SELECT u.email,
+              dp.is_online,
+              COALESCE(dp.status, CASE WHEN dp.is_online THEN 'available' ELSE 'offline' END) AS status,
+              (dp.current_lat IS NOT NULL AND dp.current_lng IS NOT NULL) AS has_coords,
+              ROUND(EXTRACT(EPOCH FROM (NOW() - COALESCE(dp.last_location_at, dp.updated_at))))::int AS location_age_s,
+              ROUND(EXTRACT(EPOCH FROM (NOW() - COALESCE(dp.last_heartbeat_at, dp.updated_at))))::int AS heartbeat_age_s,
+              (dp.is_online IS TRUE
+                AND COALESCE(dp.status, CASE WHEN dp.is_online THEN 'available' ELSE 'offline' END) = 'available'
+                AND dp.current_lat IS NOT NULL AND dp.current_lng IS NOT NULL
+                AND GREATEST(COALESCE(dp.last_location_at, dp.updated_at),
+                             COALESCE(dp.last_heartbeat_at, dp.updated_at)) > NOW() - INTERVAL '30 seconds'
+              ) AS is_candidate,
+              (SELECT COUNT(*) FROM rides r WHERE r.driver_id = u.id
+                 AND r.status IN ('accepted','driver_arrived','in_progress')) AS active_rides
+         FROM users u
+         JOIN driver_profiles dp ON dp.user_id = u.id
+        ORDER BY dp.updated_at DESC
+        LIMIT 20`
+    );
+  } catch (err: any) {
+    out.dispatch = { error: String(err?.message || err) };
+  }
+
+  // Rides still looking for a driver, and whether an offer is actually out. A rider
+  // who is waiting with zero pending offers means dispatch never found a candidate
+  // (a driver problem); a pending offer means a driver is being asked (a phone
+  // problem). Those are the same symptom in the app and need opposite fixes.
+  try {
+    out.queue = await query<any>(
+      `SELECT r.id, r.status, r.created_at, r.offer_round,
+              (SELECT COUNT(*) FROM ride_offers ro
+                WHERE ro.ride_id = r.id AND ro.status = 'pending' AND ro.expires_at > NOW()) AS pending_offers
+         FROM rides r
+        WHERE r.status IN ('searching', 'no_drivers')
+        ORDER BY r.created_at DESC
+        LIMIT 10`
+    );
+  } catch (err: any) {
+    out.queue = { error: String(err?.message || err) };
+  }
+
   res.json(out);
 });
 

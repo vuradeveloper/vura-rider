@@ -595,6 +595,22 @@ async function start() {
            AND NOT EXISTS (SELECT 1 FROM rides r WHERE r.driver_id = driver_profiles.user_id
                             AND r.status IN ('accepted','driver_arrived','in_progress'))
       `);
+      // ── "One driver, one live trip" as a DATABASE invariant, not a convention ──
+      // acceptRide already wins the race inside one transaction (FOR UPDATE + a
+      // status-guarded UPDATE + expiring the losers), and that stays the mechanism.
+      // This index is the backstop: with it, no future code path — a retry, a manual
+      // fix, a second server instance, a script — can leave one driver holding two
+      // active rides, and the scheduler refuses it rather than trusting application
+      // logic to have remembered. Partial, so it constrains only live trips and
+      // costs nothing on completed/cancelled history.
+      await execute(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rides_one_active_per_driver
+          ON rides(driver_id)
+          WHERE driver_id IS NOT NULL
+            AND status IN ('accepted','driver_arrived','in_progress')
+      `).catch((err: any) =>
+        console.warn("⚠ rides one-active-per-driver index skipped:", err?.message)
+      );
       console.log("✓ Schema up to date");
     } catch (err) {
       console.warn("⚠ Schema migration skipped:", err);

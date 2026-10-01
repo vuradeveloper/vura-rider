@@ -68,6 +68,12 @@ export interface AcceptResult {
     rideId?: string;
     version?: number;
     duplicate?: boolean;
+    /**
+     * Drivers who still held a pending offer for this ride when it was won, and so
+     * have to be told it is gone. Collected inside the accept transaction, acted on
+     * after it commits.
+     */
+    losers?: string[];
 }
 /**
  * Atomically claim a ride for a driver.
@@ -112,6 +118,21 @@ export declare function expireOffers(io: SocketIOServer): Promise<number>;
  * offers nobody could answer â€” one of the reasons riders waited forever.
  */
 export declare function sweepStaleDrivers(io: SocketIOServer): Promise<number>;
+/**
+ * Tell drivers who lost the race that the ride is gone — over both channels.
+ *
+ * WHY NOT JUST THE DATABASE: acceptRide decides the winner in ONE transaction
+ * (correct — the row is the authority) and expires the losers' offers there. But a
+ * row going to 'expired' is invisible to a phone. Before this, the losing driver's
+ * request screen stayed up with a live countdown and tapping Accept failed with
+ * "Ride no longer available" and no explanation, which is indistinguishable from a
+ * broken app.
+ *
+ * Emits `ride:offer:cancelled` (what the native driver app already handles) AND
+ * `ride:taken` (the same fact in a flatter shape), so either client build can drop
+ * the request without a coordinated release.
+ */
+export declare function notifyLosingDrivers(io: SocketIOServer, rideId: string, driverUserIds: string[], reason?: string): Promise<number>;
 /** Rider cancelled (or the ride died): kill pending offers + tell those drivers. */
 export declare function cancelPendingOffers(io: SocketIOServer, rideId: string, reason?: string): Promise<number>;
 /**
