@@ -12,6 +12,13 @@ rem EAS UPDATE config — WITHOUT these two the built app cannot check for updat
 rem ("Couldn't check for updates") and OTA updates never reach the phone.
 set EXPO_UPDATES_CHANNEL=preview
 set EXPO_UPDATES_URL=https://u.expo.dev/ed31c62e-f459-43d5-bc27-d9407298848e
+REM Pin NDK 27.0 exactly as driver-local-build.cmd does: 27.1's clang SIGILL-crashes
+REM reanimated on this CPU, which made a full native rebuild hang indefinitely on
+REM :react-native-reanimated:buildCMakeRelWithDebInfo[arm64-v8a].
+set ANDROID_NDK_HOME=C:\Android\ndk\27.0.12077973
+set ANDROID_NDK_ROOT=C:\Android\ndk\27.0.12077973
+REM Metro JS bundling needs a large heap on this 8GB machine (bounded so it fits).
+set NODE_OPTIONS=--max-old-space-size=4096
 cd /d C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider\android
 call gradlew.bat -Djava.net.preferIPv4Stack=true --no-daemon assembleRelease >> ..\rider_gradle_build.log 2>&1
 echo GRADLE_EXITCODE=%ERRORLEVEL% >> ..\rider_gradle_build.log
