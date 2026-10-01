@@ -17,8 +17,21 @@ const router = Router();
 router.get("/stats", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
+    // A driver is whoever OWNS a driver_profiles row. This is resolved through the
+    // PRIMARY KEY link (driver_profiles.user_id), never through the mutable
+    // users.role string.
+    //
+    // Why it matters: POST /api/users/sync sets role from whatever the app sends, so
+    // signing into the RIDER app once with the same account rewrites role to
+    // 'passenger'. The old `AND role = 'driver'` filter then returned nothing, this
+    // endpoint answered 403, and the whole Earnings screen went blank for a real
+    // driver who had genuinely completed paid rides.
     const user = await queryOne<{ id: string }>(
-      "SELECT id FROM users WHERE firebase_uid = $1 AND role = 'driver'",
+      `SELECT u.id
+         FROM users u
+         LEFT JOIN driver_profiles dp ON dp.user_id = u.id
+        WHERE u.firebase_uid = $1
+          AND (dp.user_id IS NOT NULL OR u.role = 'driver')`,
       [firebaseUid]
     );
     if (!user) { res.status(403).json({ error: "Driver profile not found" }); return; }
@@ -197,7 +210,14 @@ router.get("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
 router.get("/me", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = await queryOne<{ id: string; license_document_name: string | null; id_document_name: string | null }>(
-      "SELECT id, license_document_name, id_document_name FROM users WHERE firebase_uid = $1 AND role = 'driver'",
+      // Same primary-key rule as /stats: having a driver_profiles row is what makes
+      // this account a driver. users.role is only a fallback for a driver whose
+      // profile row has not been created yet.
+      `SELECT u.id, u.license_document_name, u.id_document_name
+         FROM users u
+         LEFT JOIN driver_profiles dp ON dp.user_id = u.id
+        WHERE u.firebase_uid = $1
+          AND (dp.user_id IS NOT NULL OR u.role = 'driver')`,
       [req.userId!]
     );
     if (!user) { res.status(403).json({ error: "Driver profile not found" }); return; }
@@ -230,6 +250,15 @@ router.post("/online", requireAuth, async (req: AuthRequest, res: Response) => {
       res.status(403).json({ error: "Driver account not synced yet" });
       return;
     }
+    // Self-heal the role. Only the DRIVER app calls this endpoint, so reaching it is
+    // proof that this account drives. Without it, one sign-in to the RIDER app (which
+    // syncs role='passenger') would leave the account unable to receive ride requests
+    // for ever, because the socket decides driver-vs-passenger purely from users.role.
+    // Harmless when already correct, and it never touches a rider-only account.
+    await execute(
+      `UPDATE users SET role = 'driver' WHERE id = $1 AND role <> 'driver'`,
+      [dbUser.id]
+    ).catch(() => {});
     const online = req.body?.online !== false; // default: go online
     const onTrip = await queryOne<{ id: string }>(
       `SELECT id FROM rides WHERE driver_id = $1

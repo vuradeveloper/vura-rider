@@ -163,6 +163,10 @@ async function ensureVehicleImageTables() {
     // IF NOT EXISTS so it is safe against a table created by an earlier build.
     await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0`);
     await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ`);
+    // WHY a fetch produced nothing. Without this the reason only ever reached
+    // console.warn, which is invisible in production - that is exactly how a car sat
+    // on the SVG icon while the CarsXE log showed "9 results, HTTP 200".
+    await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS last_error TEXT`);
     await (0, database_1.execute)(`
     CREATE TABLE IF NOT EXISTS carsxe_usage_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -350,12 +354,30 @@ exports.fileNameFor = fileFor;
  * own bucket and only our own URL is ever stored or shown.
  */
 async function downloadImage(url) {
-    const res = await fetch(url, { redirect: "follow" });
+    const host = (() => { try {
+        return new URL(url).host;
+    }
+    catch {
+        return "?";
+    } })();
+    // A browser-ish User-Agent: several hosts on CarsXE results (focus2move, canm8)
+    // answer 403 to a bare fetch. It does not defeat real hotlink protection, but it
+    // converts a silent failure into a plain download.
+    // A hard timeout matters more: without one, a single slow host blocks the whole
+    // fetch past the request/worker window and the key ends up with nothing stored.
+    const res = await fetch(url, {
+        redirect: "follow",
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            Accept: "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.8",
+        },
+        signal: AbortSignal.timeout(20_000),
+    });
     if (!res.ok)
-        throw new Error(`download ${res.status}`);
+        throw new Error(`download ${res.status} from ${host}`);
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length < 1024)
-        throw new Error("suspiciously small image");
+        throw new Error(`suspiciously small image (${buf.length}B from ${host})`);
     return buf;
 }
 /**
@@ -500,11 +522,26 @@ async function runCarsxeFetch(cacheKey, options) {
     const keepStatus = Boolean(options?.keepStatus);
     if (!row || (row.status !== "queued" && !(keepStatus && row.status === "approved")))
         return;
+    // Atomic claim: flip queued -> fetching so a second caller cannot spend a second
+    // CarsXE credit on the same key. This is real, not theoretical: pressing
+    // "Re-fetch" sets the row back to 'queued' and the 30s worker then picks up the
+    // same row while the request is still running, which is how one Picanto cost five
+    // calls (visible in the review page's call log). Exactly one UPDATE can match
+    // `status = 'queued'`, so the loser returns without calling the API.
+    if (!keepStatus) {
+        const claimed = await (0, database_1.queryOne)(`UPDATE vehicle_images SET status = 'fetching'
+        WHERE id = $1 AND status = 'queued' RETURNING id`, [row.id]).catch(() => null);
+        if (!claimed)
+            return;
+    }
     /** Never demote a live approved row - it keeps serving until a human approves. */
-    const markNoneFound = async () => {
+    const markNoneFound = async (reason) => {
         if (keepStatus)
             return;
-        await (0, database_1.execute)(`UPDATE vehicle_images SET status = 'none_found', api_calls_used = 1, last_attempt_at = NOW() WHERE id = $1`, [row.id]);
+        await (0, database_1.execute)(`UPDATE vehicle_images
+          SET status = 'none_found', api_calls_used = 1, last_attempt_at = NOW(),
+              last_error = $2
+        WHERE id = $1`, [row.id, reason ? String(reason).slice(0, 900) : null]);
     };
     const key = process.env.CARSXE_API_KEY;
     if (!key) {
@@ -576,6 +613,9 @@ async function runCarsxeFetch(cacheKey, options) {
     // only the winners below are uploaded to S3.
     const examined = scoreCandidates(images).slice(0, MEASURE_CANDIDATES);
     const measured = [];
+    // Every failure is recorded so the review page can say WHY a car has no photo,
+    // instead of leaving it to a console.warn nobody can read in production.
+    const failures = [];
     for (const pick of examined) {
         try {
             const buffer = await downloadImage(pick.link);
@@ -583,11 +623,15 @@ async function runCarsxeFetch(cacheKey, options) {
             measured.push({ pick, buffer, bg, bonus: studioBonus(bg) });
         }
         catch (err) {
+            const why = `${pick.width || "?"}x${pick.height || "?"} ${err?.message || err}`;
+            failures.push(why);
             console.warn(`[vehicleImages] a candidate for ${cacheKey} could not be read:`, err?.message || err);
         }
     }
     if (!measured.length) {
-        await markNoneFound();
+        await markNoneFound(examined.length === 0
+            ? `the search returned ${images.length} image(s) but none passed the filters`
+            : `all ${examined.length} candidate(s) failed to download/measure: ${failures.slice(0, 4).join(" | ")}`);
         return;
     }
     // Step 2: best first - studio-style shot, then the text score, then width.
@@ -627,13 +671,17 @@ async function runCarsxeFetch(cacheKey, options) {
             });
         }
         catch (err) {
+            failures.push(`process ${i + 1} (${pick.width || "?"}x${pick.height || "?"}): ${err?.message || err}`);
             console.warn(`[vehicleImages] candidate ${i + 1} for ${cacheKey} failed:`, err?.message || err);
         }
     }
     if (!stored.length) {
-        await markNoneFound();
+        await markNoneFound(`the search returned ${images.length} image(s), ${measured.length} downloaded, ` +
+            `but every one failed to store: ${failures.slice(0, 4).join(" | ")}`);
         return;
     }
+    // A successful fetch clears any stale reason from an earlier attempt.
+    await (0, database_1.execute)(`UPDATE vehicle_images SET last_error = NULL WHERE id = $1`, [row.id]).catch(() => { });
     // Order AFTER the pixels are known. The text score alone ties constantly (three
     // candidates at score 6 is normal - measured on the live Polo row), which used to
     // let the widest photo win even when a clean studio shot sat right beside it.
@@ -694,6 +742,12 @@ function startVehicleImageWorker(intervalMs = 30_000) {
             await ensureVehicleImageTables();
             if ((await carsxeUsage()).blocked)
                 return;
+            // A row can be left at 'fetching' if the process restarted mid-fetch (that is
+            // what the atomic claim above sets). Reclaim anything untouched for 5 minutes so
+            // a crash can never strand a car on the SVG icon for ever.
+            await (0, database_1.execute)(`UPDATE vehicle_images SET status = 'queued'
+          WHERE status = 'fetching'
+            AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - INTERVAL '5 minutes')`).catch(() => { });
             const rows = await (0, database_1.query)(`SELECT cache_key FROM vehicle_images WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`);
             for (const row of rows)
                 await runCarsxeFetch(row.cache_key);

@@ -96,6 +96,7 @@ router.get("/admin/vehicle-images", async (req, res) => {
            <b>source page</b> ${row.context_link ? `<a href="${esc(row.context_link)}" target="_blank" rel="noopener">${esc(row.context_link)}</a>` : "—"}<br>
            <b>stored copy</b> ${esc(row.image_url)}<br>
            <b>size</b> ${esc(row.width)}×${esc(row.height)} · <b>calls</b> ${esc(row.api_calls_used)} · <b>attempts</b> ${esc(row.attempts ?? 0)}</p>
+        ${row.last_error ? `<p class="err"><b>why no photo</b> ${esc(row.last_error)}</p>` : ""}
         <form method="post" action="/api/admin/vehicle-images/${esc(row.id)}/approve">
           <div class="cands">${thumbs || "<i>no candidates</i>"}</div>
           <button type="submit">Approve the chosen candidate</button>
@@ -118,6 +119,7 @@ router.get("/admin/vehicle-images", async (req, res) => {
         ".cands{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}.cand{margin:0;border:1px solid #e3e5e8;border-radius:10px;padding:6px;width:168px}" +
         ".cand img{width:100%;height:92px;object-fit:contain;background:#fff}.cand figcaption{font-size:12px;color:#5b6470}" +
         ".note{color:#8a929c;font-size:11px}.pill{background:#e9edf2;color:#39424e;border-radius:20px;padding:2px 9px;font-size:12px}" +
+        ".err{background:#fdecea;border-left:3px solid #b3261e;padding:6px 10px;border-radius:6px;color:#7a1a14;font-size:13px}" +
         "button{background:#0b62d0;color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin-top:6px}" +
         "button.danger{background:#b3261e}form{display:inline-block;margin-right:8px}";
     const nav = ["pending", "approved", "rejected", "none_found", ""]
