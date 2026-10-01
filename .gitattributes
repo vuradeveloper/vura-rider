@@ -1,0 +1,9 @@
+# Shell scripts MUST stay LF. A CRLF shebang makes the kernel reject the script
+# ("/bin/bash^M: bad interpreter: No such file or directory"), which fails an
+# Elastic Beanstalk deploy on the instance with no obvious cause. core.autocrlf is
+# true on a Windows checkout, so without these rules git silently rewrites the
+# .platform deploy hooks on checkout.
+*.sh text eol=lf
+Procfile text eol=lf
+.ebextensions/*.config text eol=lf
+server/.ebextensions/*.config text eol=lf
