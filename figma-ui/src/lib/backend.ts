@@ -1375,8 +1375,13 @@ function geoParams(q: string, bias?: { lat: number; lng: number } | null, limit 
     p.set('lng', String(bias.lng))
   }
   p.set('limit', String(limit))
-  // Closest match first, and never a place outside South Africa.
-  p.set('sort', 'distance')
+  // HERE's own relevance order - which is already proximity-aware, because lat/lng are
+  // sent above - exactly the way HERE WeGo lists results, with the distance as a badge.
+  // Forcing sort=distance here was the bug behind "Farmers showed me something else":
+  // it demoted the place the rider actually meant (Fourways Farmers Market) behind
+  // whichever little shop happened to be closest, and with no location at all it handed
+  // the query to OpenStreetMap instead of HERE.
+  p.set('sort', 'relevance')
   p.set('country', 'ZAF')
   return p.toString()
 }
