@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.READ_KEY = void 0;
 const express_1 = require("express");
 const database_1 = require("../config/database");
 // ── Remote device-log sink ─────────────────────────────────────────────────────
@@ -14,7 +15,9 @@ const database_1 = require("../config/database");
 //   DEV_LOG_WRITE_KEY   (default "vura-devlog-key")
 //   DEV_LOG_READ_KEY    (default DEV_LOG_WRITE_KEY)
 const WRITE_KEY = process.env.DEV_LOG_WRITE_KEY || "vura-devlog-key";
-const READ_KEY = process.env.DEV_LOG_READ_KEY || WRITE_KEY;
+// Exported so the other dev-only routes (see devDiag.ts) share ONE read key instead
+// of each re-reading DEV_LOG_READ_KEY and drifting apart.
+exports.READ_KEY = process.env.DEV_LOG_READ_KEY || WRITE_KEY;
 const LEVELS = new Set(["info", "warn", "error", "event"]);
 // Keep the table from growing forever: only the newest 20000 rows plus the
 // last 48h survive. Runs opportunistically on POSTs (cheap, no cron needed).
@@ -79,7 +82,7 @@ router.get("/", async (req, res) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
     const key = String(req.query.key || "");
-    if (!key || key !== READ_KEY) {
+    if (!key || key !== exports.READ_KEY) {
         res.status(401).json({ error: "bad read key" });
         return;
     }

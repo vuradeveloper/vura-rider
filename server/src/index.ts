@@ -31,6 +31,7 @@ import payoutsRouter from "./routes/payouts";
 import documentsRouter from "./routes/documents";
 import devLogsRouter from "./routes/devLogs";
 import devDispatchRouter from "./routes/devDispatch";
+import devDiagRouter from "./routes/devDiag";
 import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import adminRouter from "./routes/admin";
@@ -89,6 +90,11 @@ app.use("/api/dev/logs", devLogsRouter);
 // Dispatch inspector (read-only, same read key): see the whole offer trail for a
 // ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
 app.use("/api/dev/dispatch", devDispatchRouter);
+
+// Environment diagnostics (read-only, same read key): which build is actually live,
+// whether sharp can encode, whether S3 accepts a real write, and WHY the newest
+// vehicle photos have no image — GET /api/dev/diag?key=…&s3=1
+app.use("/api/dev/diag", devDiagRouter);
 
 // Vehicle photos: our own copy of every cached car image (public, <img>-able) plus
 // the password-gated review page. Mounted BEFORE the global limiter for the same

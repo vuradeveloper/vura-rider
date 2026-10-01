@@ -68,6 +68,7 @@ const payouts_1 = __importDefault(require("./routes/payouts"));
 const documents_1 = __importDefault(require("./routes/documents"));
 const devLogs_1 = __importDefault(require("./routes/devLogs"));
 const devDispatch_1 = __importDefault(require("./routes/devDispatch"));
+const devDiag_1 = __importDefault(require("./routes/devDiag"));
 const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmin"));
 const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
@@ -115,6 +116,10 @@ app.use("/api/dev/logs", devLogs_1.default);
 // Dispatch inspector (read-only, same read key): see the whole offer trail for a
 // ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
 app.use("/api/dev/dispatch", devDispatch_1.default);
+// Environment diagnostics (read-only, same read key): which build is actually live,
+// whether sharp can encode, whether S3 accepts a real write, and WHY the newest
+// vehicle photos have no image — GET /api/dev/diag?key=…&s3=1
+app.use("/api/dev/diag", devDiag_1.default);
 // Vehicle photos: our own copy of every cached car image (public, <img>-able) plus
 // the password-gated review page. Mounted BEFORE the global limiter for the same
 // reason as the dev routes: an image request must never eat the app's API budget.

@@ -1,4 +1,3 @@
-export declare const READ_KEY: string;
 declare const router: import("express-serve-static-core").Router;
 export default router;
-//# sourceMappingURL=devLogs.d.ts.map
+//# sourceMappingURL=devDiag.d.ts.map

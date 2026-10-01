@@ -14,7 +14,9 @@ import { query, execute } from "../config/database";
 //   DEV_LOG_READ_KEY    (default DEV_LOG_WRITE_KEY)
 
 const WRITE_KEY = process.env.DEV_LOG_WRITE_KEY || "vura-devlog-key";
-const READ_KEY = process.env.DEV_LOG_READ_KEY || WRITE_KEY;
+// Exported so the other dev-only routes (see devDiag.ts) share ONE read key instead
+// of each re-reading DEV_LOG_READ_KEY and drifting apart.
+export const READ_KEY = process.env.DEV_LOG_READ_KEY || WRITE_KEY;
 
 const LEVELS = new Set(["info", "warn", "error", "event"]);
 

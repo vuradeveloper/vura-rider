@@ -14,3 +14,15 @@
 !server/**/*
 !server/node_modules/*
 server/node_modules/.cache/
+# Never ship platform-specific native binaries. server/node_modules is built on the
+# developer's machine, so a Windows checkout would otherwise deliver
+# @img/sharp-win32-x64 to a Linux instance. sharp is only ever loaded lazily, so
+# nothing fails until the first vehicle photo is fetched - which is exactly how every
+# car ended up with no image while CarsXE happily returned 9 of them. The .platform
+# hooks install the correct build for the instance.
+server/node_modules/@img/sharp-win32-x64/
+server/node_modules/@img/sharp-wasm32/
+server/node_modules/@img/sharp-darwin-x64/
+server/node_modules/@img/sharp-darwin-arm64/
+server/node_modules/@img/sharp-linux-arm/
+server/node_modules/@img/sharp-linux-arm64/
