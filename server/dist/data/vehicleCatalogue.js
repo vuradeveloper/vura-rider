@@ -476,7 +476,13 @@ function catalogueForApi(pairs) {
     }
     const byMake = new Map();
     pairs.forEach((p, i) => {
-        const label = prettifyModel(p.model);
+        // Prefer the CATALOGUE's own spelling when this IS a catalogue car, so the dropdown
+        // reads "XC90", "BR-V", "ZS EV", "S-Presso" instead of the prettifier's "Xc90",
+        // "Br V", "Zs Ev", "S Presso". A car that only matches as a variant (polo-hatch ->
+        // Polo, golf-mk7 -> Golf) keeps its own label, because there the extra word IS the
+        // generation the driver is choosing between.
+        const hit = findModel(p.make, p.model);
+        const label = hit && norm(hit.model) === norm(p.model) ? hit.model : prettifyModel(p.model);
         if (!label)
             return;
         if (!byMake.has(p.make))
