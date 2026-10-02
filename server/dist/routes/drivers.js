@@ -4,8 +4,9 @@ const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const dispatch_1 = require("../services/dispatch");
-const vehicleCatalogue_1 = require("../data/vehicleCatalogue");
 const vehicleImages_1 = require("../services/vehicleImages");
+const vehicleCatalogue_1 = require("../data/vehicleCatalogue");
+const vehicleImages_2 = require("../services/vehicleImages");
 const router = (0, express_1.Router)();
 // GET /api/drivers/stats — Get driver statistics
 router.get("/stats", auth_1.requireAuth, async (req, res) => {
@@ -184,7 +185,7 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
         // yet, noteDriverVehicle() WINS a one-row claim (unique cache_key), which is
         // what guarantees a single CarsXE call even if two drivers save the same car
         // in the same second. Fire-and-forget: saving a car must never wait on it.
-        (0, vehicleImages_1.noteDriverVehicle)({
+        (0, vehicleImages_2.noteDriverVehicle)({
             make: vehicle_make ?? profile?.vehicle_make,
             model: vehicle_model ?? profile?.vehicle_model,
             year: vehicle_year ?? profile?.vehicle_year,
@@ -297,8 +298,22 @@ router.post("/offline", auth_1.requireAuth, async (req, res) => {
 // GET /api/drivers/vehicle-catalogue — dropdown data for the driver app
 // (makes → models → body type, the 12 colours with hex, the 5 body types) and the
 // fallbacks the UI must apply. Public on purpose: reference data, not personal data.
-router.get("/vehicle-catalogue", (_req, res) => {
-    res.json((0, vehicleCatalogue_1.catalogueForApi)());
+//
+// The makes/models come from the IMAGE LIBRARY, not the static catalogue, so a driver
+// can only pick a car that has a photo. That is what guarantees the rider sees an
+// image instead of the SVG body-type icon: there is nothing to offer that cannot be
+// served. The static catalogue still supplies the shared colours/body types, and is
+// the fallback if the library query fails — the driver app must never show an empty
+// dropdown.
+router.get("/vehicle-catalogue", async (_req, res) => {
+    try {
+        const pairs = await (0, vehicleImages_1.approvedVehicleCatalogue)();
+        res.json((0, vehicleCatalogue_1.catalogueForApi)(pairs));
+    }
+    catch (err) {
+        console.error("[catalogue] library lookup failed, serving the static list:", err?.message || err);
+        res.json((0, vehicleCatalogue_1.catalogueForApi)());
+    }
 });
 exports.default = router;
 //# sourceMappingURL=drivers.js.map

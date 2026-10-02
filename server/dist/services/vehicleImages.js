@@ -47,6 +47,7 @@ exports.rangeCoversYear = rangeCoversYear;
 exports.modelScore = modelScore;
 exports.pickBestWhiteRow = pickBestWhiteRow;
 exports.resolveVehicleImage = resolveVehicleImage;
+exports.approvedVehicleCatalogue = approvedVehicleCatalogue;
 exports.claimVehicleImageFetch = claimVehicleImageFetch;
 exports.scoreCandidates = scoreCandidates;
 exports.imageBaseUrl = imageBaseUrl;
@@ -387,6 +388,18 @@ async function resolveVehicleImage(v) {
         cacheKey,
         matched: pick.score >= 100 ? "model-colour" : "model",
     };
+}
+async function approvedVehicleCatalogue() {
+    await ensureVehicleImageTables();
+    const rows = await (0, database_1.query)(`SELECT make, model, MAX(year_range) AS year_range
+       FROM vehicle_images
+      WHERE status = 'approved' AND image_url IS NOT NULL AND LOWER(colour) = $1
+        AND make IS NOT NULL AND model IS NOT NULL
+      GROUP BY make, model
+      ORDER BY make, model`, [WHITE]);
+    return rows
+        .map((r) => ({ make: String(r.make), model: String(r.model), yearRange: r.year_range }))
+        .filter((r) => r.make && r.model);
 }
 /**
  * Returns true ONLY for the caller that won a fetch for this key. Two drivers saving

@@ -44,16 +44,22 @@ export declare function vehicleNeedsConfirming(v: {
     license_plate?: string | null;
     body_type?: string | null;
 } | null | undefined): boolean;
-/** Payload for GET /api/drivers/vehicle-catalogue (reference data, not personal). */
-export declare function catalogueForApi(): {
-    makes: {
-        make: string;
-        models: {
-            model: string;
-            body_type: BodyType;
-            category: VehicleCategory;
-        }[];
-    }[];
+/**
+ * Payload for GET /api/drivers/vehicle-catalogue (reference data, not personal).
+ *
+ * Pass `pairs` (make|model tokens from vehicle_images) to restrict the dropdown to
+ * cars that actually HAVE a photo. That is the difference between a driver picking a
+ * car and a driver picking a car the rider will then see drawn as an SVG: every entry
+ * returned here is guaranteed to resolve to an image.
+ *
+ * `model` is returned as a human label ("Polo Hatch"), not the raw DB token
+ * ("polo-hatch"). The two round-trip: the server's normToken() converts the label
+ * back to the token on save, so the app needs no change and the model still matches.
+ */
+export declare function catalogueForApi(pairs?: {
+    make: string;
+    model: string;
+}[] | null): {
     body_types: {
         id: BodyType;
         label: string;
@@ -64,6 +70,14 @@ export declare function catalogueForApi(): {
     }[];
     default_colour: string;
     fallback_body_type: BodyType;
+    makes: {
+        make: string;
+        models: {
+            model: string;
+            body_type: BodyType;
+            category: VehicleCategory;
+        }[];
+    }[];
 };
 export {};
 //# sourceMappingURL=vehicleCatalogue.d.ts.map

@@ -332,22 +332,85 @@ export function vehicleNeedsConfirming(
   return !findModel(v.vehicle_make, v.vehicle_model);
 }
 
-/** Payload for GET /api/drivers/vehicle-catalogue (reference data, not personal). */
-export function catalogueForApi() {
-  return {
-    makes: Object.keys(MAKE_MODELS).map((make) => ({
-      make,
-      models: MAKE_MODELS[make].map((e) => ({
-        model: e.model,
-        body_type: e.body,
-        category: e.category || resolveCategory(make, e.model, e.body),
-      })),
-    })),
+/**
+ * Payload for GET /api/drivers/vehicle-catalogue (reference data, not personal).
+ *
+ * Pass `pairs` (make|model tokens from vehicle_images) to restrict the dropdown to
+ * cars that actually HAVE a photo. That is the difference between a driver picking a
+ * car and a driver picking a car the rider will then see drawn as an SVG: every entry
+ * returned here is guaranteed to resolve to an image.
+ *
+ * `model` is returned as a human label ("Polo Hatch"), not the raw DB token
+ * ("polo-hatch"). The two round-trip: the server's normToken() converts the label
+ * back to the token on save, so the app needs no change and the model still matches.
+ */
+export function catalogueForApi(
+  pairs?: { make: string; model: string }[] | null
+) {
+  const base = {
     body_types: BODY_TYPES,
     colours: COLOURS,
     default_colour: DEFAULT_COLOUR,
     fallback_body_type: FALLBACK_BODY,
   };
+
+  if (!pairs || !pairs.length) {
+    return {
+      makes: Object.keys(MAKE_MODELS).map((make) => ({
+        make,
+        models: MAKE_MODELS[make].map((e) => ({
+          model: e.model,
+          body_type: e.body,
+          category: e.category || resolveCategory(make, e.model, e.body),
+        })),
+      })),
+      ...base,
+    };
+  }
+
+  const byMake = new Map<string, { model: string; body_type: BodyType; category: VehicleCategory; order: number }[]>();
+  pairs.forEach((p, i) => {
+    const label = prettifyModel(p.model);
+    if (!label) return;
+    if (!byMake.has(p.make)) byMake.set(p.make, []);
+    const list = byMake.get(p.make)!;
+    if (list.some((e) => norm(e.model) === norm(label))) return;
+    const body = resolveBodyType(p.make, p.model);
+    list.push({
+      model: label,
+      body_type: body,
+      category: resolveCategory(p.make, p.model, body),
+      order: i,
+    });
+  });
+
+  return {
+    makes: [...byMake.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([make, models]) => ({
+        make: displayMake(make),
+        models: models
+          .sort((a, b) => a.model.localeCompare(b.model))
+          .map(({ model, body_type, category }) => ({ model, body_type, category })),
+      })),
+    ...base,
+  };
 }
+
+/** "polo-hatch" -> "Polo Hatch"; "3-series" -> "3 Series"; "a4" -> "A4". */
+function prettifyModel(token?: string | null): string {
+  const s = String(token ?? "").trim().replace(/-+/g, " ").replace(/\s+/g, " ");
+  if (!s) return "";
+  return s
+    .split(" ")
+    .map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+/** Catalogue spelling when known, else a readable fallback ("byd" -> "Byd"). */
+function displayMake(token: string): string {
+  return canonicalMake(token) || prettifyModel(token);
+}
+
 
 

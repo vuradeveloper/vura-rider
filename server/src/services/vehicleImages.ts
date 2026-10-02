@@ -435,6 +435,41 @@ export async function resolveVehicleImage(v?: VehicleLike | null): Promise<Resol
 }
 
 /**
+ * Every make|model the approved white library can ACTUALLY serve.
+ *
+ * This is what stops the driver app offering cars that have no photo: the dropdown is
+ * built from this list, so whatever a driver picks is guaranteed to resolve to an
+ * image. Before this the dropdown came from the static catalogue (24 makes / 150+
+ * models) while only ~126 models had a picture, so the rest fell through to the SVG.
+ *
+ * Colour is ignored (every row here is white) and `year_range` is returned purely as
+ * information — see pickBestWhiteRow: the year only ever BREAKS A TIE, it can never
+ * make a lookup fail.
+ */
+export interface CataloguePair {
+  make: string;
+  model: string;
+  yearRange: string | null;
+}
+
+export async function approvedVehicleCatalogue(): Promise<CataloguePair[]> {
+  await ensureVehicleImageTables();
+  const rows = await query<{ make: string | null; model: string | null; year_range: string | null }>(
+    `SELECT make, model, MAX(year_range) AS year_range
+       FROM vehicle_images
+      WHERE status = 'approved' AND image_url IS NOT NULL AND LOWER(colour) = $1
+        AND make IS NOT NULL AND model IS NOT NULL
+      GROUP BY make, model
+      ORDER BY make, model`,
+    [WHITE]
+  );
+  return rows
+    .map((r) => ({ make: String(r.make), model: String(r.model), yearRange: r.year_range }))
+    .filter((r) => r.make && r.model);
+}
+
+
+/**
  * Returns true ONLY for the caller that won a fetch for this key. Two drivers saving
  * the same car in the same second therefore queue exactly ONE CarsXE call, because the
  * unique constraint on cache_key decides the winner, not application logic.

@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { reviveWaitingRides } from "../services/dispatch";
+import { approvedVehicleCatalogue } from "../services/vehicleImages";
 import {
   catalogueForApi,
   colourName,
@@ -310,8 +311,21 @@ router.post("/offline", requireAuth, async (req: AuthRequest, res: Response) => 
 // GET /api/drivers/vehicle-catalogue — dropdown data for the driver app
 // (makes → models → body type, the 12 colours with hex, the 5 body types) and the
 // fallbacks the UI must apply. Public on purpose: reference data, not personal data.
-router.get("/vehicle-catalogue", (_req: AuthRequest, res: Response) => {
-  res.json(catalogueForApi());
+//
+// The makes/models come from the IMAGE LIBRARY, not the static catalogue, so a driver
+// can only pick a car that has a photo. That is what guarantees the rider sees an
+// image instead of the SVG body-type icon: there is nothing to offer that cannot be
+// served. The static catalogue still supplies the shared colours/body types, and is
+// the fallback if the library query fails — the driver app must never show an empty
+// dropdown.
+router.get("/vehicle-catalogue", async (_req: AuthRequest, res: Response) => {
+  try {
+    const pairs = await approvedVehicleCatalogue();
+    res.json(catalogueForApi(pairs));
+  } catch (err: any) {
+    console.error("[catalogue] library lookup failed, serving the static list:", err?.message || err);
+    res.json(catalogueForApi());
+  }
 });
 
 export default router;
