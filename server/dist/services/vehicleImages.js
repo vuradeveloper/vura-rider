@@ -740,14 +740,22 @@ function startVehicleImageWorker(intervalMs = 30_000) {
     worker = setInterval(async () => {
         try {
             await ensureVehicleImageTables();
-            if ((await carsxeUsage()).blocked)
-                return;
             // A row can be left at 'fetching' if the process restarted mid-fetch (that is
             // what the atomic claim above sets). Reclaim anything untouched for 5 minutes so
             // a crash can never strand a car on the SVG icon for ever.
+            //
+            // This runs BEFORE the budget check deliberately. With the check first, an
+            // exhausted CarsXE budget froze the release of the stranded row too: the live
+            // `toyota|etios|2017-2020|blue` row sat at 'fetching' with 78 attempts and could
+            // never be picked up again, because the only thing that frees a 'fetching' row
+            // is this UPDATE and the budget guard returned before it. Freeing it is
+            // free — no API call is made by returning it to 'queued'; it simply becomes
+            // eligible again the moment budget exists.
             await (0, database_1.execute)(`UPDATE vehicle_images SET status = 'queued'
           WHERE status = 'fetching'
             AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - INTERVAL '5 minutes')`).catch(() => { });
+            if ((await carsxeUsage()).blocked)
+                return;
             const rows = await (0, database_1.query)(`SELECT cache_key FROM vehicle_images WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`);
             for (const row of rows)
                 await runCarsxeFetch(row.cache_key);
