@@ -64,17 +64,71 @@ export interface CarsxeCallRow {
  * fallbacks, without ever exposing the API key (the key only ever travels in the URL).
  */
 export declare function recentCarsxeCalls(limit?: number): Promise<CarsxeCallRow[]>;
+/**
+ * The DB's spelling of a make or model name: lowercase, with spaces and dots
+ * collapsed to single hyphens. "Polo Vivo" and "Polo  Vivo." both become
+ * "polo-vivo", which is exactly how the Car DB's filenames spell it — so a driver
+ * who types a space still finds a photo that is filed under a hyphen.
+ */
+export declare function normToken(raw: unknown): string;
+/** The Car DB's spelling of a make the driver typed. */
+export declare function canonicalMake(raw: unknown): string;
+/**
+ * True when a Car DB range label covers a model year. Handles the three forms the
+ * DB actually uses: "2016-2019", "2020-Present" and a bare "2021". A label we
+ * cannot parse covers nothing, so an unreadable row can never outrank a readable
+ * one.
+ */
+export declare function rangeCoversYear(label: unknown, year: unknown): boolean;
+/**
+ * How well a DB model name answers the one the driver saved.
+ *
+ * 100 exact, 60 for a hyphen-bounded variant — the only real shape in this DB:
+ * "Polo" must find "Polo-Hatch" / "Polo-Vivo", and "Corolla Quest" must find
+ * "Corolla-Cross". A loose `startsWith` is deliberately NOT used: it would let
+ * "Go" match "Golf" and would only ever work by luck.
+ */
+export declare function modelScore(want: unknown, have: unknown): number;
+export interface WhiteRow {
+    cache_key: string;
+    make: string | null;
+    model: string | null;
+    year: number | null;
+    year_range: string | null;
+    image_url: string | null;
+    approved_at: string | null;
+}
+export interface WhitePick {
+    row: WhiteRow;
+    score: number;
+}
+/**
+ * Chooses the ONE white row that best answers a driver's model and year. This is
+ * the whole "which photo does this driver see" decision, kept as a pure function
+ * so it can be tested against every car in the DB without a database.
+ *
+ * Order: exact model beats a variant; a stated production range that covers the
+ * year beats one that does not; the nearest such range beats a looser one; and
+ * only then does the newest approval win, exactly as it always did.
+ */
+export declare function pickBestWhiteRow(rows: WhiteRow[], want: {
+    model: string;
+    year?: unknown;
+}): WhitePick | null;
 export interface ResolvedVehicleImage {
     url: string | null;
     cacheKey: string;
     matched: "exact" | "model-colour" | "model" | "none";
 }
 /**
- * Fallback order, resolved server-side so every client agrees:
- *   1. approved, exact make+model+generation+colour
- *   2. approved, same make+model+colour, another generation   (the 2019 -> 2018 image)
- *   3. approved, same make+model, another colour              (colour fetch queued meanwhile)
- *   4. none -> the app draws the body-type icon, then the generic car
+ * Fallback order, resolved server-side so every client agrees. Colour plays no
+ * part in any step: every query reads white rows only, so a driver who picked
+ * black, red or purple is served the white model of his car.
+ *
+ *   1. the exact white row for this make|model|generation
+ *   2. same make, strongest model score, preferring a stated production range
+ *      that actually covers the driver's year
+ *   3. none -> the app draws the body-type icon, then the generic car
  */
 export declare function resolveVehicleImage(v?: VehicleLike | null): Promise<ResolvedVehicleImage>;
 /**
@@ -197,27 +251,54 @@ export declare function rejectVehicleImage(id: string): Promise<{
     id: string;
 }>;
 /**
- * Step 0 — a finished image produced by scripts/import-seed.js from a dashboard
- * search you already made. ZERO CarsXE calls: the bytes arrive already processed,
- * we only store them. Idempotent: re-running overwrites the same row instead of
- * adding a second one, and the usage log records the import exactly once.
+ * Step 0 — an image that did NOT come from a CarsXE call. Two producers use it:
+ * scripts/import-seed.js (a dashboard search you already made) and
+ * scripts/import-car-db.js (the local Car DB folder). ZERO API calls either way.
+ *
+ * Idempotent: re-running overwrites the same row instead of adding a second one,
+ * and the usage log records the import exactly once.
+ *
+ * Car DB additions:
+ *   `yearRange`  the model's stated production range ("2016-2019", "2020-Present"),
+ *                which is what a driver's year is matched against.
+ *   `processRaw` the payload is the ORIGINAL jpg/png and the server runs it through
+ *                processVehicleImage() — the same key-out/trim/canvas/WebP pipeline
+ *                every other photo goes through, so an import cannot look different
+ *                from a fetched image.
+ *   `approve`    land the row 'approved' so it serves immediately. A curated DB of
+ *                hand-checked images does not need 196 manual approvals.
  */
 export declare function importSeedImage(input: {
     cacheKey: string;
     make: string;
     model: string;
     year?: number | null;
+    yearRange?: string | null;
     colour?: string | null;
     sourceUrl?: string | null;
     contextLink?: string | null;
     licenceNote?: string | null;
     webpBase64: string;
     candidates?: Candidate[];
+    processRaw?: boolean;
+    approve?: boolean;
 }): Promise<{
     row: any;
     candidate: Candidate;
     budget: CarsxeBudget;
 }>;
 export declare function resolveVehicleImageCached(v?: VehicleLike | null): Promise<ResolvedVehicleImage>;
+/**
+ * Where vehicle photos come from.
+ *
+ *   "cardb" (the default) — the curated local Car DB, imported by
+ *        scripts/import-car-db.js. A lookup miss means the car is simply not in
+ *        the DB yet; there is nothing to fetch and nothing to pay for.
+ *   "carsxe" — the previous behaviour: queue a paid CarsXE search on a miss.
+ *
+ * The switch exists so the CarsXE path stays intact and auditable rather than
+ * deleted: flipping VEHICLE_IMAGES_SOURCE=carsxe restores it exactly.
+ */
+export declare function vehicleImageSource(): "cardb" | "carsxe";
 export declare function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage>;
 //# sourceMappingURL=vehicleImages.d.ts.map

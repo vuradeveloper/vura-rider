@@ -41,6 +41,11 @@ exports.carsxeMaxCalls = carsxeMaxCalls;
 exports.carsxeUsage = carsxeUsage;
 exports.logCarsxeCall = logCarsxeCall;
 exports.recentCarsxeCalls = recentCarsxeCalls;
+exports.normToken = normToken;
+exports.canonicalMake = canonicalMake;
+exports.rangeCoversYear = rangeCoversYear;
+exports.modelScore = modelScore;
+exports.pickBestWhiteRow = pickBestWhiteRow;
 exports.resolveVehicleImage = resolveVehicleImage;
 exports.claimVehicleImageFetch = claimVehicleImageFetch;
 exports.scoreCandidates = scoreCandidates;
@@ -58,6 +63,7 @@ exports.refetchVehicleImage = refetchVehicleImage;
 exports.rejectVehicleImage = rejectVehicleImage;
 exports.importSeedImage = importSeedImage;
 exports.resolveVehicleImageCached = resolveVehicleImageCached;
+exports.vehicleImageSource = vehicleImageSource;
 exports.noteDriverVehicle = noteDriverVehicle;
 // ─────────────────────────────────────────────────────────────────────────────
 // vehicleImages.ts — the vehicle PHOTO cache (CarsXE-backed, but the API key
@@ -167,6 +173,11 @@ async function ensureVehicleImageTables() {
     // console.warn, which is invisible in production - that is exactly how a car sat
     // on the SVG icon while the CarsXE log showed "9 results, HTTP 200".
     await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS last_error TEXT`);
+    // The local Car DB states each model's real production range ("2016-2019",
+    // "2020-Present"), which is what a driver's year has to be matched against.
+    // `year` alone cannot express "Present", and the old 4-year bucket GUESSED a
+    // range instead of reading one, which is why nothing could match the DB.
+    await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS year_range VARCHAR(24)`);
     await (0, database_1.execute)(`
     CREATE TABLE IF NOT EXISTS carsxe_usage_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -214,36 +225,167 @@ async function recentCarsxeCalls(limit = 25) {
       LIMIT ${n}`);
 }
 /**
- * Fallback order, resolved server-side so every client agrees:
- *   1. approved, exact make+model+generation+colour
- *   2. approved, same make+model+colour, another generation   (the 2019 -> 2018 image)
- *   3. approved, same make+model, another colour              (colour fetch queued meanwhile)
- *   4. none -> the app draws the body-type icon, then the generic car
+ * The Car DB is WHITE-ONLY by policy: whatever colour a driver picks, the card
+ * shows the white model of that car. Forcing the colour here rather than at each
+ * call site is what makes that true for every colour, including ones nobody has
+ * thought of yet - which is why `colour` is no longer part of any lookup.
+ */
+const WHITE = "white";
+/**
+ * Make names drivers actually type, mapped to the Car DB's spelling. Without this
+ * a "VW Polo" never reaches `volkswagen|polo-*`, and the car stays on the SVG
+ * icon even though its photo is already sitting in the table.
+ */
+const MAKE_ALIASES = {
+    vw: "volkswagen",
+    chevy: "chevrolet",
+    merc: "mercedes-benz",
+    mercedes: "mercedes-benz",
+    "mercedes benz": "mercedes-benz",
+    benz: "mercedes-benz",
+    "land rover": "land-rover",
+    landrover: "land-rover",
+    "great wall": "gwm",
+};
+/**
+ * The DB's spelling of a make or model name: lowercase, with spaces and dots
+ * collapsed to single hyphens. "Polo Vivo" and "Polo  Vivo." both become
+ * "polo-vivo", which is exactly how the Car DB's filenames spell it — so a driver
+ * who types a space still finds a photo that is filed under a hyphen.
+ */
+function normToken(raw) {
+    return String(raw ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s.]+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "");
+}
+/** The Car DB's spelling of a make the driver typed. */
+function canonicalMake(raw) {
+    const spaced = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    return MAKE_ALIASES[spaced] || normToken(spaced);
+}
+/**
+ * True when a Car DB range label covers a model year. Handles the three forms the
+ * DB actually uses: "2016-2019", "2020-Present" and a bare "2021". A label we
+ * cannot parse covers nothing, so an unreadable row can never outrank a readable
+ * one.
+ */
+function rangeCoversYear(label, year) {
+    const y = Number(year);
+    if (!label || !Number.isFinite(y))
+        return false;
+    const text = String(label).trim();
+    const span = /^(\d{4})\s*[-–—]\s*(\d{4}|present)$/i.exec(text);
+    if (span) {
+        const start = Number(span[1]);
+        const end = /present/i.test(span[2]) ? 9999 : Number(span[2]);
+        return y >= start && y <= end;
+    }
+    const single = /^(\d{4})$/.exec(text);
+    return single ? Number(single[1]) === y : false;
+}
+/**
+ * How well a DB model name answers the one the driver saved.
+ *
+ * 100 exact, 60 for a hyphen-bounded variant — the only real shape in this DB:
+ * "Polo" must find "Polo-Hatch" / "Polo-Vivo", and "Corolla Quest" must find
+ * "Corolla-Cross". A loose `startsWith` is deliberately NOT used: it would let
+ * "Go" match "Golf" and would only ever work by luck.
+ */
+function modelScore(want, have) {
+    const a = String(want ?? "").trim().toLowerCase();
+    const b = String(have ?? "").trim().toLowerCase();
+    if (!a || !b)
+        return 0;
+    if (a === b)
+        return 100;
+    if (a.startsWith(b + "-") || b.startsWith(a + "-"))
+        return 60;
+    return 0;
+}
+/**
+ * Chooses the ONE white row that best answers a driver's model and year. This is
+ * the whole "which photo does this driver see" decision, kept as a pure function
+ * so it can be tested against every car in the DB without a database.
+ *
+ * Order: exact model beats a variant; a stated production range that covers the
+ * year beats one that does not; the nearest such range beats a looser one; and
+ * only then does the newest approval win, exactly as it always did.
+ */
+function pickBestWhiteRow(rows, want) {
+    const model = normToken(want.model);
+    const year = Number(want.year);
+    const scored = rows
+        .map((row) => {
+        const start = Number(row.year);
+        const covers = rangeCoversYear(row.year_range, want.year);
+        return {
+            row,
+            score: modelScore(model, row.model),
+            covers: covers ? 1 : 0,
+            // When the driver types a GENERIC model ("Polo") and the DB only has
+            // variants ("polo-hatch", "polo-vivo", "polo-sedan"), the score ties and
+            // something has to choose. Prefer the generation whose production starts
+            // nearest the driver's year: the most specific range that still covers the
+            // car. Without this the winner was whichever row happened to be imported
+            // last, which is not a reason.
+            near: covers && !Number.isNaN(year) && Number.isFinite(start) ? -Math.abs(start - year) : -Infinity,
+            when: row.approved_at ? Date.parse(row.approved_at) || 0 : 0,
+        };
+    })
+        .filter((c) => c.score > 0 && c.row.image_url);
+    if (!scored.length)
+        return null;
+    scored.sort((a, b) => b.score - a.score ||
+        b.covers - a.covers ||
+        b.near - a.near ||
+        b.when - a.when ||
+        String(a.row.cache_key).localeCompare(String(b.row.cache_key)));
+    return { row: scored[0].row, score: scored[0].score };
+}
+/**
+ * Fallback order, resolved server-side so every client agrees. Colour plays no
+ * part in any step: every query reads white rows only, so a driver who picked
+ * black, red or purple is served the white model of his car.
+ *
+ *   1. the exact white row for this make|model|generation
+ *   2. same make, strongest model score, preferring a stated production range
+ *      that actually covers the driver's year
+ *   3. none -> the app draws the body-type icon, then the generic car
  */
 async function resolveVehicleImage(v) {
     await ensureVehicleImageTables();
     const cacheKey = vehicleImageCacheKey(v);
-    const { make, model, colour } = keyParts(cacheKey);
+    const make = canonicalMake(v?.make || v?.vehicle_make);
+    const model = normToken(v?.model || v?.vehicle_model);
+    const year = v?.year ?? v?.vehicle_year;
     if (!make || !model)
         return { url: null, cacheKey, matched: "none" };
     const exact = await (0, database_1.queryOne)(`SELECT image_url FROM vehicle_images
-      WHERE cache_key = $1 AND status = 'approved' AND image_url IS NOT NULL`, [cacheKey]);
+      WHERE cache_key = $1 AND LOWER(colour) = $2 AND status = 'approved' AND image_url IS NOT NULL`, [cacheKey, WHITE]);
     if (exact?.image_url)
         return { url: exact.image_url, cacheKey, matched: "exact" };
-    if (colour) {
-        const sameColour = await (0, database_1.queryOne)(`SELECT image_url FROM vehicle_images
-        WHERE make = $1 AND model = $2 AND colour = $3 AND status = 'approved' AND image_url IS NOT NULL
-        ORDER BY approved_at DESC NULLS LAST LIMIT 1`, [make, model, colour]);
-        if (sameColour?.image_url) {
-            return { url: sameColour.image_url, cacheKey, matched: "model-colour" };
-        }
-    }
-    const anyColour = await (0, database_1.queryOne)(`SELECT image_url FROM vehicle_images
-      WHERE make = $1 AND model = $2 AND status = 'approved' AND image_url IS NOT NULL
-      ORDER BY approved_at DESC NULLS LAST LIMIT 1`, [make, model]);
-    if (anyColour?.image_url)
-        return { url: anyColour.image_url, cacheKey, matched: "model" };
-    return { url: null, cacheKey, matched: "none" };
+    // Every white row for this make, scored here rather than in SQL: the range label
+    // is free text ("2017-Present"), so "does it cover this year" is not an
+    // indexable predicate - and the candidate set is a handful of rows.
+    const rawMakeSlug = normToken(v?.make || v?.vehicle_make);
+    const makes = Array.from(new Set([make, canonicalMake(rawMakeSlug), rawMakeSlug].filter(Boolean)));
+    const rows = await (0, database_1.query)(`SELECT cache_key, make, model, year, year_range, image_url, approved_at
+       FROM vehicle_images
+      WHERE make = ANY($1::text[]) AND LOWER(colour) = $2
+        AND status = 'approved' AND image_url IS NOT NULL`, [makes, WHITE]);
+    if (!rows.length)
+        return { url: null, cacheKey, matched: "none" };
+    const pick = pickBestWhiteRow(rows, { model, year });
+    if (!pick)
+        return { url: null, cacheKey, matched: "none" };
+    return {
+        url: pick.row.image_url,
+        cacheKey,
+        matched: pick.score >= 100 ? "model-colour" : "model",
+    };
 }
 /**
  * Returns true ONLY for the caller that won a fetch for this key. Two drivers saving
@@ -515,6 +657,12 @@ function studioBonus(m) {
  */
 async function runCarsxeFetch(cacheKey, options) {
     await ensureVehicleImageTables();
+    // The hard guarantee: whatever called this — the 30s worker or the admin
+    // "Re-fetch" button — nothing spends a CarsXE credit while the local Car DB is
+    // the configured source. This sits ABOVE the status check on purpose, so a
+    // queued row is simply left alone instead of being turned into a none_found.
+    if (vehicleImageSource() !== "carsxe")
+        return;
     const row = await (0, database_1.queryOne)(`SELECT id, make, model, year, colour, status FROM vehicle_images WHERE cache_key = $1`, [cacheKey]);
     // A re-fetch of an ALREADY APPROVED row is allowed (keepStatus), so the live image
     // stays up while the operator reviews fresh candidates. Everything else still has to
@@ -837,18 +985,33 @@ async function rejectVehicleImage(id) {
     return { id };
 }
 /**
- * Step 0 — a finished image produced by scripts/import-seed.js from a dashboard
- * search you already made. ZERO CarsXE calls: the bytes arrive already processed,
- * we only store them. Idempotent: re-running overwrites the same row instead of
- * adding a second one, and the usage log records the import exactly once.
+ * Step 0 — an image that did NOT come from a CarsXE call. Two producers use it:
+ * scripts/import-seed.js (a dashboard search you already made) and
+ * scripts/import-car-db.js (the local Car DB folder). ZERO API calls either way.
+ *
+ * Idempotent: re-running overwrites the same row instead of adding a second one,
+ * and the usage log records the import exactly once.
+ *
+ * Car DB additions:
+ *   `yearRange`  the model's stated production range ("2016-2019", "2020-Present"),
+ *                which is what a driver's year is matched against.
+ *   `processRaw` the payload is the ORIGINAL jpg/png and the server runs it through
+ *                processVehicleImage() — the same key-out/trim/canvas/WebP pipeline
+ *                every other photo goes through, so an import cannot look different
+ *                from a fetched image.
+ *   `approve`    land the row 'approved' so it serves immediately. A curated DB of
+ *                hand-checked images does not need 196 manual approvals.
  */
 async function importSeedImage(input) {
     await ensureVehicleImageTables();
     const cacheKey = input.cacheKey.trim().toLowerCase();
     const storageKey = (0, exports.storageKeyFor)(cacheKey, 0);
-    const webp = Buffer.from(input.webpBase64.includes(",") ? input.webpBase64.split(",")[1] : input.webpBase64, "base64");
-    if (!webp.length)
+    const raw = Buffer.from(input.webpBase64.includes(",") ? input.webpBase64.split(",")[1] : input.webpBase64, "base64");
+    if (!raw.length)
         throw new Error("empty image payload");
+    // Already-processed input is stored as-is; a raw photo goes through the same
+    // pipeline as a fetched one, so the two are indistinguishable in the app.
+    const webp = input.processRaw ? await processVehicleImage(raw) : raw;
     const sharp = (await Promise.resolve().then(() => __importStar(require("sharp")))).default;
     const meta = await sharp(webp).metadata();
     const up = await (0, s3_1.uploadToS3)(storageKey, webp.toString("base64"), "image/webp");
@@ -865,17 +1028,22 @@ async function importSeedImage(input) {
     };
     const candidates = [candidate, ...(input.candidates || [])];
     const row = await (0, database_1.queryOne)(`INSERT INTO vehicle_images
-       (cache_key, make, model, year, colour, image_url, storage_key, source_url, context_link,
-        licence_note, width, height, status, candidates, api_calls_used)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13::jsonb,0)
+       (cache_key, make, model, year, year_range, colour, image_url, storage_key, source_url,
+        context_link, licence_note, width, height, status, candidates, api_calls_used, approved_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,0,
+             CASE WHEN $16::boolean THEN NOW() ELSE NULL END)
      ON CONFLICT (cache_key) DO UPDATE
        SET image_url = EXCLUDED.image_url, storage_key = EXCLUDED.storage_key,
            source_url = EXCLUDED.source_url, context_link = EXCLUDED.context_link,
            licence_note = EXCLUDED.licence_note, width = EXCLUDED.width, height = EXCLUDED.height,
-           candidates = EXCLUDED.candidates, status = 'pending'
-     RETURNING *`, [cacheKey, input.make, input.model, input.year ?? null, input.colour ?? null,
+           year_range = EXCLUDED.year_range, colour = EXCLUDED.colour,
+           candidates = EXCLUDED.candidates, status = EXCLUDED.status,
+           approved_at = COALESCE(vehicle_images.approved_at, EXCLUDED.approved_at)
+     RETURNING *`, [cacheKey, canonicalMake(input.make), normToken(input.model), input.year ?? null, input.yearRange ?? null,
+        slug(input.colour) || null,
         candidate.url, storageKey, candidate.sourceUrl, candidate.contextLink,
-        input.licenceNote ?? null, candidate.width, candidate.height, JSON.stringify(candidates)]);
+        input.licenceNote ?? null, candidate.width, candidate.height,
+        input.approve ? "approved" : "pending", JSON.stringify(candidates), Boolean(input.approve)]);
     // The dashboard search cost you one call, so the budget must count it — once.
     const already = await (0, database_1.queryOne)(`SELECT id FROM carsxe_usage_log WHERE cache_key = $1 AND note LIKE 'imported%' LIMIT 1`, [cacheKey]);
     if (!already) {
@@ -901,11 +1069,35 @@ async function resolveVehicleImageCached(v) {
     resolveCache.set(key, { url: resolved.url, at: Date.now() });
     return resolved;
 }
+/**
+ * Where vehicle photos come from.
+ *
+ *   "cardb" (the default) — the curated local Car DB, imported by
+ *        scripts/import-car-db.js. A lookup miss means the car is simply not in
+ *        the DB yet; there is nothing to fetch and nothing to pay for.
+ *   "carsxe" — the previous behaviour: queue a paid CarsXE search on a miss.
+ *
+ * The switch exists so the CarsXE path stays intact and auditable rather than
+ * deleted: flipping VEHICLE_IMAGES_SOURCE=carsxe restores it exactly.
+ */
+function vehicleImageSource() {
+    return String(process.env.VEHICLE_IMAGES_SOURCE || "cardb").trim().toLowerCase() === "carsxe"
+        ? "carsxe"
+        : "cardb";
+}
 async function noteDriverVehicle(v) {
     const resolved = await resolveVehicleImage(v);
     if (resolved.url)
         return resolved;
-    await claimVehicleImageFetch(v).catch((err) => console.error("[vehicleImages] claim failed:", err?.message || err));
+    if (vehicleImageSource() === "carsxe") {
+        await claimVehicleImageFetch(v).catch((err) => console.error("[vehicleImages] claim failed:", err?.message || err));
+        return resolved;
+    }
+    // A miss is no longer a failed fetch — the car is not in the Car DB. Name the
+    // exact key so the gap can be filled deliberately, instead of guessing at a
+    // driver's description of a car that shows no photo.
+    console.warn(`[vehicleImages] Car DB has no white image for ${resolved.cacheKey} — add ` +
+        `Make_Model_YearRange_White.jpg and re-run scripts/import-car-db.js`);
     return resolved;
 }
 //# sourceMappingURL=vehicleImages.js.map

@@ -5,7 +5,13 @@
 //   GET  /api/admin/vehicle-images              password page: pending/review
 //   POST /api/admin/vehicle-images/:id/approve  body candidateIndex (default 0)
 //   POST /api/admin/vehicle-images/:id/reject
-//   POST /api/admin/vehicle-images/seed         Step 0 import (0 CarsXE calls)
+//   POST /api/admin/vehicle-images/seed         import from the local Car DB /
+//                                              a finished WebP (0 CarsXE calls).
+//                                              body: process:true -> the server
+//                                              runs the standard WebP pipeline on
+//                                              the raw jpg/png; approve:true ->
+//                                              the row lands 'approved' and serves
+//                                              immediately.
 //
 // Auth is HTTP Basic with CARSXE_ADMIN_PASSWORD. If that env var is unset the
 // page answers 503 instead of being open to the world — a page that publishes
@@ -230,17 +236,26 @@ router.post("/admin/vehicle-images/seed", async (req: Request, res: Response) =>
       make: String(body.make || ""),
       model: String(body.model || ""),
       year: body.year ?? null,
+      yearRange: body.yearRange ?? null,
       colour: body.colour ?? null,
       sourceUrl: body.sourceUrl ?? null,
       contextLink: body.contextLink ?? null,
       licenceNote: body.licenceNote ?? null,
       webpBase64: String(body.image),
       candidates: Array.isArray(body.candidates) ? body.candidates : [],
+      // The Car DB importer sends the ORIGINAL jpg/png and lets the server run the
+      // standard pipeline, so an imported photo is processed exactly like a fetched
+      // one and cannot end up looking different in the app.
+      processRaw: body.process === true,
+      approve: body.approve === true,
     });
     res.json({
       success: true,
       cacheKey: out.row?.cache_key,
+      status: out.row?.status,
+      yearRange: out.row?.year_range,
       imageUrl: out.candidate.url,
+      bytes: out.candidate.bytes,
       budget: out.budget,
     });
   } catch (err: any) {
