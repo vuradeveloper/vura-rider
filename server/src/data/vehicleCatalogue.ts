@@ -55,6 +55,14 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Tiguan", body: "suv" },
     { model: "Amarok", body: "bakkie" },
     { model: "Crafter", body: "minibus", category: "xl" },
+    // Every model below is in the image library, so a driver can pick it. Without an
+    // entry here the body shape and the tier would be GUESSED (hatchback/economy).
+    { model: "Jetta", body: "sedan" },
+    { model: "Touran", body: "minibus", category: "xl" },
+    // NOT a Volkswagen at all - the Car DB carries a `volkswagen|v-class` row by mistake
+    // (it is a Mercedes V-Class). It is listed here only so that the nonsense car still
+    // gets a sane shape and tier; the real fix is to delete that DB row.
+    { model: "V-Class", body: "minibus", category: "xl" },
   ],
   Toyota: [
     { model: "Starlet", body: "hatchback" },
@@ -67,6 +75,17 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Hilux", body: "bakkie", category: "xl" },
     { model: "Quantum", body: "minibus", category: "xl" },
     { model: "Avanza", body: "minibus", category: "xl" },
+    { model: "Yaris", body: "hatchback" },
+    { model: "Prius", body: "hatchback" },
+    { model: "Starlet GP", body: "hatchback" },
+    { model: "Etios Liva", body: "hatchback" },
+    { model: "Avalon", body: "sedan" },
+    { model: "Camry", body: "sedan" },
+    { model: "RAV4", body: "suv" },
+    { model: "Corolla Cross", body: "suv" },
+    { model: "Hiace", body: "minibus", category: "xl" },
+    { model: "Innova", body: "minibus", category: "xl" },
+    { model: "Sienna", body: "minibus", category: "xl" },
   ],
   Suzuki: [
     { model: "Swift", body: "hatchback" },
@@ -74,6 +93,10 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Vitara Brezza", body: "suv" },
     { model: "Jimny", body: "suv" },
     { model: "Ertiga", body: "minibus", category: "xl" },
+    { model: "Baleno", body: "hatchback" },
+    { model: "Celerio", body: "hatchback" },
+    { model: "S-Presso", body: "hatchback" },
+    { model: "Ciaz", body: "sedan" },
   ],
   Hyundai: [
     { model: "i10", body: "hatchback" },
@@ -83,6 +106,11 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Accent", body: "sedan" },
     { model: "Venue", body: "suv" },
     { model: "H1", body: "minibus", category: "xl" },
+    { model: "Elantra", body: "sedan" },
+    { model: "Ioniq", body: "hatchback" },
+    { model: "Creta", body: "suv" },
+    { model: "Kona EV", body: "suv" },
+    { model: "Staria", body: "minibus", category: "xl" },
   ],
   Kia: [
     { model: "Picanto", body: "hatchback" },
@@ -91,6 +119,12 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Sonet", body: "suv" },
     { model: "Sportage", body: "suv" },
     { model: "K2700", body: "bakkie", category: "xl" },
+    { model: "Ceed", body: "hatchback" },
+    { model: "Soul", body: "hatchback" },
+    { model: "Cerato", body: "sedan" },
+    { model: "Niro EV", body: "suv" },
+    { model: "Carnival", body: "minibus", category: "xl" },
+    { model: "Sedona", body: "minibus", category: "xl" },
   ],
   Renault: [
     { model: "Kwid", body: "hatchback" },
@@ -98,6 +132,7 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Sandero", body: "hatchback" },
     { model: "Duster", body: "suv" },
     { model: "Triber", body: "minibus", category: "xl" },
+    { model: "Logan", body: "sedan" },
   ],
   Ford: [
     { model: "Figo", body: "hatchback" },
@@ -107,6 +142,7 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Ranger", body: "bakkie", category: "xl" },
     { model: "Everest", body: "suv", category: "xl" },
     { model: "Transit", body: "minibus", category: "xl" },
+    { model: "Tourneo Custom", body: "minibus", category: "xl" },
   ],
   Nissan: [
     { model: "Micra", body: "hatchback" },
@@ -117,6 +153,12 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "NP300", body: "bakkie" },
     { model: "Navara", body: "bakkie" },
     { model: "NV350", body: "minibus", category: "xl" },
+    { model: "Leaf", body: "hatchback" },
+    { model: "Tiida", body: "hatchback" },
+    { model: "Sentra", body: "sedan" },
+    { model: "Versa", body: "sedan" },
+    { model: "NV200", body: "minibus", category: "xl" },
+    { model: "Serena", body: "minibus", category: "xl" },
   ],
   Isuzu: [
     { model: "D-Max", body: "bakkie", category: "xl" },
@@ -135,6 +177,11 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Ballade", body: "sedan" },
     { model: "Amaze", body: "sedan" },
     { model: "BR-V", body: "minibus", category: "xl" },
+    { model: "Jazz", body: "hatchback" },
+    { model: "City", body: "sedan" },
+    { model: "Civic", body: "sedan" },
+    { model: "Accord", body: "sedan" },
+    { model: "Odyssey", body: "minibus", category: "xl" },
   ],
   Mahindra: [
     { model: "XUV300", body: "suv" },
@@ -146,6 +193,10 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "Mazda3", body: "sedan" },
     { model: "CX-3", body: "suv" },
     { model: "CX-5", body: "suv" },
+    { model: "2", body: "hatchback" },
+    { model: "2 Hatch", body: "hatchback" },
+    { model: "3", body: "sedan" },
+    { model: "3 Hatch", body: "hatchback" },
   ],
   "Mercedes-Benz": [
     { model: "A-Class", body: "hatchback" },
@@ -153,17 +204,25 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
     { model: "GLC", body: "suv", category: "xl" },
     { model: "Vito", body: "minibus", category: "xl" },
     { model: "Sprinter", body: "minibus", category: "xl" },
+    { model: "E-Class", body: "sedan" },
+    { model: "S-Class", body: "sedan" },
+    { model: "V-Class", body: "minibus", category: "xl" },
   ],
   BMW: [
     { model: "1 Series", body: "hatchback" },
     { model: "3 Series", body: "sedan" },
     { model: "X1", body: "suv" },
     { model: "X3", body: "suv" },
+    { model: "5 Series", body: "sedan" },
+    { model: "7 Series", body: "sedan" },
   ],
   Audi: [
     { model: "A1", body: "hatchback" },
     { model: "A3", body: "sedan" },
     { model: "Q3", body: "suv" },
+    { model: "A4", body: "sedan" },
+    { model: "A5", body: "sedan" },
+    { model: "Q5", body: "suv" },
   ],
   Opel: [
     { model: "Corsa", body: "hatchback" },
@@ -172,16 +231,58 @@ export const MAKE_MODELS: Record<string, Entry[]> = {
   Mitsubishi: [
     { model: "Triton", body: "bakkie", category: "xl" },
     { model: "Pajero", body: "suv", category: "xl" },
+    { model: "Attrage", body: "sedan" },
+    { model: "Mirage", body: "hatchback" },
+    { model: "Mirage Hatch", body: "hatchback" },
   ],
   GWM: [
     { model: "Steed", body: "bakkie" },
     { model: "P-Series", body: "bakkie", category: "xl" },
+    { model: "Ora 07", body: "sedan" },
+    { model: "Ora Excel", body: "hatchback" },
   ],
   Datsun: [{ model: "Go", body: "hatchback" }],
   Fiat: [{ model: "Uno", body: "hatchback" }],
   Peugeot: [
     { model: "208", body: "hatchback" },
     { model: "2008", body: "suv" },
+    { model: "108", body: "hatchback" },
+    { model: "308", body: "hatchback" },
+    { model: "301", body: "sedan" },
+  ],
+  // ── makes that came in with the Car DB image library ────────────────────────
+  // None of these were in the original short list, but every one of them is a car a
+  // driver can now pick, so each needs a real body type and tier rather than a guess.
+  Bajaj: [{ model: "Qute", body: "hatchback" }],
+  Byd: [
+    { model: "Dolphin", body: "hatchback" },
+    { model: "Atto 3", body: "suv" },
+    { model: "Yuan Plus", body: "suv" },
+    { model: "Seal", body: "sedan" },
+  ],
+  Chevrolet: [
+    { model: "Spark", body: "hatchback" },
+    { model: "Aveo Sonic", body: "sedan" },
+    { model: "Cruze", body: "sedan" },
+    { model: "Spin", body: "minibus", category: "xl" },
+    { model: "Suburban", body: "suv", category: "xl" },
+  ],
+  Citroen: [{ model: "C3 Aircross", body: "suv" }],
+  Lexus: [
+    { model: "ES", body: "sedan" },
+    { model: "NX", body: "suv" },
+  ],
+  Maxus: [{ model: "G10", body: "minibus", category: "xl" }],
+  MG: [{ model: "ZS EV", body: "suv" }],
+  Tesla: [
+    { model: "Model 3", body: "sedan" },
+    { model: "Model S", body: "sedan" },
+    { model: "Model Y", body: "suv" },
+  ],
+  Volvo: [
+    { model: "EX30", body: "suv" },
+    { model: "S60", body: "sedan" },
+    { model: "XC90", body: "suv", category: "xl" },
   ],
 };
 
@@ -216,7 +317,17 @@ const MAKE_ALIASES: Record<string, string> = {
   peugeot: "Peugeot",
 };
 
-const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+const norm = (s: unknown) =>
+  String(s ?? "")
+    .trim()
+    .toLowerCase()
+    // Dashes and underscores mean a SPACE here, because the same car arrives as
+    // "3 Series" (this catalogue) and "3-series" (the DB, via normToken on save).
+    // Without this they never matched, so `findModel("BMW", "3-series")` returned null
+    // and the car fell back to a GUESSED hatchback/economy - which is wrong for a 3
+    // Series in every way that matters (shape on the card, tier on the map).
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ");
 
 /** The catalogue's spelling of a make, or null when it is not in the catalogue. */
 export function canonicalMake(make?: string | null): string | null {
