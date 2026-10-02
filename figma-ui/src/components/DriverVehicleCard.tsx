@@ -7,8 +7,8 @@
 // photo overlapping its top-left corner, the plate in large letter-spaced type, then
 // "<First name> - <Colour> <Make> <Model>" and a Call / Message / more row.
 //
-// The plate is the real identifier and stays the most prominent text: the drawing
-// shows the right SHAPE in the right COLOUR, not the exact model.
+// The plate is the real identifier and stays the most prominent text: the placeholder
+// shows the right SHAPE, and a real photo is used whenever one exists.
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { useState } from 'react'
 import VehicleImage, { resolveVehicleImage } from './vehicle/VehicleImage'
@@ -55,6 +55,7 @@ export default function DriverVehicleCard({
   onMore?: () => void
 }) {
   const [photoFailed, setPhotoFailed] = useState(false)
+  const [carPhotoFailed, setCarPhotoFailed] = useState(false)
 
   const fullName = String(driver?.name || 'Your driver')
   const first = fullName.split(' ')[0]
@@ -97,14 +98,16 @@ export default function DriverVehicleCard({
         </div>
 
         {spec.type === 'svg' ? (
-          <VehicleImage
-            bodyType={spec.bodyType}
-            colour={vehicle?.colour || vehicle?.vehicle_color}
-            size={carSize}
-            missing={!make && !model && !plate}
-          />
+          <VehicleImage bodyType={spec.bodyType} size={carSize} />
+        ) : carPhotoFailed ? (
+          <VehicleImage bodyType={vehicle?.body_type || vehicle?.vehicle_body_type} size={carSize} />
         ) : (
-          <img src={spec.url} alt={desc} style={{ width: carSize }} />
+          <img
+            src={spec.url}
+            alt={desc}
+            style={{ width: carSize }}
+            onError={() => setCarPhotoFailed(true)}
+          />
         )}
       </div>
 

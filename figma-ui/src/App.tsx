@@ -1737,15 +1737,13 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                     <p className="text-[15px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{formatRand(fare)}</p>
                   </div>
                 </div>
-                {/* The car that did THIS trip â€” painted from the snapshot stamped on
+                {/* The car that did THIS trip â€” drawn from the snapshot stamped on
                     the ride at accept time, so it stays correct even after the driver
                     changes cars later. */}
                 <div className="flex items-center gap-3 pt-3">
                   <VehicleImage
                     bodyType={t.vehicle_body_type || t.body_type}
-                    colour={t.vehicle_color}
                     size={78}
-                    missing={!t.vehicle_make && !t.vehicle_model}
                   />
                   <div className="min-w-0">
                     <p className="text-[14px] font-bold text-[#1A1A1A] tracking-[0.18em]"
