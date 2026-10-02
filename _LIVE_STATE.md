@@ -22,6 +22,7 @@ per-driver candidate checks are therefore NOT live. **Re-run the deploy.**
 | `773d4f3` | `.gitattributes` pins `eol=lf` for the Linux-run files |
 | `9426385` | Declares the vehicle-image generator `devDependencies` at the root |
 | `eb959ce` | The CarsXE stranded-row reclaim runs **before** the budget guard, so an exhausted budget can no longer freeze a half-finished `fetching` row |
+| `e72eb3e` | Vehicle photos come from the **local Car DB**, always the white model for any colour the driver picks, matched against the DB's own production ranges; CarsXE off behind `VEHICLE_IMAGES_SOURCE`; adds `scripts/import-car-db.js` |
 
 ## The three proven bugs
 
@@ -83,6 +84,46 @@ answers, and *neither* EB hook runs `tsc` — they only install dependencies. Ed
 `server/src/**` changes nothing on the instance until `npm run build` is run in
 `server/` and the regenerated `dist` is committed alongside it. Confirm with
 `git status --porcelain server/dist` before every deploy.
+
+## Vehicle photos now come from the local Car DB, not CarsXE
+
+`VEHICLE_IMAGES_SOURCE` defaults to `cardb`, so CarsXE no longer runs: a miss is no
+longer a queued fetch. `runCarsxeFetch()` returns before it can spend a credit,
+whoever calls it. Flip the variable to `carsxe` to restore the old path exactly.
+
+**Import it (this is the step that fills the table):**
+
+```bash
+cd ~/vura-rider
+CARSXE_ADMIN_PASSWORD='...' node scripts/import-car-db.js \
+  --dir="C:\Users\mbofh\Downloads\New Car DB"     # Windows, from the repo root
+node scripts/import-car-db.js --selftest          # no upload, no DB, no network
+node scripts/import-car-db.js --dry               # what it would import
+```
+
+It needs **no AWS key and no database access** — it posts each original file to the
+existing `/api/admin/vehicle-images/seed` endpoint with `process:true` (the server
+runs the standard key-out/trim/900×560/WebP-under-80KB pipeline, so an import looks
+identical to a fetched photo) and `approve:true` (195 hand-checked images need no
+195 manual approvals). Re-running is safe: it overwrites the same rows.
+
+**What the folder holds:** 195 files → **152 imported**, 4 skipped because the DB has
+no white model of that car, 0 unreadable names, and 31 cars had duplicate `_vN`
+copies collapsed to one (the best variant: `_Recolored` first, then the highest
+`_vN`). The 4 skipped are `Chevrolet_Aveo_2008-2011_Silver.png`, `Toyota_Camry_Blue.jpg`,
+`Volkswagen_Polo-Hatch_2017-Present_Blue.jpg` and `..._Red.jpg`.
+
+**Always white, whatever the driver picks.** The requirement is not "white when no
+colour is given" — the lookup takes no colour parameter at all, so red, black and
+purple all resolve to the white row. The rule lives in `resolveVehicleImage`.
+
+**Year matching is against the DB's own ranges.** `generationRange()` guesses a
+4-year bucket (`2017-2020`), which can never equal the DB's `2016-2019` or
+`2020-Present`. The stated range is now stored in a new `year_range` column and
+tested for membership, so a 2019 A4 gets `Audi_A4_2016-2019_White` and a 2025 A5 gets
+`Audi_A5_2020-Present_White`. `pickBestWhiteRow()` is the single pure function
+deciding which image wins; `--selftest` proves it against all 152 entries and prints
+`✓ self-test passed`.
 
 ## Run the deploy (AWS CloudShell)
 
