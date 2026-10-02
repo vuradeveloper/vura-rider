@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cleanupStaleRides = cleanupStaleRides;
 const express_1 = require("express");
@@ -40,6 +7,7 @@ const database_1 = require("../config/database");
 const AffiliateService_1 = require("../services/AffiliateService");
 const rideSim_1 = require("../services/rideSim");
 const dispatch_1 = require("../services/dispatch");
+const vehicleImages_1 = require("../services/vehicleImages");
 const router = (0, express_1.Router)();
 // GET /api/rides/me/active-state â€” ONE call that rebuilds the app's world.
 //
@@ -70,7 +38,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
               d.profile_photo_url AS driver_photo_url,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.vehicle_year, dp.body_type, dp.vehicle_category,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng,
               dp.current_heading AS driver_heading,
@@ -83,28 +51,14 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
           AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
         ORDER BY r.created_at DESC
         LIMIT 1`, [user.id]).catch(() => null);
-        // The rider must see the ACTUAL car. If an approved photo exists for this
-        // driver's make|model|generation|colour we hand the app OUR OWN stored URL
-        // (GET /api/vehicle-images/â€¦), never a third-party link. Cached for 5 minutes
-        // because this endpoint is polled every second, and a failure here can never
-        // break the active-state response â€” the app just keeps its SVG.
-        let ridePayload = ride ? mapRide(ride) : null;
-        if (ridePayload && (ride.vehicle_make || ride.vehicle_model)) {
-            try {
-                const { resolveVehicleImageCached } = await Promise.resolve().then(() => __importStar(require("../services/vehicleImages")));
-                const img = await resolveVehicleImageCached({
-                    make: ride.vehicle_make,
-                    model: ride.vehicle_model,
-                    year: ride.vehicle_year,
-                    colour: ride.vehicle_color,
-                });
-                if (img.url)
-                    ridePayload.vehicle_image_url = img.url;
-            }
-            catch {
-                /* no approved photo yet â€” the app draws the body-type SVG */
-            }
-        }
+        // The rider must see the ACTUAL car. attachVehicleImages resolves the approved
+        // photo for this driver's make|model|generation and hands the app OUR OWN
+        // stored URL (GET /api/vehicle-images/â€¦), never a third-party link. The lookup
+        // is cached for 5 minutes because this endpoint is polled every second, and a
+        // failure here can never break the active-state response â€” the app just keeps
+        // its SVG.
+        await (0, vehicleImages_1.attachVehicleImages)(ride);
+        const ridePayload = ride ? mapRide(ride) : null;
         res.json({
             role: user.role,
             offer: offer
@@ -226,7 +180,7 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data
@@ -239,6 +193,9 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
          AND r.status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
          AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
        ORDER BY r.created_at DESC LIMIT 1`, [user.id, user.id]);
+        // Same single source of truth as /me/active-state: the rider's live trip card
+        // is fed by THIS endpoint, so the approved photo must be attached here too.
+        await (0, vehicleImages_1.attachVehicleImages)(ride);
         res.json({ ride: mapRide(ride) });
     }
     catch (err) {
@@ -278,7 +235,7 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               rat.score AS rating_score, rat.comment AS rating_comment
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
@@ -292,6 +249,7 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
        WHERE r.passenger_id = $1 OR r.driver_id = $1
        ORDER BY r.created_at DESC
        LIMIT $2 OFFSET $3`, [user.id, limit, offset]);
+        await (0, vehicleImages_1.attachVehicleImages)(rows);
         res.json({
             rides: rows.map(mapRide),
             pagination: { page, limit, total, pages: Math.ceil(total / limit) },
@@ -343,13 +301,14 @@ router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
         // driver name + phone + car details so the rider sees WHO is coming.
         const rides = await (0, database_1.query)(`SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
        WHERE r.passenger_id = $1
          AND r.status IN ('scheduled','searching','accepted','driver_arrived','in_progress')
        ORDER BY r.scheduled_at ASC`, [user.id]);
+        await (0, vehicleImages_1.attachVehicleImages)(rides);
         res.json({ rides: rides.map(mapRide) });
     }
     catch (err) {
@@ -364,7 +323,7 @@ router.get("/:id", auth_1.requireAuth, async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data
@@ -378,6 +337,7 @@ router.get("/:id", auth_1.requireAuth, async (req, res) => {
             res.status(404).json({ error: "Ride not found" });
             return;
         }
+        await (0, vehicleImages_1.attachVehicleImages)(ride);
         res.json({ ride: mapRide(ride) });
     }
     catch (err) {

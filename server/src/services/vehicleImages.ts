@@ -1214,6 +1214,42 @@ export async function resolveVehicleImageCached(
   resolveCache.set(key, { url: resolved.url, at: Date.now() });
   return resolved;
 }
+
+/**
+ * Attach the approved photo to ride / driver rows as `vehicle_image_url`.
+ *
+ * This is the ONE place that decides which photo a rider sees, so the active
+ * trip card, the "driver accepted" socket event, trip history and the public
+ * share page can never disagree. Before this existed each query matched
+ * `vehicle_images` on the DRIVER'S COLOUR, so a driver who saved a red Polo got
+ * no row back (the curated Car DB stores white models only) and the rider kept
+ * the SVG icon.
+ *
+ * Rows carry the driver's car as `vehicle_make` / `vehicle_model` /
+ * `vehicle_year`. A lookup failure is swallowed on purpose: the app then draws
+ * its own body-type icon, exactly as before.
+ */
+export async function attachVehicleImages<R = any>(rows: R | R[] | null): Promise<R | R[] | null> {
+  const list = (Array.isArray(rows) ? rows : rows ? [rows] : []) as any[];
+  await Promise.all(
+    list.map(async (row) => {
+      if (!row || (!row.vehicle_make && !row.vehicle_model)) return;
+      try {
+        const img = await resolveVehicleImageCached({
+          make: row.vehicle_make,
+          model: row.vehicle_model,
+          year: row.vehicle_year,
+          colour: row.vehicle_color,
+        });
+        if (img.url) row.vehicle_image_url = img.url;
+      } catch {
+        /* no approved photo for this car — leave the column null */
+      }
+    })
+  );
+  return rows;
+}
+
 /**
  * Where vehicle photos come from.
  *

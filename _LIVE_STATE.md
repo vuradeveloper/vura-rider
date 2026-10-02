@@ -159,11 +159,16 @@ from the admin page and confirm candidates appear with no `none_found`.
 Copied to `C:\Users\mbofh\Downloads\`, every copy SHA256-verified byte-identical to
 the build output it came from:
 
-- **rider** — `vura-rider-figma.apk` = `vura-rider-2026-10-01.apk` = `VURA-RIDER-latest.apk` (8.84 MB, 2026-10-01 02:21)
-- **driver** — `vura-driver-figma.apk` = `VURA-DRIVER-latest.apk` = `vura-driver-2026-10-01-locationfix.apk`, SHA256 `48B0088B…62FD8` (8.07 MB, 2026-10-01 18:27)
+- **rider** — 8.84 MB, built 2026-10-01 02:21, SHA256 `F32562078CD12938…`
+  `vura-rider.apk` = `vura-rider-figma.apk` = `vura-rider-2026-10-01.apk` =
+  `vura-rider-2026-10-02.apk` = `VURA-RIDER-latest.apk`
+- **driver** — 8.07 MB, built 2026-10-01 18:27, SHA256 `48B0088B19490C27…`
+  `vura-driver.apk` = `vura-driver-figma.apk` =
+  `vura-driver-2026-10-01-locationfix.apk` =
+  `vura-driver-2026-10-02-locationfix.apk` = `VURA-DRIVER-latest.apk`
 
 **`vura-driver-2026-10-01.apk` is NOT that build.** It hashes differently
-(`7D10A859…18C9`) and was written 02:25, before the GPS fix — installing it
+(`7D10A859878834F3…`) and was written 02:25, before the GPS fix — installing it
 reproduces the *"Location is off"* banner and the silent no-offer state that
 started this work. Delete it.
 
@@ -171,7 +176,30 @@ The three fixes are provably inside the good APK: its bundled web assets
 (`figma-ui/android/app/src/main/assets/public/assets/index-*.js`) contain
 `maximumAge`, `ride:offer:cancelled` and `ride:taken`. Verify any future APK the
 same way — grep those three strings in the **asset** copy, not in `dist`, because
-only the asset copy is what the WebView loads.
+only the asset copy is what the WebView loads. The availability path itself reads
+`getCurrentPosition(…,{enableHighAccuracy:!1,maximumAge:6e4,timeout:2e4})` with a
+15 s refresh and a 4 s retry, so the `maximumAge:0`/`timeout:12e3` hits in that
+same bundle are unrelated map helpers, not the dispatch path.
+
+**Client drift — neither APK is the tip of its client source.**
+
+- **rider** is one client commit behind: `66d1ac9` (2026-10-01 11:04, *"fix(search):
+  ask HERE for relevance, not distance"*) touched `figma-ui/src` after the 02:21
+  build, so that change is **not** on the phone yet.
+- **driver** matches the source exactly. The fix was committed later (`51ace72`,
+  2026-10-02 07:42), but the 18:27 build came from that same working tree — which
+  the bundle contents confirm.
+
+**Being a dispatch candidate needs a fix under 30 s.** The diag row for
+`makhavhuju@gmail.com` reads `online=True, coords=True` but `locAge=128s` →
+`is_candidate=False`: the phone *is* reporting, the app was simply suspended. With
+the fixed APK in the foreground the 15 s refresh keeps the row inside the window;
+backgrounded, nothing does. `users.role` is **not** a dispatch gate — there is no
+`requireRole`/`requireDriver` anywhere, and the candidate predicate is only
+`is_online` + `status` + coords + freshness — so the `driverRoleMismatch` entry is
+cosmetic for offers. Note the self-heal in `POST /api/drivers/online` never fires
+for the real app, because the app goes online over the socket (`driver:online`),
+which writes `driver_profiles` only.
 
 Two-phone loop — `_dispatch.mjs` needs six arguments and exits with a usage line
 without them, so mint throwaway accounts first (shared password `FlowTest123!`):

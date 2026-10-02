@@ -40,6 +40,7 @@ exports.reviveWaitingRides = reviveWaitingRides;
 exports.releaseDriver = releaseDriver;
 const database_1 = require("../config/database");
 const notify_1 = require("./notify");
+const vehicleImages_1 = require("./vehicleImages");
 /** How long one driver has to answer before the ride moves on. */
 exports.OFFER_TTL_SECONDS = 15;
 /** A driver is only a candidate if we heard from them this recently. */
@@ -319,11 +320,15 @@ async function acceptRide(io, params) {
 }
 /** Single source of truth for the rider-facing "driver accepted" event. */
 async function emitRideAccepted(io, rideId, driverId, version) {
-    const driver = await (0, database_1.queryOne)(`SELECT u.full_name, u.phone, u.profile_photo_url, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url,
+    const driver = await (0, database_1.queryOne)(`SELECT u.full_name, u.phone, u.profile_photo_url, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url,
             dp.vehicle_year, dp.body_type, dp.vehicle_category,
             dp.license_plate, COALESCE(dp.rating_avg, 0)::float AS rating_avg
        FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id
       WHERE u.id = $1`, [driverId]).catch(() => null);
+    // The photo of the car that just accepted: the rider's trip card draws it the
+    // instant this event lands, so it must be on the payload, not only on the
+    // follow-up GET /api/rides/me/active.
+    await (0, vehicleImages_1.attachVehicleImages)(driver);
     // STAMP the car onto the ride at accept time: trip history must keep showing the
     // car that did THAT trip even after the driver changes cars. Best-effort â€” a
     // failure here must never block an accept that already succeeded.
@@ -351,6 +356,7 @@ async function emitRideAccepted(io, rideId, driverId, version) {
         vehicle_year: driver?.vehicle_year ?? null,
         vehicle_body_type: driver?.body_type || null,
         vehicle_category: driver?.vehicle_category || null,
+        vehicle_image_url: driver?.vehicle_image_url || null,
         driver_license_plate: driver?.license_plate,
         fare: ride?.estimated_fare != null ? Number(ride.estimated_fare) : null,
         waypoints: stops,
@@ -361,6 +367,7 @@ async function emitRideAccepted(io, rideId, driverId, version) {
             photo_url: driver?.profile_photo_url || null,
             rating: driver?.rating_avg ?? 0,
             plate: driver?.license_plate || null,
+            vehicle_image_url: driver?.vehicle_image_url || null,
             vehicle: [driver?.vehicle_color, driver?.vehicle_make, driver?.vehicle_model]
                 .filter(Boolean)
                 .join(" "),

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.sharePage = sharePage;
 const express_1 = require("express");
 const database_1 = require("../config/database");
+const vehicleImages_1 = require("../services/vehicleImages");
 const router = (0, express_1.Router)();
 // Ensure safety tables exist (best-effort) â€” a share GET must not 500 if the
 // table hasn't been created yet (e.g. first share before any POST ran).
@@ -33,10 +34,12 @@ router.get("/:token", async (req, res) => {
             res.status(404).json({ error: "Share link not found or expired" });
             return;
         }
+        // The shared photo resolver owns the answer, so a public share link can never
+        // disagree with what the rider's own app is showing.
         const ride = await (0, database_1.queryOne)(`SELECT r.id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
               r.destination_address, r.destination_lat, r.destination_lng, r.created_at,
               u.full_name AS driver_name,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading
        FROM rides r
        LEFT JOIN users u ON u.id = r.driver_id
@@ -47,6 +50,7 @@ router.get("/:token", async (req, res) => {
             return;
         }
         const ended = await (0, database_1.queryOne)(`SELECT EXISTS(SELECT 1 FROM safety_events WHERE ride_id = $1 AND type = 'share_ended') AS ended`, [evt.ride_id]);
+        await (0, vehicleImages_1.attachVehicleImages)(ride);
         res.json({
             ride: {
                 id: ride.id,
@@ -60,6 +64,7 @@ router.get("/:token", async (req, res) => {
                 vehicleMake: ride.vehicle_make,
                 vehicleModel: ride.vehicle_model,
                 vehicleColor: ride.vehicle_color,
+                vehicleImageUrl: ride.vehicle_image_url,
                 licensePlate: ride.license_plate,
                 driverLat: ride.driver_lat != null ? Number(ride.driver_lat) : null,
                 driverLng: ride.driver_lng != null ? Number(ride.driver_lng) : null,

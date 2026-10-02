@@ -4,6 +4,7 @@ import { query, queryOne, execute } from "../config/database";
 import { settleFirstRide } from "../services/AffiliateService";
 import { startServerRideSim, stopServerRideSim } from "../services/rideSim";
 import { acceptRide, declineOffer } from "../services/dispatch";
+import { attachVehicleImages } from "../services/vehicleImages";
 import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
@@ -46,7 +47,7 @@ router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Respon
       `SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
               d.profile_photo_url AS driver_photo_url,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.vehicle_year, dp.body_type, dp.vehicle_category,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng,
               dp.current_heading AS driver_heading,
@@ -62,26 +63,14 @@ router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Respon
       [user.id]
     ).catch(() => null);
 
-    // The rider must see the ACTUAL car. If an approved photo exists for this
-    // driver's make|model|generation|colour we hand the app OUR OWN stored URL
-    // (GET /api/vehicle-images/â€¦), never a third-party link. Cached for 5 minutes
-    // because this endpoint is polled every second, and a failure here can never
-    // break the active-state response â€” the app just keeps its SVG.
-    let ridePayload: any = ride ? mapRide(ride) : null;
-    if (ridePayload && (ride.vehicle_make || ride.vehicle_model)) {
-      try {
-        const { resolveVehicleImageCached } = await import("../services/vehicleImages");
-        const img = await resolveVehicleImageCached({
-          make: ride.vehicle_make,
-          model: ride.vehicle_model,
-          year: ride.vehicle_year,
-          colour: ride.vehicle_color,
-        });
-        if (img.url) ridePayload.vehicle_image_url = img.url;
-      } catch {
-        /* no approved photo yet â€” the app draws the body-type SVG */
-      }
-    }
+    // The rider must see the ACTUAL car. attachVehicleImages resolves the approved
+    // photo for this driver's make|model|generation and hands the app OUR OWN
+    // stored URL (GET /api/vehicle-images/â€¦), never a third-party link. The lookup
+    // is cached for 5 minutes because this endpoint is polled every second, and a
+    // failure here can never break the active-state response â€” the app just keeps
+    // its SVG.
+    await attachVehicleImages(ride);
+    const ridePayload: any = ride ? mapRide(ride) : null;
 
     res.json({
       role: user.role,
@@ -215,7 +204,7 @@ router.get("/me/active", requireAuth, async (req: AuthRequest, res: Response) =>
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data
@@ -231,6 +220,9 @@ router.get("/me/active", requireAuth, async (req: AuthRequest, res: Response) =>
       [user.id, user.id]
     );
 
+    // Same single source of truth as /me/active-state: the rider's live trip card
+    // is fed by THIS endpoint, so the approved photo must be attached here too.
+    await attachVehicleImages(ride);
     res.json({ ride: mapRide(ride) });
   } catch (err: any) {
     console.error("Active ride error:", err);
@@ -279,7 +271,7 @@ router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               rat.score AS rating_score, rat.comment AS rating_comment
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
@@ -296,6 +288,7 @@ router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
       [user.id, limit, offset]
     );
 
+    await attachVehicleImages(rows);
     res.json({
       rides: rows.map(mapRide),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
@@ -351,7 +344,7 @@ router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) =>
     const rides = await query(
       `SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
@@ -361,6 +354,7 @@ router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) =>
       [user.id]
     );
 
+    await attachVehicleImages(rides);
     res.json({ rides: rides.map(mapRide) });
   } catch (err: any) {
     console.error("Scheduled rides error:", err);
@@ -376,7 +370,7 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
               r.route_data
@@ -390,6 +384,7 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     );
 
     if (!ride) { res.status(404).json({ error: "Ride not found" }); return; }
+    await attachVehicleImages(ride);
     res.json({ ride: mapRide(ride) });
   } catch (err: any) {
     console.error("Ride detail error:", err);

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { query, queryOne, execute } from "../config/database";
+import { attachVehicleImages } from "../services/vehicleImages";
 
 const router = Router();
 
@@ -38,11 +39,13 @@ router.get("/:token", async (req: Request, res: Response) => {
       return;
     }
 
+    // The shared photo resolver owns the answer, so a public share link can never
+    // disagree with what the rider's own app is showing.
     const ride = await queryOne<any>(
       `SELECT r.id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
               r.destination_address, r.destination_lat, r.destination_lng, r.created_at,
               u.full_name AS driver_name,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, (SELECT vi.image_url FROM vehicle_images vi WHERE vi.status='approved' AND lower(vi.model)=lower(dp.vehicle_model) AND lower(vi.colour)=lower(dp.vehicle_color) ORDER BY (lower(vi.make)=lower(dp.vehicle_make)) DESC, vi.approved_at DESC NULLS LAST LIMIT 1) AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading
        FROM rides r
        LEFT JOIN users u ON u.id = r.driver_id
@@ -61,6 +64,7 @@ router.get("/:token", async (req: Request, res: Response) => {
       [evt.ride_id]
     );
 
+    await attachVehicleImages(ride);
     res.json({
       ride: {
         id: ride.id,
@@ -74,6 +78,7 @@ router.get("/:token", async (req: Request, res: Response) => {
         vehicleMake: ride.vehicle_make,
         vehicleModel: ride.vehicle_model,
         vehicleColor: ride.vehicle_color,
+        vehicleImageUrl: ride.vehicle_image_url,
         licensePlate: ride.license_plate,
         driverLat: ride.driver_lat != null ? Number(ride.driver_lat) : null,
         driverLng: ride.driver_lng != null ? Number(ride.driver_lng) : null,
