@@ -125,11 +125,113 @@ tested for membership, so a 2019 A4 gets `Audi_A4_2016-2019_White` and a 2025 A5
 deciding which image wins; `--selftest` proves it against all 152 entries and prints
 `✓ self-test passed`.
 
+## Only photographed cars can be picked, and the colour silhouette is gone (`ad06243`)
+
+The rider can only see a car photo if the driver's car has an approved image, so the
+picker now offers exactly what the library can serve. `GET /api/drivers/vehicle-catalogue`
+builds its makes/models from `vehicle_images` (`status='approved'`, `image_url IS NOT
+NULL`, `colour='white'`) instead of the static catalogue, which offered 24 makes / 150+
+models while only 126 models had a picture - every other pick fell through to the SVG.
+Now every car a driver can select resolves to a real photo; there is nothing left to
+offer that cannot be served. Colours, body types and fallbacks still come from the static
+catalogue, and it is also the failure fallback, so the dropdown can never come back
+empty.
+
+Live library: **152 approved white rows, 27 makes, 126 models.** Model tokens come back
+as labels (`polo-hatch` -> `Polo Hatch`); they round-trip through the server's
+`normToken()` on save, so no driver-app change was needed and the stored model still
+matches exactly.
+
+### Year: proven, not asserted
+
+`pickBestWhiteRow()` uses the year ONLY as a tie-breaker (exact model > variant, then
+"a stated range that covers it", then the nearest range start, then the newest approval).
+It is never a filter, so no year can stop an image being served. Two commands prove it:
+
+```bash
+cd server
+node _cat_test.mjs     # 152 library pairs -> 27 makes / 126 models
+                       # 0 missing, 0 bad round-trips, 0 offered without an image   PASS
+node _year_test.mjs    # 152 cars x 13 years (1990..9999, null, undefined) = 1976
+                       # resolutions, 0 failures; + 104 generic-model lookups = 0     PASS
+```
+
+### The coloured silhouette is gone
+
+`figma-ui/src/components/vehicle/VehicleImage.tsx` no longer paints the body layer in the
+car's colour - it is always `GENERIC_CAR_HEX` (neutral grey). A red car drawn where a
+photo belongs reads as "this is your driver's car" rather than "we have no photo of it";
+grey is unmistakably a placeholder, and the card's own text still names the real colour,
+make and model. The `colour` prop was removed so a colour cannot be passed in by mistake,
+and `DriverVehicleCard` now falls back to the placeholder when a photo URL fails to load
+instead of showing a broken image frame.
+
+Found while doing this: the `missing` prop was documented as "no vehicle data at all ->
+neutral grey generic car" but was never referenced in the component, so a car with no
+data at all rendered SILVER. The prop and the bug are both gone.
+
+`figma-ui/src/assets/vehiclePhotos.json` is **EMPTY (0 entries)**, so the server-resolved
+`vehicle_image_url` is the only photo path in practice; the bundle lookup is kept as
+documented dead code (the offline path if that generator is ever run again).
+## The library cars are now KNOWN cars, not guessed ones (`d7cf8c7`)
+
+Pruning the picker to the image library exposed something the library had been hiding:
+**81 of those 126 cars were not in the static catalogue at all**. `resolveBodyType()`
+falls back to hatchback and `resolveCategory()` then returns "economy", so a Toyota
+Hiace, a BMW 5 Series or a Tesla Model Y would have been offered and then TIERED and
+drawn as an economy hatchback. None of those cars could be picked before the pruning,
+so this was a bug the pruning would have introduced.
+
+1. `norm()` now treats `-` and `_` as a space. The same car is "3 Series" in the
+   catalogue and "3-series" in the DB (`normToken` on save), and the two never matched:
+
+       findModel("BMW", "3-series")    before: null       -> guessed hatchback / economy
+                                       after:  "3 Series"  -> sedan / comfort
+
+   The same bug affected the driver app's bundled list, which has offered "BMW 3 Series"
+   and "Mercedes C-Class" since it was written.
+
+2. The catalogue gained those 81 cars and the 9 makes they arrived with: **Bajaj, Byd,
+   Chevrolet, Citroen, Lexus, Maxus, MG, Tesla, Volvo**. It is now 32 makes / 179 models.
+   Categories follow the file's existing rule (bakkie/minibus/suv -> xl, sedan ->
+   comfort, hatchback -> economy), so `category` is written only where it differs.
+
+   The dropdown also uses the catalogue's own spellings now, so a driver reads "XC90",
+   "BR-V", "ZS EV", "S-Presso" instead of the slug-prettifier's "Xc90", "Br V" and so on.
+   A variant keeps its own label: polo-hatch stays "Polo Hatch".
+
+Every check, all PASS:
+
+```bash
+cd server
+node _gen_fallback.mjs --check    126 offerable cars, 126 KNOWN, 0 guessed        PASS
+node _cat_test.mjs                126 models, 0 missing, 0 bad round-trips        PASS
+node _year_test.mjs               1976 car/year resolutions, 0 failures           PASS
+node _catalogue_live.mjs --local  0 offered without a photo, 0 photos un-offered  PASS
+node _cat_show.mjs                shape + tier table for a sample of cars
+```
+
+Known data wart, left in place and commented in the file: the Car DB has a
+`volkswagen|v-class` row that is really a Mercedes. It is listed under Volkswagen only
+so the nonsense car still gets a sane shape and tier - delete that one row in the admin
+review page when convenient.
+
+### The driver app's offline list (`vura-driver` `93b1bdc`)
+
+`VehicleDetails.tsx` falls back to a bundled `FALLBACK_ROWS` when the endpoint cannot be
+reached, and that list was still the original "most common SA cars" short list - so a
+driver on a flaky connection could pick a car with no photo and the rider got the
+placeholder. It is now the same 126 library cars, generated from the same source, so the
+online and offline lists cannot disagree. Regenerate with `_gen_fallback.mjs` and
+`_patch_fallback.mjs` after importing photos.
+
+A driver APK rebuild is needed for that (offline path only). The ONLINE picker needed no
+app change at all - it always came from the server.
 ## Run the deploy (AWS CloudShell)
 
 ```bash
 cd ~/vura-rider && git pull --ff-only
-git log --oneline -1          # must print 3e480e7
+git log --oneline -1          # must print d7cf8c7
 bash deploy/deploy.sh vura-rider-prod
 ```
 
