@@ -19,9 +19,10 @@
  *
  * WHAT IT DOES PER FILE
  *   1. parses make / model / "2016-2019" / colour / variant out of the filename,
- *   2. keeps WHITE files only — every colour a driver picks resolves to the white
- *      model (see resolveVehicleImage on the server),
- *   3. within one make|model|range keeps ONE file, the best variant,
+ *   2. keeps EVERY palette colour — one row per make|model|range|colour, so a driver
+ *      who picks red is served the red model of his car. White is still imported and
+ *      is still the fallback when a colour has no render yet (see resolveVehicleImage),
+ *   3. within one make|model|range|colour keeps ONE file, the best variant,
  *   4. POSTs the ORIGINAL bytes to /api/admin/vehicle-images/seed with
  *      process:true (the server runs the standard key-out/trim/900x560/WebP-under-
  *      80KB pipeline, so an import looks exactly like a fetched photo) and
@@ -52,12 +53,50 @@ const DRY = Boolean(arg('dry', false))
 const DIR = String(arg('dir', DEFAULT_DIR))
 const API = String(arg('api', process.env.VURA_API || DEFAULT_API)).replace(/\/+$/, '')
 const PASSWORD = String(arg('password', process.env.CARSXE_ADMIN_PASSWORD || ''))
+/**
+ * --white-only restores the pre-colour behaviour (import just the white models).
+ * Kept because it is the safe switch for a folder that only holds originals.
+ */
+const WHITE_ONLY = Boolean(arg('white-only', false))
 
-/** The colours the DB names in filenames. Anything else is treated as a colour. */
+/** Colour words that may appear in a filename. Anything else falls through to
+ * parseName's "first leftover token" rule, but only the palette below is importable. */
 const COLOURS = [
   'white', 'black', 'silver', 'grey', 'gray', 'blue', 'red', 'green',
   'orange', 'brown', 'gold', 'beige', 'yellow', 'maroon', 'purple', 'bronze', 'teal',
 ]
+
+/**
+ * The 12 colours the APP can ask for — kept in step with
+ * server/src/data/vehicleCatalogue.ts (COLOURS) and
+ * figma-ui/src/components/vehicle/palette.ts (CAR_COLOURS).
+ *
+ * A driver's typed colour is normalised by colourName() on the server, so these are
+ * the only values that can EVER reach a lookup. Importing an off-palette colour would
+ * add a row no driver can match, so it is reported rather than uploaded.
+ */
+const PALETTE = [
+  'white', 'black', 'silver', 'grey', 'red', 'blue',
+  'green', 'brown', 'gold', 'orange', 'yellow', 'beige',
+]
+
+/** Filename spellings that mean a palette colour. */
+const COLOUR_ALIAS = {
+  gray: 'grey',
+  charcoal: 'grey',
+  chrome: 'silver',
+  maroon: 'brown',
+  champagne: 'gold',
+  cream: 'beige',
+  tan: 'beige',
+}
+
+/** A filename colour -> the palette name the app uses, or null when off-palette. */
+function canonicalColour(raw) {
+  const s = String(raw || '').trim().toLowerCase()
+  const c = COLOUR_ALIAS[s] || s
+  return PALETTE.includes(c) ? c : null
+}
 
 /** Marks a variant of the same car, never a different car. */
 const VARIANT = /^(v\d+|recolored|recoloured|final|new|fixed)$/i
@@ -136,9 +175,11 @@ function yearFromRange(yearRange) {
  * Turns the folder into the exact list of rows to import: one WHITE image per
  * make|model|production-range, plus everything rejected and why.
  */
-function buildPlan(dir) {
+function buildPlan(dir, opts = {}) {
+  const whiteOnly = Boolean(opts.whiteOnly)
   const files = fs.readdirSync(dir).filter((f) => IMAGE_EXT.test(f)).sort()
   const skippedColour = []
+  const offPalette = []
   const unreadable = []
   const groups = new Map()
 
@@ -148,15 +189,26 @@ function buildPlan(dir) {
       unreadable.push(file)
       continue
     }
-    const colour = String(parsed.colour || '').toLowerCase()
-    if (colour !== 'white') {
-      skippedColour.push(`${file}  (${parsed.colour || 'no colour in name'})`)
+    // An explicit colour word is required. A file named Make_Model_2016-2019.jpg has
+    // none, and guessing "white" for it could file a coloured photo under the white
+    // key — the one mistake the whole DB is built to avoid.
+    if (!parsed.colour) {
+      skippedColour.push(`${file}  (no colour in name)`)
+      continue
+    }
+    const colour = canonicalColour(parsed.colour)
+    if (!colour) {
+      offPalette.push(`${file}  (${parsed.colour})`)
+      continue
+    }
+    if (whiteOnly && colour !== 'white') {
+      skippedColour.push(`${file}  (${parsed.colour})`)
       continue
     }
     const make = normToken(parsed.make)
     const model = normToken(parsed.model)
     const range = parsed.yearRange || 'any'
-    const key = `${make}|${model}|${range}|white`
+    const key = `${make}|${model}|${range}|${colour}`
     const rank = variantRank(parsed.variants)
     const prev = groups.get(key)
     if (!prev || rank > prev.rank) {
@@ -166,9 +218,10 @@ function buildPlan(dir) {
         file,
         make,
         model,
+        colour,
         yearRange: parsed.yearRange,
         year: yearFromRange(parsed.yearRange),
-        replaced: prev ? prev.file : null,
+        replaced: prev ? [prev.file, prev.replaced].filter(Boolean).join(', ') : null,
       })
     } else {
       prev.replaced = prev.replaced ? `${prev.replaced}, ${file}` : file
@@ -176,7 +229,7 @@ function buildPlan(dir) {
   }
 
   const entries = Array.from(groups.values()).sort((a, b) => a.key.localeCompare(b.key))
-  return { files, entries, skippedColour, unreadable }
+  return { files, entries, skippedColour, offPalette, unreadable }
 }
 
 function human(bytes) {
@@ -199,8 +252,8 @@ async function seedOne(entry, dir) {
       model: entry.model,
       year: entry.year,
       yearRange: entry.yearRange,
-      colour: 'white',
-      licenceNote: 'Car DB: ' + entry.file,
+      colour: entry.colour,
+      licenceNote: `Car DB: ${entry.colour} (${entry.file})`,
       image: bytes.toString('base64'),
       process: true,
       approve: true,
@@ -214,8 +267,8 @@ async function seedOne(entry, dir) {
 /**
  * --selftest: proves the matching against EVERY car in the folder using the
  * compiled server service — "if a driver saves this exact car, does he get this
- * exact image?" — plus the alias and near-year cases that are easy to get wrong.
- * No network, no database, no upload.
+ * exact image?" — plus the alias, near-year and colour-preference cases that are
+ * easy to get wrong. No network, no database, no upload.
  */
 function selfTest(plan) {
   const svc = require(path.join(__dirname, '..', 'server', 'dist', 'services', 'vehicleImages.js'))
@@ -274,14 +327,32 @@ function selfTest(plan) {
     say(got === want, `${make} ${model} ${year}`, got)
   }
 
-  console.log('\n— the answer cannot depend on the colour the driver chose')
-  const withColour = svc.pickBestWhiteRow(rows, { model: 'Etios', year: 2016, colour: 'Red' })
-  const without = svc.pickBestWhiteRow(rows, { model: 'Etios', year: 2016 })
-  say(
-    Boolean(withColour) && Boolean(without) && withColour.row.cache_key === without.row.cache_key,
-    'a colour in the request changes nothing',
-    withColour ? withColour.row.cache_key : 'none'
-  )
+  console.log('\n— the driver\'s colour IS honoured, and white is the fallback')
+  const mk = (colour) => ({
+    cache_key: `toyota|etios|2010-2018|${colour}`,
+    make: 'toyota',
+    model: 'etios',
+    year: 2010,
+    year_range: '2010-2018',
+    colour,
+    image_url: `https://example.test/${colour}.webp`,
+    approved_at: '2026-10-01T00:00:00.000Z',
+  })
+  const three = [mk('red'), mk('white'), mk('blue')]
+  const red = svc.pickBestWhiteRow(three, { model: 'Etios', year: 2016, colour: 'Red' })
+  say(red && red.row.colour === 'red', 'a RED driver gets the RED photo', red ? red.row.cache_key : 'none')
+
+  const blue = svc.pickBestWhiteRow(three, { model: 'Etios', year: 2016, colour: 'blue' })
+  say(blue && blue.row.colour === 'blue', 'a lowercase "blue" driver gets the BLUE photo', blue ? blue.row.cache_key : 'none')
+
+  const gold = svc.pickBestWhiteRow(three, { model: 'Etios', year: 2016, colour: 'Gold' })
+  say(gold && gold.row.colour === 'white', 'a GOLD driver with no gold render falls back to WHITE', gold ? gold.row.cache_key : 'none')
+
+  const fallback = svc.pickBestWhiteRow([mk('white'), mk('blue')], { model: 'Etios', year: 2016, colour: 'Red' })
+  say(fallback && fallback.row.colour === 'white', 'a RED driver never gets the BLUE photo', fallback ? fallback.row.cache_key : 'none')
+
+  const blind = svc.pickBestWhiteRow(three, { model: 'Etios', year: 2016 })
+  say(blind && blind.row.colour === 'white', 'no colour in the request still means WHITE', blind ? blind.row.cache_key : 'none')
 
   console.log(bad ? `\n✗ self-test FAILED (${bad} problem(s))\n` : '\n✓ self-test passed\n')
   process.exit(bad ? 1 : 0)
@@ -295,26 +366,33 @@ async function main() {
   console.log(`\nCar DB   : ${DIR}`)
   console.log(`Server   : ${API}${DRY ? '   (DRY RUN — nothing will be uploaded)' : ''}\n`)
 
-  const plan = buildPlan(DIR)
+  const plan = buildPlan(DIR, { whiteOnly: WHITE_ONLY })
   const only = arg('only', null)
   const entries = only ? plan.entries.filter((e) => e.key.includes(String(only))) : plan.entries
 
+  const byColour = new Map()
+  for (const e of entries) byColour.set(e.colour, (byColour.get(e.colour) || 0) + 1)
+
   console.log(`files in folder      : ${plan.files.length}`)
-  console.log(`to import (white)    : ${entries.length}`)
-  console.log(`skipped, not white   : ${plan.skippedColour.length}`)
+  console.log(
+    `to import            : ${entries.length}` +
+      (byColour.size ? `   (${[...byColour.entries()].map(([c, n]) => `${c} ${n}`).join(', ')})` : '')
+  )
+  console.log(`skipped              : ${plan.skippedColour.length}`)
+  console.log(`colour off palette   : ${plan.offPalette.length}`)
   console.log(`unreadable names     : ${plan.unreadable.length}`)
   console.log(`superseded variants  : ${plan.entries.filter((e) => e.replaced).length} car(s) had extra copies\n`)
 
-  if (plan.skippedColour.length) {
-    console.log('— not imported, no white model of that car in the DB:')
-    for (const s of plan.skippedColour) console.log('    ' + s)
+  const list = (label, arr) => {
+    if (!arr.length) return
+    console.log(`— ${label}`)
+    for (const s of arr.slice(0, 40)) console.log('    ' + s)
+    if (arr.length > 40) console.log(`    …and ${arr.length - 40} more`)
     console.log('')
   }
-  if (plan.unreadable.length) {
-    console.log('— name not in Make_Model_... form, skipped:')
-    for (const s of plan.unreadable) console.log('    ' + s)
-    console.log('')
-  }
+  list('not imported', plan.skippedColour)
+  list('colour not in the app palette — add it to palette.ts + vehicleCatalogue.ts first', plan.offPalette)
+  list('name not in Make_Model_... form, skipped', plan.unreadable)
 
   if (arg('selftest', false)) selfTest(plan)
 
@@ -360,7 +438,8 @@ async function main() {
     api: API,
     imported: ok,
     failed,
-    skippedNotWhite: plan.skippedColour,
+    skipped: plan.skippedColour,
+    offPalette: plan.offPalette,
     unreadable: plan.unreadable,
   }
   const manifestPath = path.join(manifestDir, 'car-db-manifest.json')

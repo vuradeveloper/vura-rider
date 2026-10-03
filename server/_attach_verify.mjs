@@ -18,6 +18,15 @@ const RANGE = generationRange(2017);
 const KEY = `${MAKE}|${MODEL}|${RANGE}|white`;
 const URL = "https://api.ridevura.com/api/vehicle-images/attach-test-white.webp";
 
+// A second car that HAS a coloured render, so colour preference can be proved.
+const C_MODEL = "attachtestmodel-coloured";
+const C_RANGE = generationRange(2017);
+const RED_KEY = `${MAKE}|${C_MODEL}|${C_RANGE}|red`;
+const WHITE_KEY = `${MAKE}|${C_MODEL}|${C_RANGE}|white`;
+const BLUE_KEY = `${MAKE}|${C_MODEL}|${C_RANGE}|blue`;
+const RED_URL = "https://api.ridevura.com/api/vehicle-images/attach-test-red.webp";
+const WHITE_URL = "https://api.ridevura.com/api/vehicle-images/attach-test-white2.webp";
+
 let bad = 0;
 const say = (ok, label, detail = "") => {
   if (!ok) bad += 1;
@@ -65,8 +74,39 @@ try {
   const noCar = {};
   await attachVehicleImages(noCar);
   say(noCar.vehicle_image_url === undefined, "attachVehicleImages({}) does not throw");
+
+  console.log("\n— a driver who picked a colour the car HAS a render for")
+  for (const [k, colour, url] of [
+    [RED_KEY, "red", RED_URL],
+    [WHITE_KEY, "white", WHITE_URL],
+  ]) {
+    await execute("DELETE FROM vehicle_images WHERE cache_key = $1", [k]);
+    await execute(
+      `INSERT INTO vehicle_images (cache_key, make, model, year, year_range, colour, status, image_url, approved_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'approved',$7,NOW())`,
+      [k, MAKE, C_MODEL, 2017, C_RANGE, colour, url]
+    );
+  }
+
+  const red = await resolveVehicleImage({ make: MAKE, model: C_MODEL, year: 2017, colour: "Red" });
+  say(red.url === RED_URL, "a RED driver gets the RED photo", String(red.url));
+  say(red.matched === "exact", "…and it is an exact colour match", String(red.matched));
+
+  const green = await resolveVehicleImage({ make: MAKE, model: C_MODEL, year: 2017, colour: "Green" });
+  say(green.url === WHITE_URL, "a GREEN driver (no green render) falls back to WHITE", String(green.url));
+
+  // A colour must never leak across: with only red + white rows, a BLUE driver has to
+  // get the white fallback, never the red car.
+  const blue2 = await resolveVehicleImage({ make: MAKE, model: C_MODEL, year: 2017, colour: "Blue" });
+  say(blue2.url === WHITE_URL, "a BLUE driver never gets the RED photo", String(blue2.url));
+
+  const carRow = { vehicle_make: MAKE, vehicle_model: C_MODEL, vehicle_year: 2017, vehicle_color: "Red" };
+  await attachVehicleImages(carRow);
+  say(carRow.vehicle_image_url === RED_URL, "the ride row carries the RED photo", String(carRow.vehicle_image_url));
 } finally {
-  await execute("DELETE FROM vehicle_images WHERE cache_key = $1", [KEY]).catch(() => undefined);
+  for (const k of [KEY, RED_KEY, WHITE_KEY, BLUE_KEY]) {
+    await execute("DELETE FROM vehicle_images WHERE cache_key = $1", [k]).catch(() => undefined);
+  }
 }
 
 console.log(bad ? `\n✗ ${bad} problem(s)\n` : "\n✓ attachVehicleImages verified against real Postgres\n");

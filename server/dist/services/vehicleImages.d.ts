@@ -95,6 +95,8 @@ export interface WhiteRow {
     model: string | null;
     year: number | null;
     year_range: string | null;
+    /** "white" | "red" | … Absent is treated as white (older fixtures omit it). */
+    colour?: string | null;
     image_url: string | null;
     approved_at: string | null;
 }
@@ -103,17 +105,23 @@ export interface WhitePick {
     score: number;
 }
 /**
- * Chooses the ONE white row that best answers a driver's model and year. This is
+ * Chooses the ONE row that best answers a driver's colour, model and year. This is
  * the whole "which photo does this driver see" decision, kept as a pure function
  * so it can be tested against every car in the DB without a database.
  *
- * Order: exact model beats a variant; a stated production range that covers the
- * year beats one that does not; the nearest such range beats a looser one; and
- * only then does the newest approval win, exactly as it always did.
+ * ORDER: the driver's own colour first, then white as the fallback. A row of any
+ * OTHER colour is never eligible, so a driver who picked red can never be shown a
+ * blue car. Inside one colour: exact model beats a variant; a stated production
+ * range that covers the year beats one that does not; the nearest such range beats
+ * a looser one; and only then does the newest approval win, exactly as it always did.
+ *
+ * Called WITHOUT `want.colour` only white rows are eligible — the pre-colour
+ * behaviour, which is what the importer self-test and the year test rely on.
  */
 export declare function pickBestWhiteRow(rows: WhiteRow[], want: {
     model: string;
     year?: unknown;
+    colour?: string | null;
 }): WhitePick | null;
 export interface ResolvedVehicleImage {
     url: string | null;
@@ -121,27 +129,34 @@ export interface ResolvedVehicleImage {
     matched: "exact" | "model-colour" | "model" | "none";
 }
 /**
- * Fallback order, resolved server-side so every client agrees. Colour plays no
- * part in any step: every query reads white rows only, so a driver who picked
- * black, red or purple is served the white model of his car.
+ * Fallback order, resolved server-side so every client agrees.
  *
- *   1. the exact white row for this make|model|generation
- *   2. same make, strongest model score, preferring a stated production range
- *      that actually covers the driver's year
+ *   1. the exact row for this make|model|generation|COLOUR
+ *   2. same make, the driver's colour (or white as the fallback), strongest model
+ *      score, preferring a stated production range that covers the driver's year
  *   3. none -> the app draws the body-type icon, then the generic car
+ *
+ * A row of another colour is NEVER eligible, so a driver who picked red is shown a
+ * red car — or the white model of it while a red render is still being made — and
+ * never the blue one. Colour has to come first here: a red Polo and a blue Polo are
+ * different photographs of the same car, not two names for one row.
  */
 export declare function resolveVehicleImage(v?: VehicleLike | null): Promise<ResolvedVehicleImage>;
 /**
- * Every make|model the approved white library can ACTUALLY serve.
+ * Every make|model the approved library can ACTUALLY serve.
  *
  * This is what stops the driver app offering cars that have no photo: the dropdown is
  * built from this list, so whatever a driver picks is guaranteed to resolve to an
  * image. Before this the dropdown came from the static catalogue (24 makes / 150+
  * models) while only ~126 models had a picture, so the rest fell through to the SVG.
  *
- * Colour is ignored (every row here is white) and `year_range` is returned purely as
- * information — see pickBestWhiteRow: the year only ever BREAKS A TIE, it can never
- * make a lookup fail.
+ * This list stays WHITE on purpose, even now that coloured renders exist: white is
+ * the fallback every colour can fall back TO, so a car listed here is guaranteed to
+ * show a photo whatever colour the driver picks. A car that only had a red render
+ * would leave every other colour with nothing.
+ *
+ * `year_range` is returned purely as information — see pickBestWhiteRow: the year
+ * only ever BREAKS A TIE, it can never make a lookup fail.
  */
 export interface CataloguePair {
     make: string;

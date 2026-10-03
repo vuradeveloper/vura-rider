@@ -81,8 +81,8 @@ exports.noteDriverVehicle = noteDriverVehicle;
 //
 // After that every driver with the same car is served the cached, approved row —
 // including a different model year inside the same generation (a 2019 Picanto
-// reuses the 2017-2020 image) and a different colour (fallback, while a colour
-// fetch is queued).
+// reuses the 2017-2020 image) and, when the car has no render in the colour the
+// driver picked, the white model of it.
 //
 // Statuses: queued -> pending -> approved | rejected | none_found
 // ─────────────────────────────────────────────────────────────────────────────
@@ -308,24 +308,33 @@ function modelScore(want, have) {
     return 0;
 }
 /**
- * Chooses the ONE white row that best answers a driver's model and year. This is
+ * Chooses the ONE row that best answers a driver's colour, model and year. This is
  * the whole "which photo does this driver see" decision, kept as a pure function
  * so it can be tested against every car in the DB without a database.
  *
- * Order: exact model beats a variant; a stated production range that covers the
- * year beats one that does not; the nearest such range beats a looser one; and
- * only then does the newest approval win, exactly as it always did.
+ * ORDER: the driver's own colour first, then white as the fallback. A row of any
+ * OTHER colour is never eligible, so a driver who picked red can never be shown a
+ * blue car. Inside one colour: exact model beats a variant; a stated production
+ * range that covers the year beats one that does not; the nearest such range beats
+ * a looser one; and only then does the newest approval win, exactly as it always did.
+ *
+ * Called WITHOUT `want.colour` only white rows are eligible — the pre-colour
+ * behaviour, which is what the importer self-test and the year test rely on.
  */
 function pickBestWhiteRow(rows, want) {
     const model = normToken(want.model);
     const year = Number(want.year);
+    const wantColour = want.colour ? slug(want.colour) : WHITE;
     const scored = rows
         .map((row) => {
         const start = Number(row.year);
         const covers = rangeCoversYear(row.year_range, want.year);
+        // 1 = the driver's own colour, 0 = the white fallback, -1 = not eligible.
+        const rowColour = slug(row.colour) || WHITE;
         return {
             row,
             score: modelScore(model, row.model),
+            colour: rowColour === wantColour ? 1 : rowColour === WHITE ? 0 : -1,
             covers: covers ? 1 : 0,
             // When the driver types a GENERIC model ("Polo") and the DB only has
             // variants ("polo-hatch", "polo-vivo", "polo-sedan"), the score ties and
@@ -337,10 +346,11 @@ function pickBestWhiteRow(rows, want) {
             when: row.approved_at ? Date.parse(row.approved_at) || 0 : 0,
         };
     })
-        .filter((c) => c.score > 0 && c.row.image_url);
+        .filter((c) => c.score > 0 && c.colour >= 0 && c.row.image_url);
     if (!scored.length)
         return null;
-    scored.sort((a, b) => b.score - a.score ||
+    scored.sort((a, b) => b.colour - a.colour ||
+        b.score - a.score ||
         b.covers - a.covers ||
         b.near - a.near ||
         b.when - a.when ||
@@ -348,14 +358,17 @@ function pickBestWhiteRow(rows, want) {
     return { row: scored[0].row, score: scored[0].score };
 }
 /**
- * Fallback order, resolved server-side so every client agrees. Colour plays no
- * part in any step: every query reads white rows only, so a driver who picked
- * black, red or purple is served the white model of his car.
+ * Fallback order, resolved server-side so every client agrees.
  *
- *   1. the exact white row for this make|model|generation
- *   2. same make, strongest model score, preferring a stated production range
- *      that actually covers the driver's year
+ *   1. the exact row for this make|model|generation|COLOUR
+ *   2. same make, the driver's colour (or white as the fallback), strongest model
+ *      score, preferring a stated production range that covers the driver's year
  *   3. none -> the app draws the body-type icon, then the generic car
+ *
+ * A row of another colour is NEVER eligible, so a driver who picked red is shown a
+ * red car — or the white model of it while a red render is still being made — and
+ * never the blue one. Colour has to come first here: a red Polo and a blue Polo are
+ * different photographs of the same car, not two names for one row.
  */
 async function resolveVehicleImage(v) {
     await ensureVehicleImageTables();
@@ -365,28 +378,32 @@ async function resolveVehicleImage(v) {
     const year = v?.year ?? v?.vehicle_year;
     if (!make || !model)
         return { url: null, cacheKey, matched: "none" };
+    // The driver's own colour, or white when he did not state one.
+    const colour = slug(v?.colour || v?.vehicle_color) || WHITE;
     const exact = await (0, database_1.queryOne)(`SELECT image_url FROM vehicle_images
-      WHERE cache_key = $1 AND LOWER(colour) = $2 AND status = 'approved' AND image_url IS NOT NULL`, [cacheKey, WHITE]);
+      WHERE cache_key = $1 AND LOWER(colour) = $2 AND status = 'approved' AND image_url IS NOT NULL`, [cacheKey, colour]);
     if (exact?.image_url)
         return { url: exact.image_url, cacheKey, matched: "exact" };
-    // Every white row for this make, scored here rather than in SQL: the range label
-    // is free text ("2017-Present"), so "does it cover this year" is not an
-    // indexable predicate - and the candidate set is a handful of rows.
+    // Every approved row for this make — ALL colours come back and the colour is
+    // chosen by pickBestWhiteRow, so this is still ONE query. The range label is free
+    // text ("2017-Present"), so "does it cover this year" is not an indexable predicate
+    // anyway, and the candidate set is a handful of rows.
     const rawMakeSlug = normToken(v?.make || v?.vehicle_make);
     const makes = Array.from(new Set([make, canonicalMake(rawMakeSlug), rawMakeSlug].filter(Boolean)));
-    const rows = await (0, database_1.query)(`SELECT cache_key, make, model, year, year_range, image_url, approved_at
+    const rows = await (0, database_1.query)(`SELECT cache_key, make, model, year, year_range, colour, image_url, approved_at
        FROM vehicle_images
-      WHERE make = ANY($1::text[]) AND LOWER(colour) = $2
-        AND status = 'approved' AND image_url IS NOT NULL`, [makes, WHITE]);
+      WHERE make = ANY($1::text[])
+        AND status = 'approved' AND image_url IS NOT NULL`, [makes]);
     if (!rows.length)
         return { url: null, cacheKey, matched: "none" };
-    const pick = pickBestWhiteRow(rows, { model, year });
+    const pick = pickBestWhiteRow(rows, { model, year, colour });
     if (!pick)
         return { url: null, cacheKey, matched: "none" };
+    const pickedColour = slug(pick.row.colour) || WHITE;
     return {
         url: pick.row.image_url,
         cacheKey,
-        matched: pick.score >= 100 ? "model-colour" : "model",
+        matched: pickedColour === colour ? "model-colour" : "model",
     };
 }
 async function approvedVehicleCatalogue() {
@@ -1145,8 +1162,9 @@ async function noteDriverVehicle(v) {
     // A miss is no longer a failed fetch — the car is not in the Car DB. Name the
     // exact key so the gap can be filled deliberately, instead of guessing at a
     // driver's description of a car that shows no photo.
-    console.warn(`[vehicleImages] Car DB has no white image for ${resolved.cacheKey} — add ` +
-        `Make_Model_YearRange_White.jpg and re-run scripts/import-car-db.js`);
+    console.warn(`[vehicleImages] Car DB has no image for ${resolved.cacheKey} — add ` +
+        `Make_Model_YearRange_${(v?.colour || "White").toString().replace(/^\w/, (c) => c.toUpperCase())}.png ` +
+        `(or the White one) and re-run scripts/import-car-db.js`);
     return resolved;
 }
 //# sourceMappingURL=vehicleImages.js.map
