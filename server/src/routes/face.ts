@@ -1,5 +1,5 @@
 import { Router, type Response } from "express";
-import { query, execute } from "../config/database";
+import { query, execute, withTransaction } from "../config/database";
 import { requireAuth, type AuthRequest } from "../middleware/auth";
 import { getObjectFromS3 } from "../lib/s3";
 import { toImageBuffer, compareFaceImages } from "../lib/phash";
@@ -40,14 +40,30 @@ function ensureFaceSchema(): Promise<void> {
       `);
       await execute("CREATE INDEX IF NOT EXISTS idx_face_verifications_driver ON face_verifications(driver_id)");
       await execute("CREATE INDEX IF NOT EXISTS idx_face_verifications_created ON face_verifications(created_at DESC)");
-      // the two new document types have to be storable too
-      await execute("ALTER TABLE driver_documents DROP CONSTRAINT IF EXISTS driver_documents_doc_type_check");
-      await execute(`
-        ALTER TABLE driver_documents ADD CONSTRAINT driver_documents_doc_type_check
-        CHECK (doc_type IN ('drivers_license','id_document','prdp','criminal_record',
-                            'license_disk','carscan_report','vehicle_scan',
-                            'profile_photo','face_scan'))
-      `);
+      // The two new document types have to be storable. The CHECK is swapped inside
+      // ONE transaction, so a failure can never leave the table with no constraint,
+      // and any older doc_type CHECK (whatever it is called) is replaced.
+      const checks = await query<{ conname: string; def: string }>(
+        `SELECT conname, pg_get_constraintdef(oid) AS def
+           FROM pg_constraint
+          WHERE conrelid = 'driver_documents'::regclass
+            AND contype = 'c'
+            AND pg_get_constraintdef(oid) LIKE '%doc_type%'`
+      );
+      const alreadyFine = checks.some((c) => c.def.includes("face_scan") && c.def.includes("profile_photo"));
+      if (!alreadyFine) {
+        await withTransaction(async (client) => {
+          for (const c of checks) {
+            await client.query(`ALTER TABLE driver_documents DROP CONSTRAINT IF EXISTS "${c.conname}"`);
+          }
+          await client.query(
+            `ALTER TABLE driver_documents ADD CONSTRAINT driver_documents_doc_type_check
+             CHECK (doc_type IN ('drivers_license','id_document','prdp','criminal_record',
+                                 'license_disk','carscan_report','vehicle_scan',
+                                 'profile_photo','face_scan'))`
+          );
+        });
+      }
     })().catch((err) => {
       schemaReady = null; // let the next request retry
       throw err;
