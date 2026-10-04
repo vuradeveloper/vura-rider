@@ -204,6 +204,7 @@ router.get("/me/active", requireAuth, async (req: AuthRequest, res: Response) =>
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
+              d.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,
@@ -271,6 +272,7 @@ router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
+              d.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               rat.score AS rating_score, rat.comment AS rating_comment
        FROM rides r
@@ -305,6 +307,10 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
     // Newest first so a fresh booking is NEVER hidden behind old stale
     // "searching" rides that nobody accepted. Only show rides younger than
     // 30 minutes so abandoned/stuck requests drop out automatically.
+    // Parked 'no_drivers' rides are listed on purpose: the driver app polls this
+    // endpoint every 2 seconds, and a ride that ran out of offers must still be
+    // visible (and claimable — services/dispatch.acceptRide allows a direct claim
+    // on 'no_drivers' when nobody else holds a live offer).
     // Also surfaces upcoming SCHEDULED rides so drivers can accept them
     // BEFORE the pickup time (driver pre-accept). Drivers see them with a
     // "Scheduled" badge and can claim them early â€” driver:ride:accept
@@ -315,7 +321,7 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
               CASE WHEN r.status = 'scheduled' THEN TRUE ELSE FALSE END AS is_scheduled
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
-       WHERE (r.status = 'searching' AND r.created_at > NOW() - INTERVAL '30 minutes')
+       WHERE (r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
           OR (r.status = 'scheduled' AND r.scheduled_at > NOW())
        ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END, r.created_at DESC
        LIMIT 20`
@@ -344,6 +350,7 @@ router.get("/scheduled", requireAuth, async (req: AuthRequest, res: Response) =>
     const rides = await query(
       `SELECT r.*,
               d.full_name AS driver_name, d.phone AS driver_phone,
+              d.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
@@ -370,6 +377,7 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               d.full_name AS driver_name, d.phone AS driver_phone,
+              d.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading,
               rat.score AS rating_score, rat.comment AS rating_comment,

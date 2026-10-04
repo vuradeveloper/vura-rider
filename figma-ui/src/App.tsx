@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import VehicleImage from './components/vehicle/VehicleImage'
+import VehicleImage, { resolveVehicleImage } from './components/vehicle/VehicleImage'
 import { colourNameOf } from './components/vehicle/palette'
 
 import DriverVehicleCard from './components/DriverVehicleCard'
@@ -1530,11 +1530,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
         {/* Driver â€” real name, rating, vehicle and plate from the ride row, plus
             working call / message / emergency actions. */}
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-11 h-11 rounded-full bg-[#EA4335] flex items-center justify-center overflow-hidden shrink-0">
-            <span className="text-[15px] font-bold text-white">
-              {String(driverName).split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase() || 'D'}
-            </span>
-          </div>
+          <DriverAvatar name={driverName} photo={ride?.driver_photo_url} size={44} />
           <div className="flex-1 min-w-0">
             <p className="text-[14px] font-semibold text-[#1A1A1A] truncate capitalize">{driverName}</p>
             <div className="flex items-center gap-1 mt-0.5">
@@ -1675,6 +1671,60 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   )
 }
 
+/**
+ * The driver's photo, straight from the DB.
+ *
+ * `photo` is ride.driver_photo_url, which the server fills from
+ * users.profile_photo_url — the column the driver app writes when the driver
+ * completes their face scan (POST /api/users/photo). It used to be an initials
+ * circle only, so the rider never saw who was actually driving; the initials
+ * remain purely as the fallback for a brand-new account with no photo yet.
+ */
+function DriverAvatar({ name, photo, size = 44 }: { name: string; photo?: string | null; size?: number }) {
+  const [broken, setBroken] = useState(false)
+  const fullName = String(name || 'Driver')
+  const initials =
+    fullName.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase() || 'D'
+  const url = !broken && photo ? String(photo) : ''
+  return (
+    <div
+      className="rounded-full bg-[#1A1A1A] flex items-center justify-center overflow-hidden shrink-0"
+      style={{ width: size, height: size }}
+    >
+      {url ? (
+        <img src={url} alt={fullName} className="w-full h-full object-cover" onError={() => setBroken(true)} />
+      ) : (
+        <span className="text-[15px] font-bold text-white">{initials}</span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The car that did THIS trip in the Activity list.
+ *
+ * The server attaches an approved photo to every history row
+ * (ride.vehicle_image_url, resolved by attachVehicleImages), so the list must
+ * show the real car — the neutral silhouette is only the last-resort fallback
+ * when no photo exists (or it fails to load).
+ */
+function TripCarPhoto({ row, size = 78 }: { row: any; size?: number }) {
+  const [broken, setBroken] = useState(false)
+  const spec = resolveVehicleImage(row)
+  if (spec.type === 'url' && !broken) {
+    return (
+      <img
+        src={spec.url}
+        alt="Vehicle"
+        className="shrink-0"
+        style={{ width: size, height: size, objectFit: 'contain' }}
+        onError={() => setBroken(true)}
+      />
+    )
+  }
+  return <VehicleImage bodyType={row?.vehicle_body_type || row?.body_type} size={size} />
+}
+
 function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) => void }) {
   const [rides, setRides] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -1741,10 +1791,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                     the ride at accept time, so it stays correct even after the driver
                     changes cars later. */}
                 <div className="flex items-center gap-3 pt-3">
-                  <VehicleImage
-                    bodyType={t.vehicle_body_type || t.body_type}
-                    size={78}
-                  />
+                  <TripCarPhoto row={t} size={78} />
                   <div className="min-w-0">
                     <p className="text-[14px] font-bold text-[#1A1A1A] tracking-[0.18em]"
                       style={{ fontFamily: 'JetBrains Mono, monospace' }}>
