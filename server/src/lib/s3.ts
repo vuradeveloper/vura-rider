@@ -41,12 +41,33 @@ export const DOCUMENT_TYPES = [
   "license_disk",
   "carscan_report",
   "vehicle_scan",
+  "profile_photo",
+  "face_scan",
 ] as const;
 
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
 
 export function isDocumentType(v: unknown): v is DocumentType {
   return typeof v === "string" && (DOCUMENT_TYPES as readonly string[]).includes(v);
+}
+
+/**
+ * Downloads an object from S3 into memory — used by face verification, which
+ * needs the enrolled scan's bytes to compare against the live selfie.
+ */
+export async function getObjectFromS3(key: string): Promise<Buffer> {
+  const result = await s3.send(
+    new GetObjectCommand({
+      Bucket: bucketRequired(),
+      Key: key,
+    })
+  );
+  const body = result.Body;
+  if (!body) throw new Error(`S3 object not found: ${key}`);
+  if (typeof (body as any).transformToByteArray === "function") {
+    return Buffer.from(await (body as any).transformToByteArray());
+  }
+  return Buffer.from((await (body as any).arrayBuffer?.()) ?? []);
 }
 
 const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024; // 15 MiB per document

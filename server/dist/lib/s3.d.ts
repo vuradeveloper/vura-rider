@@ -1,8 +1,13 @@
 import { S3Client } from "@aws-sdk/client-s3";
 declare const s3: S3Client;
-export declare const DOCUMENT_TYPES: readonly ["drivers_license", "id_document", "prdp", "criminal_record", "license_disk", "carscan_report", "vehicle_scan"];
+export declare const DOCUMENT_TYPES: readonly ["drivers_license", "id_document", "prdp", "criminal_record", "license_disk", "carscan_report", "vehicle_scan", "profile_photo", "face_scan"];
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
 export declare function isDocumentType(v: unknown): v is DocumentType;
+/**
+ * Downloads an object from S3 into memory — used by face verification, which
+ * needs the enrolled scan's bytes to compare against the live selfie.
+ */
+export declare function getObjectFromS3(key: string): Promise<Buffer>;
 /** Builds the S3 object key for a document.
  *  Layout: documents/{driverUserId}/{type}/{uuid}-{safeName} */
 export declare function documentKey(userId: string, type: DocumentType, fileName: string, id: string): string;

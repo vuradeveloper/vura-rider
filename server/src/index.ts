@@ -29,6 +29,7 @@ import emailRouter from "./routes/email";
 import shareRouter, { sharePage } from "./routes/share";
 import payoutsRouter from "./routes/payouts";
 import documentsRouter from "./routes/documents";
+import faceRouter from "./routes/face";
 import devLogsRouter from "./routes/devLogs";
 import devDispatchRouter from "./routes/devDispatch";
 import devDiagRouter from "./routes/devDiag";
@@ -184,6 +185,7 @@ app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);
 app.use("/api/documents", documentsRouter);
+app.use("/api/face", faceRouter);
 app.use("/api/email", emailRouter);
 
 // ── Public share tracking page ──

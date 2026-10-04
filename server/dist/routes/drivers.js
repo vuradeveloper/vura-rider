@@ -7,6 +7,7 @@ const dispatch_1 = require("../services/dispatch");
 const vehicleImages_1 = require("../services/vehicleImages");
 const vehicleCatalogue_1 = require("../data/vehicleCatalogue");
 const vehicleImages_2 = require("../services/vehicleImages");
+const tier_classifier_1 = require("../lib/tier-classifier");
 const router = (0, express_1.Router)();
 // GET /api/drivers/stats — Get driver statistics
 router.get("/stats", auth_1.requireAuth, async (req, res) => {
@@ -84,7 +85,7 @@ router.get("/nearby", async (req, res) => {
 router.patch("/profile", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
-        const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, vehicle_body_type } = req.body;
+        const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, vehicle_body_type, vehicle_fuel_type, vehicle_doors, vehicle_seats, vehicle_derivative } = req.body;
         // NORMALISE the car on the way in: plate uppercase without spaces, colour stored
         // as a palette NAME, and the body type + category DERIVED from make + model (a
         // driver — or a client — can never choose the shape of a catalogued car).
@@ -106,6 +107,14 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
         await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_vin VARCHAR(50)`).catch(() => { });
         await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS odometer_km INTEGER`).catch(() => { });
         await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS carscan_report_name VARCHAR(255)`).catch(() => { });
+        // the vehicle-tier columns the driver app now fills in (additive, self-healing)
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_body_type VARCHAR(30)`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_fuel_type VARCHAR(20)`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_doors INTEGER`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_seats INTEGER`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_derivative VARCHAR(100)`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tier VARCHAR(20)`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tiers JSONB DEFAULT '[]'::jsonb`).catch(() => { });
         const existing = await (0, database_1.queryOne)("SELECT id FROM driver_profiles WHERE user_id = $1", [user.id]);
         if (existing) {
             const updates = [];
@@ -169,6 +178,26 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
             if (carscan_report_name !== undefined) {
                 updates.push(`carscan_report_name = $${idx}`);
                 params.push(carscan_report_name);
+                idx++;
+            }
+            if (vehicle_fuel_type !== undefined) {
+                updates.push(`vehicle_fuel_type = $${idx}`);
+                params.push(vehicle_fuel_type);
+                idx++;
+            }
+            if (vehicle_doors !== undefined) {
+                updates.push(`vehicle_doors = $${idx}`);
+                params.push(vehicle_doors);
+                idx++;
+            }
+            if (vehicle_seats !== undefined) {
+                updates.push(`vehicle_seats = $${idx}`);
+                params.push(vehicle_seats);
+                idx++;
+            }
+            if (vehicle_derivative !== undefined) {
+                updates.push(`vehicle_derivative = $${idx}`);
+                params.push(vehicle_derivative);
                 idx++;
             }
             updates.push("updated_at = NOW()");
@@ -313,6 +342,66 @@ router.get("/vehicle-catalogue", async (_req, res) => {
     catch (err) {
         console.error("[catalogue] library lookup failed, serving the static list:", err?.message || err);
         res.json((0, vehicleCatalogue_1.catalogueForApi)());
+    }
+});
+// POST /api/drivers/vehicle/classify
+// Body: { make, model, model_year, body_type, fuel_type, doors, seats, derivative?, color? }
+// Runs the tier engine (src/lib/tier-classifier.ts) and stores the result on the
+// driver's profile. Ported from the driver repo's server so the two agree.
+router.post("/vehicle/classify", auth_1.requireAuth, async (req, res) => {
+    try {
+        const { make, model, model_year, body_type, fuel_type, doors, seats, derivative, color } = req.body || {};
+        const year = parseInt(String(model_year ?? ""), 10);
+        const doorCount = parseInt(String(doors ?? ""), 10);
+        const seatCount = parseInt(String(seats ?? ""), 10);
+        if (!make || !model || !body_type || !fuel_type) {
+            res.status(400).json({ error: "make, model, body_type and fuel_type are required" });
+            return;
+        }
+        if (!Number.isFinite(year) || year < 1950 || year > new Date().getFullYear() + 1) {
+            res.status(400).json({ error: "Valid model_year is required" });
+            return;
+        }
+        if (!Number.isFinite(doorCount) || doorCount < 2 || doorCount > 8) {
+            res.status(400).json({ error: "Valid doors count is required" });
+            return;
+        }
+        if (!Number.isFinite(seatCount) || seatCount < 2 || seatCount > 20) {
+            res.status(400).json({ error: "Valid seats count is required" });
+            return;
+        }
+        const firebaseUid = req.userId;
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
+        if (!user) {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
+        const assignments = (0, tier_classifier_1.classifyVehicle)({
+            vin: "",
+            make: String(make),
+            model: String(model),
+            model_year: year,
+            body_type: String(body_type).toLowerCase(),
+            fuel_type: String(fuel_type).toLowerCase(),
+            doors: doorCount,
+            seats: seatCount,
+            derivative: typeof derivative === "string" ? derivative : null,
+            color: typeof color === "string" ? color : null,
+        });
+        const tier = (0, tier_classifier_1.primaryTier)(assignments);
+        // the tier columns are created on demand so production never needs a migration
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tier VARCHAR(20)`).catch(() => { });
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tiers JSONB DEFAULT '[]'::jsonb`).catch(() => { });
+        await (0, database_1.execute)(`UPDATE driver_profiles
+          SET vehicle_tier  = $2,
+              vehicle_tiers = $3::jsonb,
+              updated_at    = NOW()
+        WHERE user_id = $1`, [user.id, tier, JSON.stringify(assignments)]);
+        res.json({ assignments, primary_tier: tier });
+    }
+    catch (err) {
+        console.error("vehicle classify error:", err?.message || err);
+        res.status(500).json({ error: "Failed to classify vehicle" });
     }
 });
 exports.default = router;

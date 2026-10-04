@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.s3 = exports.DOCUMENT_TYPES = void 0;
 exports.isDocumentType = isDocumentType;
+exports.getObjectFromS3 = getObjectFromS3;
 exports.documentKey = documentKey;
 exports.uploadToS3 = uploadToS3;
 exports.getPresignedViewUrl = getPresignedViewUrl;
@@ -40,9 +41,28 @@ exports.DOCUMENT_TYPES = [
     "license_disk",
     "carscan_report",
     "vehicle_scan",
+    "profile_photo",
+    "face_scan",
 ];
 function isDocumentType(v) {
     return typeof v === "string" && exports.DOCUMENT_TYPES.includes(v);
+}
+/**
+ * Downloads an object from S3 into memory — used by face verification, which
+ * needs the enrolled scan's bytes to compare against the live selfie.
+ */
+async function getObjectFromS3(key) {
+    const result = await s3.send(new client_s3_1.GetObjectCommand({
+        Bucket: bucketRequired(),
+        Key: key,
+    }));
+    const body = result.Body;
+    if (!body)
+        throw new Error(`S3 object not found: ${key}`);
+    if (typeof body.transformToByteArray === "function") {
+        return Buffer.from(await body.transformToByteArray());
+    }
+    return Buffer.from((await body.arrayBuffer?.()) ?? []);
 }
 const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024; // 15 MiB per document
 function sanitizeFileName(name) {
