@@ -304,6 +304,37 @@ router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
 // GET /api/rides/available â€” Rides still searching for a driver (driver-side poll)
 router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) => {
   try {
+    // SCOPE THIS TO THE DRIVER WHO IS ASKING.
+    //
+    // This endpoint used to return EVERY searching ride on the platform, newest
+    // first, and the app simply took the first one (App.tsx: live[0]). That meant
+    // a driver in Cape Town was shown a rider in Pretoria, every driver in the
+    // country raced for the same ride, and acceptRide had to reject the losers
+    // with "Another driver is reviewing this ride".
+    //
+    // It is kept as the FALLBACK for a missed socket event -- deliberately so.
+    // Two rules protect that:
+    //   * A driver with no GPS fix still sees everything. Staying available must
+    //     never depend on having coordinates (see commit 107a87a).
+    //   * Rides with no pickup coords are still returned. Dispatch cannot match
+    //     them either (offerToNextDriver bails with ride_has_no_pickup_coords),
+    //     so hiding them here would only hide the diagnosis.
+    const me = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [_req.userId!]
+    );
+    const dp = me
+      ? await queryOne<{ current_lat: number | null; current_lng: number | null }>(
+          "SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1",
+          [me.id]
+        ).catch(() => null)
+      : null;
+
+    const hasCoords = dp?.current_lat != null && dp?.current_lng != null;
+    // Default 3 km, overridable per deployment. Generous enough that a driver
+    // who is genuinely close is never left out; tight enough to stop a city-wide
+    // broadcast.
+    const radiusKm = Number(process.env.DISPATCH_RADIUS_KM || 3);
     // Newest first so a fresh booking is NEVER hidden behind old stale
     // "searching" rides that nobody accepted. Only show rides younger than
     // 30 minutes so abandoned/stuck requests drop out automatically.
@@ -315,18 +346,61 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
     // BEFORE the pickup time (driver pre-accept). Drivers see them with a
     // "Scheduled" badge and can claim them early â€” driver:ride:accept
     // accepts status 'scheduled' (see socket handlers).
+    // Haversine against the ASKING driver's position. When they have no fix
+    // ($3::boolean false) the radius test passes for every ride, so behaviour is
+    // unchanged from before for a driver without a GPS fix.
     const rows = await query<any>(
       `SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
-              CASE WHEN r.status = 'scheduled' THEN TRUE ELSE FALSE END AS is_scheduled
-       FROM rides r
-       LEFT JOIN users u ON u.id = r.passenger_id
-       WHERE (r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
-          OR (r.status = 'scheduled' AND r.scheduled_at > NOW())
-       ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END, r.created_at DESC
-       LIMIT 20`
+              CASE WHEN r.status = 'scheduled' THEN TRUE ELSE FALSE END AS is_scheduled,
+              -- Distance is only meaningful when we actually know where the
+              -- asking driver is. Without a fix it would be measured from
+              -- (0,0) in the Gulf of Guinea and could reorder a no-GPS
+              -- driver's list nonsensically, so it is left NULL and ordering
+              -- falls back to newest-first -- exactly the old behaviour.
+              CASE WHEN $3::boolean AND r.pickup_lat IS NOT NULL AND r.pickup_lng IS NOT NULL
+                THEN (6371 * acos(LEAST(1, GREATEST(-1,
+                  cos(radians($2)) * cos(radians(r.pickup_lat)) *
+                    cos(radians(r.pickup_lng) - radians($1)) +
+                  sin(radians($2)) * sin(radians(r.pickup_lat))
+                ))))
+              END AS distance_km
+         FROM rides r
+         LEFT JOIN users u ON u.id = r.passenger_id
+        WHERE ((r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
+           OR (r.status = 'scheduled' AND r.scheduled_at > NOW()))
+          -- Keep rides whose pickup coords are missing: dispatch cannot match
+          -- them either, so hiding them here would only hide the diagnosis.
+          AND (NOT $3::boolean
+               OR r.pickup_lat IS NULL OR r.pickup_lng IS NULL
+               OR (6371 * acos(LEAST(1, GREATEST(-1,
+                     cos(radians($2)) * cos(radians(r.pickup_lat)) *
+                       cos(radians(r.pickup_lng) - radians($1)) +
+                     sin(radians($2)) * sin(radians(r.pickup_lat))
+                   )))) <= $4::double precision)
+        -- Nearest first (not merely newest) so the closest real option is what
+        -- the driver sees. Scheduled rides still sort ahead of live ones so
+        -- pre-accept keeps working.
+        -- NULLS LAST: rides we could not measure sort after measured ones, so a
+        -- no-GPS driver keeps newest-first ordering among the unmeasurable.
+        ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END,
+                 distance_km ASC NULLS LAST,
+                 r.created_at DESC
+        LIMIT 20`,
+      [
+        hasCoords ? Number(dp!.current_lng) : 0,
+        hasCoords ? Number(dp!.current_lat) : 0,
+        hasCoords,
+        radiusKm,
+      ]
     );
-    res.json({ rides: (rows || []).map((row) => mapRide(row)) });
+    res.json({
+      rides: (rows || []).map((row) => mapRide(row)),
+      // Lets the app and debug distinguish "nothing near you" from "you have no
+      // GPS fix, so this list is unfiltered".
+      scoped: hasCoords,
+      radius_km: hasCoords ? radiusKm : null,
+    });
   } catch (err: any) {
     console.error("Available rides error:", err);
     res.status(500).json({ error: err.message });
