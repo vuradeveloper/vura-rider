@@ -2,7 +2,7 @@ import { Server as SocketIOServer, Socket } from "socket.io";
 import { getAuth } from "../config/firebase";
 import { query, queryOne, execute } from "../config/database";
 import { refundTransaction, chargeAuthorization, getDefaultCardToken } from "../services/paystackPayment";
-import { sendPushToUser } from "../services/push";
+import { sendPushToUsers } from "../services/notify";
 import { markDriverLivePing, stopServerRideSim, syncSimToDriver } from "../services/rideSim";
 import {
   acceptRide,
@@ -56,11 +56,72 @@ function traceRequestAndSave(rideId: string | null, socket: Socket, extra: Recor
 }
 
 // Push a ride milestone to a user's registered devices. firebaseUid is the
-// riders/driver Firebase account id (stored on users.firebase_uid).
-function notifyUser(firebaseUid: string | null | undefined, title: string, body: string, data?: Record<string, unknown>) {
+// rider's/driver's Firebase account id (stored on users.firebase_uid).
+//
+// WHY THIS NO LONGER USES services/push.ts
+//
+// services/push.ts is the LEGACY Expo-only sender: it accepts just
+// ExponentPushToken[...] tokens. The apps actually being shipped are Capacitor
+// APKs, which cannot mint an Expo token, so every milestone sent through here
+// ("Driver arrived", "Ride complete", the cancellations) reached NOTHING on a
+// backgrounded phone -- no socket, no notification. Only dispatch's offer path
+// reached FCM, because it already went through services/notify.ts.
+//
+// services/notify.ts is the real sender: FCM via firebase-admin with Android
+// priority high, a high-importance channel and apns time-sensitive, PLUS the
+// Expo fallback for the legacy RN build. Both transports, so nobody regresses.
+//
+// Note the key change: notify.ts keys on DB user ids, not Firebase uids, so the
+// uid is resolved here. That resolution is also recorded in the trace, so a
+// milestone that fails to resolve is visible instead of silent.
+function notifyUser(
+  firebaseUid: string | null | undefined,
+  title: string,
+  body: string,
+  data?: Record<string, unknown>,
+  rideId?: string | null,
+  type?: string
+) {
   if (!firebaseUid) return;
-  Promise.resolve(sendPushToUser(firebaseUid, { title, body, data }))
-    .catch((err) => console.warn("push:", err?.message));
+  void (async () => {
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [firebaseUid]
+    );
+    if (!user) {
+      // Unresolvable uid: log it rather than dropping the notification silently.
+      console.warn(`[push] no DB user for firebase uid; dropped "${title}"`);
+      return;
+    }
+
+    // FCM data values must be strings, so coerce rather than trusting callers.
+    const stringData: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data || {})) {
+      if (v == null) continue;
+      stringData[k] = String(v);
+    }
+
+    const delivered = await sendPushToUsers([user.id], {
+      type: type || "trip_update",
+      title,
+      body,
+      rideId: rideId ?? null,
+      // Milestones like "Driver arrived" are worth waking a phone for.
+      highPriority: true,
+      data: stringData,
+    });
+
+    if (rideId) {
+      trace(rideId, "milestone_push", {
+        type: type || "trip_update",
+        delivered,
+        ok: delivered > 0,
+      });
+    }
+    if (!delivered) {
+      console.warn(`[push] milestone "${title}" reached 0 devices (ride=${rideId ?? "-"})`);
+    }
+  })().catch((err) => console.warn("[push] milestone failed:", err?.message));
 }
 
 interface AuthSocket extends Socket {
@@ -534,7 +595,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
             [rideId]
           ).catch(() => null);
           if (drv?.firebase_uid) {
-            notifyUser(drv.firebase_uid, "Ride cancelled", "The rider cancelled this ride.", { ride_id: rideId });
+            notifyUser(drv.firebase_uid, "Ride cancelled", "The rider cancelled this ride.", { ride_id: rideId }, rideId, "ride_cancelled");
           }
         })();
 
@@ -943,7 +1004,9 @@ export function setupSocketHandlers(io: SocketIOServer) {
             isScheduled
               ? `${driver?.full_name || "Your driver"} is confirmed for your scheduled ride. They'll pick you up at the booked time.`
               : `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`,
-            { ride_id: rideId, scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined }
+            { ride_id: rideId, scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined },
+            rideId,
+            "ride_accepted"
           );
         })();
         socket.emit("ride:accepted:ack", { success: true, rideId });
@@ -1058,7 +1121,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         ).catch(() => null);
         if (pax?.firebase_uid) {
           io.to(`user:${pax.firebase_uid}`).emit("ride:cancelled", cancelPayload);
-          notifyUser(pax.firebase_uid, "Ride cancelled", "Your driver cancelled the trip.", { ride_id: rideId });
+          notifyUser(pax.firebase_uid, "Ride cancelled", "Your driver cancelled the trip.", { ride_id: rideId }, rideId, "ride_cancelled");
         }
         // Drivers still holding an Accept card for this ride lose it immediately.
         io.to("drivers").emit("ride:cancelled", cancelPayload);
@@ -1100,7 +1163,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
             .filter(Boolean)
             .join(" ") || "Your driver";
           if (p?.fb) io.to(`user:${p.fb}`).emit("ride:driver:arrived");
-          notifyUser(p?.fb, "Driver arrived", `${who} has arrived at your pickup point.`, { ride_id: rideId });
+          notifyUser(p?.fb, "Driver arrived", `${who} has arrived at your pickup point.`, { ride_id: rideId }, rideId, "driver_arrived");
         })();
       } catch (err: any) { console.error("Driver start error:", err); }
     });
@@ -1164,7 +1227,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
             "SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]
           ).catch(() => null);
           if (p?.firebase_uid) io.to(`user:${p.firebase_uid}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
-          notifyUser(p?.firebase_uid, "Ride complete", "You've arrived at your destination. Thanks for riding with Vura!", { ride_id: rideId });
+          notifyUser(p?.firebase_uid, "Ride complete", "You've arrived at your destination. Thanks for riding with Vura!", { ride_id: rideId }, rideId, "trip_completed");
         })();
       } catch (err: any) { console.error("Driver complete error:", err); }
     });
