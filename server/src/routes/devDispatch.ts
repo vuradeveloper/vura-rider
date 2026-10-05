@@ -1,5 +1,14 @@
 import { Router, Request, Response } from "express";
 import { query, queryOne } from "../config/database";
+// Plain static imports (NOT top-level await -- this project compiles to CommonJS,
+// where top-level await is a hard compile error).
+import { readTrace, TRACE_STAGES } from "../services/trace";
+import {
+  OFFER_TTL_SECONDS,
+  LOCATION_FRESH_SECONDS,
+  DRIVER_STALE_SECONDS,
+  MAX_OFFER_ROUNDS,
+} from "../services/dispatch";
 
 // ── Dispatch inspector ────────────────────────────────────────────────────────
 //   GET /api/dev/dispatch?key=<DEV_LOG_READ_KEY>&rideId=<uuid>
@@ -84,10 +93,14 @@ router.get("/", async (req: Request, res: Response) => {
       events,
       drivers,
       config: {
-        offerTtlSeconds: 15,
-        candidateFreshnessSeconds: 30,
-        driverStaleSeconds: 45,
-        maxOfferRounds: 12,
+        // Imported, not hardcoded: these used to be literal copies (30/45) that
+        // silently went stale the moment the constants in dispatch.ts changed, so
+        // the inspector would report a freshness window the server was not using.
+        offerTtlSeconds: OFFER_TTL_SECONDS,
+        candidateFreshnessSeconds: LOCATION_FRESH_SECONDS,
+        driverStaleSeconds: DRIVER_STALE_SECONDS,
+        maxOfferRounds: MAX_OFFER_ROUNDS,
+        availableRadiusKm: Number(process.env.DISPATCH_RADIUS_KM || 3),
       },
     });
   } catch (err: any) {
@@ -107,10 +120,6 @@ router.get("/", async (req: Request, res: Response) => {
 //
 // Stages that never fired are reported as `missing`, because a gap in the trail
 // is itself the diagnosis (e.g. no `drivers_found` means dispatch never ran).
-// Plain static import (NOT a top-level await -- this project compiles to
-// CommonJS, where top-level await is a hard compile error).
-import { readTrace, TRACE_STAGES } from "../services/trace";
-
 router.get("/trips/:id/trace", async (req: Request, res: Response) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, OPTIONS");

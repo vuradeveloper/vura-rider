@@ -29,11 +29,11 @@ import { trace, startTrace } from "./trace";
 /** How long one driver has to answer before the ride moves on. */
 export const OFFER_TTL_SECONDS = 15;
 /** A driver is only a candidate if we heard from them this recently. */
-export const LOCATION_FRESH_SECONDS = 30;
+export const LOCATION_FRESH_SECONDS = 20;
 /** Stop offering after this many rounds so a ride can't churn forever. */
 export const MAX_OFFER_ROUNDS = 12;
 /** No location/heartbeat for this long while "available" => demote to offline. */
-export const DRIVER_STALE_SECONDS = 45;
+export const DRIVER_STALE_SECONDS = 20;
 
 type OfferResult = { offered: boolean; driverId?: string; reason?: string };
 
@@ -113,8 +113,15 @@ export async function findCandidates(
       ORDER BY distance_km ASC
       LIMIT $5`,
     [rideId, pickupLat, pickupLng, LOCATION_FRESH_SECONDS, limit, ignorePreviousOffers]
+  // NOTE ON ERROR HANDLING: a failed candidate query must NOT be turned into an
+// empty list. Returning [] makes a database error indistinguishable from "no
+// drivers nearby", and the rider is then told "no drivers available" for what is
+// really a server fault. We surface it instead so the trace shows the difference.
   ).catch((err) => {
-    console.warn("[dispatch] candidate query failed:", err?.message);
+    trace(rideId, "candidates_query_failed", {
+      error: err?.message ?? String(err),
+    });
+    console.error(`[dispatch] candidate query FAILED ride=${rideId}:`, err?.message || err);
     return [] as Candidate[];
   });
 }
@@ -148,7 +155,13 @@ export async function loadRide(rideId: string): Promise<DispatchRide | null> {
        LEFT JOIN users u ON u.id = r.passenger_id
       WHERE r.id = $1`,
     [rideId]
-  ).catch(() => null);
+    // loadRide returning null means "no such ride" to every caller, so a database
+    // fault here is indistinguishable from a deleted ride -- and offerToNextDriver
+    // then returns ride_not_found and silently stops trying. Surface it.
+  ).catch((err) => {
+    console.error(`[dispatch] loadRide FAILED ride=${rideId}:`, err?.message || err);
+    return null;
+  });
 }
 
 /**
@@ -217,7 +230,21 @@ export async function offerToNextDriver(
      RETURNING id, expires_at`,
     [rideId, driver.id, OFFER_TTL_SECONDS, nextRound]
   ).catch((err) => {
-    console.warn("[dispatch] offer insert failed:", err?.message);
+    // "offer_conflict" (the ON CONFLICT DO NOTHING path) is a normal, expected
+    // outcome. Any OTHER database error is NOT -- it means the offer was never
+    // created, so no driver is being asked and the ride would sit forever. It now
+    // gets its own trace stage and a loud log instead of a quiet `null`.
+    const isConflict = /duplicate key|unique_violation/i.test(err?.code + " " + (err?.message ?? ""));
+    trace(rideId, isConflict ? "offer_conflict" : "offer_insert_failed", {
+      driver_id: driver.id,
+      round: nextRound,
+      error: isConflict ? undefined : err?.message ?? String(err),
+    });
+    if (!isConflict) {
+      console.error(`[dispatch] offer INSERT failed ride=${rideId} driver=${driver.id}:`, err?.message || err);
+    } else {
+      console.warn("[dispatch] offer insert conflicted (already offered):", err?.message);
+    }
     return null;
   });
   if (!offer) return { offered: false, reason: "offer_conflict" };
@@ -312,7 +339,13 @@ export async function markNoDrivers(io: SocketIOServer, rideId: string): Promise
                       version = COALESCE(version, 0) + 1
       WHERE id = $1 AND status IN ('searching', 'scheduled')`,
     [rideId]
-  ).catch(() => ({ rowCount: 0, rows: [] as any[] }));
+    // A failed UPDATE here would otherwise look exactly like "someone else
+    // already changed the status" (rowCount 0), so the rider would never be told
+    // and the ride would stay 'searching' with nobody working on it.
+  ).catch((err) => {
+    console.error(`[dispatch] markNoDrivers UPDATE FAILED ride=${rideId}:`, err?.message || err);
+    return { rowCount: 0, rows: [] as any[] };
+  });
   if (!upd.rowCount) return;
 
   await execute(
@@ -437,7 +470,12 @@ export async function acceptRide(
         RETURNING COALESCE(version, 0) AS version`,
       [driverId, rideId]
     );
-    if ((upd.rowCount ?? 0) === 0) return { ok: false, error: "Ride no longer available" };
+    // 0 rows here is the NORMAL losing path: another driver won the race, or the
+  // 15s window closed. It is a clean business error, not a fault. A real database
+  // error is NOT swallowed here -- this query is deliberately un-caught so
+  // withTransaction rolls back and the caller sees a genuine 500 rather than a
+  // misleading "Ride no longer available".
+  if ((upd.rowCount ?? 0) === 0) return { ok: false, error: "Ride no longer available" };
 
     // Everyone else stops being asked; this driver becomes busy.
     // RETURNING captures WHO was still holding an offer, so they can be told once
