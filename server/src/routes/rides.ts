@@ -3,8 +3,9 @@ import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { settleFirstRide } from "../services/AffiliateService";
 import { startServerRideSim, stopServerRideSim } from "../services/rideSim";
-import { acceptRide, declineOffer } from "../services/dispatch";
+import { acceptRide, declineOffer, startDispatch, logRideEvent } from "../services/dispatch";
 import { attachVehicleImages } from "../services/vehicleImages";
+import { trace, startTrace } from "../services/trace";
 import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
@@ -94,6 +95,157 @@ router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Respon
 });
 
 // POST /api/rides/:id/accept â€” REST twin of the `driver:ride:accept` socket event.
+// Idempotent + atomic (see services/dispatch.ts acceptRide): safe to retry, and two
+// drivers accepting at the same moment can never both win.
+router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => {
+  // WHY THIS EXISTS
+  //
+  // Until now a ride could ONLY be created by emitting the `passenger:ride:request`
+  // socket event. If the rider's socket was down, reconnecting, or mid-token-
+  // refresh at the moment they tapped Book, no ride was created at all -- or one
+  // was created but nothing dispatched it, and it only got picked up whenever
+  // reviveWaitingRides happened to run. Dispatch must not depend on a long-lived
+  // connection: the request should not care whether the caller can hold a socket.
+  //
+  // THE ORDERING, which is the entire point:
+  //   1. INSERT the ride                  (the only thing we wait for)
+  //   2. respond 201 with id + SEARCHING  (rider shows "Finding your driver...")
+  //   3. THEN start dispatch, un-awaited
+  //
+  // Dispatch runs AFTER the response is written, so ranking, socket delivery and
+  // push can never add latency to the booking. Deliberately not awaited, and it
+  // never rejects into an unhandled rejection.
+  //
+  // NOTE: no Paystack pre-authorisation on this path. The socket path awaits a live
+  // network call to Paystack BEFORE inserting the ride, which can add hundreds of
+  // ms to every card booking. Charging is settled outside this call.
+  const t0 = Date.now();
+
+  try {
+    const rider = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!rider) {
+      res.status(403).json({ error: "Account not synced yet. Try again in a moment." });
+      return;
+    }
+
+    const {
+      pickupAddress, pickupLat, pickupLng,
+      destinationAddress, destinationLat, destinationLng,
+      paymentMethod, fare, deviceId, waypoints, stops,
+    } = req.body || {};
+
+    // Coordinates are mandatory: without them dispatch cannot match
+    // (offerToNextDriver returns ride_has_no_pickup_coords) and the rider would sit
+    // on "Finding your driver..." forever. Fail loudly now rather than accepting a
+    // ride we already know we cannot dispatch.
+    if (!Number.isFinite(Number(pickupLat)) || !Number.isFinite(Number(pickupLng))) {
+      res.status(400).json({ error: "Pickup coordinates are required" });
+      return;
+    }
+
+    const rideWaypoints = (Array.isArray(waypoints) ? waypoints : Array.isArray(stops) ? stops : [])
+      .filter((w: any) => w && Number.isFinite(Number(w?.lat)) && Number.isFinite(Number(w?.lng)))
+      .slice(0, 8)
+      .map((w: any) => ({ address: String(w?.address ?? ""), lat: Number(w.lat), lng: Number(w.lng) }));
+
+    // One rider, one live ride. A double-tap or a client retry must not create two
+    // rides that two drivers could each accept.
+    const existing = await queryOne<{ id: string; status: string }>(
+      `SELECT id, status FROM rides
+        WHERE passenger_id = $1
+          AND status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
+        ORDER BY created_at DESC LIMIT 1`,
+      [rider.id]
+    ).catch(() => null);
+
+    if (existing?.id) {
+      // Reuse it, but still make sure dispatch is running for it.
+      res.status(200).json({
+        rideId: existing.id,
+        status: existing.status,
+        reused: true,
+        ms: Date.now() - t0,
+      });
+      const ioReuse = (global as any).__vuraIo as SocketIOServer | undefined;
+      if (ioReuse && ["searching", "scheduled"].includes(existing.status)) {
+        res.on("finish", () => void startDispatch(ioReuse, existing.id).catch(() => undefined));
+      }
+      return;
+    }
+
+    const ride = await queryOne<any>(
+      `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                          destination_address, destination_lat, destination_lng,
+                          status, estimated_fare, payment_method, device_id, waypoints)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
+       RETURNING id, status`,
+      [
+        rider.id,
+        pickupAddress ?? null,
+        Number(pickupLat), Number(pickupLng),
+        destinationAddress ?? null,
+        Number.isFinite(Number(destinationLat)) ? Number(destinationLat) : null,
+        Number.isFinite(Number(destinationLng)) ? Number(destinationLng) : null,
+        fare != null ? Number(fare) : null,
+        paymentMethod || null,
+        deviceId || null,
+        rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
+      ]
+    );
+
+    if (!ride?.id) {
+      res.status(500).json({ error: "Could not create the ride" });
+      return;
+    }
+
+    // Start the trace here so trip_saved / dispatch_started / drivers_found /
+    // offer_sent all share one trace_id for this ride.
+    startTrace(ride.id);
+    trace(ride.id, "request_received", {
+      source: "rest",
+      ms_from_start: 0,
+      at: new Date(t0).toISOString(),
+    });
+    trace(ride.id, "trip_saved", {
+      source: "rest",
+      payment_method: paymentMethod || "cash",
+    });
+    await logRideEvent(ride.id, null, "ride_requested", { source: "rest" }).catch(() => undefined);
+
+    const io = (global as any).__vuraIo as SocketIOServer | undefined;
+
+    // 201 + SEARCHING. The rider can render "Finding your driver..." and this
+    // response waits on no matching work at all.
+    res.status(201).json({
+      rideId: ride.id,
+      status: "searching",
+      ms: Date.now() - t0,
+      dispatching: Boolean(io),
+    });
+
+    // Dispatch AFTER the response is flushed. `io` can be undefined during a
+    // deploy restart; the offerWorker still picks the ride up on its next tick via
+    // reviveWaitingRides, so a ride is never lost.
+    if (io) {
+      res.on("finish", () => {
+        void startDispatch(io, ride.id).catch((err) => {
+          console.error(`[rides] startDispatch FAILED ride=${ride.id}:`, err?.message || err);
+        });
+      });
+    }
+  } catch (err: any) {
+    console.error("POST /api/rides/request error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message || "Could not create the ride" });
+    }
+  }
+});
+
+// POST /api/rides/:id/accept
+// REST twin of the `driver:ride:accept` socket event.
 // Idempotent + atomic (see services/dispatch.ts acceptRide): safe to retry, and two
 // drivers accepting at the same moment can never both win.
 router.post("/:id/accept", requireAuth, async (req: AuthRequest, res: Response) => {
