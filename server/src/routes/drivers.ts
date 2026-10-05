@@ -409,4 +409,146 @@ router.post("/vehicle/classify", requireAuth, async (req: AuthRequest, res: Resp
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE DRIVER ONBOARDING RECORD
+//
+// One canonical, per-driver payload that BOTH the driver app and the admin app
+// render. The driver app's "Your driver profile" screen and the admin's driver
+// detail screen read THIS endpoint (admin via /api/admin/drivers/:id), so the
+// two can never disagree about what a driver has entered.
+//
+// Everything comes straight from Postgres -- nothing is assembled from whatever
+// the phone happens to have cached. That is the point: a driver can install the
+// APK, sign in on a new phone, and still see their full record.
+//
+// Progress is DERIVED here rather than stored, so it cannot drift out of sync
+// with the rows it describes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Document types a driver must clear before the account can go live. */
+const REQUIRED_DOC_TYPES = [
+  "drivers_license",
+  "id_document",
+  "prdp",
+  "criminal_record",
+  "license_disk",
+  "carscan_report",
+] as const;
+
+const DOC_TYPE_LABEL: Record<string, string> = {
+  drivers_license: "Driver's licence",
+  id_document: "ID document",
+  prdp: "PRDP licence",
+  criminal_record: "Criminal record check",
+  license_disk: "Licence disc",
+  carscan_report: "CarScan report",
+  vehicle_scan: "Vehicle scan",
+};
+
+type OnboardingStep = { key: string; label: string; done: boolean; detail: string };
+
+function buildOnboardingSteps(user: any, profile: any, docs: any[], face: any): OnboardingStep[] {
+  const approved = new Set(docs.filter((d) => d.status === "approved").map((d) => d.doc_type as string));
+  const submitted = new Set(docs.map((d) => d.doc_type as string));
+  const steps: OnboardingStep[] = [];
+  const name = user.full_name ? String(user.full_name).trim() : "";
+  const phone = user.phone_number ? String(user.phone_number).trim() : "";
+
+  steps.push({ key: "full_name", label: "Legal name", done: name.length > 0, detail: name || "Not entered yet" });
+  steps.push({ key: "phone", label: "Phone number", done: phone.length > 0, detail: phone || "Not entered yet" });
+  steps.push({ key: "profile_photo", label: "Profile photo", done: Boolean(user.profile_photo_url), detail: user.profile_photo_url ? "Uploaded" : "Not uploaded yet" });
+
+  const make = profile?.vehicle_make ? String(profile.vehicle_make).trim() : "";
+  const model = profile?.vehicle_model ? String(profile.vehicle_model).trim() : "";
+  steps.push({ key: "vehicle", label: "Vehicle make and model", done: make.length > 0 && model.length > 0, detail: make ? `${make} ${model}`.trim() : "Not entered yet" });
+
+  const plate = profile?.license_plate ? String(profile.license_plate).trim() : "";
+  steps.push({ key: "license_plate", label: "Number plate", done: plate.length > 0, detail: plate || "Not entered yet" });
+  steps.push({ key: "vehicle_photo", label: "Vehicle photo", done: Boolean(profile?.vehicle_image_url), detail: profile?.vehicle_image_url ? "Uploaded" : "Not uploaded yet" });
+
+  for (const type of REQUIRED_DOC_TYPES) {
+    steps.push({
+      key: `doc:${type}`,
+      label: DOC_TYPE_LABEL[type] ?? type,
+      done: approved.has(type),
+      detail: approved.has(type) ? "Approved" : submitted.has(type) ? "Awaiting review" : "Not uploaded yet",
+    });
+  }
+
+  steps.push({
+    key: "face_scan",
+    label: "Facial recognition scan",
+    done: Boolean(face?.verified),
+    detail: face ? (face.verified ? "Verified" : face.status || "Recorded, not verified") : "Not done yet",
+  });
+
+  return steps;
+}
+
+// GET /api/drivers/me/onboarding -- everything about THIS driver, in one payload.
+router.get("/me/onboarding", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = await queryOne<any>("SELECT * FROM users WHERE firebase_uid = $1", [req.userId!]);
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    // driver_profiles is created lazily, so its absence is normal early on and
+    // must NOT be an error.
+    const profile = await queryOne<any>("SELECT * FROM driver_profiles WHERE user_id = $1", [user.id]);
+
+    const docs = await query<any>(
+      `SELECT id, doc_type, file_name, mime_type, size_bytes, status, note, created_at
+         FROM driver_documents WHERE driver_id = $1 ORDER BY created_at DESC`,
+      [user.id]
+    );
+
+    // No face scan yet is normal, so this must never 500 the whole payload --
+    // the driver still needs to see their profile.
+    const face = await queryOne<any>(
+      `SELECT id, verified, method, status, note, created_at
+         FROM face_verifications WHERE driver_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [user.id]
+    ).catch(() => null);
+
+    const stats = await queryOne<any>(
+      `SELECT
+         (SELECT COUNT(*) FROM rides WHERE driver_id = $1 AND status = 'completed')::int AS completed_rides,
+         (SELECT COUNT(*) FROM ratings WHERE driver_id = $1)::int AS ratings_count,
+         (SELECT COALESCE(AVG(score), 0) FROM ratings WHERE driver_id = $1)::float AS rating_average`,
+      [user.id]
+    );
+
+    const steps = buildOnboardingSteps(user, profile, docs, face);
+    const completed = steps.filter((s) => s.done).length;
+
+    // Mirror the /me fallback so both endpoints agree: if every required document
+    // is explicitly approved the driver is approved, whatever the cached column says.
+    const allDocsApproved = REQUIRED_DOC_TYPES.every((t) =>
+      docs.some((d) => d.doc_type === t && d.status === "approved")
+    );
+
+    res.json({
+      user,
+      profile: profile || null,
+      documents: docs,
+      face_scan: face || null,
+      stats: {
+        completed_rides: stats?.completed_rides ?? 0,
+        ratings_count: stats?.ratings_count ?? 0,
+        rating_average: stats?.rating_average ?? 0,
+      },
+      verification_status: allDocsApproved ? "approved" : profile?.verification_status || "pending",
+      progress: {
+        steps,
+        completed,
+        total: steps.length,
+        percent: steps.length ? Math.round((completed / steps.length) * 100) : 0,
+      },
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error("Driver onboarding error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
