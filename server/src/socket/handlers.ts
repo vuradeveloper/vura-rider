@@ -14,6 +14,46 @@ import {
   reviveWaitingRides,
   startDispatch,
 } from "../services/dispatch";
+import { trace, startTrace } from "../services/trace";
+
+/**
+ * `request_received` must be timestamped at the rider's TAP, but the ride row (and
+ * therefore its UUID, which ride_events.ride_id is typed as) does not exist until
+ * several awaits later. Writing the stage under a placeholder id would fail the
+ * INSERT outright and lose the very measurement we want.
+ *
+ * So instead: capture the clock in a per-socket pending slot NOW, then once the
+ * INSERT returns, write BOTH request_received and trip_saved under the real ride
+ * id using that original timestamp. The elapsed time is preserved exactly, and the
+ * whole journey ends up under one trace_id.
+ */
+interface PendingRequest {
+  t0: number;
+  traceId: string;
+}
+const pendingRequest = new WeakMap<Socket, PendingRequest>();
+
+/** Stamp the rider's tap. Returns the clock so the caller can keep it. */
+function markRequestReceived(socket: Socket): PendingRequest {
+  const ctx: PendingRequest = { t0: Date.now(), traceId: crypto.randomUUID() };
+  pendingRequest.set(socket, ctx);
+  return ctx;
+}
+
+/** Write the first two stages under the real ride id, preserving the tap clock. */
+function traceRequestAndSave(rideId: string | null, socket: Socket, extra: Record<string, unknown>) {
+  const ctx = pendingRequest.get(socket);
+  pendingRequest.delete(socket);
+  if (!rideId || !ctx) return;
+
+  // Adopt the tap's trace_id for the ride, so every later stage lines up with it.
+  startTrace(rideId);
+  const adopted = startTrace(rideId);
+  adopted.traceId = ctx.traceId;
+  adopted.t0 = ctx.t0;
+
+  trace(rideId, "request_received", { ...extra, ms_from_start: 0, at: new Date(ctx.t0).toISOString() });
+}
 
 // Push a ride milestone to a user's registered devices. firebaseUid is the
 // riders/driver Firebase account id (stored on users.firebase_uid).
@@ -138,8 +178,36 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     });
 
-    // ── Passenger: request ride ──
+    // ── Driver confirms the offer actually reached the device ──────────────────
+  // "offer_sent" only proves the server handed the event to socket.io. It says
+  // nothing about whether the phone rendered it. This ack is what distinguishes
+  // "the offer was sent" from "the offer arrived" -- the difference between a
+  // dispatch bug and a dead socket.
+  socket.on("driver:ride:offer:ack", async (data) => {
+    try {
+      const rideId = String(data?.rideId || data?.id || "");
+      if (!/^[0-9a-f-]{36}$/i.test(rideId)) return;
+      const driverId = await getDbUserId();
+      if (!driverId) return;
+
+      trace(rideId, "offer_delivered_ack", {
+        driver_id: driverId,
+        channel: data?.channel === "push" ? "push" : "socket",
+        offer_id: data?.offerId ?? null,
+      });
+      await logRideEvent(rideId, driverId, "offer_delivered_ack", {
+        channel: data?.channel ?? "socket",
+      });
+    } catch (err: any) {
+      console.warn("offer ack failed:", err?.message);
+    }
+  });
+
+  // ── Passenger: request ride ──
     socket.on("passenger:ride:request", async (data) => {
+      // Clock the rider's tap BEFORE any await, so ms_from_start reflects the real
+      // rider-tap -> server-entry cost rather than starting late.
+      markRequestReceived(socket);
       try {
         const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops } = data;
         let dbUserId = await getDbUserId();
@@ -349,6 +417,11 @@ export function setupSocketHandlers(io: SocketIOServer) {
           ).catch(() => {});
         }
 
+        traceRequestAndSave(ride?.id ?? null, socket, {
+          has_pickup_coords:
+            Number.isFinite(Number(pickupLat)) && Number.isFinite(Number(pickupLng)),
+        });
+        trace(ride?.id ?? null, "trip_saved", { payment_method: paymentMethod || "cash" });
         socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
         if (ride) socket.join(`ride:${ride.id}`);
 

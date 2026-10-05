@@ -24,6 +24,7 @@ import type { Server as SocketIOServer } from "socket.io";
 import { query, queryOne, execute, withTransaction } from "../config/database";
 import { sendPushToUsers } from "./notify";
 import { attachVehicleImages } from "./vehicleImages";
+import { trace, startTrace } from "./trace";
 
 /** How long one driver has to answer before the ride moves on. */
 export const OFFER_TTL_SECONDS = 15;
@@ -195,6 +196,10 @@ export async function offerToNextDriver(
   }
 
   const candidates = await findCandidates(rideId, ride.pickup_lat, ride.pickup_lng, 1, reviving);
+  // The COUNT is the single most useful number in the whole trace: 0 means the
+  // driver was invisible to dispatch (offline / stale GPS / on a trip), which is
+  // a completely different problem from "the offer was sent but never arrived".
+  trace(rideId, "drivers_found", { count: candidates.length });
   await logRideEvent(rideId, null, "candidates_found", {
     round: nextRound,
     count: candidates.length,
@@ -256,6 +261,15 @@ export async function offerToNextDriver(
     socket: Boolean(driver.firebase_uid),
   });
 
+  // `channel` distinguishes the two delivery paths. socket:false means this
+  // driver has NO live connection, so push is the ONLY way the offer can arrive
+  // -- exactly the case that used to fail in total silence.
+  trace(rideId, "offer_sent", {
+    driver_id: driver.id,
+    channel: driver.firebase_uid ? "socket" : "push_only",
+    distance_km: payload.distanceToPickupKm,
+  });
+
   void sendPushToUsers([driver.id], {
     type: "ride_offer",
     title: "New ride request",
@@ -264,7 +278,29 @@ export async function offerToNextDriver(
     offerId: offer.id,
     highPriority: true,
     data: { channel: "offers", offer_id: offer.id },
-  }).catch(() => 0);
+  })
+    // WAS `.catch(() => 0)` -- a push that failed, or was skipped because the
+    // token was an Expo token this build can never mint, returned 0 in total
+    // silence. `delivered: 0` is now written to the trace, which is what makes
+    // "the app was killed" distinguishable from "the offer arrived".
+    .then((delivered) => {
+      trace(rideId, "push_result", { driver_id: driver.id, delivered, ok: delivered > 0 });
+      if (!delivered) {
+        console.warn(
+          `[dispatch] push delivered 0 devices driver=${driver.id} ride=${rideId}; ` +
+            `socket is the only remaining channel`
+        );
+      }
+    })
+    .catch((err) => {
+      trace(rideId, "push_result", {
+        driver_id: driver.id,
+        delivered: 0,
+        ok: false,
+        error: err?.message ?? String(err),
+      });
+      console.warn(`[dispatch] push failed driver=${driver.id}:`, err?.message);
+    });
 
   return { offered: true, driverId: driver.id };
 }
@@ -306,6 +342,10 @@ export async function markNoDrivers(io: SocketIOServer, rideId: string): Promise
 
 /** Entry point when a rider books (socket handler calls this after INSERT). */
 export async function startDispatch(io: SocketIOServer, rideId: string): Promise<OfferResult> {
+  // Mint the trace BEFORE the first stage is written, so request_received and
+  // dispatch_started share one trace_id and can be timed against each other.
+  startTrace(rideId);
+  trace(rideId, "dispatch_started");
   await logRideEvent(rideId, null, "ride_requested", {});
   return offerToNextDriver(io, rideId, 1);
 }
@@ -424,6 +464,14 @@ export async function acceptRide(
   });
 
   if (!result.ok) return result;
+
+  // The LAST stage of a healthy trace: request -> saved -> dispatch -> drivers
+  // found -> offer sent -> delivered ack -> response. Once this lands,
+  // total_ms is the true rider-tap-to-driver-decision latency.
+  trace(rideId, "driver_response", {
+    driver_id: driverId,
+    response: result.duplicate ? "accept_duplicate" : "accept",
+  });
 
   await logRideEvent(rideId, driverId, result.duplicate ? "accept_duplicate" : "ride_accepted", {
     version: result.version,
@@ -550,6 +598,7 @@ export async function declineOffer(
       ORDER BY created_at DESC LIMIT 1`,
     [rideId, driverId]
   ).catch(() => null);
+  trace(rideId, "driver_response", { driver_id: driverId, response: "decline", reason: reason ?? "declined" });
   await logRideEvent(rideId, driverId, "offer_declined", { reason, round: offer?.round });
   await offerToNextDriver(io, rideId, (offer?.round ?? 1) + 1);
   return { ok: true };
