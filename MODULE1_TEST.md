@@ -9,7 +9,7 @@ log line to expect** and the **failure signature** if it is wrong.
 ```bash
 cd server
 npx tsc --noEmit          # type gate
-npx vitest run            # 46 mocked tests (always run, no database needed)
+npx vitest run            # 52 mocked tests (always run, no database needed)
 # real-Postgres suite (needs a scratch DB, see the header of
 # src/services/dispatch.integration.test.ts):
 $env:VURA_TEST_DB_PORT='55432'; npx vitest run src/services/dispatch.integration.test.ts
@@ -22,7 +22,7 @@ $env:VURA_TEST_DB_PORT='55432'; npx vitest run src/services/dispatch.integration
 | Check | Command / expectation |
 |---|---|
 | Migration applied + valid | `SELECT key FROM app_config WHERE key='matching';` → 1 row (see `server/migrations/TEST_MIGRATION.md`) |
-| Flag turned ON for this test | the seed leaves it OFF; run `UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'true') WHERE key = 'matching';` before starting (and back to `'false'` afterwards if you are not rolling out) |
+| Flag turned ON for this test | the seed leaves flag **and** rollout mode OFF; before starting run `UPDATE app_config SET value = jsonb_set(jsonb_set(value, '{h3_matching_enabled}', 'true'), '{h3_rollout_mode}', '"all"') WHERE key = 'matching';` (restore `'false'`/`'off'` afterwards if you are not rolling out — section 5) |
 | Server up | boot log shows `[offerWorker] started (2s tick · offer TTL 15s · driver stale 45s)` |
 | Admin trace endpoint | `ADMIN_EMAILS` env contains the email you will sign in with |
 | Apps | driver app + rider app (or the `figma-ui` harness) pointed at this server |
@@ -111,7 +111,9 @@ Rider app flips to "driver on the way"; any losing drivers get
 
 ---
 
-## 5. Kill switch (flag OFF) — one line, no redeploy
+## 5. Kill switch + rollout control — no redeploy
+
+**Master kill switch — flag OFF serves everyone the old path (seconds):**
 
 ```sql
 UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'false')
@@ -119,12 +121,60 @@ UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'false')
 ```
 Wait >10s (config cache), book again.
 
-**Expect:** identical dispatch flow, and **no** `h3_*` trace stages on the new
-ride — the original haversine query is serving it. Restore with `'true'`.
+**Expect:** identical dispatch flow, and the new ride's `matching_path` stage is
+`{"path":"legacy","reason":"kill_switch_off"}` with **no** `h3_*` stages —
+the original haversine query is serving it. Restore with `'true'`.
 
-**Failure signature:** flag flipped but behaviour unchanged after ~10s → the
-server reads a different `app_config` (wrong database / config falling back to
-defaults); a `[dispatch] config read failed, flag treated as OFF` warning
+**Rollout modes** — consulted only while `h3_matching_enabled = true`:
+
+| `h3_rollout_mode` | Effect |
+|---|---|
+| `off` | legacy for everyone (seed default) |
+| `allowlist` | H3 only for riders in `h3_rollout_rider_ids` |
+| `percent` | H3 for riders with `hash(rider id) % 100 < h3_rollout_percent` — stable per rider |
+| `all` | H3 for everyone |
+
+```sql
+-- Switch to allowlist mode:
+UPDATE app_config SET value = jsonb_set(value, '{h3_rollout_mode}', '"allowlist"')
+  WHERE key = 'matching';
+
+-- ADD a rider to the allowlist (idempotent — appends only if absent):
+UPDATE app_config
+   SET value = jsonb_set(value, '{h3_rollout_rider_ids}',
+         CASE WHEN value->'h3_rollout_rider_ids' ? '<RIDER_USER_UUID>'
+              THEN value->'h3_rollout_rider_ids'
+              ELSE value->'h3_rollout_rider_ids' || '<RIDER_USER_UUID>'::jsonb
+         END),
+       updated_at = NOW()
+ WHERE key = 'matching';
+
+-- REMOVE a rider from the allowlist:
+UPDATE app_config
+   SET value = jsonb_set(value, '{h3_rollout_rider_ids}',
+         (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+            FROM jsonb_array_elements_text(value->'h3_rollout_rider_ids') e
+           WHERE e <> '<RIDER_USER_UUID>')),
+       updated_at = NOW()
+ WHERE key = 'matching';
+
+-- PERCENT rollout (0-100). The bucket is a stable hash of the rider id, so
+-- widening never flips an individual rider's path mid-session:
+UPDATE app_config
+   SET value = jsonb_set(jsonb_set(value, '{h3_rollout_mode}', '"percent"'),
+                         '{h3_rollout_percent}', '25')
+ WHERE key = 'matching';
+```
+
+**Expect on EVERY ride** (either path): a `matching_path` trace stage —
+`{"path":"h3","reason":"rollout_allowlist"}` for the allowlisted rider versus
+`{"path":"legacy","reason":"rollout_not_allowlisted"}` for another rider in the
+same minute. Other reasons: `kill_switch_off`, `rollout_off`, `rollout_all`,
+`rollout_percent_<bucket>`, `rollout_percent_no_rider`, `config_error`.
+
+**Failure signature:** flag/mode flipped but behaviour unchanged after ~10s →
+the server reads a different `app_config` (wrong database / config falling back
+to defaults); a `[dispatch] config read failed, using legacy path` warning
 would also appear.
 
 ---
@@ -142,11 +192,12 @@ Admin only: the token's email must be in `ADMIN_EMAILS`. (Legacy alternative:
 ```json
 {
   "trace_id": "...",
-  "stage_count": 9,
+  "stage_count": 10,
   "stages": [
     { "stage": "request_received",   "ms_from_start": 0 },
     { "stage": "trip_saved",         "ms_from_start": 45 },
     { "stage": "dispatch_started",   "ms_from_start": 60 },
+    { "stage": "matching_path",      "ms_from_start": 62,  "detail": { "path": "h3", "reason": "rollout_all" } },
     { "stage": "drivers_found",      "ms_from_start": 95,  "detail": { "count": 1 } },
     { "stage": "h3_candidates",      "ms_from_start": 120, "detail": { "radius_km": 3 } },
     { "stage": "offer_sent",         "ms_from_start": 140 },
@@ -161,12 +212,20 @@ Admin only: the token's email must be in `ADMIN_EMAILS`. (Legacy alternative:
 `offer_acked` is the brief's `offer_acked` (implemented as
 `offer_delivered_ack` — the mapping is in `stage_aliases`).
 
+`matching_path` appears on **every** ride — `{path, reason}` says which
+matching path served it (section 5). The embedded `counters` object is **per
+instance** (one process's memory): it carries `instance` (hostname) and
+`started_at` (process start), both reset on redeploy. Same object is served
+alone at `GET /debug/counters` — in a scaled deployment, check every instance
+before drawing conclusions.
+
 **Failure signatures in the trace:**
 | Symptom | Diagnosis |
 |---|---|
 | `missing_stages` contains `drivers_found` | dispatch never ran for this ride |
 | `drivers_found` count 0 | see step 3's count:0 row |
 | `h3_path_failed` present | H3 threw; check `error` — haversine fallback covered the request |
+| `matching_path` shows `path: legacy` | the rollout excluded this ride — `reason` says why: `kill_switch_off`, `rollout_off`, `rollout_not_allowlisted`, `rollout_percent_no_rider` or `config_error` |
 | `h3_index_empty` present | index had no fresh drivers in those cells — writer (step 2) or eviction too aggressive (`stale_seconds`) |
 | `h3_search_timeout` then `no_drivers` | the 90s budget expired with nobody eligible — correct rider-facing stop |
 | `offer_sent` but no `offer_delivered_ack` | event left the server, phone never rendered it: dead socket and `push_result` shows `delivered: 0` |
@@ -210,6 +269,28 @@ SELECT COUNT(*) FROM ride_offers WHERE driver_id = '<D>' AND status = 'pending';
 **Failure signature:** count = `2` → the 001b index is missing or INVALID
 (`server/migrations/TEST_MIGRATION.md` step 5) — re-create it; matching is not
 safe until it holds.
+
+---
+
+## Deploy checklist (rollout ladder)
+
+The master switch (`h3_matching_enabled`) stays on as the kill switch at every
+stage; `h3_rollout_mode` controls who actually rides H3. Counters are **per
+instance** — check each instance (or accept the one you sampled) before widening.
+
+| # | Stage | Do | Gate before the next stage |
+|---|---|---|---|
+| 1 | Migrations | `001_h3_driver_index.sql` twice, then `001b_offer_unique_index.sql` outside any transaction — `server/migrations/TEST_MIGRATION.md` | all its boxes signed off |
+| 2 | Deploy | ship `module1-h3-matching` with the seed untouched (`enabled=false`, `mode='off'`) | every ride: `matching_path` = `legacy / kill_switch_off`; zero `h3_*` stages |
+| 3 | Index writers | drivers ping normally | `driver_cells` rows appear; no `[driverIndex] upsert failed` in logs |
+| 4 | Switch ON, mode still `off` | `h3_matching_enabled = true` | still all legacy — `matching_path` = `legacy / rollout_off` |
+| 5 | Allowlist mode, empty | `h3_rollout_mode = 'allowlist'` | still all legacy — `legacy / rollout_not_allowlisted` |
+| 6 | **Allowlist your own test rider id** | add the id (SQL in section 5), leave the mode on `allowlist` | your rider: `matching_path` = `h3 / rollout_allowlist` **in the same minute** as a second, non-allowlisted rider getting `legacy / rollout_not_allowlisted`; full one-driver/one-rider flow (sections 1-8) green |
+| 7 | Baseline counters | `GET /debug/counters` per instance | record `h3_path_failures`, `fallback_used`, `offer_driver_busy`, `no_drivers` + `instance`/`started_at` |
+| 8 | Percent widen | `mode='percent'` at **10 → 25 → 50 → 100**, **pausing at each step** | at every pause: counters vs the step-7 baseline — `h3_path_failures`/`fallback_used` not climbing, `no_drivers` not spiking, spot-checked traces still carry `matching_path`; finish with `mode='all'` |
+
+Any stage going wrong → section 5's kill switch (flag OFF) serves everyone the
+legacy path within seconds.
 
 ---
 

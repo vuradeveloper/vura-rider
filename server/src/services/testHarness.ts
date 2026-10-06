@@ -52,6 +52,9 @@ export const TEST_CONFIG = {
   avg_speed_kmh: 40,
   min_driver_rating: 0,
   required_vehicle_category: null as string | null,
+  h3_rollout_mode: "off" as "off" | "allowlist" | "percent" | "all",
+  h3_rollout_rider_ids: [] as string[],
+  h3_rollout_percent: 0,
 };
 
 let configState = { ...TEST_CONFIG };
@@ -65,9 +68,15 @@ export const appConfig = {
   DEFAULT_CONFIG: { ...TEST_CONFIG },
 };
 
-/** Flip the H3 kill-switch for one test. */
+/**
+ * Flip the master kill-switch for one test.
+ * `true` also sets rollout mode 'all' (flag-on tests exercise full rollout;
+ * use patchConfig({ h3_rollout_mode, ... }) for allowlist/percent scenarios).
+ * `false` mirrors the seed: mode back to 'off'.
+ */
 export function setH3Enabled(on: boolean): void {
   configState.h3_matching_enabled = on;
+  configState.h3_rollout_mode = on ? "all" : "off";
 }
 
 /** Change any config value for one test (stale_seconds, ladder, ...). */

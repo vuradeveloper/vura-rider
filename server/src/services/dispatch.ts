@@ -30,6 +30,7 @@ import { getDriverIndex, MATCHABLE_STATUSES } from "./driverIndex";
 import { cellsAround } from "../lib/h3";
 import { etaMinutesList } from "./eta";
 import { bump } from "./metrics";
+import type { AppConfig } from "./config";
 
 /** How long one driver has to answer before the ride moves on. */
 export const OFFER_TTL_SECONDS = 15;
@@ -182,19 +183,79 @@ export function radiusForRound(
 }
 
 /**
- * Matching entry point — the h3_matching_enabled kill-switch (one place).
+ * Stable 0-99 bucket for a rider id (FNV-1a).
  *
- *   flag OFF : the original haversine query above, completely unchanged.
- *   flag ON  : H3 cell lookup -> exact haversine <= radius -> eligibility
- *              filters (MATCHABLE_STATUSES from driverIndex, vehicle category,
- *              min rating, driver_blocks) -> rank by road ETA (haversine
- *              fallback) -> a ranked pool for the one-at-a-time offer loop.
+ * Deterministic across processes and deploys — the same rider always lands in
+ * the same bucket, so raising h3_rollout_percent widens the cohort but never
+ * flips an individual rider's path back and forth between requests.
+ */
+export function riderBucket(riderId: string): number {
+  let h = 0x811c9dc5;
+  const s = String(riderId).toLowerCase();
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % 100;
+}
+
+export type H3RolloutDecision = { useH3: boolean; reason: string };
+
+type RolloutConfig = Pick<
+  AppConfig,
+  "h3_matching_enabled" | "h3_rollout_mode" | "h3_rollout_rider_ids" | "h3_rollout_percent"
+>;
+
+/**
+ * Which path serves THIS ride. Master kill switch first: h3_matching_enabled
+ * false => legacy for everyone, no matter what the rollout says.
+ * Pure function — no cache, no I/O — so allowlist changes take effect on the
+ * next request even inside the 10s config cache window... (the config values
+ * themselves still refresh every 10s like everything else).
+ */
+export function decideH3Path(cfg: RolloutConfig, riderId: string | null): H3RolloutDecision {
+  if (!cfg.h3_matching_enabled) return { useH3: false, reason: "kill_switch_off" };
+  switch (cfg.h3_rollout_mode) {
+    case "all":
+      return { useH3: true, reason: "rollout_all" };
+    case "allowlist": {
+      const id = (riderId || "").trim().toLowerCase();
+      if (id && cfg.h3_rollout_rider_ids.includes(id)) {
+        return { useH3: true, reason: "rollout_allowlist" };
+      }
+      return { useH3: false, reason: "rollout_not_allowlisted" };
+    }
+    case "percent": {
+      if (!riderId) return { useH3: false, reason: "rollout_percent_no_rider" };
+      const bucket = riderBucket(riderId);
+      const useH3 = bucket < cfg.h3_rollout_percent;
+      return { useH3, reason: `rollout_percent_${bucket}` };
+    }
+    case "off":
+    default:
+      return { useH3: false, reason: "rollout_off" };
+  }
+}
+
+/**
+ * Matching entry point — rollout + kill-switch decision (one place).
+ *
+ * EVERY call records a `matching_path` trace stage {path: "h3"|"legacy",
+ * reason}, so each ride shows exactly which path served it and why.
+ *
+ *   legacy  : the original haversine query above, byte-for-byte unchanged —
+ *             used when the kill switch is off, the rollout excludes this
+ *             rider, the mode is 'off', or config cannot be read.
+ *   h3      : H3 cell lookup -> exact haversine <= radius -> eligibility
+ *             filters (MATCHABLE_STATUSES from driverIndex, vehicle category,
+ *             min rating, driver_blocks) -> rank by road ETA (haversine
+ *             fallback) -> a ranked pool for the one-at-a-time offer loop.
  *
  * FAILURE POLICY: any throw anywhere in the H3 path (config, index, SQL, ETA)
  * is logged with an `h3_path_failed` trace stage and the request re-runs on the
  * haversine path. The rider is never left waiting and matching never fails
- * closed; an empty index (nobody pinged since boot) also falls back rather than
- * reporting a false "no drivers".
+ * closed; a cold index (rollout guard) or empty area also falls back rather
+ * than reporting a false "no drivers".
  */
 export async function findCandidates(
   rideId: string,
@@ -202,19 +263,26 @@ export async function findCandidates(
   pickupLng: number,
   limit = 3,
   ignorePreviousOffers = false,
-  round = 1
+  round = 1,
+  riderId: string | null = null
 ): Promise<Candidate[]> {
-  let enabled = false;
+  let decision: H3RolloutDecision;
   try {
-    enabled = (await getConfig()).h3_matching_enabled;
+    const cfg = await getConfig();
+    decision = decideH3Path(cfg, riderId);
   } catch (err: any) {
-    enabled = false;
+    // Unknown config => legacy. Never fail closed on a config read.
+    decision = { useH3: false, reason: "config_error" };
     console.warn(
-      `[dispatch] config read failed, flag treated as OFF ride=${rideId}:`,
+      `[dispatch] config read failed, using legacy path ride=${rideId}:`,
       err?.message || err
     );
   }
-  if (!enabled) {
+  trace(rideId, "matching_path", {
+    path: decision.useH3 ? "h3" : "legacy",
+    reason: decision.reason,
+  });
+  if (!decision.useH3) {
     return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
   }
   try {
@@ -517,7 +585,8 @@ export async function offerToNextDriver(
     ride.pickup_lng,
     1,
     reviving,
-    nextRound
+    nextRound,
+    ride.passenger_id ?? null
   );
   // The COUNT is the single most useful number in the whole trace: 0 means the
   // driver was invisible to dispatch (offline / stale GPS / on a trip), which is

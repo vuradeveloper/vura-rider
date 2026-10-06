@@ -3,7 +3,13 @@
 //
 // Answers "where did the time go" for ONE trip, with the stages from the
 // debugging brief: request_received, trip_saved, dispatch_started,
+// matching_path(path+reason — which matching path served this ride and why),
 // drivers_found(count), offer_sent, the delivery ack, driver_response.
+//
+// COUNTERS: embedded here and served at GET /debug/counters they are PER
+// INSTANCE (this process's memory). `instance` (hostname) and `started_at`
+// identify the source; both reset on redeploy. In a scaled deployment read
+// every instance before drawing conclusions.
 //
 // AUTH: a real Firebase bearer token (requireAuth) whose email is in
 // ADMIN_EMAILS — the same gate admin.ts uses. No shared query key like the
@@ -97,7 +103,8 @@ router.get("/trips/:id/trace", requireAuth, async (req: AuthRequest, res: Respon
       offer_acked: seen.has("offer_delivered_ack"),
       stage_aliases: { offer_acked: "offer_delivered_ack" },
       complete: seen.has("driver_response"),
-      // Process-wide dispatch counters (also on GET /debug/counters).
+      // Per-instance dispatch counters (also on GET /debug/counters),
+      // with `instance` (hostname) + `started_at` naming the source.
       counters: getCounters(),
     });
   } catch (err: any) {

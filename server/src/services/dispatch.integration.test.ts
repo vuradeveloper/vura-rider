@@ -159,12 +159,14 @@ beforeAll(async () => {
   );
   expect(validity[0]?.indisvalid).toBe(true);
 
-  // The 001 seed keeps the flag OFF (safe rollout default). The suite then
-  // turns it on explicitly — exactly the production rollout sequence. (The
-  // OFF-by-default claim itself is asserted in the migration test below,
-  // where the row is deleted and re-seeded for determinism.)
+  // The 001 seed keeps the flag OFF + mode 'off' (safe rollout default). The
+  // suite then turns full rollout on explicitly — exactly the production
+  // sequence. (The OFF-by-default claim itself is asserted in the migration
+  // test below, where the row is deleted and re-seeded for determinism.)
   await execute(
-    `UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'true') WHERE key = 'matching'`
+    `UPDATE app_config SET value = jsonb_set(jsonb_set(value, '{h3_matching_enabled}', 'true'),
+                                              '{h3_rollout_mode}', '"all"')
+      WHERE key = 'matching'`
   );
 
   // Road ETA: haversine fallback only — no network from the test run.
@@ -196,10 +198,15 @@ describe.skipIf(!enabled)("migration 001 + 001b against real Postgres", () => {
     expect(seed.length).toBe(1);
     // OFF by default: rollout turns it on explicitly (deploy checklist step).
     expect(seed[0].value.h3_matching_enabled).toBe(false);
+    expect(seed[0].value.h3_rollout_mode).toBe("off");
+    expect(seed[0].value.h3_rollout_rider_ids).toEqual([]);
+    expect(seed[0].value.h3_rollout_percent).toBe(0);
     expect(seed[0].value.stale_seconds).toBe(40);
-    // Leave the suite's flag ON for the tests that follow.
+    // Leave the suite's full rollout ON for the tests that follow.
     await execute(
-      `UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'true') WHERE key = 'matching'`
+      `UPDATE app_config SET value = jsonb_set(jsonb_set(value, '{h3_matching_enabled}', 'true'),
+                                                '{h3_rollout_mode}', '"all"')
+        WHERE key = 'matching'`
     );
   });
 
@@ -302,9 +309,11 @@ describe.skipIf(!enabled)("flag ON dispatch against real Postgres", () => {
     const cands = await findCandidates(ride.rideId, SANDTON.lat, SANDTON.lng, 3, false);
     expect(cands.some((c) => c.id === d1)).toBe(true);
 
-    // Restore the seeded flag for any later run on the same container.
+    // Restore the full-rollout config for any later run on the same container.
     await execute(
-      `UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'true') WHERE key = 'matching'`
+      `UPDATE app_config SET value = jsonb_set(jsonb_set(value, '{h3_matching_enabled}', 'true'),
+                                                '{h3_rollout_mode}', '"all"')
+        WHERE key = 'matching'`
     );
     invalidateConfigCache();
   });

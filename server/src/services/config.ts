@@ -55,6 +55,27 @@ export interface AppConfig {
    * surge-only-sedans policy), and it too lives here rather than in code.
    */
   required_vehicle_category: string | null;
+  /**
+   * ROLLOUT CONTROL (read with the same 10s cache as everything else):
+   *
+   *   h3_matching_enabled  MASTER KILL SWITCH. false => legacy path for every
+   *                        ride, regardless of the mode below.
+   *   h3_rollout_mode      'off'       -> legacy for everyone
+   *                        'allowlist' -> H3 only for h3_rollout_rider_ids
+   *                        'percent'   -> H3 for riders whose stable bucket
+   *                                        (hash of rider id) < percent
+   *                        'all'       -> H3 for everyone
+   *   h3_rollout_rider_ids rider user ids (users.id), allowlist mode only
+   *   h3_rollout_percent   0-100, percent mode only. Stable per rider: the
+   *                        same rider always lands in the same bucket, so
+   *                        widening the percent never flips a rider's path
+   *                        mid-session.
+   *
+   * Seed: enabled=false, mode='off' — rollout is always an explicit act.
+   */
+  h3_rollout_mode: "off" | "allowlist" | "percent" | "all";
+  h3_rollout_rider_ids: string[];
+  h3_rollout_percent: number;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -73,6 +94,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   avg_speed_kmh: 40,
   min_driver_rating: 0,
   required_vehicle_category: null,
+  h3_rollout_mode: "off",
+  h3_rollout_rider_ids: [],
+  h3_rollout_percent: 0,
 };
 
 let cached: AppConfig | null = null;
@@ -98,6 +122,19 @@ function coerce(raw: Partial<AppConfig> | null | undefined): AppConfig {
   if (typeof raw.min_driver_rating === "number") cfg.min_driver_rating = raw.min_driver_rating;
   if (typeof raw.required_vehicle_category === "string" && raw.required_vehicle_category.trim()) {
     cfg.required_vehicle_category = raw.required_vehicle_category.trim();
+  }
+  const modes: Array<AppConfig["h3_rollout_mode"]> = ["off", "allowlist", "percent", "all"];
+  if (typeof raw.h3_rollout_mode === "string" && modes.includes(raw.h3_rollout_mode as AppConfig["h3_rollout_mode"])) {
+    cfg.h3_rollout_mode = raw.h3_rollout_mode as AppConfig["h3_rollout_mode"];
+  }
+  if (Array.isArray(raw.h3_rollout_rider_ids)) {
+    cfg.h3_rollout_rider_ids = raw.h3_rollout_rider_ids
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => id.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  if (typeof raw.h3_rollout_percent === "number" && Number.isFinite(raw.h3_rollout_percent)) {
+    cfg.h3_rollout_percent = Math.max(0, Math.min(100, raw.h3_rollout_percent));
   }
   return cfg;
 }

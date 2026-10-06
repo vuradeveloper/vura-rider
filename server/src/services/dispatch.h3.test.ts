@@ -31,6 +31,8 @@ import {
   offerToNextDriver,
   radiusForRound,
   h3MaxOfferRounds,
+  decideH3Path,
+  riderBucket,
 } from "./dispatch";
 import {
   getDriverIndex,
@@ -362,6 +364,140 @@ describe("one offer per driver", () => {
     // driver-1 was removed from the SQL ids param by the busy-lock filter.
     const call = h3CandidateCall();
     expect(call![1][0]).toEqual(["driver-2"]);
+  });
+});
+
+describe("rollout control (h3_rollout_mode)", () => {
+  it("allowlisted rider gets H3 while another rider gets legacy in the same minute", async () => {
+    setH3Enabled(true); // master switch on, mode 'all' ...
+    patchConfig({
+      // ... then restrict: same cached config for BOTH calls below.
+      h3_rollout_mode: "allowlist",
+      h3_rollout_rider_ids: ["rider-a"],
+    });
+    const idx = makeIndex([cellDriver("driver-1")]);
+    setDriverIndex(idx);
+    db.query
+      .mockResolvedValueOnce([sqlDriver("driver-1", 0.4)]) // H3 eligibility SQL
+      .mockResolvedValueOnce([sqlDriver("driver-9", 0.4)]); // legacy haversine SQL
+
+    const h3Rider = await findCandidates("ride-a", SANDTON.lat, SANDTON.lng, 1, false, 1, "rider-a");
+    const otherRider = await findCandidates(
+      "ride-b",
+      SANDTON.lat,
+      SANDTON.lng,
+      1,
+      false,
+      1,
+      "rider-b"
+    );
+
+    expect(h3Rider.map((c) => c.id)).toEqual(["driver-1"]);
+    expect(otherRider.map((c) => c.id)).toEqual(["driver-9"]);
+    // SQL shape proves which path served which rider.
+    const sqlA = String(db.query.mock.calls[0][0]);
+    const sqlB = String(db.query.mock.calls[1][0]);
+    expect(sqlA).toContain("driver_blocks"); // rider-a -> H3
+    expect(sqlB).not.toContain("driver_blocks"); // rider-b -> legacy
+    expect(idx.getDriversInCells).toHaveBeenCalledTimes(1); // only rider-a
+    // Both rides record path + reason.
+    const paths = traceStage("matching_path");
+    expect(paths).toHaveLength(2);
+    expect(paths[0]).toMatchObject({ path: "h3", reason: "rollout_allowlist" });
+    expect(paths[1]).toMatchObject({ path: "legacy", reason: "rollout_not_allowlisted" });
+  });
+
+  it("percent mode is stable per rider and widens only at the boundary", () => {
+    const base = {
+      h3_matching_enabled: true,
+      h3_rollout_mode: "percent" as const,
+      h3_rollout_rider_ids: [],
+      h3_rollout_percent: 50,
+    };
+    const findId = (pred: (b: number) => boolean): string => {
+      for (let i = 0; i < 5000; i++) {
+        const id = `rider-percent-${i}`;
+        if (pred(riderBucket(id))) return id;
+      }
+      throw new Error("no rider id matched the bucket predicate");
+    };
+    const inside = findId((b) => b < 50);
+    const outside = findId((b) => b >= 50);
+
+    // Same rider, repeated decisions -> identical outcome (the bucket never
+    // moves: a rider's path cannot flip between requests or deploys).
+    for (let i = 0; i < 5; i++) {
+      expect(decideH3Path(base, inside)).toEqual({
+        useH3: true,
+        reason: `rollout_percent_${riderBucket(inside)}`,
+      });
+      expect(decideH3Path(base, outside).useH3).toBe(false);
+    }
+    // Widening admits the outside rider; 0 excludes everyone; no rider id ->
+    // legacy, never a coin flip.
+    expect(decideH3Path({ ...base, h3_rollout_percent: 100 }, outside).useH3).toBe(true);
+    expect(decideH3Path({ ...base, h3_rollout_percent: 0 }, inside).useH3).toBe(false);
+    expect(decideH3Path(base, null)).toEqual({ useH3: false, reason: "rollout_percent_no_rider" });
+    // Bucket is deterministic and in range.
+    expect(riderBucket(inside)).toBe(riderBucket(inside));
+    expect(riderBucket(inside)).toBeGreaterThanOrEqual(0);
+    expect(riderBucket(inside)).toBeLessThan(100);
+  });
+
+  it("master kill switch overrides mode 'all' and the allowlist", () => {
+    const off = {
+      h3_matching_enabled: false,
+      h3_rollout_mode: "all" as const,
+      h3_rollout_rider_ids: ["rider-a"],
+      h3_rollout_percent: 100,
+    };
+    expect(decideH3Path(off, "rider-a")).toEqual({ useH3: false, reason: "kill_switch_off" });
+    expect(decideH3Path({ ...off, h3_rollout_mode: "allowlist" }, "rider-a")).toEqual({
+      useH3: false,
+      reason: "kill_switch_off",
+    });
+    // Switch back on -> mode decides again.
+    expect(decideH3Path({ ...off, h3_matching_enabled: true }, "rider-a").useH3).toBe(true);
+  });
+
+  it("kill switch off serves legacy even in mode 'all', and records why", async () => {
+    patchConfig({
+      h3_matching_enabled: false,
+      h3_rollout_mode: "all",
+      h3_rollout_percent: 100,
+    });
+    const idx = makeIndex([cellDriver("driver-1")]);
+    setDriverIndex(idx);
+    db.query.mockResolvedValueOnce([sqlDriver("driver-9", 0.4)]);
+
+    const cands = await findCandidates(
+      "ride-1",
+      SANDTON.lat,
+      SANDTON.lng,
+      1,
+      false,
+      1,
+      "rider-a"
+    );
+
+    expect(cands.map((c) => c.id)).toEqual(["driver-9"]);
+    expect(idx.getDriversInCells).not.toHaveBeenCalled();
+    expect(traceStage("matching_path")[0]).toMatchObject({
+      path: "legacy",
+      reason: "kill_switch_off",
+    });
+  });
+
+  it("seed default (enabled + mode 'off') serves legacy with reason rollout_off", async () => {
+    patchConfig({ h3_matching_enabled: true }); // mode stays 'off' as seeded
+    db.query.mockResolvedValueOnce([]);
+
+    await findCandidates("ride-1", SANDTON.lat, SANDTON.lng, 3, false, 1, "rider-a");
+
+    expect(traceStage("matching_path")[0]).toMatchObject({
+      path: "legacy",
+      reason: "rollout_off",
+    });
   });
 });
 

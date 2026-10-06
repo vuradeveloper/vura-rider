@@ -24,6 +24,8 @@ export type CounterName =
   | "offer_driver_busy"
   | "no_drivers";
 
+import { hostname } from "os";
+
 const counters: Record<CounterName, number> = {
   upsert_failures: 0,
   h3_path_failures: 0,
@@ -41,9 +43,20 @@ export function bump(name: CounterName): void {
   }
 }
 
-/** Snapshot for the debug endpoints. */
-export function getCounters(): Record<CounterName, number> & { since: string } {
-  return { ...counters, since: startedAt };
+/** Snapshot for the debug endpoints. Counters are PER INSTANCE (one EB
+ * instance has its own memory); `instance` names the host and `started_at`
+ * says when this process's counters began — both reset on redeploy. */
+export function getCounters(): Record<CounterName, number> & {
+  instance: string;
+  started_at: string;
+} {
+  let host = "unknown";
+  try {
+    host = hostname();
+  } catch {
+    /* keep unknown */
+  }
+  return { ...counters, instance: host, started_at: startedAt };
 }
 
 const startedAt = new Date().toISOString();

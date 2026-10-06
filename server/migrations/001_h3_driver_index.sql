@@ -106,6 +106,9 @@ COMMIT;
 INSERT INTO app_config (key, value) VALUES
   ('matching', '{
     "h3_matching_enabled": false,
+    "h3_rollout_mode": "off",
+    "h3_rollout_rider_ids": [],
+    "h3_rollout_percent": 0,
     "match_radius_km": [3, 5, 7],
     "search_timeout_ms": 90000,
     "still_looking_msg_ms": 30000,
