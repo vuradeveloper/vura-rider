@@ -1092,7 +1092,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
       try {
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
-        await execute(
+        const updated = await execute(
           `UPDATE driver_profiles
               SET last_heartbeat_at = NOW(),
                   status = CASE
@@ -1100,9 +1100,22 @@ export function setupSocketHandlers(io: SocketIOServer) {
                     ELSE COALESCE(status, 'offline')
                   END,
                   updated_at = NOW()
-            WHERE user_id = $1`,
+            WHERE user_id = $1
+        RETURNING status`,
           [dbUserId]
         ).catch(() => undefined);
+        // MODULE 1 FIX: the heartbeat must also refresh driver_cells, or a
+        // stationary driver (app alive, GPS quiet) is evicted from the index
+        // after stale_seconds and vanishes from H3 matching even though
+        // driver_profiles still counts them as fresh. Fire-and-forget like
+        // every other index write — a failed touch must never break the
+        // heartbeat itself.
+        const status = (updated?.rows?.[0] as { status?: string } | undefined)?.status;
+        if (status !== undefined) {
+          void getDriverIndex()
+            .touch(dbUserId, status)
+            .catch((err) => noteIndexUpsertFailure(dbUserId, err));
+        }
       } catch (err: any) {
         console.warn("driver heartbeat failed:", err?.message);
       }

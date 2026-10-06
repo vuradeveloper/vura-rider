@@ -351,4 +351,28 @@ describe.skipIf(!enabled)("stale eviction against real Postgres", () => {
     expect(a + b).toBeGreaterThanOrEqual(0);
     expect([a, b]).toContain(0);
   });
+
+  it("touch() revives a stale index row (Module 1 heartbeat fix)", async () => {
+    const id = await seedDriver({ lat: -26.1062, lng: 28.0561 });
+    await driverIndex.upsert({ userId: id, lat: -26.1062, lng: 28.0561, status: "available" });
+    await execute(`UPDATE driver_cells SET last_seen_at = NOW() - interval '10 minutes' WHERE user_id = $1`, [id]);
+
+    // A heartbeat-only driver (app alive, GPS quiet) must NOT stay evicted:
+    // this is the exact stationary-driver bug the fix closes.
+    expect(await driverIndex.touch(id, "available")).toBe(true);
+
+    const rows = await query<{ last_seen_at: string; status: string }>(
+      `SELECT last_seen_at, status FROM driver_cells WHERE user_id = $1`,
+      [id]
+    );
+    expect(rows).toHaveLength(1);
+    expect(Date.now() - Date.parse(rows[0].last_seen_at)).toBeLessThan(60_000);
+    expect(rows[0].status).toBe("available");
+
+    // A driver who never pinged GPS has no index row: honest false, no INSERT.
+    const ghost = randomUUID();
+    expect(await driverIndex.touch(ghost, "available")).toBe(false);
+    const ghostRows = await query(`SELECT 1 FROM driver_cells WHERE user_id = $1`, [ghost]);
+    expect(ghostRows).toHaveLength(0);
+  });
 });

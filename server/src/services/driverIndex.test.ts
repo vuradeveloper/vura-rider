@@ -149,6 +149,51 @@ describe("stale eviction", () => {
   });
 });
 
+describe("heartbeat touch (Module 1 fix: stationary drivers stay fresh)", () => {
+  it("refreshes last_seen_at and mirrors status without moving the position", async () => {
+    const ok = await driverIndex.touch("driver-1", "available");
+    expect(ok).toBe(true);
+
+    const call = db.execute.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("UPDATE driver_cells")
+    );
+    expect(call).toBeDefined();
+    expect(String(call![0])).toContain("last_seen_at = NOW()");
+    expect(String(call![0])).toContain("COALESCE($2, status)");
+    // Keyed by user_id — never a positional/scan update.
+    expect(String(call![0])).toContain("WHERE user_id = $1");
+    // Position and cell are deliberately NOT written: this is liveness only.
+    expect(String(call![0])).not.toContain("lat =");
+    expect(String(call![0])).not.toContain("cell_res8 =");
+    expect(call![1]).toEqual(["driver-1", "available"]);
+  });
+
+  it("keeps the stored status when none is passed", async () => {
+    await driverIndex.touch("driver-1");
+    const call = db.execute.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("UPDATE driver_cells")
+    );
+    expect(call![1]).toEqual(["driver-1", null]);
+  });
+
+  it("reports false when the driver has no index row (never pinged GPS)", async () => {
+    db.execute.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    expect(await driverIndex.touch("driver-1", "available")).toBe(false);
+  });
+
+  it("never throws on a database failure", async () => {
+    db.execute.mockRejectedValueOnce(new Error("connection lost"));
+    await expect(driverIndex.touch("driver-1")).resolves.toBe(false);
+  });
+
+  it("is a no-op without a user id", async () => {
+    expect(await driverIndex.touch("")).toBe(false);
+    expect(db.execute.mock.calls.filter((c: any[]) =>
+      String(c[0]).includes("UPDATE driver_cells")
+    )).toHaveLength(0);
+  });
+});
+
 describe("matchable status comes from ONE constant (Q8)", () => {
   it("treats only 'available' as matchable", () => {
     expect(MATCHABLE_STATUSES).toEqual(["available"]);

@@ -85,6 +85,7 @@ function makeIndex(
     getDriversInCells: vi.fn(async () => rows),
     remove: vi.fn(),
     evictStale: vi.fn(async () => 0),
+    touch: vi.fn(async () => true),
     countFresh: vi.fn(async () => rows.length),
     ...over,
   };

@@ -58,6 +58,8 @@ export interface DriverIndex {
   getDriversInCells(cells: string[], limit?: number): Promise<IndexedDriver[]>;
   remove(userId: string): Promise<boolean>;
   evictStale(olderThanSeconds?: number): Promise<number>;
+  /** Refresh liveness WITHOUT a new position — used by driver:heartbeat. */
+  touch(userId: string, status?: string | null): Promise<boolean>;
   countFresh(olderThanSeconds?: number): Promise<number>;
 }
 
@@ -193,6 +195,28 @@ class PostgresDriverIndex implements DriverIndex {
       [seconds]
     ).catch(() => ({ rowCount: 0, rows: [] as any[] }));
     return r.rowCount ?? 0;
+  }
+
+  /**
+   * Refresh `last_seen_at` (optionally mirroring status) without moving the
+   * driver. THE MODULE 1 FIX: `driver:heartbeat` only updated
+   * driver_profiles, so a stationary driver whose app heartbeats but stops
+   * sending GPS (parked, background, battery saver) went cold in
+   * driver_cells after `stale_seconds` and dropped out of H3 matching —
+   * while the eligibility SQL over driver_profiles would still have
+   * accepted them. Heartbeats now touch the index row too. Position and
+   * cell are untouched: the next driver:location ping overwrites them.
+   * A missing row (driver never sent GPS) is a no-op — nothing to keep
+   * fresh, and upsert will create it on the first ping.
+   */
+  async touch(userId: string, status?: string | null): Promise<boolean> {
+    if (!userId) return false;
+    const r = await execute(
+      `UPDATE driver_cells SET last_seen_at = NOW(), status = COALESCE($2, status)
+        WHERE user_id = $1`,
+      [userId, status ?? null]
+    ).catch(() => ({ rowCount: 0, rows: [] as any[] }));
+    return (r.rowCount ?? 0) > 0;
   }
 
   async countFresh(olderThanSeconds?: number): Promise<number> {
