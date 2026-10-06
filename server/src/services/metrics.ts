@@ -22,7 +22,13 @@ export type CounterName =
   | "h3_path_failures"
   | "fallback_used"
   | "offer_driver_busy"
-  | "no_drivers";
+  | "no_drivers"
+  // ── Offer delivery hardening ──
+  | "offer_socket_down" // offers sent while the driver's socket room was EMPTY
+  | "push_delivered_zero" // a push answered "delivered to 0 devices" (or failed)
+  | "offer_undeliverable" // offers skipped instantly: socket down AND push 0
+  | "offer_acked" // device confirmed the offer rendered (driver:ride:offer:ack)
+  | "offer_not_acked"; // an offer that closed without ever being acknowledged
 
 import { hostname } from "os";
 
@@ -32,6 +38,11 @@ const counters: Record<CounterName, number> = {
   fallback_used: 0,
   offer_driver_busy: 0,
   no_drivers: 0,
+  offer_socket_down: 0,
+  push_delivered_zero: 0,
+  offer_undeliverable: 0,
+  offer_acked: 0,
+  offer_not_acked: 0,
 };
 
 /** Increment a counter (in-memory, sync, infallible). */
