@@ -42,7 +42,8 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.sql
       indexes `idx_driver_cells_cell`, `idx_driver_cells_fresh`.
 - [ ] Config seed present:
       `SELECT key, value FROM app_config WHERE key = 'matching';` → one row,
-      `h3_matching_enabled = true`, `stale_seconds = 40`, `h3_match_res = 8`.
+      `h3_matching_enabled = false` (flag stays OFF until the rollout step
+      turns it on deliberately), `stale_seconds = 40`, `h3_match_res = 8`.
 - [ ] Re-running the seed does not duplicate: that SELECT still returns 1 row.
 
 ---

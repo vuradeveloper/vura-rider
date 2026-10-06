@@ -39,6 +39,7 @@ import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/ve
 import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOfferWorker } from "./services/offerWorker";
+import { logEtaProviderStatus } from "./services/eta";
 import { startOsmPlaceSync, syncOsmPlaces, getOsmSyncStatus } from "./services/OsmPlaceSyncService";
 
 // ── Socket handlers ──
@@ -627,6 +628,11 @@ async function start() {
   // Driver dispatch runs on the DB, not on setTimeout (a restart must not strand
   // a rider waiting for an offer that will never expire).
   startOfferWorker(io);
+
+  // Report the ETA provider decision ONCE at boot: ROUTE_PROVIDER_URL set ->
+  // OSRM-compatible table API; unset -> "ETA provider not configured" and
+  // haversine ranking only (never the public OSRM demo in production).
+  logEtaProviderStatus();
 
   // 2. Init Firebase Admin
   try {

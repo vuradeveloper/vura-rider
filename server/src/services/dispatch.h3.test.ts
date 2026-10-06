@@ -40,6 +40,7 @@ import {
 } from "./driverIndex";
 import { setRoadEtaImpl, resetRoadEtaImpl } from "./eta";
 import { evictStaleIndexOnce } from "./offerWorker";
+import { getCounters } from "./metrics";
 
 const realIndex = getDriverIndex();
 
@@ -210,9 +211,10 @@ describe("flag ON: H3 path shape", () => {
     expect(res.reason).toBe("no_candidates");
     expect(traceStage("h3_search_timeout")).toHaveLength(1);
     expect(traceStage("h3_search_timeout")[0].max_rounds).toBe(6);
-    // The RIDER is told — not a silent stop.
+    // The RIDER is told — not a silent stop, and counted.
     expect(emitted.some((e) => e.event === "ride:no:drivers")).toBe(true);
     expect(rideEvents("no_drivers").length).toBe(1);
+    expect(getCounters().no_drivers).toBe(1);
     // Budget already spent: the index is not even consulted.
     expect(getDriverIndex().getDriversInCells).not.toHaveBeenCalled();
   });
@@ -259,8 +261,9 @@ describe("flag ON: failure falls back to the old path", () => {
     setH3Enabled(true);
     setDriverIndex(
       makeIndex([], {
+        countFresh: vi.fn(async () => 10), // rollout guard passes...
         getDriversInCells: vi.fn(async () => {
-          throw new Error("index exploded");
+          throw new Error("index exploded"); // ...then the path breaks
         }),
       })
     );
@@ -272,23 +275,46 @@ describe("flag ON: failure falls back to the old path", () => {
     expect(cands.map((c) => c.id)).toEqual(["driver-9"]);
     const sql = String(db.query.mock.calls[0][0]);
     expect(sql).not.toContain("driver_blocks"); // haversine shape, not H3
-    // The failure is LOUD, not silent.
+    // The failure is LOUD, not silent, and counted.
     const failed = traceStage("h3_path_failed");
     expect(failed).toHaveLength(1);
     expect(String(failed[0].error)).toContain("index exploded");
+    expect(getCounters().h3_path_failures).toBe(1);
+    expect(getCounters().fallback_used).toBe(1);
   });
 
-  it("falls back when the index is empty instead of reporting false no-drivers", async () => {
+  it("rollout guard: cold index (0 fresh rows anywhere) uses the old path and says why", async () => {
     setH3Enabled(true);
-    setDriverIndex(makeIndex([])); // nobody pinged since boot
+    const idx = makeIndex([], { countFresh: vi.fn(async () => 0) });
+    setDriverIndex(idx);
+    db.query.mockResolvedValueOnce([sqlDriver("driver-9", 0.4)]);
+
+    const cands = await findCandidates("ride-1", SANDTON.lat, SANDTON.lng, 1, false, 1);
+
+    expect(cands).toHaveLength(1);
+    expect(traceStage("h3_index_cold")).toHaveLength(1);
+    // The guard fired before any cell work — no cells, no busy lock.
+    expect(idx.getDriversInCells).not.toHaveBeenCalled();
+    expect(db.withTransaction).not.toHaveBeenCalled();
+    const sql = String(db.query.mock.calls[0][0]);
+    expect(sql).not.toContain("driver_blocks"); // haversine fallback ran
+    expect(getCounters().fallback_used).toBe(1);
+  });
+
+  it("falls back when the index is empty FOR THE AREA (globally fresh)", async () => {
+    setH3Enabled(true);
+    // Guard passes (rows exist elsewhere) but this pickup's cells are empty.
+    setDriverIndex(makeIndex([], { countFresh: vi.fn(async () => 5) }));
     db.query.mockResolvedValueOnce([sqlDriver("driver-9", 0.4)]);
 
     const cands = await findCandidates("ride-1", SANDTON.lat, SANDTON.lng, 1, false, 1);
 
     expect(cands).toHaveLength(1);
     expect(traceStage("h3_index_empty")).toHaveLength(1);
+    expect(traceStage("h3_index_cold")).toHaveLength(0);
     const sql = String(db.query.mock.calls[0][0]);
     expect(sql).not.toContain("driver_blocks"); // haversine fallback ran
+    expect(getCounters().fallback_used).toBe(1);
   });
 });
 
@@ -332,6 +358,7 @@ describe("one offer per driver", () => {
     expect(res.offered).toBe(true);
     expect(res.driverId).toBe("driver-2");
     expect(traceStage("offer_driver_busy")).toHaveLength(1);
+    expect(getCounters().offer_driver_busy).toBe(1);
     // driver-1 was removed from the SQL ids param by the busy-lock filter.
     const call = h3CandidateCall();
     expect(call![1][0]).toEqual(["driver-2"]);

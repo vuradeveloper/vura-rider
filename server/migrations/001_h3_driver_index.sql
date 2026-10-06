@@ -105,7 +105,7 @@ COMMIT;
 -- ON CONFLICT DO NOTHING: re-running never clobbers tuned values.
 INSERT INTO app_config (key, value) VALUES
   ('matching', '{
-    "h3_matching_enabled": true,
+    "h3_matching_enabled": false,
     "match_radius_km": [3, 5, 7],
     "search_timeout_ms": 90000,
     "still_looking_msg_ms": 30000,

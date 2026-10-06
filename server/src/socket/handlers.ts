@@ -16,6 +16,7 @@ import {
 } from "../services/dispatch";
 import { trace, startTrace } from "../services/trace";
 import { getDriverIndex } from "../services/driverIndex";
+import { noteIndexUpsertFailure } from "../services/metrics";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -869,9 +870,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
               heading: heading ?? null,
               status: statusAfterPing,
             })
-            .catch((err) =>
-              console.warn(`[driverIndex] upsert failed driver=${dbUserId}:`, err?.message)
-            );
+            .catch((err) => noteIndexUpsertFailure(dbUserId, err));
         }
         // Broadcast the driver's live position to the rider(s) of any ACTIVE
         // ride this driver is on, so the rider's car follows the real driver
@@ -951,7 +950,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
                 status: prof.status || "available",
               });
             }
-          })().catch((err) => console.warn("[driverIndex] online upsert failed:", err?.message));
+          })().catch((err) => noteIndexUpsertFailure(dbUserId, err));
           await broadcastRiderQueue();
           // A driver just became available: give them any ride that is still waiting
           // (including one parked as 'no_drivers'), instead of making the rider wait

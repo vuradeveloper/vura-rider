@@ -3,6 +3,7 @@ import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { reviveWaitingRides } from "../services/dispatch";
 import { getDriverIndex } from "../services/driverIndex";
+import { noteIndexUpsertFailure } from "../services/metrics";
 import { approvedVehicleCatalogue } from "../services/vehicleImages";
 import {
   catalogueForApi,
@@ -311,7 +312,7 @@ router.post("/online", requireAuth, async (req: AuthRequest, res: Response) => {
             status,
           });
         }
-      })().catch((err) => console.warn("[driverIndex] online upsert failed:", err?.message));
+      })().catch((err) => noteIndexUpsertFailure(dbUser.id, err));
     } else {
       void getDriverIndex().remove(dbUser.id).catch(() => false);
     }

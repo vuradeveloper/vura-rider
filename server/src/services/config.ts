@@ -58,7 +58,11 @@ export interface AppConfig {
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
-  h3_matching_enabled: true,
+  // Safe-by-default: H3 matching stays OFF unless app_config explicitly turns
+  // it on (the 001 seed writes false; rollout enables it per the checklist).
+  // A missing/unreadable app_config therefore behaves exactly like the
+  // pre-Module-1 server.
+  h3_matching_enabled: false,
   match_radius_km: [3, 5, 7],
   search_timeout_ms: 90_000,
   still_looking_msg_ms: 30_000,

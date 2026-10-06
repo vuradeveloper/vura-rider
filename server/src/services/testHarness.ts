@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { vi } from "vitest";
 import { setRoadEtaImpl } from "./eta";
+import { resetCounters } from "./metrics";
 
 // NOTE ON vi.hoisted: these mocks CANNOT be created with vi.hoisted() here,
 // because hoisted variables may not be exported from a helper module ("Cannot
@@ -81,6 +82,8 @@ export function resetHarness() {
   notify.sendPushToUsers.mockResolvedValue(1);
   // Flag OFF + default thresholds: legacy tests exercise the haversine path.
   configState = { ...TEST_CONFIG };
+  // Dispatch counters start at zero for every test.
+  resetCounters();
   // No network under vitest: road ETA always uses the haversine fallback
   // unless a test injects its own provider via setRoadEtaImpl().
   setRoadEtaImpl(null);

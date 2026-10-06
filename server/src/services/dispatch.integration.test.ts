@@ -158,6 +158,15 @@ beforeAll(async () => {
       WHERE c.relname = 'idx_ride_offers_one_active_per_driver'`
   );
   expect(validity[0]?.indisvalid).toBe(true);
+
+  // The 001 seed keeps the flag OFF (safe rollout default). The suite then
+  // turns it on explicitly — exactly the production rollout sequence. (The
+  // OFF-by-default claim itself is asserted in the migration test below,
+  // where the row is deleted and re-seeded for determinism.)
+  await execute(
+    `UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'true') WHERE key = 'matching'`
+  );
+
   // Road ETA: haversine fallback only — no network from the test run.
   setRoadEtaImpl(null);
   invalidateConfigCache();
@@ -169,7 +178,11 @@ beforeEach(() => {
 });
 
 describe.skipIf(!enabled)("migration 001 + 001b against real Postgres", () => {
-  it("applies 001 twice (idempotent) and seeds exactly one config row", async () => {
+  it("applies 001 twice (idempotent) and seeds exactly one config row, flag OFF", async () => {
+    // Delete first so this asserts what the SEED writes, even when re-running
+    // against a container a previous suite toggled the flag on.
+    await execute(`DELETE FROM app_config WHERE key = 'matching'`);
+    await query(migrationSql());
     await query(migrationSql());
     const tables = await query<{ tablename: string }>(
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public'
@@ -181,8 +194,13 @@ describe.skipIf(!enabled)("migration 001 + 001b against real Postgres", () => {
       `SELECT value FROM app_config WHERE key = 'matching'`
     );
     expect(seed.length).toBe(1);
-    expect(seed[0].value.h3_matching_enabled).toBe(true);
+    // OFF by default: rollout turns it on explicitly (deploy checklist step).
+    expect(seed[0].value.h3_matching_enabled).toBe(false);
     expect(seed[0].value.stale_seconds).toBe(40);
+    // Leave the suite's flag ON for the tests that follow.
+    await execute(
+      `UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'true') WHERE key = 'matching'`
+    );
   });
 
   it("001b refuses a second PENDING offer for the same driver (double assignment)", async () => {

@@ -29,6 +29,7 @@ import { getConfig } from "./config";
 import { getDriverIndex, MATCHABLE_STATUSES } from "./driverIndex";
 import { cellsAround } from "../lib/h3";
 import { etaMinutesList } from "./eta";
+import { bump } from "./metrics";
 
 /** How long one driver has to answer before the ride moves on. */
 export const OFFER_TTL_SECONDS = 15;
@@ -236,6 +237,8 @@ export async function findCandidates(
       `[dispatch] H3 path FAILED ride=${rideId} (falling back to haversine):`,
       err?.message || err
     );
+    bump("h3_path_failures");
+    bump("fallback_used");
     return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
   }
 }
@@ -274,12 +277,26 @@ async function findCandidatesH3(
     return [];
   }
 
-  // 1. Cells that could contain a point within radiusKm. gridDisk gives
+  // 1. ROLLOUT GUARD: flag ON but the index has no fresh rows anywhere ->
+  //    this is "nobody has pinged since boot / migration just applied", not
+  //    "no drivers exist". Serve this request from the old path and SAY why,
+  //    so a flag turned on before the writers are live cannot strand riders.
+  const index = getDriverIndex();
+  const freshTotal = await index.countFresh(cfg.stale_seconds);
+  if (freshTotal === 0) {
+    trace(rideId, "h3_index_cold", { stale_seconds: cfg.stale_seconds });
+    console.log(
+      `[dispatch] rollout guard: driver_cells has 0 fresh rows (within ${cfg.stale_seconds}s); using haversine for ride=${rideId}`
+    );
+    bump("fallback_used");
+    return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
+  }
+
+  // 2. Cells that could contain a point within radiusKm. gridDisk gives
   //    CANDIDATES only — the exact haversine arrives in the SQL below.
   const { cells, k } = cellsAround(pickupLat, pickupLng, radiusKm, cfg.h3_match_res);
 
-  // 2. Who the index thinks is in those cells, seen within stale_seconds.
-  const index = getDriverIndex();
+  // 3. Who the index thinks is in those cells, seen within stale_seconds.
   const indexed = await index.getDriversInCells(cells, 500);
   const now = Date.now();
   const freshIds = indexed
@@ -290,17 +307,18 @@ async function findCandidatesH3(
     .map((d) => d.userId);
 
   if (freshIds.length === 0) {
-    // The index is empty for this area — usually "nobody pinged since boot" or
-    // "migration not applied yet", NOT "no drivers exist". Falling back keeps
-    // the rider served; the warn makes the deployment gap visible.
+    // The index is empty FOR THIS AREA while globally fresh — usually a
+    // deployment gap in the writers, NOT "no drivers exist". Falling back
+    // keeps the rider served; the warn makes the gap visible.
     trace(rideId, "h3_index_empty", { cells: cells.length, radius_km: radiusKm });
     console.warn(
       `[dispatch] H3 index has 0 fresh drivers ride=${rideId} cells=${cells.length} radius=${radiusKm}km; falling back to haversine`
     );
+    bump("fallback_used");
     return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
   }
 
-  // 3. One offer per driver — enforced TWICE:
+  // 4. One offer per driver — enforced TWICE:
   //    a) here: pending offers for these drivers are locked with FOR UPDATE
   //       SKIP LOCKED inside one transaction (skips rows a concurrent
   //       dispatcher is mid-flight on instead of blocking dispatch);
@@ -326,7 +344,7 @@ async function findCandidatesH3(
     return [];
   }
 
-  // 4. Eligibility, in SQL over driver_profiles (the source of truth for
+  // 5. Eligibility, in SQL over driver_profiles (the source of truth for
   //    status/online/freshness — the index only narrows the scan to ids):
   //    matchable status via the MATCHABLE_STATUSES constant, not-on-a-trip,
   //    not-already-offered, not-the-rider, driver_blocks (Q9), vehicle
@@ -383,7 +401,7 @@ async function findCandidatesH3(
   );
   if (rows.length === 0) return [];
 
-  // 5. Rank by ROAD ETA (one OSRM matrix call for the pool), haversine
+  // 6. Rank by ROAD ETA (one OSRM matrix call for the pool), haversine
   //    fallback per entry — never a reason to delay the offer.
   const etas = await etaMinutesList(
     { lat: pickupLat, lng: pickupLng },
@@ -544,6 +562,7 @@ export async function offerToNextDriver(
           driver_id: candidate.id,
           round: nextRound,
         });
+        bump("offer_driver_busy");
         console.warn(
           `[dispatch] driver already holds a pending offer, trying next candidate ride=${rideId} driver=${candidate.id}`
         );
@@ -678,6 +697,8 @@ export async function markNoDrivers(io: SocketIOServer, rideId: string): Promise
     return { rowCount: 0, rows: [] as any[] };
   });
   if (!upd.rowCount) return;
+  // The ride was actually parked with a rider-facing "no drivers" — count it.
+  bump("no_drivers");
 
   await execute(
     `UPDATE ride_offers SET status = 'expired', decline_reason = 'no_drivers', updated_at = NOW()

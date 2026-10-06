@@ -22,7 +22,7 @@ $env:VURA_TEST_DB_PORT='55432'; npx vitest run src/services/dispatch.integration
 | Check | Command / expectation |
 |---|---|
 | Migration applied + valid | `SELECT key FROM app_config WHERE key='matching';` → 1 row (see `server/migrations/TEST_MIGRATION.md`) |
-| Flag ON | `SELECT value->>'h3_matching_enabled' FROM app_config WHERE key='matching';` → `true` |
+| Flag turned ON for this test | the seed leaves it OFF; run `UPDATE app_config SET value = jsonb_set(value, '{h3_matching_enabled}', 'true') WHERE key = 'matching';` before starting (and back to `'false'` afterwards if you are not rolling out) |
 | Server up | boot log shows `[offerWorker] started (2s tick · offer TTL 15s · driver stale 45s)` |
 | Admin trace endpoint | `ADMIN_EMAILS` env contains the email you will sign in with |
 | Apps | driver app + rider app (or the `figma-ui` harness) pointed at this server |

@@ -5,16 +5,22 @@
 // than a driver 3km away on the same road. Matching ranks by road ETA so the
 // rider waits less; haversine-over-avg-speed is the FALLBACK, not the plan.
 //
-// HOW: ONE OSRM /table (matrix) request for the pickup and every candidate in
-// the pool — a single HTTP call regardless of candidate count — with a short
-// timeout so a slow provider cannot stall dispatch. Any failure (timeout, 5xx,
-// malformed body, no network, Node without fetch) silently degrades to
-// haversine / avg_speed_kmh, which is always available and needs no network.
+// PROVIDER (production-safe by default):
+//   * ROUTE_PROVIDER_URL set     -> OSRM-compatible `/table` matrix API
+//                                   (self-hosted OSRM, or any proxy speaking
+//                                   that shape), one HTTP call for the whole
+//                                   candidate pool, 700ms timeout.
+//   * ROUTE_PROVIDER_URL unset   -> "ETA provider not configured": NO request
+//                                   is ever made — especially NOT to the public
+//                                   router.project-osrm.org demo, which is
+//                                   rate-limited, unmonitored and unsuitable
+//                                   for production matching. Haversine only.
+//   * provider fails 5x in a row -> 60s circuit breaker (haversine meanwhile,
+//                                   one warning) so a dead provider cannot add
+//                                   latency to every dispatch.
+// Start-up reports the choice exactly once via logEtaProviderStatus().
 //
-// The provider URL comes from the same ROUTE_PROVIDER_URL the /api/route
-// proxy uses (self-hosted OSRM/Valhalla in production, the public OSRM demo
-// otherwise). Tests drive setRoadEtaImpl() so NO network call ever happens
-// under vitest.
+// Tests drive setRoadEtaImpl() so NO network call ever happens under vitest.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { haversineKm } from "../lib/h3";
@@ -30,12 +36,10 @@ export type RoadEtaImpl = (
   targets: LatLon[]
 ) => Promise<(number | null)[]>;
 
-const UPSTREAM =
-  process.env.ROUTE_PROVIDER_URL?.replace(/\/+$/, "") ||
-  "https://router.project-osrm.org";
-
 /** Dispatch ranks candidates; it must never wait on a routing provider. */
 const TABLE_TIMEOUT_MS = 700;
+const MAX_CONSECUTIVE_FAILURES = 5;
+const COOLDOWN_MS = 60_000;
 
 let impl: RoadEtaImpl | null | undefined = undefined;
 
@@ -44,9 +48,47 @@ export function setRoadEtaImpl(fn: RoadEtaImpl | null): void {
   impl = fn;
 }
 
-/** Test seam: back to the default OSRM provider. */
+/** Test seam: back to the configured-provider default. */
 export function resetRoadEtaImpl(): void {
   impl = undefined;
+}
+
+/**
+ * The OSRM-compatible base URL, read LAZILY (dotenv/import-order safe).
+ * null = not configured = haversine only. No public-demo default, ever.
+ */
+export function etaProviderUrl(): string | null {
+  const url = (process.env.ROUTE_PROVIDER_URL || "").trim().replace(/\/+$/, "");
+  return url || null;
+}
+
+let statusLogged = false;
+let consecutiveFailures = 0;
+let cooldownUntil = 0;
+
+/**
+ * Log the ETA provider decision ONCE, at startup (index.ts calls this).
+ * Answers: "is ROUTE_PROVIDER_URL set, and what happens if it is not?"
+ */
+export function logEtaProviderStatus(): void {
+  if (statusLogged) return;
+  statusLogged = true;
+  const url = etaProviderUrl();
+  if (url) {
+    let host = url;
+    try {
+      host = new URL(url).host;
+    } catch {
+      /* keep raw */
+    }
+    console.log(
+      `[eta] ETA provider: OSRM-compatible table API at ${host} (ROUTE_PROVIDER_URL set), ${TABLE_TIMEOUT_MS}ms timeout`
+    );
+  } else {
+    console.log(
+      "[eta] ETA provider not configured (ROUTE_PROVIDER_URL unset); using haversine fallback"
+    );
+  }
 }
 
 /** Straight-line minutes at the configured average city speed. */
@@ -64,12 +106,14 @@ async function osrmTableMinutes(
   pickup: LatLon,
   targets: LatLon[]
 ): Promise<(number | null)[]> {
+  const base = etaProviderUrl();
+  if (!base) throw new Error("ETA provider not configured"); // belt and braces
   const g = globalThis as any;
   if (typeof g.fetch !== "function") throw new Error("fetch unavailable");
   const coords = [pickup, ...targets]
     .map((p) => `${Number(p.lng)},${Number(p.lat)}`)
     .join(";");
-  const url = `${UPSTREAM}/table/v1/driving/${coords}?sources=0`;
+  const url = `${base}/table/v1/driving/${coords}?sources=0`;
   const signal =
     typeof AbortSignal !== "undefined" && typeof (AbortSignal as any).timeout === "function"
       ? (AbortSignal as any).timeout(TABLE_TIMEOUT_MS)
@@ -95,14 +139,33 @@ export async function etaMinutesList(
 ): Promise<number[]> {
   const fallback = targets.map((t) => haversineEtaMinutes(pickup, t, avgSpeedKmh));
   if (targets.length === 0) return [];
-  const active = impl === undefined ? osrmTableMinutes : impl;
-  if (!active) return fallback;
+  const usingDefault = impl === undefined;
+  const active = usingDefault ? osrmTableMinutes : impl;
+  if (!active) return fallback; // explicitly haversine-only (tests)
+
+  if (usingDefault) {
+    if (!etaProviderUrl()) return fallback; // not configured -> never dial out
+    if (Date.now() < cooldownUntil) return fallback; // circuit breaker open
+    logEtaProviderStatus(); // safety net if the startup hook was skipped
+  }
+
   try {
     const got = await active(pickup, targets);
+    if (usingDefault) consecutiveFailures = 0;
     return got.map((v, i) =>
       typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : fallback[i]
     );
   } catch {
+    if (usingDefault) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        consecutiveFailures = 0;
+        cooldownUntil = Date.now() + COOLDOWN_MS;
+        console.warn(
+          `[eta] ETA provider failing (${MAX_CONSECUTIVE_FAILURES}x in a row); circuit breaker open for ${COOLDOWN_MS / 1000}s, haversine ranking meanwhile`
+        );
+      }
+    }
     return fallback;
   }
 }
