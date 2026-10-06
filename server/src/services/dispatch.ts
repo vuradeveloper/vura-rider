@@ -1085,6 +1085,35 @@ export async function expireOffers(io: SocketIOServer): Promise<number> {
       ORDER BY expires_at ASC LIMIT 40`
   ).catch(() => [] as any[]);
 
+  // Which of these offers did the DEVICE ever confirm (driver:ride:offer:ack)?
+  // offer_not_acked counts offers that close with no ack on record — the
+  // counterpart to offer_acked (bumped on receipt in handlers.ts). Read via
+  // execute() inside try/catch: an ack-accounting problem must never be able
+  // to block offer expiry, and this keeps the db.query slot free for the
+  // candidates query of the re-offer below.
+  const acked = new Set<string>();
+  if (due.length > 0) {
+    try {
+      const res = await execute(
+        `SELECT ride_id, detail FROM ride_events
+          WHERE event = 'trace:offer_delivered_ack'
+            AND ride_id = ANY($1::uuid[])`,
+        [[...new Set(due.map((o) => o.ride_id))]]
+      );
+      for (const r of res?.rows ?? []) {
+        try {
+          const d = typeof r.detail === "string" ? JSON.parse(r.detail) : r.detail;
+          const driverId = d?.driver_id;
+          if (driverId) acked.add(`${r.ride_id}:${driverId}`);
+        } catch {
+          /* unparsable ack row = not acked */
+        }
+      }
+    } catch {
+      /* best-effort: expiry must proceed without ack knowledge */
+    }
+  }
+
   let handled = 0;
   for (const offer of due) {
     const upd = await execute(
@@ -1094,6 +1123,7 @@ export async function expireOffers(io: SocketIOServer): Promise<number> {
     ).catch(() => ({ rowCount: 0, rows: [] as any[] }));
     if (!upd.rowCount) continue;
     handled += 1;
+    if (!acked.has(`${offer.ride_id}:${offer.driver_id}`)) bump("offer_not_acked");
     await logRideEvent(offer.ride_id, offer.driver_id, "offer_expired", { round: offer.round });
 
     const ride = await queryOne<{ status: string }>(
