@@ -18,6 +18,8 @@ vi.mock("./vehicleImages", async () => (await import("./testHarness")).vehicleIm
 vi.mock("./config", async () => (await import("./testHarness")).appConfig);
 
 import { offerToNextDriver, expireOffers, markNoDrivers, declineOffer } from "./dispatch";
+import { getCounters } from "./metrics";
+import { getCounters } from "./metrics";
 
 beforeEach(() => {
   resetHarness();
@@ -199,5 +201,65 @@ describe("5. no drivers -> the rider is told", () => {
     const res = await offerToNextDriver(io, "ride-1");
     expect(res.offered).toBe(false);
     expect(res.reason).toBe("ride_parked_no_drivers");
+  });
+});
+
+describe("offer ack accounting (delivery hardening)", () => {
+  it("counts offer_not_acked when an offer expires with no device ack", async () => {
+    const { io } = makeIo();
+    // Due-offer sweep returns exactly one expired offer.
+    db.query.mockResolvedValueOnce([
+      { id: "offer-1", ride_id: "ride-1", driver_id: "driver-1", round: 1 },
+    ]);
+    // Ride stopped searching -> no re-offer; keeps the test focused on accounting.
+    db.queryOne.mockImplementationOnce(async () => ({ status: "accepted" }));
+    // The ack read (first execute) uses the default rows: [] = nobody acked.
+
+    const n = await expireOffers(io);
+
+    expect(n).toBe(1);
+    const c = getCounters();
+    expect(c.offer_not_acked).toBe(1);
+    expect(c.offer_acked).toBe(0);
+    // The ack read targets ride_events with the exact trace event name.
+    const ackRead = db.execute.mock.calls.find((c2: any[]) =>
+      String(c2[0]).includes("trace:offer_delivered_ack")
+    );
+    expect(ackRead).toBeDefined();
+    expect(String(ackRead![0])).toContain("ride_id = ANY");
+    expect(ackRead![1]).toEqual([["ride-1"]]);
+  });
+
+  it("does NOT count offer_not_acked when the device acknowledged", async () => {
+    const { io } = makeIo();
+    db.query.mockResolvedValueOnce([
+      { id: "offer-1", ride_id: "ride-1", driver_id: "driver-1", round: 1 },
+    ]);
+    db.queryOne.mockImplementationOnce(async () => ({ status: "accepted" }));
+    // First execute() = the ack read; JSONB-object detail as Postgres returns it.
+    db.execute.mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [{ ride_id: "ride-1", detail: { driver_id: "driver-1" } }],
+    });
+
+    const n = await expireOffers(io);
+
+    expect(n).toBe(1);
+    expect(getCounters().offer_not_acked).toBe(0);
+  });
+
+  it("parses a TEXT detail column (string) as an ack too", async () => {
+    const { io } = makeIo();
+    db.query.mockResolvedValueOnce([
+      { id: "offer-1", ride_id: "ride-1", driver_id: "driver-1", round: 1 },
+    ]);
+    db.queryOne.mockImplementationOnce(async () => ({ status: "accepted" }));
+    db.execute.mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [{ ride_id: "ride-1", detail: JSON.stringify({ driver_id: "driver-1" }) }],
+    });
+
+    await expireOffers(io);
+    expect(getCounters().offer_not_acked).toBe(0);
   });
 });

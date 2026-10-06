@@ -16,7 +16,7 @@ import {
 } from "../services/dispatch";
 import { trace, startTrace } from "../services/trace";
 import { getDriverIndex } from "../services/driverIndex";
-import { noteIndexUpsertFailure } from "../services/metrics";
+import { noteIndexUpsertFailure, bump } from "../services/metrics";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -261,6 +261,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
       await logRideEvent(rideId, driverId, "offer_delivered_ack", {
         channel: data?.channel ?? "socket",
       });
+      // Delivery hardening: every confirmed arrival counts. The counterpart
+      // offer_not_acked is bumped in expireOffers when an offer closes with
+      // no such ack on record.
+      bump("offer_acked");
     } catch (err: any) {
       console.warn("offer ack failed:", err?.message);
     }
