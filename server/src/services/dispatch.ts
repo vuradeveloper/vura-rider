@@ -38,6 +38,46 @@ export const OFFER_TTL_SECONDS = 15;
 export const LOCATION_FRESH_SECONDS = 20;
 /** Stop offering after this many rounds so a ride can't churn forever. */
 export const MAX_OFFER_ROUNDS = 12;
+
+/**
+ * Does the driver's personal room hold a connected socket RIGHT NOW?
+ *
+ * The truthful replacement for the old `Boolean(firebase_uid)` guess: a uid
+ * says the driver once logged in, nothing about this instant. Reads the same
+ * socket.io v4 structure production emits into (handlers.ts joins `user:<uid>`
+ * on connect). No adapter or no room => nobody is listening. Never throws.
+ */
+export function hasLiveSocket(io: unknown, room: string): boolean {
+  try {
+    const rooms: { get?: (r: string) => unknown } | undefined = (io as any)?.sockets
+      ?.adapter?.rooms;
+    const members = typeof rooms?.get === "function" ? rooms.get(room) : undefined;
+    return !!members && typeof (members as { size?: number }).size === "number" &&
+      (members as { size: number }).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Cap on waiting for the push answer when the socket is down (delivery
+ * hardening step b). Resolves null = UNKNOWN outcome, and unknown never
+ * triggers the instant skip — only a proven delivered:0 does.
+ */
+const PUSH_RESULT_TIMEOUT_MS = 2500;
+function withPushTimeout(p: Promise<number | null>): Promise<number | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => finish(null), PUSH_RESULT_TIMEOUT_MS);
+    function finish(v: number | null): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(v);
+    }
+    p.then(finish, () => finish(null));
+  });
+}
 /** No location/heartbeat for this long while "available" => demote to offline. */
 export const DRIVER_STALE_SECONDS = 20;
 
@@ -587,6 +627,55 @@ export async function offerToNextDriver(
     return { offered: false, reason: "too_many_rounds" };
   }
 
+  /**
+   * Push for ONE offer attempt. Resolves with the number of devices the push
+   * reached, or null when the outcome is UNKNOWN (send rejected / timed out).
+   * Only a known 0 may trigger the instant skip (hardening step b) — a flaky
+   * network on the server side must never cost a driver their offer.
+   */
+  const sendOfferPush = (
+    driverId: string,
+    offerId: string,
+    fare: number
+  ): Promise<number | null> =>
+    Promise.resolve()
+      .then(() =>
+        sendPushToUsers([driverId], {
+          type: "ride_offer",
+          title: "New ride request",
+          body: `${ride.pickup_address || "Pickup"} · R${fare.toFixed(2)} — tap to accept`,
+          rideId,
+          offerId,
+          highPriority: true,
+          data: { channel: "offers", offer_id: offerId },
+        })
+      )
+      .then((n) => {
+        const delivered = typeof n === "number" ? n : 0;
+        if (delivered <= 0) bump("push_delivered_zero");
+        trace(rideId, "push_result", { driver_id: driverId, delivered, ok: delivered > 0 });
+        if (!delivered) {
+          console.warn(
+            `[dispatch] push delivered 0 devices driver=${driverId} ride=${rideId}; ` +
+              `socket is the only remaining channel`
+          );
+        }
+        return delivered;
+      })
+      .catch((err) => {
+        // UNKNOWN, not zero: counted (the trace records delivered:0) but not
+        // skip-eligible — see withPushTimeout.
+        bump("push_delivered_zero");
+        trace(rideId, "push_result", {
+          driver_id: driverId,
+          delivered: 0,
+          ok: false,
+          error: err?.message ?? String(err),
+        });
+        console.warn(`[dispatch] push failed driver=${driverId}:`, err?.message);
+        return null;
+      });
+
   const candidates = await findCandidates(
     rideId,
     ride.pickup_lat,
@@ -618,6 +707,8 @@ export async function offerToNextDriver(
   // the original behaviour (loud trace + log, round not sent).
   let driver: Candidate | null = null;
   let offer: { id: string; expires_at: string } | null = null;
+  // Candidates skipped for being unreachable (socket down + push delivered 0).
+  let undeliverable = 0;
   for (const candidate of candidates) {
     const res = await queryOne<{ id: string; expires_at: string }>(
       `INSERT INTO ride_offers (ride_id, driver_id, status, expires_at, round)
@@ -670,92 +761,121 @@ export async function offerToNextDriver(
       );
       continue;
     }
+    // ── Deliver BEFORE declaring this candidate the winner ──────────────────
+    // Truthful liveness AT EMIT TIME (step a: socket_connected, not "has a
+    // uid") and — step b — a driver we cannot reach at all (empty socket room
+    // AND push delivered 0) is skipped NOW instead of holding the round for
+    // the full 15s TTL.
+    const room = candidate.firebase_uid ? `user:${candidate.firebase_uid}` : null;
+    const socketConnected = !!room && hasLiveSocket(io, room);
+    if (!socketConnected) bump("offer_socket_down");
+
+    await execute(`UPDATE rides SET offer_round = $2, updated_at = NOW() WHERE id = $1`, [
+      rideId,
+      nextRound,
+    ]).catch(() => undefined);
+
+    const payload = {
+      id: rideId,
+      offerId: res.id,
+      expiresAt: res.expires_at,
+      secondsRemaining: OFFER_TTL_SECONDS,
+      round: nextRound,
+      version: (ride.version || 0) + 1,
+      pickupAddress: ride.pickup_address,
+      pickupLat: ride.pickup_lat,
+      pickupLng: ride.pickup_lng,
+      destinationAddress: ride.destination_address,
+      destinationLat: ride.destination_lat,
+      destinationLng: ride.destination_lng,
+      fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
+      paymentMethod: ride.payment_method || "cash",
+      waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
+      stops: Array.isArray(ride.waypoints) ? ride.waypoints : [],
+      riderName: "Rider",
+      riderRating: 5,
+      distanceToPickupKm: Number(candidate.distance_km?.toFixed?.(2) ?? candidate.distance_km),
+    };
+
+    if (room) {
+      io.to(room).emit("ride:offer", payload);
+      io.to(room).emit("ride:request", payload);
+    }
+
+    await logRideEvent(rideId, candidate.id, "offer_sent", {
+      round: nextRound,
+      distanceKm: payload.distanceToPickupKm,
+      expiresIn: OFFER_TTL_SECONDS,
+      socket: socketConnected,
+    });
+    // `channel` and `socket_connected` are derived from the ADAPTER ROOM at
+    // emit time — an empty room is push_only regardless of the uid.
+    trace(rideId, "offer_sent", {
+      driver_id: candidate.id,
+      channel: socketConnected ? "socket" : "push_only",
+      socket_connected: socketConnected,
+      distance_km: payload.distanceToPickupKm,
+    });
+
+    const push = sendOfferPush(candidate.id, res.id, payload.fare);
+    if (socketConnected) {
+      // Live socket: push is belt-and-braces and is never awaited.
+      void push;
+      driver = candidate;
+      offer = res;
+      break;
+    }
+
+    const delivered = await withPushTimeout(push);
+    if (delivered === 0) {
+      // Socket down AND push reached nobody: this offer can never be seen.
+      // Close it immediately and try the NEXT candidate in this same round.
+      await execute(
+        `UPDATE ride_offers SET status = 'expired', decline_reason = 'undeliverable', updated_at = NOW()
+          WHERE id = $1 AND status = 'pending'`,
+        [res.id]
+      ).catch(() => undefined);
+      trace(rideId, "offer_undeliverable", {
+        driver_id: candidate.id,
+        round: nextRound,
+        socket_connected: false,
+        push_delivered: 0,
+      });
+      console.warn(
+        `[dispatch] offer undeliverable (socket down + push delivered 0) ride=${rideId} driver=${candidate.id}; trying next candidate`
+      );
+      bump("offer_undeliverable");
+      undeliverable += 1;
+      continue;
+    }
+
     driver = candidate;
     offer = res;
     break;
   }
-  if (!offer || !driver) return { offered: false, reason: "offer_conflict" };
-
-  await execute(`UPDATE rides SET offer_round = $2, updated_at = NOW() WHERE id = $1`, [
-    rideId,
-    nextRound,
-  ]).catch(() => undefined);
-
-  const payload = {
-    id: rideId,
-    offerId: offer.id,
-    expiresAt: offer.expires_at,
-    secondsRemaining: OFFER_TTL_SECONDS,
-    round: nextRound,
-    version: (ride.version || 0) + 1,
-    pickupAddress: ride.pickup_address,
-    pickupLat: ride.pickup_lat,
-    pickupLng: ride.pickup_lng,
-    destinationAddress: ride.destination_address,
-    destinationLat: ride.destination_lat,
-    destinationLng: ride.destination_lng,
-    fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
-    paymentMethod: ride.payment_method || "cash",
-    waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
-    stops: Array.isArray(ride.waypoints) ? ride.waypoints : [],
-    riderName: "Rider",
-    riderRating: 5,
-    distanceToPickupKm: Number(driver.distance_km?.toFixed?.(2) ?? driver.distance_km),
-  };
-
-  if (driver.firebase_uid) {
-    io.to(`user:${driver.firebase_uid}`).emit("ride:offer", payload);
-    io.to(`user:${driver.firebase_uid}`).emit("ride:request", payload);
+  if (!offer || !driver) {
+    if (undeliverable > 0) {
+      // Nobody in this round was reachable. Advance exactly like expireOffers
+      // and declineOffer do, so the rider never waits on an offer that does
+      // not exist. try/catch: a failed status read must not throw here.
+      let current: { status: string } | null = null;
+      try {
+        current =
+          (await queryOne<{ status: string }>(`SELECT status FROM rides WHERE id = $1`, [
+            rideId,
+          ])) ?? null;
+      } catch {
+        current = null;
+      }
+      if (current && ["searching", "scheduled"].includes(current.status)) {
+        return offerToNextDriver(io, rideId, nextRound + 1);
+      }
+      return { offered: false, reason: "offer_undeliverable" };
+    }
+    return { offered: false, reason: "offer_conflict" };
   }
 
-  await logRideEvent(rideId, driver.id, "offer_sent", {
-    round: nextRound,
-    distanceKm: payload.distanceToPickupKm,
-    expiresIn: OFFER_TTL_SECONDS,
-    socket: Boolean(driver.firebase_uid),
-  });
-
-  // `channel` distinguishes the two delivery paths. socket:false means this
-  // driver has NO live connection, so push is the ONLY way the offer can arrive
-  // -- exactly the case that used to fail in total silence.
-  trace(rideId, "offer_sent", {
-    driver_id: driver.id,
-    channel: driver.firebase_uid ? "socket" : "push_only",
-    distance_km: payload.distanceToPickupKm,
-  });
-
-  void sendPushToUsers([driver.id], {
-    type: "ride_offer",
-    title: "New ride request",
-    body: `${ride.pickup_address || "Pickup"} Â· R${payload.fare.toFixed(2)} â€” tap to accept`,
-    rideId,
-    offerId: offer.id,
-    highPriority: true,
-    data: { channel: "offers", offer_id: offer.id },
-  })
-    // WAS `.catch(() => 0)` -- a push that failed, or was skipped because the
-    // token was an Expo token this build can never mint, returned 0 in total
-    // silence. `delivered: 0` is now written to the trace, which is what makes
-    // "the app was killed" distinguishable from "the offer arrived".
-    .then((delivered) => {
-      trace(rideId, "push_result", { driver_id: driver.id, delivered, ok: delivered > 0 });
-      if (!delivered) {
-        console.warn(
-          `[dispatch] push delivered 0 devices driver=${driver.id} ride=${rideId}; ` +
-            `socket is the only remaining channel`
-        );
-      }
-    })
-    .catch((err) => {
-      trace(rideId, "push_result", {
-        driver_id: driver.id,
-        delivered: 0,
-        ok: false,
-        error: err?.message ?? String(err),
-      });
-      console.warn(`[dispatch] push failed driver=${driver.id}:`, err?.message);
-    });
-
+  // Emit, traces and push all happened inside the loop, per candidate.
   return { offered: true, driverId: driver.id };
 }
 

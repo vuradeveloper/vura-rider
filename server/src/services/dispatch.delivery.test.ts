@@ -6,7 +6,7 @@
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
-  db, notify, makeIo, mockRide, queueOffer, traceStage, resetHarness, DRIVER_NEAR,
+  db, notify, makeIo, mockRide, queueOffer, traceStage, resetHarness, DRIVER_NEAR, RIDE,
 } from "./testHarness";
 
 // Async factories: evaluated after hoisting, so the module instance (and
@@ -19,6 +19,7 @@ vi.mock("./vehicleImages", async () => (await import("./testHarness")).vehicleIm
 vi.mock("./config", async () => (await import("./testHarness")).appConfig);
 
 import { offerToNextDriver } from "./dispatch";
+import { getCounters } from "./metrics";
 
 beforeEach(() => {
   resetHarness();
@@ -179,5 +180,105 @@ describe("3. push is the fallback when the socket is down", () => {
     const detail = traceStage("offer_sent")[0];
     expect(detail.channel).toBe("socket");
     expect(detail.driver_id).toBe("driver-1");
+  });
+});
+
+describe("4. delivery hardening: truthful channel + instant skip", () => {
+  it("records socket_connected=true only when the room really has a socket", async () => {
+    const { io } = makeIo(); // default: all rooms connected
+    queueOffer();
+
+    await offerToNextDriver(io, "ride-1");
+
+    const d = traceStage("offer_sent")[0];
+    expect(d.socket_connected).toBe(true);
+    expect(d.channel).toBe("socket");
+    expect(getCounters().offer_socket_down).toBe(0);
+  });
+
+  it("a uid with a dead socket is push_only + offer_socket_down, not 'socket'", async () => {
+    const { io } = makeIo(false); // nobody connected; driver HAS a firebase_uid
+    notify.sendPushToUsers.mockResolvedValue(1); // push reaches a device
+    queueOffer();
+
+    const res = await offerToNextDriver(io, "ride-1");
+
+    expect(res.offered).toBe(true);
+    const d = traceStage("offer_sent")[0];
+    expect(d.socket_connected).toBe(false);
+    expect(d.channel).toBe("push_only");
+    expect(getCounters().offer_socket_down).toBe(1);
+    // The push ANSWERED before the offer was declared (awaited, not fire-and-forget).
+    expect(traceStage("push_result")[0]).toMatchObject({ delivered: 1, ok: true });
+  });
+
+  it("skips instantly when socket down AND push delivers 0, then offers the next candidate", async () => {
+    notify.sendPushToUsers.mockResolvedValueOnce(0).mockResolvedValue(1);
+    const { io } = makeIo(false);
+    db.query.mockResolvedValueOnce([
+      { ...DRIVER_NEAR, firebase_uid: "fb-d1", distance_km: 0.4 },
+      { ...DRIVER_NEAR, id: "driver-2", firebase_uid: "fb-d2", distance_km: 0.9 },
+    ]);
+    db.queryOne
+      .mockImplementationOnce(async () => ({ ...RIDE })) // loadRide
+      .mockImplementationOnce(async () => ({ id: "offer-1", expires_at: "2026-01-01T00:00:15Z" }))
+      .mockImplementationOnce(async () => ({ id: "offer-2", expires_at: "2026-01-01T00:00:15Z" }));
+
+    const res = await offerToNextDriver(io, "ride-1");
+
+    expect(res).toMatchObject({ offered: true, driverId: "driver-2" });
+    // driver-1's offer was closed NOW, not left pending for 15 seconds.
+    const closed = db.execute.mock.calls.filter(
+      (c: any[]) =>
+        String(c[0]).includes("UPDATE ride_offers") && String(c[0]).includes("undeliverable")
+    );
+    expect(closed).toHaveLength(1);
+    expect(closed[0][1]).toEqual(["offer-1"]);
+    const skipped = traceStage("offer_undeliverable");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({
+      driver_id: "driver-1",
+      socket_connected: false,
+      push_delivered: 0,
+    });
+    const c = getCounters();
+    expect(c.offer_undeliverable).toBe(1);
+    expect(c.offer_socket_down).toBe(2); // both attempts had an empty room
+    expect(c.push_delivered_zero).toBe(1);
+    // driver-2's offer DID go out.
+    const sent = traceStage("offer_sent");
+    expect(sent[sent.length - 1]).toMatchObject({ driver_id: "driver-2", socket_connected: false });
+  });
+
+  it("does NOT skip on an UNKNOWN push outcome (send rejected)", async () => {
+    notify.sendPushToUsers.mockRejectedValue(new Error("network down"));
+    const { io } = makeIo(false);
+    queueOffer();
+
+    // Unknown != delivered:0 — the offer keeps its 15s window.
+    const res = await offerToNextDriver(io, "ride-1");
+    expect(res).toMatchObject({ offered: true, driverId: "driver-1" });
+    expect(traceStage("offer_undeliverable")).toHaveLength(0);
+  });
+
+  it("when nobody is reachable the ride reports offer_undeliverable instead of hanging", async () => {
+    notify.sendPushToUsers.mockResolvedValue(0);
+    const { io } = makeIo(false);
+    db.query.mockResolvedValueOnce([{ ...DRIVER_NEAR, firebase_uid: "fb-d1" }]);
+    db.queryOne
+      .mockImplementationOnce(async () => ({ ...RIDE }))
+      .mockImplementationOnce(async () => ({ id: "offer-1", expires_at: "2026-01-01T00:00:15Z" }));
+
+    const res = await offerToNextDriver(io, "ride-1");
+
+    expect(res).toMatchObject({ offered: false, reason: "offer_undeliverable" });
+    expect(traceStage("offer_undeliverable")).toHaveLength(1);
+    expect(getCounters().offer_undeliverable).toBe(1);
+    // The advance decision ran (status read). mockRide answers null for this
+    // query shape, so no recursion happens inside the test.
+    const adv = db.queryOne.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("SELECT status FROM rides")
+    );
+    expect(adv).toBeDefined();
   });
 });

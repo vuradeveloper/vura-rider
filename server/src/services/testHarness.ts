@@ -106,10 +106,24 @@ export function resetHarness() {
   );
 }
 
-/** A fake io that records every (room, event, payload) emission. */
-export function makeIo() {
+/**
+ * A fake io that records every (room, event, payload) emission.
+ *
+ * `connected` mirrors the socket.io v4 adapter: dispatch.hasLiveSocket reads
+ * io.sockets.adapter.rooms.get(room) to decide socket_connected at emit time.
+ *   true (default) -> every room has a live socket (a healthy, connected driver)
+ *   false          -> nobody is connected anywhere
+ *   fn(room)       -> per-room control, e.g. makeIo((r) => r === "user:fb-d2")
+ */
+export function makeIo(connected: boolean | ((room: string) => boolean) = true) {
   const emitted: { room: string; event: string; payload: any }[] = [];
+  const isConnected = typeof connected === "function" ? connected : () => connected;
+  const rooms = {
+    get: (room: string): { size: number } | undefined =>
+      isConnected(room) ? { size: 1 } : undefined,
+  };
   const io = {
+    sockets: { adapter: { rooms } },
     to(room: string) {
       return {
         emit(event: string, payload: any) {
