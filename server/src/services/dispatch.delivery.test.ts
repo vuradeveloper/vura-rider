@@ -14,6 +14,9 @@ import {
 vi.mock("../config/database", async () => (await import("./testHarness")).db);
 vi.mock("./notify", async () => (await import("./testHarness")).notify);
 vi.mock("./vehicleImages", async () => (await import("./testHarness")).vehicleImages);
+// Flag-OFF config so getConfig() neither consumes the queryOne Once-queue nor
+// flips these legacy scenarios onto the Module 1 H3 path.
+vi.mock("./config", async () => (await import("./testHarness")).appConfig);
 
 import { offerToNextDriver } from "./dispatch";
 

@@ -15,6 +15,7 @@ import {
   startDispatch,
 } from "../services/dispatch";
 import { trace, startTrace } from "../services/trace";
+import { getDriverIndex } from "../services/driverIndex";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -839,7 +840,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         if (lat == null || lng == null) return;
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
-        await execute(
+        const updated = await execute(
           `UPDATE driver_profiles
            SET current_lat = $1, current_lng = $2,
                current_heading = COALESCE($3, current_heading),
@@ -850,9 +851,28 @@ export function setupSocketHandlers(io: SocketIOServer) {
                  ELSE COALESCE(status, 'offline')
                END,
                updated_at = NOW()
-           WHERE user_id = $4`,
+           WHERE user_id = $4
+           RETURNING status`,
           [lat, lng, heading ?? null, dbUserId]
         );
+        // Module 1: mirror the ping into the H3 driver index. Fire-and-forget —
+        // an index failure must never drop a GPS update the share page and
+        // dispatch fallback both rely on. Every ping re-computes the cell, so
+        // the row follows the driver across cell boundaries automatically.
+        const statusAfterPing = updated.rows?.[0]?.status as string | undefined;
+        if (statusAfterPing) {
+          void getDriverIndex()
+            .upsert({
+              userId: dbUserId,
+              lat: Number(lat),
+              lng: Number(lng),
+              heading: heading ?? null,
+              status: statusAfterPing,
+            })
+            .catch((err) =>
+              console.warn(`[driverIndex] upsert failed driver=${dbUserId}:`, err?.message)
+            );
+        }
         // Broadcast the driver's live position to the rider(s) of any ACTIVE
         // ride this driver is on, so the rider's car follows the real driver
         // (single source of truth — no per-app simulation).
@@ -915,6 +935,23 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // Join/leave the drivers room so we can broadcast queue counts.
         if (online === true) {
           socket.join("drivers");
+          // Module 1: refresh the index row (status + last position) if we have
+          // one — the next driver:location ping re-upserts coords anyway, so a
+          // driver who never pinged simply has no row and needs none here.
+          void (async () => {
+            const prof = await queryOne<{ current_lat: number | null; current_lng: number | null; status: string }>(
+              "SELECT current_lat, current_lng, status FROM driver_profiles WHERE user_id = $1",
+              [dbUserId]
+            ).catch(() => null);
+            if (prof?.current_lat != null && prof.current_lng != null) {
+              await getDriverIndex().upsert({
+                userId: dbUserId,
+                lat: Number(prof.current_lat),
+                lng: Number(prof.current_lng),
+                status: prof.status || "available",
+              });
+            }
+          })().catch((err) => console.warn("[driverIndex] online upsert failed:", err?.message));
           await broadcastRiderQueue();
           // A driver just became available: give them any ride that is still waiting
           // (including one parked as 'no_drivers'), instead of making the rider wait
@@ -922,6 +959,9 @@ export function setupSocketHandlers(io: SocketIOServer) {
           void reviveWaitingRides(io).catch(() => 0);
         } else {
           socket.leave("drivers");
+          // Offline drivers leave the index immediately: a queued offer to a
+          // driver who just closed the app is a lost round for the rider.
+          void getDriverIndex().remove(dbUserId).catch(() => false);
         }
       } catch (err: any) { console.error("Driver online error:", err); }
     });

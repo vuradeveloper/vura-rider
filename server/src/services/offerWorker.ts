@@ -14,6 +14,8 @@
 
 import type { Server as SocketIOServer } from "socket.io";
 import { expireOffers, reviveWaitingRides, sweepStaleDrivers } from "./dispatch";
+import { getDriverIndex } from "./driverIndex";
+import { getConfig } from "./config";
 
 const TICK_MS = 2000;
 const SWEEP_EVERY_TICKS = 15;
@@ -21,6 +23,42 @@ const SWEEP_EVERY_TICKS = 15;
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 let ticks = 0;
+
+// The eviction sweep guards SEPARATELY from the tick's own `running` flag: even
+// if a future caller invokes it directly (tests, a debug endpoint, a second
+// worker process), a run never overlaps another run — the second call returns
+// 0 immediately instead of issuing a second DELETE.
+let evicting = false;
+
+/**
+ * Drop drivers from the H3 index who have gone quiet past stale_seconds
+ * (40 today; read from app_config, never hardcoded here).
+ *
+ * Cheap by construction: idx_driver_cells_fresh (last_seen_at) turns the
+ * DELETE into an index range scan — no seq scan, no lock on driver_profiles,
+ * and driver_cells rows are rebuildable from the next GPS ping, so a lost row
+ * costs nothing.
+ */
+export async function evictStaleIndexOnce(): Promise<number> {
+  if (evicting) return 0; // skip: the previous run is still going
+  evicting = true;
+  try {
+    const cfg = await getConfig();
+    const n = await getDriverIndex().evictStale(cfg.stale_seconds);
+    if (n > 0) {
+      console.log(
+        `[offerWorker] evicted ${n} stale driver cell(s) (last_seen older than ${cfg.stale_seconds}s)`
+      );
+    }
+    return n;
+  } catch (err: any) {
+    // Never let a sweep failure kill the worker loop.
+    console.warn("[offerWorker] evictStale failed:", err?.message);
+    return 0;
+  } finally {
+    evicting = false;
+  }
+}
 
 export function startOfferWorker(io: SocketIOServer): void {
   if (timer) return;
@@ -39,6 +77,9 @@ export function startOfferWorker(io: SocketIOServer): void {
         if (ticks % SWEEP_EVERY_TICKS === 0) {
           const demoted = await sweepStaleDrivers(io);
           if (demoted > 0) console.log(`[offerWorker] marked ${demoted} silent driver(s) offline`);
+          // Index hygiene: same cadence as the driver demotion sweep (~30s),
+          // non-overlapping (evictStaleIndexOnce skips if still running).
+          await evictStaleIndexOnce();
         }
       } catch (err: any) {
         console.warn("[offerWorker] tick failed:", err?.message);

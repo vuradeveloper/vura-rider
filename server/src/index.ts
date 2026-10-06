@@ -33,6 +33,7 @@ import faceRouter from "./routes/face";
 import devLogsRouter from "./routes/devLogs";
 import devDispatchRouter from "./routes/devDispatch";
 import devDiagRouter from "./routes/devDiag";
+import debugTraceRouter from "./routes/debugTrace";
 import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import adminRouter from "./routes/admin";
@@ -91,6 +92,10 @@ app.use("/api/dev/logs", devLogsRouter);
 // Dispatch inspector (read-only, same read key): see the whole offer trail for a
 // ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
 app.use("/api/dev/dispatch", devDispatchRouter);
+
+// Admin-only trip trace: GET /debug/trips/:id/trace (Firebase bearer + ADMIN_EMAILS).
+// Mounted with the other dev routes, before the global limiter.
+app.use("/debug", debugTraceRouter);
 
 // Environment diagnostics (read-only, same read key): which build is actually live,
 // whether sharp can encode, whether S3 accepts a real write, and WHY the newest

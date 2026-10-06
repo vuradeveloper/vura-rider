@@ -113,7 +113,9 @@ INSERT INTO app_config (key, value) VALUES
     "h3_heatmap_res": 7,
     "stale_seconds": 40,
     "offer_ttl_seconds": 15,
-    "avg_speed_kmh": 40
+    "avg_speed_kmh": 40,
+    "min_driver_rating": 0,
+    "required_vehicle_category": null
   }')
 ON CONFLICT (key) DO NOTHING;
 

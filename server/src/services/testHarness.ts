@@ -13,6 +13,7 @@
 // still missing the real risk, which is a behavioural regression.
 // ─────────────────────────────────────────────────────────────────────────────
 import { vi } from "vitest";
+import { setRoadEtaImpl } from "./eta";
 
 // NOTE ON vi.hoisted: these mocks CANNOT be created with vi.hoisted() here,
 // because hoisted variables may not be exported from a helper module ("Cannot
@@ -30,11 +31,66 @@ export const notify = { sendPushToUsers: vi.fn() };
 
 export const vehicleImages = { attachVehicleImages: vi.fn() };
 
+// ── CONFIG MOCK (flag-OFF by default) ────────────────────────────────────────
+// dispatch.getConfig must NOT hit db.queryOne: the real config module would
+// consume the mockImplementationOnce queue that loadRide/queueOffer rely on,
+// and its DEFAULT flag is ON, which would silently flip the legacy tests onto
+// the H3 path. Test files therefore add:
+//   vi.mock("./config", async () => (await import("./testHarness")).appConfig);
+// Flag-on tests call setH3Enabled(true); everything resets to OFF in
+// resetHarness() (beforeEach).
+export const TEST_CONFIG = {
+  h3_matching_enabled: false,
+  match_radius_km: [3, 5, 7] as number[],
+  search_timeout_ms: 90_000,
+  still_looking_msg_ms: 30_000,
+  h3_match_res: 8,
+  h3_heatmap_res: 7,
+  stale_seconds: 40,
+  offer_ttl_seconds: 15,
+  avg_speed_kmh: 40,
+  min_driver_rating: 0,
+  required_vehicle_category: null as string | null,
+};
+
+let configState = { ...TEST_CONFIG };
+
+export const appConfig = {
+  getConfig: vi.fn(async (_force?: boolean) => ({ ...configState })),
+  h3MatchingEnabled: vi.fn(async () => configState.h3_matching_enabled),
+  invalidateConfigCache: vi.fn(),
+  seedConfig: vi.fn(async () => undefined),
+  allConfig: vi.fn(async () => ({ matching: { ...configState } })),
+  DEFAULT_CONFIG: { ...TEST_CONFIG },
+};
+
+/** Flip the H3 kill-switch for one test. */
+export function setH3Enabled(on: boolean): void {
+  configState.h3_matching_enabled = on;
+}
+
+/** Change any config value for one test (stale_seconds, ladder, ...). */
+export function patchConfig(patch: Partial<typeof TEST_CONFIG>): void {
+  Object.assign(configState, patch);
+}
+
 /** Reset every mock and restore default behaviour between tests. */
 export function resetHarness() {
   vi.clearAllMocks();
   db.execute.mockResolvedValue({ rowCount: 1, rows: [] });
   notify.sendPushToUsers.mockResolvedValue(1);
+  // Flag OFF + default thresholds: legacy tests exercise the haversine path.
+  configState = { ...TEST_CONFIG };
+  // No network under vitest: road ETA always uses the haversine fallback
+  // unless a test injects its own provider via setRoadEtaImpl().
+  setRoadEtaImpl(null);
+  // withTransaction is only exercised by the flag-ON busy-lock; default to a
+  // fake client reporting "no pending offers anywhere".
+  db.withTransaction.mockImplementation(async (fn: any) =>
+    fn({
+      query: async () => ({ rows: [], rowCount: 0 }),
+    })
+  );
 }
 
 /** A fake io that records every (room, event, payload) emission. */

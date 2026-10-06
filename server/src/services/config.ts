@@ -41,6 +41,20 @@ export interface AppConfig {
   offer_ttl_seconds: number;
   /** Haversine fallback speed when the routing API fails. */
   avg_speed_kmh: number;
+  /**
+   * Minimum driver rating for a candidate. 0 disables the filter (the default):
+   * a rating floor above 0 would lock out every driver who simply has no ratings
+   * yet, which on a new fleet is most of them. Tune upward via app_config only
+   * once ratings are widespread.
+   */
+  min_driver_rating: number;
+  /**
+   * When set (e.g. "sedan"), only drivers in this vehicle category are offered
+   * any ride. null = no vehicle filter (the default; rides carry no vehicle
+   * preference today, so a non-null value is an operational override such as a
+   * surge-only-sedans policy), and it too lives here rather than in code.
+   */
+  required_vehicle_category: string | null;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -53,6 +67,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   stale_seconds: 40,
   offer_ttl_seconds: 15,
   avg_speed_kmh: 40,
+  min_driver_rating: 0,
+  required_vehicle_category: null,
 };
 
 let cached: AppConfig | null = null;
@@ -75,6 +91,10 @@ function coerce(raw: Partial<AppConfig> | null | undefined): AppConfig {
   if (typeof raw.stale_seconds === "number") cfg.stale_seconds = raw.stale_seconds;
   if (typeof raw.offer_ttl_seconds === "number") cfg.offer_ttl_seconds = raw.offer_ttl_seconds;
   if (typeof raw.avg_speed_kmh === "number") cfg.avg_speed_kmh = raw.avg_speed_kmh;
+  if (typeof raw.min_driver_rating === "number") cfg.min_driver_rating = raw.min_driver_rating;
+  if (typeof raw.required_vehicle_category === "string" && raw.required_vehicle_category.trim()) {
+    cfg.required_vehicle_category = raw.required_vehicle_category.trim();
+  }
   return cfg;
 }
 

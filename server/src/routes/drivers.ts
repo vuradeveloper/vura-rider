@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { reviveWaitingRides } from "../services/dispatch";
+import { getDriverIndex } from "../services/driverIndex";
 import { approvedVehicleCatalogue } from "../services/vehicleImages";
 import {
   catalogueForApi,
@@ -294,6 +295,26 @@ router.post("/online", requireAuth, async (req: AuthRequest, res: Response) => {
     ).catch(() => null);
 
     console.log(`[driver] online_intent=${online} status=${status} driver=${dbUser.id}`);
+    // Module 1: keep the H3 index in step with the REST intent toggle too —
+    // offline removes the row, online refreshes status/coords when known.
+    if (online) {
+      void (async () => {
+        const prof = await queryOne<{ current_lat: number | null; current_lng: number | null }>(
+          "SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1",
+          [dbUser.id]
+        ).catch(() => null);
+        if (prof?.current_lat != null && prof.current_lng != null) {
+          await getDriverIndex().upsert({
+            userId: dbUser.id,
+            lat: Number(prof.current_lat),
+            lng: Number(prof.current_lng),
+            status,
+          });
+        }
+      })().catch((err) => console.warn("[driverIndex] online upsert failed:", err?.message));
+    } else {
+      void getDriverIndex().remove(dbUser.id).catch(() => false);
+    }
     if (online) void reviveWaitingRides((global as any).__vuraIo).catch(() => 0);
     res.json({ ok: true, online_intent: !!row?.is_online, status: row?.status || status });
   } catch (err: any) {
@@ -317,6 +338,10 @@ router.post("/offline", requireAuth, async (req: AuthRequest, res: Response) => 
       WHERE user_id = $1`,
     [dbUser.id]
   ).catch(() => undefined);
+  // Module 1: offline means unofferable — drop the index row now rather than
+  // waiting for stale eviction (a pending offer to a gone driver is a lost
+  // round for a waiting rider).
+  void getDriverIndex().remove(dbUser.id).catch(() => false);
   console.log(`[driver] online_intent=false status=offline driver=${dbUser.id}`);
   res.json({ ok: true, online_intent: false, status: "offline" });
 });

@@ -6,6 +6,14 @@ a **copy/snapshot** of the database, never against `vura-rider-prod` directly.
 > These are the SQL checks the unit tests CANNOT make. `driverIndex.test.ts`
 > mocks the database, so it proves the logic but not that Postgres accepts the
 > statements. Everything below is what that gap covers.
+>
+> **Now partly automated:** `src/services/dispatch.integration.test.ts` runs
+> steps 1 (001 applied twice), 5 (index created CONCURRENTLY + `indisvalid`
+> post-check + enforced-23505 proof) and parts of 6/7 against a scratch
+> Postgres (Docker) whenever `VURA_TEST_DB_PORT` is set. The remaining manual
+> steps are the ones that need a COPY of real data: duplicate-seed detection
+> (step 2-4 against production-shaped rows), the runtime smoke, and the full
+> rollback cycle on a production snapshot.
 
 ---
 
