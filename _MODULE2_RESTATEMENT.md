@@ -281,3 +281,98 @@ structure; nothing implements or merges before Q1–Q14 are answered. Confirm.
 - **Manual:** extend the `MODULE1_TEST.md` one-driver/one-rider flow with a
   destination-mode driver, same log-line/failure-signature format.
 - **STOP:** no implementation before Q1–Q14 are answered; no merge; no Module 3.
+
+## 8. DECISIONS — answered (build approval, code NOT yet written)
+
+Your replies, recorded as the spec of record. Where you changed a
+recommendation, your version wins.
+
+| Q | Decided |
+|---|---|
+| 1 | **Confirmed** + your original rules (full text below): daily limit, auto-end, 1 km reject, banners, DB-persisted state |
+| 2 | A — driver-destination only; rider-destination reranking later |
+| 3 | **CHANGED — NO new status.** Driver stays `'available'`; `MATCHABLE_STATUSES` unchanged. Destination mode = attributes + a predicate in the eligibility SQL. (If a status is ever argued, it must come with file+line proof first. Note: the comment at `driverIndex.ts:72-73` still promises a new status — it must be corrected as part of the Module 2 build.) |
+| 4 | **CHANGED — two homes:** `driver_profiles` holds the CURRENT destination (`destination_lat`, `destination_lng`, `destination_label`, `destination_set_at`, `destination_expires_at`); new `destination_sessions (id, driver_id, lat, lng, label, started_at, ended_at, end_reason, trips_completed, sast_day)` for the daily limit + audit |
+| 5 | **CHANGED — rule replaced** (exact formula + fixtures below) |
+| 6 | A clarified: a driver with no fitting trip gets **no offer from this feature**; other drivers serve the rider normally. Never offer a non-matching trip to a destination-mode driver. Trace + count every skip |
+| 7 | A — build now behind a **driver allowlist**, widen after the 4s APK. Module 1 must be stable in production first |
+| 8 | A — and executed already as a **Module 1 bug fix**: `driver:heartbeat` refreshes `driver_cells` via `DriverIndex.touch()` (`0010bb0`, on `module1-h3-matching`, with mocked + real-Postgres tests) — **before your deploy** |
+| 9 | Mostly moot without a status. **Add a non-overlapping auto-end sweep** (500 m / 3 hours / offline) modelled on the stale-index sweep |
+| 10 | A — no new `tier` anywhere; `destination_*` naming only |
+| 11 | A — Set/Clear UI + socket/REST events in the **same release as the 4s heartbeat APK**. Driver app repo: **[YOU WILL CONFIRM THE REPO NAME]** |
+| 12 | A — `destination_matching_enabled` (seed `false`) + driver-keyed allowlist, same machinery as Module 1 |
+| 13 | **CHANGED — fail closed PER DRIVER:** if the predicate throws for one driver, skip **that driver only** for that request, log it, count it, keep serving the rider with everyone else |
+| 14 | A — `002_destination_mode.sql` + rollback + TEST_MIGRATION + `MODULE2_TEST.md`, Module-1 style, **additive only** |
+
+### 8.1 Your activation/lifecycle rules (item 1, verbatim intent)
+
+All thresholds in `app_config`, never hard-coded:
+- **Max 2 activations per driver per day**, resetting **00:00 SAST** (counter
+  from `destination_sessions.sast_day`).
+- Activation only while **online and not on a trip**.
+- **Auto-ends** when: within **500 m** of destination · driver cancels · driver
+  goes offline · **3 hours** pass without a trip. **Push on end, stating why**
+  (`end_reason` on the session row).
+- Reject activation if already within **1 km**: *"You're already close"*.
+- **Changing destination mid-mode = a new use** (session end + new session).
+- State lives in the **database** → survives crash/reconnect.
+- Driver banner: `Going to [place] - 1 of 2 uses today`; when nothing matches:
+  `Looking for trips towards [place]`.
+
+### 8.2 Q5 rule — exact formula (replaces the 2 km rule)
+
+**Inputs** (all WGS84 degrees, mean Earth radius **R = 6371 km** — same
+constant as the matching SQL's `6371 * acos(...)`):
+`D` = driver position · `T` = driver destination (`driver_profiles`) ·
+`P` = ride pickup · `X` = ride drop-off (`rides.destination_*`).
+
+```
+hav(A,B) = 2R · asin( √( sin²((φB−φA)/2) + cosφA·cosφB·sin²((λB−λA)/2) ) )
+
+bearing(A→B) = atan2( sinΔλ·cosφB , cosφA·sinφB − sinφA·cosφB·cosΔλ )
+
+cross-track (A=D start, B=T end, P=X point):
+  dAP = hav(D,X)   dAB = hav(D,T)
+  θ   = bearing(D→T)      θAP = bearing(D→X)
+  xt  = R · asin( clamp( sin(dAP/R) · sin(θAP − θ), −1, 1 ) )
+  guard: dAB < 1e-9 km  →  xt := dAP        (driver already at destination)
+```
+
+**A trip is offered to a destination-mode driver iff ALL hold:**
+
+| # | Condition |
+|---|---|
+| (a) | `hav(P, X)`-distance from pickup within the **normal matching radius** — enforced by the existing eligibility SQL, unchanged |
+| (b) | `hav(X, T) < hav(P, T)` — drop-off **strictly closer** to the destination than the pickup is |
+| (c) | `hav(X, T) ≤ 3 km` **OR** `|xt| ≤ 5 km` |
+
+- **Ride has no drop-off coordinates → destination-mode driver is skipped**
+  for that ride (plain drivers unaffected).
+- (b) is evaluated in the **same AND-chain** as (a): a drop-off far beyond `T`
+  fails (b), which is what makes the *infinite-line* reading of (c) safe.
+- Predicate runs **in JavaScript per candidate** (not in SQL): Q13's per-driver
+  fail-closed is a per-row try/catch → skip that driver, log, count; SQL would
+  abort the whole query on error. Flag-off ⇒ predicate never executes ⇒ legacy
+  SQL byte-identical.
+
+### 8.3 Planned unit tests — fixtures (text now, code at build time)
+
+Pure-function fixtures for `destinationMatches(D, T, P, X)` (equator degrees:
+0.01° lat = 1.112 km; 0.01° lng = 1.112 km):
+
+| # | Fixture (D, T, P, X) | Expect | Exercises |
+|---|---|---|---|
+| 1 | D(0,0) T(0,0.10) P(0,0.02) X(0,0.06) | **ACCEPT** | on-corridor: (b) 4.45<8.90 km, xt≈0 |
+| 2 | D(0,0) T(0,0.10) P(0,0.03) X(0,0.01) | **REJECT** | (b): drop-off *away* from T (9.9 > 7.8 km) |
+| 3 | D(0,0) T(0,0.10) P(0,0.05) X(0.01,0.099) | **ACCEPT** | (c1): 1.5 km ≤ 3, off-line |
+| 4 | D(0,0) T(0,0.10) P(0,0.04) X(0.04,0.07) | **ACCEPT** | (c2) only: xt≈4.4 ≤5, dist≈5.5 >3 |
+| 5 | D(0,0) T(0,0.10) P(0,0.04) X(0.06,0.07) | **REJECT** | both (c) branches fail (xt≈6.7, 7.8>3) |
+| 6 | boundary sets | xt **exactly** 5 → ACCEPT; X **exactly** 3 km → ACCEPT; `hav(X,T)==hav(P,T)` → **REJECT** (strict <) | inclusive ≤, exclusive < |
+| 7 | X = null | **SKIP** | no drop-off coords |
+| 8 | D==T=(0,0), P(0,0.10); X(0,0.018) [2 km] and twin X(0,0.06) [6.7 km] | 2 km **ACCEPT** (c1); 6.7 km **REJECT** | `dAB≈0` guard → `xt := dAP`, so (c2) degenerates to a 5 km disk around T; (b) still enforced |
+| 9 | fixture 1 repeated ×10 | identical results | pure, no time/queue dependence |
+| 10 | X beyond T on the line, P before T | **REJECT** | overshoot blocked by (b) |
+
+**STOP** — no Module 2 code until you confirm these fixtures (and the §8
+decisions) — then `002` is built on this branch plan, Module-1 style.
+
