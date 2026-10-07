@@ -159,6 +159,20 @@ beforeAll(async () => {
   );
   expect(validity[0]?.indisvalid).toBe(true);
 
+  // CROSS-RUN ISOLATION: this file re-runs against a PERSISTENT scratch
+  // database. driver_cells and driver_profiles rows seeded by a PREVIOUS run
+  // are still fresh (within stale_seconds) when runs are close together, and
+  // would silently join this run's candidate pools — the H3 path via the
+  // index, the legacy path via driver_profiles directly — turning ranking and
+  // LIMIT assertions flaky. Wipe the index and push every profile's clocks an
+  // hour into the past; each test then seeds exactly its own fresh drivers.
+  await execute(`DELETE FROM driver_cells`);
+  await execute(
+    `UPDATE driver_profiles
+        SET last_location_at = NOW() - interval '1 hour',
+            last_heartbeat_at = NOW() - interval '1 hour'`
+  );
+
   // The 001 seed keeps the flag OFF + mode 'off' (safe rollout default). The
   // suite then turns full rollout on explicitly — exactly the production
   // sequence. (The OFF-by-default claim itself is asserted in the migration
@@ -334,7 +348,9 @@ describe.skipIf(!enabled)("flag ON dispatch against real Postgres", () => {
     await driverIndex.upsert({ userId: fresh, lat: -26.12, lng: 28.04, status: "available" });
 
     const { findCandidates } = await import("./dispatch");
-    const cands = await findCandidates(randomUUID(), SANDTON.lat, SANDTON.lng, 5, false, 1);
+    // Generous limit: earlier tests in this file seed drivers near SANDTON
+    // too — they are legitimately fresh, so this asserts membership, not rank.
+    const cands = await findCandidates(randomUUID(), SANDTON.lat, SANDTON.lng, 50, false, 1);
     const ids = cands.map((c) => c.id);
 
     expect(ids).toContain(fresh);
