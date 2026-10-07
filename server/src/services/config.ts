@@ -38,6 +38,14 @@ export interface AppConfig {
    * the 4s heartbeat APK is live (Q7). Both live in config, never in code.
    */
   stale_seconds: number;
+  /**
+   * POSITION AGE (independent of `stale_seconds`, which measures LIVENESS):
+   * a candidate whose last GPS fix (`driver_profiles.last_location_at`) is
+   * older than this is excluded from the H3 path even if heartbeats keep
+   * them alive. Heartbeat `touch()` refreshes driver_cells.last_seen_at
+   * only — never this timestamp.
+   */
+  max_position_age_seconds: number;
   offer_ttl_seconds: number;
   /** Haversine fallback speed when the routing API fails. */
   avg_speed_kmh: number;
@@ -90,6 +98,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   h3_match_res: DEFAULT_MATCH_RES,
   h3_heatmap_res: DEFAULT_HEATMAP_RES,
   stale_seconds: 40,
+  max_position_age_seconds: 300,
   offer_ttl_seconds: 15,
   avg_speed_kmh: 40,
   min_driver_rating: 0,
@@ -117,6 +126,9 @@ function coerce(raw: Partial<AppConfig> | null | undefined): AppConfig {
   if (typeof raw.h3_match_res === "number") cfg.h3_match_res = raw.h3_match_res;
   if (typeof raw.h3_heatmap_res === "number") cfg.h3_heatmap_res = raw.h3_heatmap_res;
   if (typeof raw.stale_seconds === "number") cfg.stale_seconds = raw.stale_seconds;
+  if (typeof raw.max_position_age_seconds === "number" && raw.max_position_age_seconds > 0) {
+    cfg.max_position_age_seconds = raw.max_position_age_seconds;
+  }
   if (typeof raw.offer_ttl_seconds === "number") cfg.offer_ttl_seconds = raw.offer_ttl_seconds;
   if (typeof raw.avg_speed_kmh === "number") cfg.avg_speed_kmh = raw.avg_speed_kmh;
   if (typeof raw.min_driver_rating === "number") cfg.min_driver_rating = raw.min_driver_rating;

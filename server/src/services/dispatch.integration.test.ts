@@ -317,6 +317,29 @@ describe.skipIf(!enabled)("flag ON dispatch against real Postgres", () => {
     );
     invalidateConfigCache();
   });
+
+  it("excludes candidates whose POSITION is older than max_position_age_seconds (heartbeat still fresh)", async () => {
+    // Stale position: 10 minutes since the last GPS fix (> 300s default),
+    // heartbeat fresh NOW — liveness passes, position age must not.
+    const stalePos = await seedDriver({ lat: -26.1062, lng: 28.0561 });
+    await driverIndex.upsert({ userId: stalePos, lat: -26.1062, lng: 28.0561, status: "available" });
+    await execute(
+      `UPDATE driver_profiles SET last_location_at = NOW() - interval '10 minutes',
+                                  last_heartbeat_at = NOW()
+        WHERE user_id = $1`,
+      [stalePos]
+    );
+    // Control: fresh position ~2km from pickup.
+    const fresh = await seedDriver({ lat: -26.12, lng: 28.04 });
+    await driverIndex.upsert({ userId: fresh, lat: -26.12, lng: 28.04, status: "available" });
+
+    const { findCandidates } = await import("./dispatch");
+    const cands = await findCandidates(randomUUID(), SANDTON.lat, SANDTON.lng, 5, false, 1);
+    const ids = cands.map((c) => c.id);
+
+    expect(ids).toContain(fresh);
+    expect(ids).not.toContain(stalePos);
+  });
 });
 
 describe.skipIf(!enabled)("stale eviction against real Postgres", () => {
@@ -356,6 +379,12 @@ describe.skipIf(!enabled)("stale eviction against real Postgres", () => {
     const id = await seedDriver({ lat: -26.1062, lng: 28.0561 });
     await driverIndex.upsert({ userId: id, lat: -26.1062, lng: 28.0561, status: "available" });
     await execute(`UPDATE driver_cells SET last_seen_at = NOW() - interval '10 minutes' WHERE user_id = $1`, [id]);
+    // The POSITION clock is deliberately stale too — touch() must refresh
+    // liveness only and never disguise an old GPS fix as a fresh one.
+    await execute(
+      `UPDATE driver_profiles SET last_location_at = NOW() - interval '10 minutes' WHERE user_id = $1`,
+      [id]
+    );
 
     // A heartbeat-only driver (app alive, GPS quiet) must NOT stay evicted:
     // this is the exact stationary-driver bug the fix closes.
@@ -368,6 +397,12 @@ describe.skipIf(!enabled)("stale eviction against real Postgres", () => {
     expect(rows).toHaveLength(1);
     expect(Date.now() - Date.parse(rows[0].last_seen_at)).toBeLessThan(60_000);
     expect(rows[0].status).toBe("available");
+    // Position age is a SEPARATE clock: last_location_at still reads 10 min old.
+    const prof = await query<{ last_location_at: string }>(
+      `SELECT last_location_at FROM driver_profiles WHERE user_id = $1`,
+      [id]
+    );
+    expect(Date.now() - Date.parse(prof[0].last_location_at)).toBeGreaterThan(9 * 60_000);
 
     // A driver who never pinged GPS has no index row: honest false, no INSERT.
     const ghost = randomUUID();

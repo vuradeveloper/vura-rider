@@ -162,9 +162,12 @@ describe("heartbeat touch (Module 1 fix: stationary drivers stay fresh)", () => 
     expect(String(call![0])).toContain("COALESCE($2, status)");
     // Keyed by user_id — never a positional/scan update.
     expect(String(call![0])).toContain("WHERE user_id = $1");
-    // Position and cell are deliberately NOT written: this is liveness only.
+    // Position and cell are deliberately NOT written: this is liveness only,
+    // and driver_profiles.last_location_at (the POSITION timestamp used by
+    // max_position_age_seconds) must never be touched either.
     expect(String(call![0])).not.toContain("lat =");
     expect(String(call![0])).not.toContain("cell_res8 =");
+    expect(String(call![0])).not.toContain("last_location_at");
     expect(call![1]).toEqual(["driver-1", "available"]);
   });
 

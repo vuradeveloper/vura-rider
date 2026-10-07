@@ -115,6 +115,7 @@ INSERT INTO app_config (key, value) VALUES
     "h3_match_res": 8,
     "h3_heatmap_res": 7,
     "stale_seconds": 40,
+    "max_position_age_seconds": 300,
     "offer_ttl_seconds": 15,
     "avg_speed_kmh": 40,
     "min_driver_rating": 0,

@@ -416,8 +416,9 @@ async function findCandidatesH3(
   //    status/online/freshness — the index only narrows the scan to ids):
   //    matchable status via the MATCHABLE_STATUSES constant, not-on-a-trip,
   //    not-already-offered, not-the-rider, driver_blocks (Q9), vehicle
-  //    category, min rating — and the EXACT haversine <= radius, because hex
-  //    cells are not circles.
+  //    category, min rating, POSITION AGE (max_position_age_seconds — GPS-fix
+  //    age, deliberately SEPARATE from heartbeat liveness above), and the
+  //    EXACT haversine <= radius, because hex cells are not circles.
   const rows = await query<H3Row>(
     `SELECT u.id, u.firebase_uid, dp.current_lat, dp.current_lng,
             (6371 * acos(LEAST(1, GREATEST(-1,
@@ -446,6 +447,12 @@ async function findCandidatesH3(
                  AND blk.driver_id = u.id)
         AND ($8::text IS NULL OR dp.vehicle_category = $8)
         AND COALESCE(dp.rating_avg, 0) >= $9::double precision
+        -- POSITION AGE: last GPS fix must be newer than max_position_age_seconds.
+        -- Heartbeats (last_heartbeat_at) keep a driver ALIVE via the freshness
+        -- clause above but never refresh this — a heartbeat-only driver with a
+        -- 10-minute-old position is excluded here and only here.
+        AND COALESCE(dp.last_location_at, dp.updated_at)
+            > NOW() - make_interval(secs => $12::double precision)
         AND (6371 * acos(LEAST(1, GREATEST(-1,
               cos(radians($4)) * cos(radians(dp.current_lat)) *
                 cos(radians(dp.current_lng) - radians($5)) +
@@ -465,6 +472,7 @@ async function findCandidatesH3(
       cfg.min_driver_rating,
       radiusKm,
       H3_CANDIDATE_POOL,
+      cfg.max_position_age_seconds,
     ]
   );
   if (rows.length === 0) return [];

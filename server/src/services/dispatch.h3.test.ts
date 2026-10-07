@@ -170,9 +170,13 @@ describe("flag ON: H3 path shape", () => {
     expect(String(call![0])).toContain("= ANY($1::uuid[])");
     expect(String(call![0])).toContain("driver_blocks");
     expect(String(call![0])).toContain("<= $10::double precision");
+    // POSITION AGE is its own clause ($12), separate from heartbeat liveness.
+    expect(String(call![0])).toContain("last_location_at");
+    expect(String(call![0])).toContain("$12::double precision");
     expect(call![1][0]).toEqual(["driver-1"]); // ids from the index
     expect(call![1][1]).toEqual(["available"]); // MATCHABLE_STATUSES constant
     expect(call![1][9]).toBe(3); // round 1 -> 3km rung
+    expect(call![1][11]).toBe(300); // cfg.max_position_age_seconds (default)
     expect(traceStage("h3_candidates")).toHaveLength(1);
   });
 
