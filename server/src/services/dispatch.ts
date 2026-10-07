@@ -651,7 +651,20 @@ export async function offerToNextDriver(
         })
       )
       .then((n) => {
-        const delivered = typeof n === "number" ? n : 0;
+        if (typeof n !== "number") {
+          // notify answered UNKNOWN (lookup/transport failed). Keep it UNKNOWN:
+          // never coerce to 0, because a 0 is skip-eligible downstream and a
+          // flaky server must not cost a driver their offer (see withPushTimeout).
+          bump("push_delivered_zero");
+          trace(rideId, "push_result", {
+            driver_id: driverId,
+            delivered: 0,
+            ok: false,
+            error: "push_outcome_unknown",
+          });
+          return null;
+        }
+        const delivered = n;
         if (delivered <= 0) bump("push_delivered_zero");
         trace(rideId, "push_result", { driver_id: driverId, delivered, ok: delivered > 0 });
         if (!delivered) {
@@ -828,8 +841,12 @@ export async function offerToNextDriver(
 
     const delivered = await withPushTimeout(push);
     if (delivered === 0) {
-      // Socket down AND push reached nobody: this offer can never be seen.
-      // Close it immediately and try the NEXT candidate in this same round.
+      // PROVEN delivered:0 — which includes "this user has no push token at
+      // all" (the sender returns 0 only after SUCCESSFUL token lookups and
+      // transport answers). hasLiveSocket() alone can never reach this branch:
+      // it only selects the channel. Socket down AND push reached nobody: this
+      // offer can never be seen. Close it immediately and try the NEXT
+      // candidate in this same round.
       await execute(
         `UPDATE ride_offers SET status = 'expired', decline_reason = 'undeliverable', updated_at = NOW()
           WHERE id = $1 AND status = 'pending'`,
@@ -847,6 +864,15 @@ export async function offerToNextDriver(
       bump("offer_undeliverable");
       undeliverable += 1;
       continue;
+    }
+    if (delivered === null) {
+      // UNKNOWN (notify could not answer / timed out): NEVER skip on an
+      // unproven result — the offer stays pending and owns its full TTL.
+      trace(rideId, "push_result_unknown", {
+        driver_id: candidate.id,
+        round: nextRound,
+        socket_connected: socketConnected,
+      });
     }
 
     driver = candidate;

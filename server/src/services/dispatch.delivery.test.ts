@@ -261,6 +261,29 @@ describe("4. delivery hardening: truthful channel + instant skip", () => {
     expect(traceStage("offer_undeliverable")).toHaveLength(0);
   });
 
+  it("does NOT skip when notify itself answers UNKNOWN (resolved null)", async () => {
+    // notify returns null when a lookup/transport failed — an unproven result
+    // must never be coerced into the skip-eligible 0.
+    notify.sendPushToUsers.mockResolvedValueOnce(null);
+    const { io } = makeIo(false);
+    queueOffer();
+
+    const res = await offerToNextDriver(io, "ride-1");
+    expect(res).toMatchObject({ offered: true, driverId: "driver-1" });
+    expect(traceStage("offer_undeliverable")).toHaveLength(0);
+    expect(traceStage("push_result_unknown")).toHaveLength(1);
+    expect(traceStage("push_result_unknown")[0]).toMatchObject({
+      driver_id: "driver-1",
+      socket_connected: false,
+    });
+    // The offer was NOT closed early.
+    const closed = db.execute.mock.calls.filter(
+      (c: any[]) =>
+        String(c[0]).includes("UPDATE ride_offers") && String(c[0]).includes("undeliverable")
+    );
+    expect(closed).toHaveLength(0);
+  });
+
   it("when nobody is reachable the ride reports offer_undeliverable instead of hanging", async () => {
     notify.sendPushToUsers.mockResolvedValue(0);
     const { io } = makeIo(false);

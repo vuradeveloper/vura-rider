@@ -117,7 +117,7 @@ function notifyUser(
       trace(rideId, "milestone_push", {
         type: type || "trip_update",
         delivered,
-        ok: delivered > 0,
+        ok: (delivered ?? 0) > 0,
       });
     }
     if (!delivered) {

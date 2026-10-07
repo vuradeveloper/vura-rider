@@ -100,8 +100,18 @@ async function logPushSend(userId: string, reference: string, result: string, de
  * Both transports run: FCM (native/Capacitor apps) and Expo (legacy RN app), so a
  * user signed into either build is reachable. Never throws — a push failure must
  * not break a ride.
+ *
+ * HONEST RETURN CONTRACT (offer-dispatch skip safety depends on it):
+ *  - `N > 0`  — PROVEN: N device(s) accepted the push.
+ *  - `0`      — PROVEN nothing exists/accepted: the token lookups succeeded and
+ *               every reachable transport answered "0 delivered". An empty
+ *               token set is exactly this case, and dispatch is allowed to
+ *               skip an undeliverable offer on it.
+ *  - `null`   — UNKNOWN: a lookup or transport failed so the answer cannot be
+ *               trusted. Callers must never coerce this to 0 — a ride offer
+ *               may only be skipped on a PROVEN 0.
  */
-export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise<number> {
+export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise<number | null> {
   const ids = (userIds || []).filter(Boolean);
   if (ids.length === 0) return 0;
 
@@ -113,20 +123,23 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
   };
 
   let sent = 0;
+  let unknown = false;
   let error: string | null = null;
 
   try {
     // ── 1. Native (FCM) ──────────────────────────────────────────────────────
+    // No .catch(() => []): a FAILED lookup must surface as null (unknown), not
+    // masquerade as a proven "this user has no tokens" zero.
     const users = await query<{ id: string; firebase_uid: string | null }>(
       `SELECT id, firebase_uid FROM users WHERE id = ANY($1::uuid[])`,
       [ids]
-    ).catch(() => [] as any[]);
+    );
 
     const tokens = await query<{ id: string; user_id: string; push_token: string; platform: string }>(
       `SELECT id, user_id, push_token, platform FROM device_tokens
         WHERE user_id = ANY($1::uuid[]) AND is_active = TRUE`,
       [ids]
-    ).catch(() => [] as any[]);
+    );
 
     if (tokens.length > 0) {
       const app = getFirebaseApp();
@@ -179,10 +192,17 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
         title: msg.title,
         body: msg.body,
         data: { ...data, rideId: msg.rideId ?? undefined },
-      }).catch(() => 0);
+      }).catch((err) => {
+        // Transport-level failure: this half of the answer is UNKNOWN.
+        unknown = true;
+        error = err?.message || String(err);
+        return 0;
+      });
       sent += n;
     }
 
+    // Logging must never flip a proven answer (or a proven zero) into unknown,
+    // so both sinks are fire-and-forget here.
     await logNotification(
       ids[0],
       String(msg.type),
@@ -192,18 +212,35 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
       sent > 0 ? (error ? "partial" : "sent") : "skipped",
       error,
       tokens.length > 0 ? "fcm" : "expo"
-    );
-    await logPushSend(ids[0], msg.rideId ?? "", sent > 0 ? "sent" : "none", error ?? `${sent} device(s)`);
+    ).catch(() => undefined);
+    await logPushSend(
+      ids[0],
+      msg.rideId ?? "",
+      sent > 0 ? "sent" : "none",
+      error ?? `${sent} device(s)`
+    ).catch(() => undefined);
   } catch (err: any) {
+    // A lookup or the FCM transport failed before any proof arrived: UNKNOWN.
+    unknown = true;
     error = err?.message || String(err);
     console.warn("[notify] push failed:", error);
-    await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, "error", error, "fcm");
+    await logNotification(
+      ids[0],
+      String(msg.type),
+      msg.rideId ?? null,
+      msg.title,
+      msg.body,
+      "error",
+      error,
+      "fcm"
+    ).catch(() => undefined);
   }
 
-  return sent;
+  if (sent > 0) return sent;
+  return unknown ? null : 0;
 }
 
 /** Convenience: one user (driver offer, rider milestones). */
-export function sendPushToUser(userId: string, msg: RidePush): Promise<number> {
+export function sendPushToUser(userId: string, msg: RidePush): Promise<number | null> {
   return sendPushToUsers([userId], msg);
 }
