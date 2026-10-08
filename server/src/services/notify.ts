@@ -186,8 +186,13 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
     }
 
     // ── 2. Expo (legacy RN app) ──────────────────────────────────────────────
+    // Only for users WITHOUT an active FCM token: both transports running for
+    // the same user delivered a double notification (and made the `provider`
+    // label meaningless). The native path owns anyone with a live token row.
+    const fcmUserIds = new Set(tokens.map((t) => t.user_id));
     for (const u of users) {
       if (!u.firebase_uid) continue;
+      if (fcmUserIds.has(u.id)) continue;
       const n = await sendExpoPush(u.firebase_uid, {
         title: msg.title,
         body: msg.body,
@@ -201,6 +206,15 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
       sent += n;
     }
 
+    // Provider = the transport that ACTUALLY spoke for the logged user
+    // (ids[0]): FCM only if that user had an active token row, Expo only if
+    // the Expo leg actually ran for them, "none" otherwise. The old label
+    // ("any FCM token in the batch?") lied whenever both/neither applied.
+    const fcmForFirst = tokens.some((t) => t.user_id === ids[0]);
+    const expoForFirst =
+      !fcmForFirst && users.some((u) => u.id === ids[0] && !!u.firebase_uid);
+    const provider = fcmForFirst ? "fcm" : expoForFirst ? "expo" : "none";
+
     // Logging must never flip a proven answer (or a proven zero) into unknown,
     // so both sinks are fire-and-forget here.
     await logNotification(
@@ -211,7 +225,7 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
       msg.body,
       sent > 0 ? (error ? "partial" : "sent") : "skipped",
       error,
-      tokens.length > 0 ? "fcm" : "expo"
+      provider
     ).catch(() => undefined);
     await logPushSend(
       ids[0],
@@ -232,7 +246,7 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
       msg.body,
       "error",
       error,
-      "fcm"
+      "unknown"
     ).catch(() => undefined);
   }
 

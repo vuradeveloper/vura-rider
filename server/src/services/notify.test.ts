@@ -109,4 +109,41 @@ describe("sendPushToUsers return contract", () => {
 
     expect(n).toBe(0);
   });
+
+  it("does NOT run Expo for a user who has an active FCM token (no double send)", async () => {
+    setLookups(
+      [{ id: "u1", firebase_uid: "fb1" }],
+      [{ id: "t1", user_id: "u1", push_token: "tok", platform: "android" }]
+    );
+    fcmMock.mockResolvedValue({ successCount: 1, failureCount: 0, responses: [{ success: true }] });
+
+    const n = await sendPushToUsers(["u1"], { type: "ride_offer", title: "t", body: "b" });
+
+    expect(n).toBe(1);
+    expect(expoMock).not.toHaveBeenCalled(); // native path owns this user
+    // Provider = the transport that ACTUALLY spoke for the logged user.
+    const log = db.execute.mock.calls.filter((c: any[]) =>
+      String(c[0]).includes("INSERT INTO notifications_log")
+    );
+    expect(log[0][1][7]).toBe("fcm");
+  });
+
+  it("labels provider 'expo' when only the Expo leg ran, 'none' when nothing did", async () => {
+    setLookups([{ id: "u1", firebase_uid: "fb-uid" }], []); // no FCM tokens
+    expoMock.mockResolvedValue(1);
+    await sendPushToUsers(["u1"], { type: "ride_offer", title: "t", body: "b" });
+    let log = db.execute.mock.calls.filter((c: any[]) =>
+      String(c[0]).includes("INSERT INTO notifications_log")
+    );
+    expect(log[0][1][7]).toBe("expo");
+
+    resetHarness();
+    expoMock.mockReset();
+    setLookups([{ id: "u1", firebase_uid: null }], []); // nothing exists at all
+    await sendPushToUsers(["u1"], { type: "ride_offer", title: "t", body: "b" });
+    log = db.execute.mock.calls.filter((c: any[]) =>
+      String(c[0]).includes("INSERT INTO notifications_log")
+    );
+    expect(log[0][1][7]).toBe("none");
+  });
 });
