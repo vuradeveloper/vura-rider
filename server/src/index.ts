@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import express from "express";
 import http from "http";
+import { hostname } from "os";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -646,6 +647,18 @@ async function start() {
     console.log(`✓ Server running on http://localhost:${PORT}`);
     console.log(`✓ Allowed origins: ${allowedOrigins.join(", ")}`);
     console.log(`✓ Environment: ${process.env.NODE_ENV || "development"}`);
+    // SINGLE-INSTANCE DEPLOY PRECONDITION (MODULE1_TEST.md): socket.io has no
+    // shared adapter on this stack, so rooms, hasLiveSocket() and
+    // io.to(room).emit() are all PER-PROCESS. A second instance silently
+    // splits offer delivery — instance A sees an empty room for a driver
+    // connected to instance B and can never reach it.
+    const instanceId = process.env.EC2_INSTANCE_ID || process.env.INSTANCE_ID || hostname();
+    console.log(`✓ Instance: ${instanceId}`);
+    console.warn(
+      "[deploy] SINGLE-INSTANCE REQUIRED — socket.io has no shared adapter; " +
+        "multi-instance delivery is UNSUPPORTED. Keep Elastic Beanstalk " +
+        "min=max=1 and avoid rolling deployments with an additional batch."
+    );
   });
 }
 

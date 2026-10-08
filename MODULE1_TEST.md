@@ -272,6 +272,33 @@ safe until it holds.
 
 ---
 
+## Deploy precondition — ONE instance only (hard requirement)
+
+socket.io has **no shared adapter** on this stack (nothing but `socket.io`
+itself in `server/package.json` — no Redis/Postgres adapter). Rooms,
+`hasLiveSocket()` and `io.to(room).emit()` are therefore **per-process**:
+
+| Rule | Why |
+|---|---|
+| Elastic Beanstalk environment **min = max = 1** | with 2+ instances, a driver connected to B is invisible to the instance running dispatch: A's `emit` is a silent no-op and `hasLiveSocket()` answers false on A — offers, acks and ride events split across processes |
+| **Avoid `RollingWithAdditionalBatch`** (and any deploy that briefly runs two serving environments) | the extra batch splits sockets for the duration of the deploy — same failure as above, mid-rollout |
+| Prefer `All-at-once`, or single-instance `Rolling` | keeps exactly one process owning the socket rooms |
+
+Every boot prints the contract:
+
+```
+✓ Instance: <instance-id>
+[deploy] SINGLE-INSTANCE REQUIRED — socket.io has no shared adapter; multi-instance delivery is UNSUPPORTED. Keep Elastic Beanstalk min=max=1 and avoid rolling deployments with an additional batch.
+```
+
+Workers are also per-process (`offerWorker` 2s tick, driver demotion, index
+eviction). Their cross-instance safety is NOT an advisory lock — it is
+idempotence: status-guarded UPDATEs, the 001b partial unique index, `FOR
+UPDATE SKIP LOCKED`, and idempotent DELETEs mean a double-fired tick can only
+waste work, never corrupt state. Single-instance keeps even that moot.
+
+---
+
 ## Deploy checklist (rollout ladder)
 
 The master switch (`h3_matching_enabled`) stays on as the kill switch at every
