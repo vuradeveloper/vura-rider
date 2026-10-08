@@ -81,10 +81,13 @@ export function startOfferWorker(io: SocketIOServer): void {
           // Index hygiene: same cadence as the driver demotion sweep (~30s),
           // non-overlapping (evictStaleIndexOnce skips if still running).
           await evictStaleIndexOnce();
-          // Module 2: destination sessions end ONLY via sweep — 500 m arrival,
-          // offline, or the 3h timeout (§8.1, fixtures L7a/c/d). Same
-          // non-overlap guard pattern as the eviction above: a slow sweep
-          // makes the next tick skip rather than race it.
+          // Module 2: auto-end sweep (~30s cadence): feature_disabled →
+          // arrived → offline (explicit or grace silence) → idle timeout; the
+          // arrival check ALSO runs on every GPS ping (onDriverPingPosition),
+          // and both paths close through ONE row-guarded closeSession so a
+          // session can never end twice. Same non-overlap guard pattern as the
+          // eviction above: a slow sweep makes the next tick skip rather than
+          // race it.
           const destEnded = await sweepDestinationSessionsOnce(io);
           if (destEnded > 0) {
             console.log(`[offerWorker] auto-ended ${destEnded} destination session(s)`);
@@ -109,8 +112,9 @@ export function startOfferWorker(io: SocketIOServer): void {
   }, 4000);
 
   // Module 2: a session that hit its end condition while the server was down
-  // (arrived / offline / 3h timeout) must be closed soon after boot — the
-  // daily-use count and the driver's banner both read the session row.
+  // (feature_disabled / arrived / offline / idle timeout) must be closed soon
+  // after boot — the daily-use count and the driver's banner both read the
+  // session row.
   setTimeout(() => {
     void sweepDestinationSessionsOnce(io)
       .then((n) => {
