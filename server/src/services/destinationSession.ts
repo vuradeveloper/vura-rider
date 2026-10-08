@@ -45,6 +45,23 @@ export type ActivateResult =
   | { ok: true; status: DestinationStatus }
   | { ok: false; error: ActivateErrorCode; message: string };
 
+/**
+ * Service error → HTTP status (REST transport contract, §8.1/f). Lives HERE,
+ * next to the code union, so routes/drivers.ts cannot drift: the unit test
+ * asserts this record covers every ActivateErrorCode exactly once. State
+ * conflicts are 409s, daily quota is 429, flag-off is 403.
+ */
+export const DESTINATION_ERROR_HTTP_STATUS: Record<ActivateErrorCode, number> = {
+  disabled: 403,
+  invalid_coordinates: 400,
+  not_found: 404,
+  not_online: 409,
+  on_trip: 409,
+  already_close: 409,
+  daily_limit: 429,
+  internal: 500,
+};
+
 export interface SetDestinationInput {
   lat: unknown;
   lng: unknown;

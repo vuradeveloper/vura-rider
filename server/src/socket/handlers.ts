@@ -17,6 +17,7 @@ import {
 import { trace, startTrace } from "../services/trace";
 import { getDriverIndex } from "../services/driverIndex";
 import { noteIndexUpsertFailure, bump } from "../services/metrics";
+import { activateDestination, clearDestination, getDestinationStatus } from "../services/destinationSession";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -1122,6 +1123,69 @@ export function setupSocketHandlers(io: SocketIOServer) {
         }
       } catch (err: any) {
         console.warn("driver heartbeat failed:", err?.message);
+      }
+    });
+
+    // ── Module 2: destination mode — set / clear (§8.1) ───────────────────────
+    // The driver declares where they are heading; dispatch then only offers
+    // rides whose drop-off fits that direction (destinationFit in
+    // findCandidatesH3). Both acks carry the service result VERBATIM —
+    // { ok:true, status } or { ok:false, error, message } — the exact shape
+    // REST returns, so the app handles one contract either way.
+    socket.on("driver:destination:set", async (data) => {
+      try {
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+        const result = await activateDestination(dbUserId, {
+          lat: data?.lat,
+          lng: data?.lng,
+          label: data?.label,
+        });
+        socket.emit("driver:destination:set:ack", result);
+      } catch (err: any) {
+        console.warn("driver:destination:set failed:", err?.message || err);
+        socket.emit("driver:destination:set:ack", {
+          ok: false,
+          error: "internal",
+          message: "Destination service error — try again",
+        });
+      }
+    });
+
+    socket.on("driver:destination:clear", async () => {
+      try {
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+        const result = await clearDestination(dbUserId);
+        socket.emit("driver:destination:clear:ack", result);
+      } catch (err: any) {
+        console.warn("driver:destination:clear failed:", err?.message || err);
+        socket.emit("driver:destination:clear:ack", {
+          ok: false,
+          error: "internal",
+          message: "Destination service error — try again",
+        });
+      }
+    });
+
+    // Read-only status for the banner (§8.1/f). Wraps the same
+    // DestinationStatus the REST GET returns as { ok:true, status } so the app
+    // parses set/clear/status acks with ONE shape.
+    socket.on("driver:destination:status", async () => {
+      try {
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+        socket.emit("driver:destination:status:ack", {
+          ok: true,
+          status: await getDestinationStatus(dbUserId),
+        });
+      } catch (err: any) {
+        console.warn("driver:destination:status failed:", err?.message || err);
+        socket.emit("driver:destination:status:ack", {
+          ok: false,
+          error: "internal",
+          message: "Destination service error — try again",
+        });
       }
     });
 

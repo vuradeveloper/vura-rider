@@ -14,6 +14,7 @@ import {
 } from "../data/vehicleCatalogue";
 import { noteDriverVehicle } from "../services/vehicleImages";
 import { classifyVehicle, primaryTier } from "../lib/tier-classifier";
+import { activateDestination, clearDestination, getDestinationStatus, DESTINATION_ERROR_HTTP_STATUS } from "../services/destinationSession";
 
 const router = Router();
 
@@ -573,6 +574,72 @@ router.get("/me/onboarding", requireAuth, async (req: AuthRequest, res: Response
     });
   } catch (err: any) {
     console.error("Driver onboarding error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE 2 — DESTINATION MODE (§8.1)
+//
+// The same service the socket events call, over HTTP: the driver app picks
+// whichever transport it has and both produce identical bodies. State lives
+// in destination_sessions / driver_profiles (columns from 002), never in the
+// request — a reconnect or restart replays the same status.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Resolve the caller to the driver_profiles OWNER — same rule as GET /stats. */
+async function resolveDriverId(firebaseUid: string): Promise<string | null> {
+  const user = await queryOne<{ id: string }>(
+    `SELECT u.id
+       FROM users u
+       LEFT JOIN driver_profiles dp ON dp.user_id = u.id
+      WHERE u.firebase_uid = $1
+        AND (dp.user_id IS NOT NULL OR u.role = 'driver')`,
+    [firebaseUid]
+  );
+  return user?.id ?? null;
+}
+
+// Service error → HTTP status comes from DESTINATION_ERROR_HTTP_STATUS in the
+// service (next to the ActivateErrorCode union) so REST and socket can never
+// disagree — it is unit-tested against every code.
+
+// GET /api/drivers/destination — banner/status (active?, label, uses_today...).
+router.get("/destination", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const driverId = await resolveDriverId(req.userId!);
+    if (!driverId) { res.status(403).json({ error: "Driver profile not found" }); return; }
+    res.json(await getDestinationStatus(driverId));
+  } catch (err: any) {
+    console.error("Destination status error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/drivers/destination — activate (or CHANGE: the old session closes
+// as 'changed' and the new one counts as today's next use, §8.1/Q1).
+router.post("/destination", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const driverId = await resolveDriverId(req.userId!);
+    if (!driverId) { res.status(403).json({ error: "Driver profile not found" }); return; }
+    const { lat, lng, label } = req.body || {};
+    const result = await activateDestination(driverId, { lat, lng, label });
+    if (result.ok) { res.json(result.status); return; }
+    res.status(DESTINATION_ERROR_HTTP_STATUS[result.error] ?? 400).json({ error: result.message, code: result.error });
+  } catch (err: any) {
+    console.error("Destination set error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/drivers/destination — cancel the mode (idempotent; L7b push).
+router.delete("/destination", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const driverId = await resolveDriverId(req.userId!);
+    if (!driverId) { res.status(403).json({ error: "Driver profile not found" }); return; }
+    res.json((await clearDestination(driverId)).status);
+  } catch (err: any) {
+    console.error("Destination clear error:", err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -14,6 +14,8 @@ import {
   clearDestination,
   getDestinationStatus,
   sweepDestinationSessionsOnce,
+  DESTINATION_ERROR_HTTP_STATUS,
+  type ActivateErrorCode,
 } from "./destinationSession";
 import { db, resetHarness, patchDestinationConfig, patchConfig, notify, makeIo } from "./testHarness";
 import { getCounters } from "./metrics";
@@ -344,5 +346,42 @@ describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
     release();
     expect(await first).toBe(0);
     expect(db.query).toHaveBeenCalledTimes(1); // only the first run ever queried
+  });
+});
+
+// ── 4f: REST/socket transport contract ───────────────────────────────────────
+// The HTTP status map lives beside the ActivateErrorCode union so both
+// transports share ONE mapping. This test fails the moment a new service error
+// code is added without deciding its HTTP status — routes/drivers.ts imports
+// this record verbatim, so there is no second copy to drift.
+describe("DESTINATION_ERROR_HTTP_STATUS (transport contract)", () => {
+  const ALL_CODES: ActivateErrorCode[] = [
+    "disabled",
+    "invalid_coordinates",
+    "not_found",
+    "not_online",
+    "on_trip",
+    "already_close",
+    "daily_limit",
+    "internal",
+  ];
+
+  it("maps every ActivateErrorCode exactly once (no extras, none missing)", () => {
+    expect(Object.keys(DESTINATION_ERROR_HTTP_STATUS).sort()).toEqual(
+      [...ALL_CODES].sort()
+    );
+  });
+
+  it("uses the approved statuses: state conflicts 409, quota 429, flag 403", () => {
+    expect(DESTINATION_ERROR_HTTP_STATUS).toMatchObject({
+      disabled: 403,
+      invalid_coordinates: 400,
+      not_found: 404,
+      not_online: 409,
+      on_trip: 409,
+      already_close: 409,
+      daily_limit: 429,
+      internal: 500,
+    });
   });
 });
