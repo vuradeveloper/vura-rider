@@ -341,6 +341,7 @@ interface SweepRow {
   current_lat: number | null;
   current_lng: number | null;
   last_location_at: string | Date | null;
+  last_heartbeat_at: string | Date | null;
   is_online: boolean | null;
   status: string;
   firebase_uid: string | null;
@@ -372,9 +373,24 @@ export function classifyDestinationEnd(
   ) {
     return "arrived";
   }
-  // L7c: explicit driver:online=false / 15-min safety timeout set is_online
-  // false; the stale sweep demotes status to 'offline'. Either counts.
-  if (row.is_online === false || row.status === "offline") return "offline";
+  // L7c (revised): END only on an EXPLICIT offline action — driver:online=false
+  // or the 15-min safety timeout, both set is_online=false — or when no
+  // heartbeat/location has arrived for destination_offline_grace_seconds
+  // (default 300 s). A short socket drop only demotes status to 'offline'
+  // while is_online stays true; ending there would kill a working session and
+  // burn a daily use on a tunnel. Null timestamps (pathological row) fail
+  // OPEN: never 'offline' on missing data — arrival/timeout still end it.
+  if (row.is_online === false) return "offline";
+  const lastSeenMs = Math.max(
+    row.last_location_at ? new Date(row.last_location_at).getTime() : 0,
+    row.last_heartbeat_at ? new Date(row.last_heartbeat_at).getTime() : 0
+  );
+  if (
+    lastSeenMs > 0 &&
+    Date.now() - lastSeenMs > destCfg.destination_offline_grace_seconds * 1000
+  ) {
+    return "offline";
+  }
   // L7d: the 3h clock written at activation. A NULL expiry (row written before
   // 002 ran) never times out — failing OPEN so a legacy row is never mass-ended.
   if (row.expires_at != null && new Date(row.expires_at).getTime() <= Date.now()) {
@@ -407,6 +423,7 @@ export async function sweepDestinationSessionsOnce(
       `SELECT ds.id, ds.driver_id, ds.lat, ds.lng, ds.label,
               ds.destination_expires_at AS expires_at,
               dp.current_lat, dp.current_lng, dp.last_location_at,
+              dp.last_heartbeat_at,
               dp.is_online, COALESCE(dp.status, 'offline') AS status,
               u.firebase_uid
          FROM destination_sessions ds

@@ -52,6 +52,7 @@ INSERT INTO app_config (key, value) VALUES ('destination', '{
   "destination_max_activations_per_day": 2,
   "destination_reject_radius_km": 1,
   "destination_arrival_radius_km": 0.5,
+  "destination_offline_grace_seconds": 300,
   "destination_timeout_hours": 3,
   "destination_match_dropoff_radius_km": 3,
   "destination_match_cross_track_km": 5,

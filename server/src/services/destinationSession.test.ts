@@ -245,6 +245,7 @@ describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
     current_lat: -26.2,
     current_lng: 28.1,
     last_location_at: new Date(),
+    last_heartbeat_at: new Date(),
     is_online: true,
     status: "available",
     firebase_uid: "fb-d1",
@@ -277,16 +278,54 @@ describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
     });
   });
 
-  it("L7c: offline via is_online=false OR status='offline' -> 'offline'", async () => {
+  it("L7c: explicit offline (is_online=false) ends; a short drop (status demoted, heartbeat fresh) does NOT", async () => {
     sweepRoute([row({ is_online: false })]);
     expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
     expect(closedReasons()).toEqual([["sess-1", "offline"]]);
 
+    // Short socket drop: the stale sweep demoted status to 'offline' but the
+    // driver is still online-intent and the last ping is inside the grace
+    // window — the session must stay open and no daily use is burned.
     resetHarness();
-    patchDestinationConfig({ destination_matching_enabled: true });
+    patchDestinationConfig({ destination_matching_enabled: true, destination_rollout_driver_ids: ["d1"] });
     sweepRoute([row({ is_online: true, status: "offline" })]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(0);
+    expect(calls("UPDATE destination_sessions")).toHaveLength(0);
+    expect(getCounters().destination_ended ?? 0).toBe(0);
+
+    // Silence past destination_offline_grace_seconds (default 300 s) = offline.
+    resetHarness();
+    patchDestinationConfig({ destination_matching_enabled: true, destination_rollout_driver_ids: ["d1"] });
+    sweepRoute([
+      row({
+        is_online: true,
+        status: "offline",
+        last_location_at: new Date(Date.now() - 400_000),
+        last_heartbeat_at: new Date(Date.now() - 400_000),
+      }),
+    ]);
     expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
     expect(closedReasons()).toEqual([["sess-1", "offline"]]);
+  });
+
+  it("L7c: a custom grace window is honoured (60 s)", async () => {
+    patchDestinationConfig({ destination_offline_grace_seconds: 60 });
+    sweepRoute([
+      row({
+        last_location_at: new Date(Date.now() - 90_000),
+        last_heartbeat_at: new Date(Date.now() - 90_000),
+      }),
+    ]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(closedReasons()).toEqual([["sess-1", "offline"]]);
+  });
+
+  it("L7c: missing timestamps (null heartbeat AND location) never mean offline", async () => {
+    sweepRoute([
+      row({ last_location_at: null, last_heartbeat_at: null }),
+    ]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(0);
+    expect(calls("UPDATE destination_sessions")).toHaveLength(0);
   });
 
   it("L7d: the 3h clock expired -> 'timeout_3h'", async () => {
