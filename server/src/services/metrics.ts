@@ -28,7 +28,12 @@ export type CounterName =
   | "push_delivered_zero" // a push answered "delivered to 0 devices" (or failed)
   | "offer_undeliverable" // offers skipped instantly: socket down AND push 0
   | "offer_acked" // device confirmed the offer rendered (driver:ride:offer:ack)
-  | "offer_not_acked"; // an offer that closed without ever being acknowledged
+  | "offer_not_acked" // an offer that closed without ever being acknowledged
+  // ── Module 2: destination mode ──
+  | "destination_activated" // successful Set-Destination (session row created)
+  | "destination_filtered" // candidates removed by the destinationFit predicate
+  | "destination_predicate_error" // destinationFit threw — driver skipped, ride served
+  | "destination_ended"; // sessions closed by the auto-end sweep
 
 import { hostname } from "os";
 
@@ -43,6 +48,10 @@ const counters: Record<CounterName, number> = {
   offer_undeliverable: 0,
   offer_acked: 0,
   offer_not_acked: 0,
+  destination_activated: 0,
+  destination_filtered: 0,
+  destination_predicate_error: 0,
+  destination_ended: 0,
 };
 
 /** Increment a counter (in-memory, sync, infallible). */

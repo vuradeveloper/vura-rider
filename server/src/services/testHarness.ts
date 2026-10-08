@@ -58,10 +58,31 @@ export const TEST_CONFIG = {
   h3_rollout_percent: 0,
 };
 
+// ── Module 2 config mock (flag OFF by default; seed = 002) ───────────────────
+export const TEST_DEST_CONFIG = {
+  destination_matching_enabled: false,
+  destination_rollout_driver_ids: [] as string[],
+  destination_max_activations_per_day: 2,
+  destination_reject_radius_km: 1,
+  destination_arrival_radius_km: 0.5,
+  destination_timeout_hours: 3,
+  destination_match_dropoff_radius_km: 3,
+  destination_match_cross_track_km: 5,
+  destination_match_along_tolerance_km: 0.5,
+};
+
+let destConfigState = { ...TEST_DEST_CONFIG };
+
+/** Change any destination config value for one test. */
+export function patchDestinationConfig(patch: Partial<typeof TEST_DEST_CONFIG>): void {
+  Object.assign(destConfigState, patch);
+}
+
 let configState = { ...TEST_CONFIG };
 
 export const appConfig = {
   getConfig: vi.fn(async (_force?: boolean) => ({ ...configState })),
+  getDestinationConfig: vi.fn(async (_force?: boolean) => ({ ...destConfigState })),
   h3MatchingEnabled: vi.fn(async () => configState.h3_matching_enabled),
   invalidateConfigCache: vi.fn(),
   seedConfig: vi.fn(async () => undefined),
@@ -92,6 +113,8 @@ export function resetHarness() {
   notify.sendPushToUsers.mockResolvedValue(1);
   // Flag OFF + default thresholds: legacy tests exercise the haversine path.
   configState = { ...TEST_CONFIG };
+  destConfigState = { ...TEST_DEST_CONFIG };
+  destConfigState = { ...TEST_DEST_CONFIG };
   // Dispatch counters start at zero for every test.
   resetCounters();
   // No network under vitest: road ETA always uses the haversine fallback

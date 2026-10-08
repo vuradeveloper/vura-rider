@@ -1,0 +1,283 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// DESTINATION SESSION SERVICE — activate / change / cancel / status (§8.1):
+//   • max 2 activations per driver per day, bucketed 00:00 SAST
+//     (destination_sessions.sast_day — the timezone lives in SQL, never JS)
+//   • activation only while online and NOT on a trip
+//   • reject activation inside 1 km: "You're already close"
+//   • changing destination mid-mode = a NEW use (old end_reason='changed')
+//   • cancelling pushes the driver the reason (fixture L7b)
+//   • state lives in the database → survives crash/reconnect
+// Every activation/termination is also written to destination_events (audit).
+// ─────────────────────────────────────────────────────────────────────────────
+import { query, execute } from "../config/database";
+import { getDestinationConfig, DestinationConfig } from "./config";
+import { haversineKm } from "../lib/h3";
+import { sendPushToUsers } from "./notify";
+import { bump } from "./metrics";
+
+export interface DestinationStatus {
+  active: boolean;
+  label: string | null;
+  lat: number | null;
+  lng: number | null;
+  /** Sessions started today (SAST), including 'changed' ones — Q1/Q6. */
+  uses_today: number;
+  max_uses: number;
+  /** "Going to [place] - 1 of 2 uses today" while active, else null. */
+  banner: string | null;
+  expires_at: string | null;
+  sast_day: string;
+}
+
+export type ActivateErrorCode =
+  | "disabled"
+  | "invalid_coordinates"
+  | "not_found"
+  | "not_online"
+  | "on_trip"
+  | "already_close"
+  | "daily_limit"
+  | "internal";
+
+export type ActivateResult =
+  | { ok: true; status: DestinationStatus }
+  | { ok: false; error: ActivateErrorCode; message: string };
+
+export interface SetDestinationInput {
+  lat: unknown;
+  lng: unknown;
+  label: unknown;
+}
+
+interface ActiveSession {
+  id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  expires_at: string | null;
+}
+
+const fail = (error: ActivateErrorCode, message: string): ActivateResult => ({
+  ok: false,
+  error,
+  message,
+});
+
+async function loadActive(driverId: string): Promise<ActiveSession | null> {
+  const rows = await query<ActiveSession>(
+    `SELECT id, label, lat, lng, destination_expires_at AS expires_at
+       FROM destination_sessions
+      WHERE driver_id = $1 AND ended_at IS NULL
+      ORDER BY started_at DESC
+      LIMIT 1`,
+    [driverId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Count + SAST day from ONE query: the daily bucket is computed by the DB. */
+async function usageToday(driverId: string): Promise<{ uses: number; sastDay: string }> {
+  const rows = await query<{ n: string | number; sast_day: string }>(
+    `SELECT COUNT(*)::int AS n,
+            to_char(now() AT TIME ZONE 'Africa/Johannesburg', 'YYYY-MM-DD') AS sast_day
+       FROM destination_sessions
+      WHERE driver_id = $1
+        AND sast_day = (now() AT TIME ZONE 'Africa/Johannesburg')::date`,
+    [driverId]
+  );
+  return { uses: Number(rows[0]?.n ?? 0), sastDay: String(rows[0]?.sast_day ?? "") };
+}
+
+async function logEvent(
+  driverId: string,
+  event: string,
+  detail: Record<string, unknown>
+): Promise<void> {
+  await execute(
+    `INSERT INTO destination_events (driver_id, event, detail) VALUES ($1, $2, $3)`,
+    [driverId, event, JSON.stringify(detail)]
+  ).catch((err) => console.warn(`[destination] event log failed (${event}):`, err?.message));
+}
+
+async function buildStatus(
+  driverId: string,
+  cfg: DestinationConfig,
+  active: ActiveSession | null
+): Promise<DestinationStatus> {
+  const { uses, sastDay } = await usageToday(driverId);
+  return {
+    active: !!active,
+    label: active?.label ?? null,
+    lat: active ? Number(active.lat) : null,
+    lng: active ? Number(active.lng) : null,
+    uses_today: uses,
+    max_uses: cfg.destination_max_activations_per_day,
+    banner: active
+      ? `Going to ${active.label} - ${Math.max(uses, 1)} of ${cfg.destination_max_activations_per_day} uses today`
+      : null,
+    expires_at: active?.expires_at ?? null,
+    sast_day: sastDay,
+  };
+}
+
+/**
+ * Set (or change) the driver's destination — one session per use.
+ * Idempotent for the SAME destination; a different one closes the old session
+ * as 'changed' and opens a new one (counts as a new use, §8.1).
+ */
+export async function activateDestination(
+  driverId: string,
+  input: SetDestinationInput
+): Promise<ActivateResult> {
+  try {
+    const cfg = await getDestinationConfig();
+    if (!cfg.destination_matching_enabled) {
+      return fail("disabled", "Destination mode is turned off");
+    }
+    const lat = Number(input?.lat);
+    const lng = Number(input?.lng);
+    const label = String(input?.label ?? "").trim();
+    if (
+      !label ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      Math.abs(lat) > 90 ||
+      Math.abs(lng) > 180
+    ) {
+      return fail("invalid_coordinates", "A destination label and valid coordinates are required");
+    }
+
+    const profs = await query<{
+      is_online: boolean;
+      status: string | null;
+      current_lat: number | null;
+      current_lng: number | null;
+    }>(
+      `SELECT is_online, status, current_lat, current_lng
+         FROM driver_profiles WHERE user_id = $1`,
+      [driverId]
+    );
+    const prof = profs[0];
+    if (!prof) return fail("not_found", "Driver profile not found");
+    if (!prof.is_online) return fail("not_online", "Go online to set a destination");
+    if (prof.status !== "available") return fail("on_trip", "Finish the current trip first");
+
+    // Q1: reject when already within the radius ("You're already close").
+    // No known position ⇒ nothing to prove close — allow (matching itself
+    // stays fail-closed on position age).
+    if (prof.current_lat != null && prof.current_lng != null) {
+      const d = haversineKm(Number(prof.current_lat), Number(prof.current_lng), lat, lng);
+      if (d <= cfg.destination_reject_radius_km) {
+        return fail("already_close", "You're already close");
+      }
+    }
+
+    const { uses, sastDay } = await usageToday(driverId);
+    if (uses >= cfg.destination_max_activations_per_day) {
+      return fail(
+        "daily_limit",
+        `Daily limit reached — ${cfg.destination_max_activations_per_day} uses today (${sastDay})`
+      );
+    }
+
+    const active = await loadActive(driverId);
+    if (
+      active &&
+      active.label === label &&
+      Math.abs(Number(active.lat) - lat) < 1e-6 &&
+      Math.abs(Number(active.lng) - lng) < 1e-6
+    ) {
+      // Same destination again → idempotent, no extra use burned.
+      return { ok: true, status: await buildStatus(driverId, cfg, active) };
+    }
+
+    if (active) {
+      // §8.1: changing destination mid-mode = a NEW use.
+      const closed = await execute(
+        `UPDATE destination_sessions SET ended_at = NOW(), end_reason = 'changed'
+          WHERE id = $1 AND ended_at IS NULL`,
+        [active.id]
+      );
+      if (closed?.rowCount) await logEvent(driverId, "ended", { reason: "changed", to: label });
+    }
+
+    await execute(
+      `UPDATE driver_profiles
+          SET destination_lat = $1, destination_lng = $2, destination_label = $3,
+              destination_set_at = NOW(),
+              destination_expires_at = NOW() + make_interval(secs => $4::double precision),
+              updated_at = NOW()
+        WHERE user_id = $5`,
+      [lat, lng, label, cfg.destination_timeout_hours * 3600, driverId]
+    );
+    await execute(
+      `INSERT INTO destination_sessions (driver_id, lat, lng, label)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [driverId, lat, lng, label]
+    );
+    await logEvent(driverId, "activated", { label, lat, lng, uses_today: uses + 1 });
+    bump("destination_activated");
+
+    // Build the status from what we just wrote (not a re-read): the label must
+    // be the NEW one even though the session row was inserted microseconds ago.
+    return {
+      ok: true,
+      status: await buildStatus(driverId, cfg, {
+        id: "(new)",
+        label,
+        lat,
+        lng,
+        expires_at: new Date(Date.now() + cfg.destination_timeout_hours * 3_600_000).toISOString(),
+      }),
+    };
+  } catch (err: any) {
+    console.warn("[destination] activate failed:", err?.message || err);
+    return fail("internal", "Destination service error — try again");
+  }
+}
+
+/** Turn the mode off (fixture L7b: the driver gets a push stating why). Idempotent. */
+export async function clearDestination(
+  driverId: string
+): Promise<{ ok: true; status: DestinationStatus }> {
+  try {
+    const cfg = await getDestinationConfig();
+    let active = await loadActive(driverId);
+    if (active) {
+      const closed = await execute(
+        `UPDATE destination_sessions SET ended_at = NOW(), end_reason = 'cancelled'
+          WHERE id = $1 AND ended_at IS NULL`,
+        [active.id]
+      );
+      if (closed?.rowCount) {
+        await execute(
+          `UPDATE driver_profiles
+              SET destination_lat = NULL, destination_lng = NULL, destination_label = NULL,
+                  destination_set_at = NULL, destination_expires_at = NULL, updated_at = NOW()
+            WHERE user_id = $1`,
+          [driverId]
+        ).catch(() => undefined);
+        await logEvent(driverId, "ended", { reason: "cancelled" });
+        void sendPushToUsers([driverId], {
+          type: "destination_mode_ended",
+          title: "Destination mode cancelled",
+          body: "You turned destination mode off.",
+          highPriority: true,
+          data: { reason: "cancelled" },
+        }).catch(() => undefined);
+        active = null; // WE closed it — status below must say so (rowCount = proof)
+      }
+    }
+    return { ok: true, status: await buildStatus(driverId, cfg, active) };
+  } catch (err: any) {
+    console.warn("[destination] clear failed:", err?.message || err);
+    const cfg = await getDestinationConfig(true);
+    return { ok: true, status: await buildStatus(driverId, cfg, null) };
+  }
+}
+
+/** Banner/status for the driver app (DB-persisted — survives reconnects). */
+export async function getDestinationStatus(driverId: string): Promise<DestinationStatus> {
+  const cfg = await getDestinationConfig();
+  return buildStatus(driverId, cfg, await loadActive(driverId));
+}

@@ -177,6 +177,8 @@ export async function h3MatchingEnabled(): Promise<boolean> {
 export function invalidateConfigCache(): void {
   cached = null;
   cachedAt = 0;
+  destCached = null;
+  destCachedAt = 0;
 }
 
 /**
@@ -204,4 +206,96 @@ export async function allConfig(): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const r of rows) out[r.key] = r.value;
   return out;
+}
+
+// ── Module 2: destination mode config (key `destination`, seeded by 002) ─────
+
+export interface DestinationConfig {
+  /** Master switch for the feature (seeded FALSE — Q12). */
+  destination_matching_enabled: boolean;
+  /** Driver-keyed rollout: only these user ids get the predicate applied. */
+  destination_rollout_driver_ids: string[];
+  /** Q1: max activations per driver per SAST day. */
+  destination_max_activations_per_day: number;
+  /** Q1: reject activation inside this radius ("You're already close"). */
+  destination_reject_radius_km: number;
+  /** §8.1: auto-end when the driver is within this radius of the destination. */
+  destination_arrival_radius_km: number;
+  /** §8.1: auto-end after this many hours without a trip. */
+  destination_timeout_hours: number;
+  /** §8.2 (c1): pure disk around the drop-off→destination. */
+  destination_match_dropoff_radius_km: number;
+  /** §8.2 (c2): max cross-track offset from the driver→destination line. */
+  destination_match_cross_track_km: number;
+  /** §8.2 (c2): along-track tolerance past the driver / past the destination. */
+  destination_match_along_tolerance_km: number;
+}
+
+export const DEFAULT_DESTINATION_CONFIG: DestinationConfig = {
+  destination_matching_enabled: false,
+  destination_rollout_driver_ids: [],
+  destination_max_activations_per_day: 2,
+  destination_reject_radius_km: 1,
+  destination_arrival_radius_km: 0.5,
+  destination_timeout_hours: 3,
+  destination_match_dropoff_radius_km: 3,
+  destination_match_cross_track_km: 5,
+  destination_match_along_tolerance_km: 0.5,
+};
+
+function coerceDestination(raw: any): DestinationConfig {
+  const cfg: DestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
+  if (!raw || typeof raw !== "object") return cfg;
+  if (typeof raw.destination_matching_enabled === "boolean") {
+    cfg.destination_matching_enabled = raw.destination_matching_enabled;
+  }
+  if (Array.isArray(raw.destination_rollout_driver_ids)) {
+    const ids: unknown[] = raw.destination_rollout_driver_ids;
+    cfg.destination_rollout_driver_ids = ids
+      .filter((id): id is string => typeof id === "string")
+      .map((id: string) => id.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  type NumKey = Exclude<
+    keyof DestinationConfig,
+    "destination_matching_enabled" | "destination_rollout_driver_ids"
+  >;
+  const nums: NumKey[] = [
+    "destination_max_activations_per_day",
+    "destination_reject_radius_km",
+    "destination_arrival_radius_km",
+    "destination_timeout_hours",
+    "destination_match_dropoff_radius_km",
+    "destination_match_cross_track_km",
+    "destination_match_along_tolerance_km",
+  ];
+  for (const k of nums) {
+    const v: unknown = (raw as Record<string, unknown>)[k];
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+      cfg[k] = v;
+    }
+  }
+  return cfg;
+}
+
+let destCached: DestinationConfig | null = null;
+let destCachedAt = 0;
+
+/**
+ * Destination-mode config (key `destination`), same 10s cache and
+ * fail-to-defaults behaviour as getConfig: a missing row (before 002 runs)
+ * means the feature is simply OFF, never an exception.
+ */
+export async function getDestinationConfig(force = false): Promise<DestinationConfig> {
+  if (!force && destCached && Date.now() - destCachedAt < CACHE_MS) return destCached;
+  try {
+    const row = await queryOne<{ value: any }>(
+      "SELECT value FROM app_config WHERE key = 'destination'"
+    );
+    destCached = coerceDestination(row?.value);
+  } catch {
+    destCached = { ...DEFAULT_DESTINATION_CONFIG };
+  }
+  destCachedAt = Date.now();
+  return destCached;
 }
