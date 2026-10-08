@@ -331,47 +331,86 @@ hav(A,B) = 2R · asin( √( sin²((φB−φA)/2) + cosφA·cosφB·sin²((λB−
 
 bearing(A→B) = atan2( sinΔλ·cosφB , cosφA·sinφB − sinφA·cosφB·cosΔλ )
 
-cross-track (A=D start, B=T end, P=X point):
+cross-track (perpendicular offset of X from the D→T line):
   dAP = hav(D,X)   dAB = hav(D,T)
   θ   = bearing(D→T)      θAP = bearing(D→X)
   xt  = R · asin( clamp( sin(dAP/R) · sin(θAP − θ), −1, 1 ) )
   guard: dAB < 1e-9 km  →  xt := dAP        (driver already at destination)
+
+along-track (signed position of X's PROJECTION onto the D→T line;
+ positive toward T, negative behind the driver, in km):
+  Δ    = θAP − θ
+  at   = R · acos( clamp( cos(dAP/R) / cos(xt/R), −1, 1 ) )   // magnitude
+  along = sign(cos Δ) · at
+  guard: dAB < 1e-9 km  →  along-check SKIPPED (only the xt := dAP disk applies)
 ```
 
 **A trip is offered to a destination-mode driver iff ALL hold:**
 
 | # | Condition |
 |---|---|
-| (a) | `hav(P, X)`-distance from pickup within the **normal matching radius** — enforced by the existing eligibility SQL, unchanged |
+| (a) | pickup within the **normal matching radius** — enforced by the existing eligibility SQL, unchanged |
 | (b) | `hav(X, T) < hav(P, T)` — drop-off **strictly closer** to the destination than the pickup is |
-| (c) | `hav(X, T) ≤ 3 km` **OR** `|xt| ≤ 5 km` |
+| (c) | `hav(X, T) ≤ 3 km` **OR** (`|xt| ≤ 5 km` **AND** `−0.5 km ≤ along ≤ dAB + 0.5 km`) |
 
+- **The along-track check makes the corridor FINITE**: the projection of the
+  drop-off onto the line must lie between the driver and the destination,
+  ±500 m tolerance. A drop-off *behind* the driver fails even at `xt ≈ 0`
+  (which (b) alone can pass), and one *past* T fails even when it sits on the
+  line — (b) only blocks gross overshoot, not a 1–5 km overshoot.
+- **(c1) is a pure 3 km disk** (no along limit — that is what the rule says):
+  a drop-off ≤ 3 km from T is accepted from anywhere, including just beyond T.
 - **Ride has no drop-off coordinates → destination-mode driver is skipped**
   for that ride (plain drivers unaffected).
-- (b) is evaluated in the **same AND-chain** as (a): a drop-off far beyond `T`
-  fails (b), which is what makes the *infinite-line* reading of (c) safe.
-- Predicate runs **in JavaScript per candidate** (not in SQL): Q13's per-driver
-  fail-closed is a per-row try/catch → skip that driver, log, count; SQL would
-  abort the whole query on error. Flag-off ⇒ predicate never executes ⇒ legacy
-  SQL byte-identical.
+- (b) stays in the **same AND-chain** as (a). Predicate runs **in JavaScript
+  per candidate** (not in SQL): Q13's per-driver fail-closed is a per-row
+  try/catch → skip that driver, log, count. Flag-off ⇒ predicate never
+  executes ⇒ legacy SQL byte-identical.
 
 ### 8.3 Planned unit tests — fixtures (text now, code at build time)
 
 Pure-function fixtures for `destinationMatches(D, T, P, X)` (equator degrees:
-0.01° lat = 1.112 km; 0.01° lng = 1.112 km):
+0.01° lat = 1.112 km; 0.01° lng = 1.112 km; `tol = 0.5 km` along-track).
+
+**A. Geometry (predicate) fixtures** — base line D(0,0) → T(0,0.10) unless
+stated (`dAB = 11.12 km`, θ = north; for X on the north–south line
+`along ≈ y · 111.2 km`):
 
 | # | Fixture (D, T, P, X) | Expect | Exercises |
 |---|---|---|---|
-| 1 | D(0,0) T(0,0.10) P(0,0.02) X(0,0.06) | **ACCEPT** | on-corridor: (b) 4.45<8.90 km, xt≈0 |
-| 2 | D(0,0) T(0,0.10) P(0,0.03) X(0,0.01) | **REJECT** | (b): drop-off *away* from T (9.9 > 7.8 km) |
-| 3 | D(0,0) T(0,0.10) P(0,0.05) X(0.01,0.099) | **ACCEPT** | (c1): 1.5 km ≤ 3, off-line |
-| 4 | D(0,0) T(0,0.10) P(0,0.04) X(0.04,0.07) | **ACCEPT** | (c2) only: xt≈4.4 ≤5, dist≈5.5 >3 |
-| 5 | D(0,0) T(0,0.10) P(0,0.04) X(0.06,0.07) | **REJECT** | both (c) branches fail (xt≈6.7, 7.8>3) |
-| 6 | boundary sets | xt **exactly** 5 → ACCEPT; X **exactly** 3 km → ACCEPT; `hav(X,T)==hav(P,T)` → **REJECT** (strict <) | inclusive ≤, exclusive < |
-| 7 | X = null | **SKIP** | no drop-off coords |
-| 8 | D==T=(0,0), P(0,0.10); X(0,0.018) [2 km] and twin X(0,0.06) [6.7 km] | 2 km **ACCEPT** (c1); 6.7 km **REJECT** | `dAB≈0` guard → `xt := dAP`, so (c2) degenerates to a 5 km disk around T; (b) still enforced |
+| 1 | D(0,0) T(0,0.10) P(0,0.02) X(0,0.06) | **ACCEPT** | on-corridor: (b) 4.45<8.90 km, xt≈0, along≈6.67 |
+| 2 | D(0,0) T(0,0.10) P(0,0.03) X(0,0.01) | **REJECT** | (b): drop-off *away* from T (9.90 > 7.78 km) |
+| 3 | D(0,0) T(0,0.10) P(0,0.05) X(0.01,0.099) | **ACCEPT** | (c1): 1.12 km ≤ 3, off-line |
+| 4 | D(0,0) T(0,0.10) P(0,0.04) X(0.04,0.07) | **ACCEPT** | (c2) only: xt≈4.45 ≤5, dist≈5.56 >3, along≈7.78 on-line |
+| 5 | D(0,0) T(0,0.10) P(0,0.03) X(0.05,0.07) | **REJECT** | drop-off closer than pickup **but outside both allowances**: (b) 6.50<7.78 ✓, c1 6.50>3 ✗, xt 5.56>5 ✗ |
+| 6 | boundary sets | xt **exactly** 5 → ACCEPT; X **exactly** 3 km → ACCEPT; `hav(X,T)==hav(P,T)` → **REJECT** (strict <); `along == −0.5` → ACCEPT, `along == −0.501` → REJECT; `along == dAB+0.5` → ACCEPT | inclusive ≤, exclusive < |
+| 7 | X = null | **SKIP** | no drop-off coords → destination-mode driver skipped, plain drivers unaffected |
+| 8 | D==T=(0,0), P(0,0.10); X(0,0.018) [2 km] and twin X(0,0.06) [6.7 km] | 2 km **ACCEPT** (c1); 6.7 km **REJECT** | `dAB≈0` guard → `xt := dAP`, along-check skipped, (c2) is a 5 km disk around T; (b) still enforced |
 | 9 | fixture 1 repeated ×10 | identical results | pure, no time/queue dependence |
-| 10 | X beyond T on the line, P before T | **REJECT** | overshoot blocked by (b) |
+| 10 | **X beyond T on the line**, P before T: D(0,0) T(0,0.10) P(0,0.02) X(0,0.14) | **REJECT** | overshoot blocked by (b) *and* (c2): along≈15.6 > 11.62 |
+| 11 | **behind the driver**: D(0,0) T(0,0.09) P(0.063,0) X(0,−0.018) | **REJECT** | the along-track rule alone: (b) 12.01<12.20 ✓, c1 ✗, xt=0 ✓, **along = −2.0 < −0.5** ✗ — (b) and xt both pass, only `along` catches it |
+| 12 | **beyond the destination**: D(0,0) T(0,0.09) P(0.063,0) X(0,0.13) | **REJECT** | on-line overshoot 4.45 km past T: (b) passes (4.45<12.20), c1 4.45>3 ✗, xt=0 ✓, **along 14.46 > 10.01+0.5** ✗ |
+| 13 | **exactly on the line** mid-segment: D(0,0) T(0,0.10) P(0,0.02) X(0,0.05) | **ACCEPT** | xt = 0 exactly, along ≈5.56 ∈ [−0.5, 11.62] |
+| 14 | **3 km boundary just inside**: X beyond T by 2.99 km → X(0,0.1169) | **ACCEPT** | c1 2.99 ≤ 3 — note **(c1) is a pure disk**: accepted even past T |
+| 15 | **3 km boundary just outside**: X beyond T by 3.001 km → X(0,0.1170) | **REJECT** | c1 fails; c2: xt=0 ✓ but along ≈13.0 > 10.62 ✗ |
+| 16 | **pickup farther than the match radius**: hav(D,P) = 7.2 km > 7 km rung | **not offered** (SQL-level (a)) | eligibility SQL rejects before the predicate runs |
+| 17 | driver **already inside the 1 km** activation radius | see L1 | cross-listed for completeness — belongs to activation, not the predicate |
+
+**B. Activation/lifecycle fixtures** (state machine against `destination_sessions` +
+`app_config`; driver online, not on a trip unless stated):
+
+| # | Scenario | Expect | Exercises |
+|---|---|---|---|
+| L1 | activate while within **1 km** of the destination | **REJECT**, *"You're already close"* — no session row | §8.1 activation guard |
+| L2 | activate normally, 1st use of the day | session `sast_day = today`, banner `Going to [place] - 1 of 2 uses today` | happy path |
+| L3 | end + activate again, 2nd use | allowed, banner `- 2 of 2` | quota consumption |
+| L4 | **3rd activation** same `sast_day` | **REJECT** `daily_limit` — no session row | 2/day limit, counted in `destination_sessions` |
+| L5 | activate at **23:59:30 SAST** (day D), clear, activate at **00:01 SAST** (day D+1) | both **ACCEPT** — bucket rolls at 00:00 SAST (`sast_day`); 23:59:59 belongs to D, 00:00:00 to D+1 | midnight reset boundary (SA timezone, not UTC) |
+| L6 | **destination change** mid-mode (clear/set to a new place) | old session `end_reason = 'changed'`, **new session row** = new use (counts toward today's 2) | "change = a new use" |
+| L7a | driver comes within **500 m** of the destination | auto-end `end_reason = 'arrived'` + **push stating the reason** | end trigger 1 |
+| L7b | driver **cancels** the mode | auto-end `end_reason = 'cancelled'` + push | end trigger 2 |
+| L7c | driver goes **offline** | auto-end `end_reason = 'offline'` + push | end trigger 3 |
+| L7d | **3 hours** pass with no trip | auto-end `end_reason = 'timeout_3h'` + push | end trigger 4 (sweep, like Module 1's stale-index sweep) |
 
 **STOP** — no Module 2 code until you confirm these fixtures (and the §8
 decisions) — then `002` is built on this branch plan, Module-1 style.
