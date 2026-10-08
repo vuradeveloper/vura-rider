@@ -35,6 +35,45 @@ const enabled = Boolean(DB_PORT);
 
 const SANDTON = { lat: -26.1076, lng: 28.0567 };
 
+/**
+ * SAFETY GUARD — this suite CREATES schema and WIPES driver rows in beforeAll.
+ * It may only ever talk to the local scratch container; anything else must
+ * fail loudly BEFORE the first statement executes — the cleanup included.
+ */
+export const SCRATCH_DB = { host: "127.0.0.1", port: "55432", name: "vura_test" } as const;
+
+export function assertScratchDatabase(host: string, port: string, dbName: string): void {
+  const hostOk = host === "127.0.0.1" || host === "localhost";
+  if (hostOk && port === SCRATCH_DB.port && dbName === SCRATCH_DB.name) return;
+  throw new Error(
+    `[integration] REFUSING to run against ${host || "(none)"}:${port}/${dbName} — ` +
+      `this suite creates tables and deletes driver rows, so it only accepts the ` +
+      `scratch container (localhost:${SCRATCH_DB.port}/${SCRATCH_DB.name}, docker ` +
+      `container vura-module1-db). Point VURA_TEST_DB_PORT at ${SCRATCH_DB.port} ` +
+      `or unset it to skip the suite entirely.`
+  );
+}
+
+// Guard tests are deliberately UNGATED: they must run (and prove the refusal)
+// even when the DB-backed suite is skipped.
+describe("scratch-database guard", () => {
+  it("accepts the scratch container (127.0.0.1:55432/vura_test)", () => {
+    expect(() => assertScratchDatabase("127.0.0.1", "55432", "vura_test")).not.toThrow();
+  });
+  it("accepts the localhost alias", () => {
+    expect(() => assertScratchDatabase("localhost", "55432", "vura_test")).not.toThrow();
+  });
+  it("refuses a remote host", () => {
+    expect(() => assertScratchDatabase("db.prod.internal", "55432", "vura_test")).toThrow(/REFUSING/);
+  });
+  it("refuses a non-scratch port on localhost", () => {
+    expect(() => assertScratchDatabase("127.0.0.1", "5432", "vura_test")).toThrow(/REFUSING/);
+  });
+  it("refuses a different database name", () => {
+    expect(() => assertScratchDatabase("127.0.0.1", "55432", "vura")).toThrow(/REFUSING/);
+  });
+});
+
 // Minimal-but-sufficient core schema. Columns cover every statement the code
 // under test issues; the MODULE 1 objects come from the REAL migration file.
 const CORE_SCHEMA = `
@@ -140,6 +179,15 @@ beforeAll(async () => {
   process.env.DB_SSL = "false";
 
   if (!enabled) return; // suite is skipped; do not touch any database
+
+  // Guard FIRST: nothing below (schema, migrations, and above all the driver
+  // state cleanup) may run against any database other than the scratch
+  // container. Throws with a clear message otherwise.
+  assertScratchDatabase(
+    process.env.DB_HOST ?? "",
+    process.env.DB_PORT ?? "",
+    process.env.DB_NAME ?? ""
+  );
 
   await execute(CORE_SCHEMA);
   // Real migration, applied TWICE to prove idempotency on live Postgres
