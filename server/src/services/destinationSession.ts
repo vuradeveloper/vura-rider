@@ -408,6 +408,90 @@ const END_COPY: Record<DestinationEndReason, string> = {
 let sweeping = false;
 
 /**
+ * THE one way a session ends from server code (sweep, ping arrival, …):
+ * row-guarded close + profile wipe + audit + counter + socket + push, in that
+ * order, and ONLY for the caller whose `ended_at IS NULL` UPDATE won the row
+ * (rowCount proof). Two racers (sweep vs ping) can both try; exactly one does
+ * the side effects — one arrival, one push, one counter, one daily use.
+ */
+async function closeSession(
+  io: DestinationEmitTarget,
+  row: { id: string; driver_id: string; label: string; firebase_uid: string | null },
+  reason: DestinationEndReason,
+  via: string,
+  pushBody?: string
+): Promise<boolean> {
+  const closed = await execute(
+    `UPDATE destination_sessions
+        SET ended_at = NOW(), end_reason = $2
+      WHERE id = $1 AND ended_at IS NULL`,
+    [row.id, reason]
+  );
+  if (!closed?.rowCount) return false; // someone else closed it first — their win
+  await execute(
+    `UPDATE driver_profiles
+        SET destination_lat = NULL, destination_lng = NULL, destination_label = NULL,
+            destination_set_at = NULL, destination_expires_at = NULL, updated_at = NOW()
+      WHERE user_id = $1`,
+    [row.driver_id]
+  ).catch(() => undefined);
+  await logEvent(row.driver_id, "ended", { reason, via, to: row.label });
+  bump("destination_ended");
+  console.log(
+    `[destination] ${via} ended session ${row.id} driver=${row.driver_id} reason=${reason}`
+  );
+  if (row.firebase_uid) {
+    io.to(`user:${row.firebase_uid}`).emit("driver:destination:ended", { reason });
+  }
+  void sendPushToUsers([row.driver_id], {
+    type: "destination_mode_ended",
+    title: "Destination mode ended",
+    body: pushBody ?? END_COPY[reason],
+    highPriority: true,
+    data: { reason },
+  }).catch(() => undefined);
+  return true;
+}
+
+/**
+ * Arrival check on EVERY driver GPS ping (§8.1 L7a) — the sweep stays as the
+ * backup. The socket handler only calls this when the profile row it just
+ * UPDATEd still carries a destination (destination_lat IS NOT NULL), so the
+ * extra indexed query (idx_destination_sessions_active) hits only drivers with
+ * an active session — never the whole fleet.
+ *
+ * The ping itself is a fresh GPS fix, so no position-age guard is needed here
+ * (unlike the sweep, which reads stored coordinates).
+ */
+export async function onDriverPingPosition(
+  io: DestinationEmitTarget,
+  driverId: string,
+  lat: number,
+  lng: number
+): Promise<boolean> {
+  const rows = await query<
+    Pick<SweepRow, "id" | "driver_id" | "lat" | "lng" | "label" | "firebase_uid">
+  >(
+    `SELECT ds.id, ds.driver_id, ds.lat, ds.lng, ds.label, u.firebase_uid
+       FROM destination_sessions ds
+       JOIN users u ON u.id = ds.driver_id
+      WHERE ds.driver_id = $1 AND ds.ended_at IS NULL
+      LIMIT 1`,
+    [driverId]
+  );
+  const row = rows[0];
+  if (!row) return false; // stale destination flag on the profile — nothing to end
+  const cfg = await getDestinationConfig();
+  if (
+    haversineKm(lat, lng, Number(row.lat), Number(row.lng)) >
+    cfg.destination_arrival_radius_km
+  ) {
+    return false; // still driving towards it
+  }
+  return closeSession(io, row, "arrived", "ping");
+}
+
+/**
  * Close every session that has hit an end condition. Returns how many were
  * ended by THIS run (0 also when a run was skipped by the guard).
  */
@@ -435,36 +519,7 @@ export async function sweepDestinationSessionsOnce(
     for (const row of rows) {
       const reason = classifyDestinationEnd(row, destCfg, mainCfg);
       if (!reason) continue;
-      const closed = await execute(
-        `UPDATE destination_sessions
-            SET ended_at = NOW(), end_reason = $2
-          WHERE id = $1 AND ended_at IS NULL`,
-        [row.id, reason]
-      );
-      if (!closed?.rowCount) continue; // someone else closed it first — their win
-      await execute(
-        `UPDATE driver_profiles
-            SET destination_lat = NULL, destination_lng = NULL, destination_label = NULL,
-                destination_set_at = NULL, destination_expires_at = NULL, updated_at = NOW()
-          WHERE user_id = $1`,
-        [row.driver_id]
-      ).catch(() => undefined);
-      await logEvent(row.driver_id, "ended", { reason, via: "sweep", to: row.label });
-      bump("destination_ended");
-      ended += 1;
-      console.log(
-        `[destination] sweep ended session ${row.id} driver=${row.driver_id} reason=${reason}`
-      );
-      if (row.firebase_uid) {
-        io.to(`user:${row.firebase_uid}`).emit("driver:destination:ended", { reason });
-      }
-      void sendPushToUsers([row.driver_id], {
-        type: "destination_mode_ended",
-        title: "Destination mode ended",
-        body: END_COPY[reason],
-        highPriority: true,
-        data: { reason },
-      }).catch(() => undefined);
+      if (await closeSession(io, row, reason, "sweep")) ended += 1;
     }
     return ended;
   } catch (err: any) {

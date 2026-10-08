@@ -13,6 +13,7 @@ import {
   activateDestination,
   clearDestination,
   getDestinationStatus,
+  onDriverPingPosition,
   sweepDestinationSessionsOnce,
   DESTINATION_ERROR_HTTP_STATUS,
   type ActivateErrorCode,
@@ -397,6 +398,71 @@ describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
     release();
     expect(await first).toBe(0);
     expect(db.query).toHaveBeenCalledTimes(1); // only the first run ever queried
+  });
+});
+
+// ── 4h-fix2: arrival check on every GPS ping (sweep stays as backup) ──────────
+describe("onDriverPingPosition (arrival on each driver location update)", () => {
+  const sessionRoute = (rows: any[]) => route({ "ds.ended_at IS NULL": rows });
+  const session = (over: Record<string, unknown> = {}) => ({
+    id: "sess-9",
+    driver_id: "d1",
+    lat: -26.145, // Rosebank
+    lng: 28.04,
+    label: "Rosebank",
+    firebase_uid: "fb-d1",
+    ...over,
+  });
+
+  it("no active session -> a cheap no-op (no config read, no UPDATE)", async () => {
+    sessionRoute([]);
+    const { io } = makeIo();
+    expect(await onDriverPingPosition(io, "d1", -26.142, 28.04)).toBe(false);
+    expect(calls("UPDATE destination_sessions")).toHaveLength(0);
+    expect(notify.sendPushToUsers).not.toHaveBeenCalled();
+  });
+
+  it("a ping beyond the 500 m radius never ends the session", async () => {
+    sessionRoute([session()]); // destination Rosebank; ping ~7 km away
+    const { io } = makeIo();
+    expect(await onDriverPingPosition(io, "d1", -26.2, 28.1)).toBe(false);
+    expect(calls("UPDATE destination_sessions")).toHaveLength(0);
+    expect(notify.sendPushToUsers).not.toHaveBeenCalled();
+  });
+
+  it("a ping inside the radius ends it once: 'arrived' + push + socket + counter", async () => {
+    sessionRoute([session()]);
+    const { io, emitted } = makeIo();
+    // ~0.003° north ≈ 0.33 km — inside the 500 m radius.
+    expect(await onDriverPingPosition(io, "d1", -26.142, 28.04)).toBe(true);
+    const closed = calls("UPDATE destination_sessions");
+    expect(closed).toHaveLength(1);
+    expect(closed[0][1]).toEqual(["sess-9", "arrived"]);
+    expect(calls("destination_lat = NULL")).toHaveLength(1); // profile wiped
+    expect(getCounters().destination_ended).toBe(1);
+    expect(notify.sendPushToUsers).toHaveBeenCalledTimes(1);
+    expect(notify.sendPushToUsers).toHaveBeenCalledWith(
+      ["d1"],
+      expect.objectContaining({ data: { reason: "arrived" } })
+    );
+    expect(emitted).toContainEqual({
+      room: "user:fb-d1",
+      event: "driver:destination:ended",
+      payload: { reason: "arrived" },
+    });
+  });
+
+  it("cannot end a session twice: the second close loses the row-guard (rowCount=0)", async () => {
+    sessionRoute([session()]);
+    const { io } = makeIo();
+    expect(await onDriverPingPosition(io, "d1", -26.142, 28.04)).toBe(true);
+    // The sweep (or a concurrent ping) closed it first on the next attempt.
+    db.execute.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    expect(await onDriverPingPosition(io, "d1", -26.142, 28.04)).toBe(false);
+    expect(calls("destination_lat = NULL")).toHaveLength(1); // wipe ran ONCE
+    expect(notify.sendPushToUsers).toHaveBeenCalledTimes(1); // push ran ONCE
+    expect(getCounters().destination_ended).toBe(1); // counter ran ONCE
+    expect(calls("destination_events")).toHaveLength(1); // audit ran ONCE
   });
 });
 

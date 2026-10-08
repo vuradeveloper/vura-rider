@@ -17,7 +17,7 @@ import {
 import { trace, startTrace } from "../services/trace";
 import { getDriverIndex } from "../services/driverIndex";
 import { noteIndexUpsertFailure, bump } from "../services/metrics";
-import { activateDestination, clearDestination, getDestinationStatus } from "../services/destinationSession";
+import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition } from "../services/destinationSession";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -858,7 +858,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
                END,
                updated_at = NOW()
            WHERE user_id = $4
-           RETURNING status`,
+           RETURNING status, destination_lat, destination_lng`,
           [lat, lng, heading ?? null, dbUserId]
         );
         // Module 1: mirror the ping into the H3 driver index. Fire-and-forget —
@@ -876,6 +876,18 @@ export function setupSocketHandlers(io: SocketIOServer) {
               status: statusAfterPing,
             })
             .catch((err) => noteIndexUpsertFailure(dbUserId, err));
+        }
+        // Module 2: arrival check on EVERY ping (the ~30s sweep stays as
+        // backup). The UPDATE above already told us whether this driver has a
+        // destination — drivers without one never pay for the extra query —
+        // and this ping is a fresh fix, so the haversine needs no age guard.
+        // Row-guarded inside: a race with the sweep ends the session exactly
+        // once (one push, one counter, one daily use).
+        const destRow = updated.rows?.[0];
+        if (destRow?.destination_lat != null && destRow?.destination_lng != null) {
+          void onDriverPingPosition(io, dbUserId, Number(lat), Number(lng)).catch((err) =>
+            console.warn("[destination] ping arrival check failed:", err?.message || err)
+          );
         }
         // Broadcast the driver's live position to the rider(s) of any ACTIVE
         // ride this driver is on, so the rider's car follows the real driver
