@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS destination_sessions (
   lng DOUBLE PRECISION NOT NULL,
   label TEXT NOT NULL,
   started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- The idle timer lives on the SESSION row (not just driver_profiles): it is
+  -- reset to NOW() + destination_max_minutes_without_trip on every completed
+  -- trip, and the sweep reads it here. NULL before 002-era rows never timeout.
+  destination_expires_at TIMESTAMPTZ,
   ended_at TIMESTAMPTZ,
   end_reason TEXT,
   trips_completed INT NOT NULL DEFAULT 0,
@@ -53,7 +57,7 @@ INSERT INTO app_config (key, value) VALUES ('destination', '{
   "destination_reject_radius_km": 1,
   "destination_arrival_radius_km": 0.5,
   "destination_offline_grace_seconds": 300,
-  "destination_timeout_hours": 3,
+  "destination_max_minutes_without_trip": 180,
   "destination_match_dropoff_radius_km": 3,
   "destination_match_cross_track_km": 5,
   "destination_match_along_tolerance_km": 0.5

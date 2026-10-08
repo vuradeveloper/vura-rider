@@ -13,6 +13,7 @@ import {
   activateDestination,
   clearDestination,
   getDestinationStatus,
+  noteDestinationTripCompleted,
   onDriverPingPosition,
   sweepDestinationSessionsOnce,
   DESTINATION_ERROR_HTTP_STATUS,
@@ -138,10 +139,10 @@ describe("activateDestination", () => {
     });
     const ins = calls("INSERT INTO destination_sessions");
     expect(ins).toHaveLength(1);
-    expect(ins[0][1]).toEqual(["d1", -26.1, 28.4, "Sandton"]);
+    expect(ins[0][1]).toEqual(["d1", -26.1, 28.4, "Sandton", 180]); // idle minutes from config
     const prof = calls("UPDATE driver_profiles");
     expect(prof).toHaveLength(1);
-    expect(prof[0][1]).toEqual([-26.1, 28.4, "Sandton", 3 * 3600, "d1"]); // 3h expiry from config
+    expect(prof[0][1]).toEqual([-26.1, 28.4, "Sandton", 180, "d1"]); // 180 min idle timer from config
     expect(calls("destination_events")).toHaveLength(1); // activated
     expect(getCounters().destination_activated).toBe(1);
   });
@@ -398,6 +399,39 @@ describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
     release();
     expect(await first).toBe(0);
     expect(db.query).toHaveBeenCalledTimes(1); // only the first run ever queried
+  });
+});
+
+// ── 4h-fix3: completed trip = trips_completed++ and the idle timer resets ────
+describe("noteDestinationTripCompleted (reset on each completed trip)", () => {
+  it("increments trips_completed AND resets the timer on the session + profile", async () => {
+    expect(await noteDestinationTripCompleted("d1", "ride-1")).toBe(true);
+    const bump = calls("trips_completed = trips_completed + 1");
+    expect(bump).toHaveLength(1);
+    expect(bump[0][1]).toEqual(["d1", "ride-1", 180]); // idle minutes from config
+    const mirror = calls("UPDATE driver_profiles");
+    expect(mirror).toHaveLength(1);
+    expect(mirror[0][1]).toEqual(["d1", 180]); // banner/status clock moves too
+    expect(calls("INSERT INTO destination_events")).toHaveLength(1); // audit row
+    expect(calls("INSERT INTO destination_events")[0][1][1]).toBe("trip_completed");
+  });
+
+  it("honours a custom destination_max_minutes_without_trip", async () => {
+    patchDestinationConfig({ destination_max_minutes_without_trip: 45 });
+    expect(await noteDestinationTripCompleted("d1", "ride-1")).toBe(true);
+    expect(calls("trips_completed = trips_completed + 1")[0][1]).toEqual(["d1", "ride-1", 45]);
+  });
+
+  it("no active session -> nothing happens (a trip does NOT start a session)", async () => {
+    db.execute.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // the guarded UPDATE
+    expect(await noteDestinationTripCompleted("d1", "ride-1")).toBe(false);
+    expect(calls("UPDATE driver_profiles")).toHaveLength(0);
+    expect(calls("destination_events")).toHaveLength(0);
+  });
+
+  it("a DB failure returns false and never throws into the ride flow", async () => {
+    db.execute.mockRejectedValueOnce(new Error("db down"));
+    await expect(noteDestinationTripCompleted("d1", "ride-1")).resolves.toBe(false);
   });
 });
 

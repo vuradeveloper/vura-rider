@@ -17,7 +17,7 @@ import {
 import { trace, startTrace } from "../services/trace";
 import { getDriverIndex } from "../services/driverIndex";
 import { noteIndexUpsertFailure, bump } from "../services/metrics";
-import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition } from "../services/destinationSession";
+import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition, noteDestinationTripCompleted } from "../services/destinationSession";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -1330,8 +1330,8 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const { rideId } = data;
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
-        const ride = await queryOne<{ id: string; driver_id: string; fare: number }>(
-          "SELECT id, driver_id, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2",
+        const ride = await queryOne<{ id: string; driver_id: string; fare: number; status: string }>(
+          "SELECT id, driver_id, status, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2",
           [rideId, dbUserId]
         );
         if (!ride) return;
@@ -1340,6 +1340,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
           [ride.fare, rideId]
         );
         stopServerRideSim(rideId);
+        // Module 2: the FIRST completion of this trip increments the active
+        // session's trips_completed and resets the idle timer to
+        // destination_max_minutes_without_trip (fire-and-forget — destination
+        // bookkeeping must never block or fail a ride; a re-fired event for an
+        // already-completed ride is skipped so the counter stays truthful).
+        if (ride.status !== "completed") {
+          void noteDestinationTripCompleted(dbUserId, rideId).catch(() => undefined);
+        }
         // Record the driver's earnings so the wallet / pending-earnings
         // endpoint shows the real amount the driver earned from this ride.
         try {

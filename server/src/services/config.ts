@@ -229,8 +229,9 @@ export interface DestinationConfig {
    * never end the session or burn a daily use.
    */
   destination_offline_grace_seconds: number;
-  /** §8.1: auto-end after this many hours without a trip. */
-  destination_timeout_hours: number;
+  /** §8.1: auto-end after this long without a COMPLETED trip (the timer
+   *  resets on every completed trip — noteDestinationTripCompleted). */
+  destination_max_minutes_without_trip: number;
   /** §8.2 (c1): pure disk around the drop-off→destination. */
   destination_match_dropoff_radius_km: number;
   /** §8.2 (c2): max cross-track offset from the driver→destination line. */
@@ -246,7 +247,7 @@ export const DEFAULT_DESTINATION_CONFIG: DestinationConfig = {
   destination_reject_radius_km: 1,
   destination_arrival_radius_km: 0.5,
   destination_offline_grace_seconds: 300,
-  destination_timeout_hours: 3,
+  destination_max_minutes_without_trip: 180,
   destination_match_dropoff_radius_km: 3,
   destination_match_cross_track_km: 5,
   destination_match_along_tolerance_km: 0.5,
@@ -274,7 +275,7 @@ function coerceDestination(raw: any): DestinationConfig {
     "destination_reject_radius_km",
     "destination_arrival_radius_km",
     "destination_offline_grace_seconds",
-    "destination_timeout_hours",
+    "destination_max_minutes_without_trip",
     "destination_match_dropoff_radius_km",
     "destination_match_cross_track_km",
     "destination_match_along_tolerance_km",

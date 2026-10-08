@@ -6,8 +6,11 @@
 //   • reject activation inside 1 km: "You're already close"
 //   • changing destination mid-mode = a NEW use (old end_reason='changed')
 //   • cancelling pushes the driver the reason (fixture L7b)
-//   • a non-overlapping sweep auto-ends arrived/offline/3h-timeout sessions
-//     (fixtures L7a/L7c/L7d) and pushes the reason
+//   • a non-overlapping sweep auto-ends arrived/offline/idle-timeout sessions
+//     (fixtures L7a/L7c/L7d) and pushes the reason; the idle clock
+//     (destination_max_minutes_without_trip, default 180 min) RESETS on every
+//     completed trip via noteDestinationTripCompleted, which also bumps the
+//     session's trips_completed
 //   • state lives in the database → survives crash/reconnect
 // Every activation/termination is also written to destination_events (audit).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,15 +235,15 @@ export async function activateDestination(
       `UPDATE driver_profiles
           SET destination_lat = $1, destination_lng = $2, destination_label = $3,
               destination_set_at = NOW(),
-              destination_expires_at = NOW() + make_interval(secs => $4::double precision),
+              destination_expires_at = NOW() + make_interval(mins => $4::double precision),
               updated_at = NOW()
         WHERE user_id = $5`,
-      [lat, lng, label, cfg.destination_timeout_hours * 3600, driverId]
+      [lat, lng, label, cfg.destination_max_minutes_without_trip, driverId]
     );
     await execute(
-      `INSERT INTO destination_sessions (driver_id, lat, lng, label)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [driverId, lat, lng, label]
+      `INSERT INTO destination_sessions (driver_id, lat, lng, label, destination_expires_at)
+       VALUES ($1, $2, $3, $4, NOW() + make_interval(mins => $5::double precision)) RETURNING id`,
+      [driverId, lat, lng, label, cfg.destination_max_minutes_without_trip]
     );
     await logEvent(driverId, "activated", { label, lat, lng, uses_today: uses + 1 });
     bump("destination_activated");
@@ -254,7 +257,9 @@ export async function activateDestination(
         label,
         lat,
         lng,
-        expires_at: new Date(Date.now() + cfg.destination_timeout_hours * 3_600_000).toISOString(),
+        expires_at: new Date(
+          Date.now() + cfg.destination_max_minutes_without_trip * 60_000
+        ).toISOString(),
       }),
     };
   } catch (err: any) {
@@ -307,6 +312,50 @@ export async function clearDestination(
 export async function getDestinationStatus(driverId: string): Promise<DestinationStatus> {
   const cfg = await getDestinationConfig();
   return buildStatus(driverId, cfg, await loadActive(driverId));
+}
+
+/**
+ * A COMPLETED trip (driver:ride:complete) does two things to the active
+ * session, both row-guarded by `ended_at IS NULL`:
+ *   1. trips_completed += 1  — the audit counter on the session row;
+ *   2. the idle timer resets to NOW() + destination_max_minutes_without_trip
+ *      on BOTH the session row (the sweep reads this one) and driver_profiles
+ *      (the banner/status read this one).
+ * Returns true only if an active session was touched. Fire-and-forget from the
+ * socket handler: destination bookkeeping must never block or fail a ride.
+ * A driver with no active session gets nothing — a completed trip does NOT
+ * start a session or burn a daily use.
+ */
+export async function noteDestinationTripCompleted(
+  driverId: string,
+  rideId: string
+): Promise<boolean> {
+  try {
+    const cfg = await getDestinationConfig();
+    const updated = await execute(
+      `UPDATE destination_sessions
+          SET trips_completed = trips_completed + 1,
+              destination_expires_at = NOW() + make_interval(mins => $3::double precision)
+        WHERE driver_id = $1 AND ended_at IS NULL`,
+      [driverId, rideId, cfg.destination_max_minutes_without_trip]
+    );
+    if (!updated?.rowCount) return false;
+    await execute(
+      `UPDATE driver_profiles
+          SET destination_expires_at = NOW() + make_interval(mins => $2::double precision),
+              updated_at = NOW()
+        WHERE user_id = $1 AND destination_lat IS NOT NULL`,
+      [driverId, cfg.destination_max_minutes_without_trip]
+    ).catch(() => undefined);
+    await logEvent(driverId, "trip_completed", {
+      ride_id: rideId,
+      trips_completed_reset_minutes: cfg.destination_max_minutes_without_trip,
+    });
+    return true;
+  } catch (err: any) {
+    console.warn("[destination] trip-completed hook failed:", err?.message || err);
+    return false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
