@@ -20,7 +20,8 @@ app will, and verifies in the database / trace / counters.
   hard-coded): `destination_matching_enabled`,
   `destination_rollout_driver_ids`, `destination_max_activations_per_day=2`,
   `destination_reject_radius_km=1`, `destination_arrival_radius_km=0.5`,
-  `destination_timeout_hours=3`, `destination_match_dropoff_radius_km=3`,
+  `destination_offline_grace_seconds=300`, `destination_max_minutes_without_trip=180`,
+  `destination_match_dropoff_radius_km=3`,
   `destination_match_cross_track_km=5`,
   `destination_match_along_tolerance_km=0.5`.
 
@@ -53,11 +54,12 @@ UPDATE app_config SET value = jsonb_set(
 `POST /api/drivers/destination` as D with a destination >1 km away:
 
 - **200** `DestinationStatus`: `active:true`, `label`, `lat/lng`,
-  `uses_today:1`, `max_uses:2`, `expires_at` ≈ now+3 h,
-  `banner:"Going to [place] - 1 of 2 uses today"`, `sast_day`.
-- DB: one `destination_sessions` row (`ended_at NULL`), `destination_events`
-  row `activated`, `driver_profiles.destination_*` populated,
-  `destination_expires_at` = now + 3 h.
+  `uses_today:1`, `max_uses:2`, `expires_at` ≈ now + `destination_max_minutes_without_trip`
+  (180 min), `banner:"Going to [place] - 1 of 2 uses today"`, `sast_day`,
+  `paused:false`, `pause_reason:null`.
+- DB: one `destination_sessions` row (`ended_at NULL`, `destination_expires_at`
+  = now + 180 min), `destination_events` row `activated`,
+  `driver_profiles.destination_*` populated, `destination_expires_at` = now + 180 min.
 - Counters: `destination_activated=1`.
 - `GET /api/drivers/destination` returns the same status (DB-persisted →
   kill the app, relaunch, GET again: still active — crash-survival proof).
@@ -110,23 +112,51 @@ control.
    production watch for the `destination_predicate_error` counter and the
    `[dispatch] destinationFit threw driver=…` log line.
 
-## 7. Auto-end sweep (L7a/c/d) — one reason per end, push states why
+## 7. Auto-end sweep (L7a/c/d/e) — one reason per end, push states why
 
 The sweep runs inside the existing 4 s offer-worker tick (every ~30 s) plus a
-boot catch-up at +6 s. Each end writes `destination_sessions.end_reason`,
-clears `driver_profiles.destination_*`, emits
-`driver:destination:ended {reason}`, bumps `destination_ended`, and pushes
-`type:"destination_mode_ended"`:
+boot catch-up at +6 s. Arrival is additionally checked on **every driver GPS
+ping** (`driver:location` → `onDriverPingPosition`) — the sweep is the backup,
+and both paths close through the same row-guarded UPDATE, so a session can
+never end twice (one push, one counter, one daily use). Each end writes
+`destination_sessions.end_reason`, clears `driver_profiles.destination_*`,
+emits `driver:destination:ended {reason}`, bumps `destination_ended`, and
+pushes `type:"destination_mode_ended"`:
 
 | Trigger | How to force | `end_reason` | Push body |
 |---|---|---|---|
 | L7a ≤500 m | drive/ping D within 500 m of destination (fresh fix) | `arrived` | "You've arrived at your destination, so destination mode ended." |
-| L7c offline | D goes offline (or the 15-min safety timeout fires) | `offline` | "You went offline, so destination mode ended." |
-| L7d 3 h | `UPDATE driver_profiles SET destination_expires_at=NOW()-interval '1 min' WHERE user_id='…'` | `timeout_3h` | "Your 3 hour destination mode limit was reached." |
+| L7c offline | D goes offline explicitly (`driver:online=false` / the 15-min safety timeout sets `is_online=false`) **or** no heartbeat/location for `destination_offline_grace_seconds` (300 s). A short socket drop (status demoted, fresh ping) does **NOT** end it | `offline` | "You went offline, so destination mode ended." |
+| L7d idle | `UPDATE destination_sessions SET destination_expires_at=NOW()-interval '1 min' WHERE driver_id='…' AND ended_at IS NULL` — clock set at activation and reset by each completed trip (§7b); NULL never times out | `timeout_3h` | "Your 3 hour destination mode limit was reached." |
+| L7e disabled | flip `destination_matching_enabled=false` **or** remove D from `destination_rollout_driver_ids` (§2 SQL reversed) while a session is open | `feature_disabled` | "Destination mode is turned off or no longer enabled for your account. Your session has ended." |
 | L7b manual | `driver:destination:clear` / `DELETE /api/drivers/destination` | `cancelled` | "You turned destination mode off." |
 
 After each: GET status → `active:false`, banner `null`; a second sweep never
-double-ends (it sees `ended_at IS NOT NULL`).
+double-ends (the close UPDATE carries `ended_at IS NULL` and only the winner
+whose `rowCount=1` runs the side effects).
+
+Between flag flip and the next sweep tick, GET status returns
+`paused:true` + `pause_reason` (with `active:true` still — the sweep ends it
+within ~30 s): the app shows the destination UI paused in the meantime.
+
+## 7b. Completed trip → `trips_completed++` and the idle clock resets
+
+The idle timeout is a **without-trip** timer, not a hard 3-hour cap: every
+completed trip restarts it and counts the trip against the session.
+
+1. D has an active session → `SELECT trips_completed, destination_expires_at
+   FROM destination_sessions WHERE driver_id='…' AND ended_at IS NULL;`
+   → `trips_completed=0`, expiry ≈ now + 180 min.
+2. Complete a trip (`driver:ride:complete` with a real ride for D) → same
+   SELECT now shows `trips_completed=1` and `destination_expires_at` ≈ now +
+   180 min **again** (moved forward), `driver_profiles.destination_expires_at`
+   moved too, and `destination_events` gained a `trip_completed` row.
+3. Repeat until `destination_expires_at` is inside the past → L7d fires on the
+   next sweep. A trip completed with **no** active session changes nothing (no
+   session is started, no daily use burned) — verify `destination_events` has
+   no `trip_completed` row.
+4. Re-fired `driver:ride:complete` for an already-`completed` ride is skipped —
+   `trips_completed` counts each ride at most once.
 
 ## 8. Read the trace / counters
 
@@ -157,7 +187,9 @@ double-tick them.
      '{destination_rollout_driver_ids}', '[]') WHERE key = 'destination';
    ```
    Activation → 403, predicate + trace stage disappear, matching = Module 1.
-   Clear any live modes:
+   Live sessions are NOT left running: the next sweep (~30 s) ends each with
+   `end_reason='feature_disabled'` + push (§7e), and status reports
+   `paused:true` until then. The clear SQL below remains as a manual override:
    ```sql
    UPDATE destination_sessions SET ended_at=NOW(), end_reason='cancelled'
     WHERE ended_at IS NULL;
@@ -180,9 +212,10 @@ double-tick them.
 ## Known edges (documented, accepted)
 
 - **Allowlist removal mid-session**: removing D from
-  `destination_rollout_driver_ids` blocks re-activation but leaves an already
-  active session unfiltered. When de-listing a driver, also run the clear SQL
-  above.
+  `destination_rollout_driver_ids` (or flipping the flag) is now handled
+  automatically — status reports `paused:true` immediately and the sweep ends
+  the session as `feature_disabled` within ~30 s (§7e). The manual clear SQL
+  remains as an instant override.
 - **Stationary arrival**: L7a requires a GPS fix younger than
   `max_position_age_seconds` — a parked phone never "arrives" until it moves
   or another end reason fires (by design).
