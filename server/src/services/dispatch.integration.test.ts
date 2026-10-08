@@ -133,6 +133,13 @@ function migrationSql(): string {
   );
 }
 
+function destinationMigrationSql(): string {
+  return readFileSync(
+    join(process.cwd(), "migrations", "002_destination_mode.sql"),
+    "utf8"
+  );
+}
+
 /** Create a driver with a fresh available profile at the given position. */
 async function seedDriver(over: {
   lat: number;
@@ -194,6 +201,9 @@ beforeAll(async () => {
   // (TEST_MIGRATION.md step 1) — SQL the mocked tests cannot validate.
   await query(migrationSql());
   await query(migrationSql());
+  // Module 2 (002): applied twice — additive AND idempotent, same contract.
+  await query(destinationMigrationSql());
+  await query(destinationMigrationSql());
   // 001b: CREATE UNIQUE INDEX CONCURRENTLY cannot run inside a transaction, so
   // it is issued as its own single statement, exactly like psql autocommit.
   await query(
@@ -242,6 +252,41 @@ beforeEach(() => {
 });
 
 describe.skipIf(!enabled)("migration 001 + 001b against real Postgres", () => {
+  it("applies 002 twice (idempotent) and seeds destination config flag OFF", async () => {
+    // Delete first so this asserts what the SEED writes, even when re-running
+    // against a container an earlier suite toggled.
+    await execute(`DELETE FROM app_config WHERE key = 'destination'`);
+    await query(destinationMigrationSql());
+    await query(destinationMigrationSql());
+
+    const rows = await query<{ value: any }>(
+      `SELECT value FROM app_config WHERE key = 'destination'`
+    );
+    expect(rows).toHaveLength(1);
+    const v = rows[0].value;
+    expect(v.destination_matching_enabled).toBe(false); // Q12 seed: OFF
+    expect(v.destination_rollout_driver_ids).toEqual([]);
+    expect(v.destination_max_activations_per_day).toBe(2);
+    expect(v.destination_reject_radius_km).toBe(1);
+    expect(v.destination_arrival_radius_km).toBe(0.5);
+    expect(v.destination_timeout_hours).toBe(3);
+    expect(v.destination_match_dropoff_radius_km).toBe(3);
+    expect(v.destination_match_cross_track_km).toBe(5);
+    expect(v.destination_match_along_tolerance_km).toBe(0.5);
+
+    // Additive schema exists exactly once after two applies.
+    const cols = await query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM information_schema.columns
+        WHERE table_name = 'driver_profiles' AND column_name LIKE 'destination\\_%'`
+    );
+    expect(Number(cols[0].n)).toBe(5);
+    const tables = await query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM information_schema.tables
+        WHERE table_name IN ('destination_sessions', 'destination_events')`
+    );
+    expect(Number(tables[0].n)).toBe(2);
+  });
+
   it("applies 001 twice (idempotent) and seeds exactly one config row, flag OFF", async () => {
     // Delete first so this asserts what the SEED writes, even when re-running
     // against a container a previous suite toggled the flag on.

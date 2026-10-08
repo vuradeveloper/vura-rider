@@ -170,3 +170,20 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.rollba
 
 **Only after all boxes above: run 001 and 001b against production**
 (in that order, snapshot taken first, 001b outside any wrapping transaction).
+
+---
+
+## 002_destination_mode.sql (Module 2 — destination mode)
+
+Additive only (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Apply **after** 001b.
+
+| Check | Expect |
+|---|---|
+| Apply twice | no errors; second run changes nothing |
+| `SELECT value FROM app_config WHERE key='destination'` | exactly 1 row: `destination_matching_enabled=false`, empty allowlist, limits `2 / 1 km / 0.5 km / 3 h`, match rule `3 km / 5 km / 0.5 km` |
+| `information_schema.columns WHERE table_name='driver_profiles' AND column_name LIKE 'destination\_%'` | exactly 5 columns |
+| Tables + partial index | `destination_sessions`, `destination_events`; `idx_destination_sessions_active` (one ACTIVE session per driver) |
+| Rollback | run `002_destination_mode.rollback.sql` (drops tables/columns, deletes the config row), then re-apply |
+
+Automated: the integration test `applies 002 twice (idempotent) and seeds
+destination config flag OFF` asserts every row of this table.
