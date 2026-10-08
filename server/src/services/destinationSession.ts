@@ -153,6 +153,14 @@ export async function activateDestination(
     if (!cfg.destination_matching_enabled) {
       return fail("disabled", "Destination mode is turned off");
     }
+    // Q12: driver-keyed rollout — same machinery as Module 1. The matcher only
+    // filters ALLOWLISTED drivers, so activating from outside the rollout would
+    // put a "Looking for trips towards X" banner on a driver whose offers are
+    // NOT filtered. `disabled` (403) until they are added — same answer as the
+    // flag-off case, no new error code for the app to learn.
+    if (!cfg.destination_rollout_driver_ids.includes(driverId)) {
+      return fail("disabled", "Destination mode is not enabled for your account yet");
+    }
     const lat = Number(input?.lat);
     const lng = Number(input?.lng);
     const label = String(input?.label ?? "").trim();

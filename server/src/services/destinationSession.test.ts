@@ -42,12 +42,24 @@ const calls = (frag: string) =>
 
 beforeEach(() => {
   resetHarness();
-  patchDestinationConfig({ destination_matching_enabled: true });
+  // Q12: activation is gated by flag AND driver allowlist — the default test
+  // driver is inside the rollout.
+  patchDestinationConfig({
+    destination_matching_enabled: true,
+    destination_rollout_driver_ids: ["d1"],
+  });
 });
 
 describe("activateDestination", () => {
   it("refuses while the feature flag is off (seed default)", async () => {
     patchDestinationConfig({ destination_matching_enabled: false });
+    const r = await activateDestination("d1", { lat: -26.1, lng: 28.1, label: "Sandton" });
+    expect(r).toMatchObject({ ok: false, error: "disabled" });
+    expect(calls("INSERT INTO destination_sessions")).toHaveLength(0);
+  });
+
+  it("refuses drivers outside the rollout allowlist (Q12 gate)", async () => {
+    patchDestinationConfig({ destination_rollout_driver_ids: ["someone-else"] });
     const r = await activateDestination("d1", { lat: -26.1, lng: 28.1, label: "Sandton" });
     expect(r).toMatchObject({ ok: false, error: "disabled" });
     expect(calls("INSERT INTO destination_sessions")).toHaveLength(0);
