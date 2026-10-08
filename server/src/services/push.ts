@@ -109,26 +109,54 @@ export async function sendPushToUser(
     });
 
     const json = (await res.json().catch(() => ({}))) as any;
-    const errors = (json?.data || []).filter((m: any) => m && m.status === "error");
+    const data: any[] = Array.isArray(json?.data) ? json.data : [];
 
-    if (res.ok && errors.length === 0) {
+    if (!res.ok) {
+      // Non-OK (401 bad token, 429 rate limit, 5xx): record it. A silent
+      // non-OK is exactly how pushes "mysteriously" stop working — the old
+      // code fell through both branches here and logged NOTHING.
+      await logPush(
+        notification.data?.ride_id as string ?? "",
+        firebaseUid,
+        "error",
+        `HTTP ${res.status}`
+      );
+      return 0;
+    }
+
+    // The Expo response array is POSITIONAL: data[i] answers messages[i].
+    // Pair by index — `details.error` is an error CODE (e.g.
+    // "DeviceNotRegistered"), never a token, so comparing it against the token
+    // list (the old code) meant stale tokens were NEVER pruned.
+    let errCount = 0;
+    let stalePruned = 0;
+    const { execute } = await import("../config/database");
+    for (let i = 0; i < data.length; i++) {
+      const entry = data[i];
+      if (!entry || entry.status !== "error") continue;
+      errCount += 1;
+      const code = entry?.details?.error ?? "";
+      const sentTo = messages[i]?.to;
+      if (code === "DeviceNotRegistered" && sentTo) {
+        stalePruned += 1;
+        await execute(
+          "DELETE FROM push_tokens WHERE user_id = $1 AND token = $2",
+          [firebaseUid, sentTo]
+        ).catch(() => undefined);
+      }
+    }
+
+    if (errCount === 0) {
       dispatched = validTokens.length;
       await logPush(notification.data?.ride_id as string ?? "", firebaseUid, "sent");
-    } else if (errors.length > 0) {
-      // Some tokens are stale (device uninstalled). Prune them so future sends
-      // stop failing. Best-effort.
-      const { execute } = await import("../config/database");
-      for (const err of errors) {
-        const badToken = err?.details?.error ?? "";
-        if (badToken && validTokens.includes(badToken)) {
-          await execute(
-            "DELETE FROM push_tokens WHERE user_id = $1 AND token = $2",
-            [firebaseUid, badToken]
-          ).catch(() => undefined);
-        }
-      }
-      dispatched = validTokens.length - errors.length;
-      await logPush(notification.data?.ride_id as string ?? "", firebaseUid, "sent", `${errors.length} stale`);
+    } else {
+      dispatched = Math.max(0, validTokens.length - errCount);
+      await logPush(
+        notification.data?.ride_id as string ?? "",
+        firebaseUid,
+        "sent",
+        `${errCount} error(s), ${stalePruned} DeviceNotRegistered pruned`
+      );
     }
   } catch (err: any) {
     console.warn("Push send error:", err?.message);
