@@ -364,7 +364,7 @@ describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
     expect(closedReasons()).toEqual([["sess-1", "arrived"]]);
 
     resetHarness();
-    patchDestinationConfig({ destination_matching_enabled: true });
+    patchDestinationConfig({ destination_matching_enabled: true, destination_rollout_driver_ids: ["d1"] });
     sweepRoute([row({ is_online: false, expires_at: new Date(Date.now() - 1000) })]);
     expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
     expect(closedReasons()).toEqual([["sess-1", "offline"]]);
@@ -399,6 +399,127 @@ describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
     release();
     expect(await first).toBe(0);
     expect(db.query).toHaveBeenCalledTimes(1); // only the first run ever queried
+  });
+});
+
+// ── 4h-fix4: flag off / driver removed from rollout MID-SESSION ──────────────
+describe("feature_disabled mid-session (paused status + sweep end)", () => {
+  const activeSession = () => ({
+    id: "sess-1",
+    label: "Rosebank",
+    lat: -26.145,
+    lng: 28.04,
+    expires_at: new Date(Date.now() + 3 * 3600_000),
+  });
+  const statusRoute = (session: object | null) =>
+    route({
+      "FROM destination_sessions": session ? [session] : [],
+      "COUNT(*)": [{ n: 1, sast_day: "2026-10-08" }],
+    });
+  const sweepRow = (over: Record<string, unknown> = {}) => ({
+    id: "sess-1",
+    driver_id: "d1",
+    lat: -26.145,
+    lng: 28.04,
+    label: "Rosebank",
+    expires_at: new Date(Date.now() + 3 * 3600_000),
+    current_lat: -26.2, // ~7 km away — would normally keep running
+    current_lng: 28.1,
+    last_location_at: new Date(),
+    last_heartbeat_at: new Date(),
+    is_online: true,
+    status: "available",
+    firebase_uid: "fb-d1",
+    ...over,
+  });
+
+  it("status reports paused:true + reason while the flag is off and a session is open", async () => {
+    patchDestinationConfig({ destination_matching_enabled: false });
+    statusRoute(activeSession());
+    const s = await getDestinationStatus("d1");
+    expect(s.active).toBe(true); // not yet ended — the sweep does that
+    expect(s.paused).toBe(true);
+    expect(s.pause_reason).toBeTruthy();
+  });
+
+  it("status reports paused:true when the driver was dropped from the rollout", async () => {
+    patchDestinationConfig({ destination_rollout_driver_ids: ["someone-else"] });
+    statusRoute(activeSession());
+    const s = await getDestinationStatus("d1");
+    expect(s.paused).toBe(true);
+    expect(s.pause_reason).toBeTruthy();
+  });
+
+  it("status is normal (paused:false) while allowed, and with no session even when flag off", async () => {
+    statusRoute(activeSession());
+    expect((await getDestinationStatus("d1")).paused).toBe(false);
+    patchDestinationConfig({ destination_matching_enabled: false });
+    statusRoute(null);
+    const s = await getDestinationStatus("d1");
+    expect(s.active).toBe(false);
+    expect(s.paused).toBe(false); // nothing to pause
+    expect(s.pause_reason).toBeNull();
+  });
+
+  it("sweep ends the session as 'feature_disabled' when the flag is flipped off", async () => {
+    patchDestinationConfig({ destination_matching_enabled: false });
+    route({ "ds.ended_at IS NULL": [sweepRow()] });
+    const { io, emitted } = makeIo();
+    expect(await sweepDestinationSessionsOnce(io)).toBe(1);
+    expect(calls("UPDATE destination_sessions")[0][1]).toEqual([
+      "sess-1",
+      "feature_disabled",
+    ]);
+    expect(calls("destination_lat = NULL")).toHaveLength(1); // profile wiped
+    expect(notify.sendPushToUsers).toHaveBeenCalledWith(
+      ["d1"],
+      expect.objectContaining({
+        type: "destination_mode_ended",
+        data: { reason: "feature_disabled" },
+      })
+    );
+    expect(emitted).toContainEqual({
+      room: "user:fb-d1",
+      event: "driver:destination:ended",
+      payload: { reason: "feature_disabled" },
+    });
+  });
+
+  it("sweep ends it when the driver leaves the rollout (flag still on)", async () => {
+    patchDestinationConfig({ destination_rollout_driver_ids: ["someone-else"] });
+    route({ "ds.ended_at IS NULL": [sweepRow()] });
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(calls("UPDATE destination_sessions")[0][1]).toEqual([
+      "sess-1",
+      "feature_disabled",
+    ]);
+  });
+
+  it("feature_disabled beats every other reason (ops action wins, needs no data)", async () => {
+    patchDestinationConfig({ destination_matching_enabled: false });
+    route({
+      "ds.ended_at IS NULL": [
+        sweepRow({
+          current_lat: -26.145, // parked AT the destination...
+          current_lng: 28.04,
+          is_online: false, // ...and offline...
+          expires_at: new Date(Date.now() - 1000), // ...and expired
+          last_location_at: null,
+          last_heartbeat_at: null,
+        }),
+      ],
+    });
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(calls("UPDATE destination_sessions")[0][1]).toEqual([
+      "sess-1",
+      "feature_disabled",
+    ]);
+  });
+
+  it("flag on + driver allowlisted → the sweep never emits feature_disabled", async () => {
+    route({ "ds.ended_at IS NULL": [sweepRow()] }); // beforeEach allows d1
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(0);
+    expect(calls("UPDATE destination_sessions")).toHaveLength(0);
   });
 });
 

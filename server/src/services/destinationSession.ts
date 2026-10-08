@@ -31,6 +31,14 @@ export interface DestinationStatus {
   /** "Going to [place] - 1 of 2 uses today" while active, else null. */
   banner: string | null;
   expires_at: string | null;
+  /**
+   * Flag off or driver dropped from the rollout WHILE a session is still open:
+   * the next sweep ends it (`feature_disabled`), so the app must show the
+   * destination UI as PAUSED (with `pause_reason`) until then. Always false
+   * when no session is open — there is nothing to pause.
+   */
+  paused: boolean;
+  pause_reason: string | null;
   sast_day: string;
 }
 
@@ -121,12 +129,21 @@ async function logEvent(
   ).catch((err) => console.warn(`[destination] event log failed (${event}):`, err?.message));
 }
 
+/** Shown while `paused` (status endpoint) — the same cause as the
+ *  `feature_disabled` end reason, without the "ended" tail (not ended yet). */
+const PAUSE_REASON =
+  "Destination mode is turned off or no longer enabled for your account.";
+
 async function buildStatus(
   driverId: string,
   cfg: DestinationConfig,
   active: ActiveSession | null
 ): Promise<DestinationStatus> {
   const { uses, sastDay } = await usageToday(driverId);
+  const paused =
+    !!active &&
+    (!cfg.destination_matching_enabled ||
+      !cfg.destination_rollout_driver_ids.includes(driverId));
   return {
     active: !!active,
     label: active?.label ?? null,
@@ -138,6 +155,8 @@ async function buildStatus(
       ? `Going to ${active.label} - ${Math.max(uses, 1)} of ${cfg.destination_max_activations_per_day} uses today`
       : null,
     expires_at: active?.expires_at ?? null,
+    paused,
+    pause_reason: paused ? PAUSE_REASON : null,
     sast_day: sastDay,
   };
 }
@@ -368,12 +387,17 @@ export async function noteDestinationTripCompleted(
 // returns 0 instead of racing the first one's UPDATEs.
 //
 // One row ends for exactly ONE reason: each session is classified once with a
-// fixed priority (arrived → offline → timeout_3h) and the close UPDATE carries
-// `ended_at IS NULL`, so a concurrent driver-initiated clear wins the row
-// first and this sweep skips push/counter/profile-wipe entirely (rowCount proof).
+// fixed priority (feature_disabled → arrived → offline → timeout_3h) and the
+// close UPDATE carries `ended_at IS NULL`, so a concurrent driver-initiated
+// clear wins the row first and this sweep skips push/counter/profile-wipe
+// entirely (rowCount proof).
 // ────────────────────────────────────────────────────────────────────────────
 
-export type DestinationEndReason = "arrived" | "offline" | "timeout_3h";
+export type DestinationEndReason =
+  | "arrived"
+  | "offline"
+  | "timeout_3h"
+  | "feature_disabled";
 
 /** Structural slice of socket.io's `io.to(room).emit(...)` — tests pass makeIo(). */
 export interface DestinationEmitTarget {
@@ -411,6 +435,17 @@ export function classifyDestinationEnd(
   destCfg: DestinationConfig,
   mainCfg: { max_position_age_seconds: number }
 ): DestinationEndReason | null {
+  // 4h-fix4: the ops action beats everything. Flag turned off, or the driver
+  // removed from the rollout mid-session ⇒ end as 'feature_disabled' — checked
+  // FIRST and needing NO fresh data, so a disabled feature can never be masked
+  // by an arrival/offline/timeout signal (and a stale row cannot keep a
+  // disabled mode alive until the timeout).
+  if (
+    !destCfg.destination_matching_enabled ||
+    !destCfg.destination_rollout_driver_ids.includes(row.driver_id)
+  ) {
+    return "feature_disabled";
+  }
   if (
     row.current_lat != null &&
     row.current_lng != null &&
@@ -452,6 +487,7 @@ const END_COPY: Record<DestinationEndReason, string> = {
   arrived: "You've arrived at your destination, so destination mode ended.",
   offline: "You went offline, so destination mode ended.",
   timeout_3h: "Your 3 hour destination mode limit was reached.",
+  feature_disabled: `${PAUSE_REASON} Your session has ended.`,
 };
 
 let sweeping = false;
