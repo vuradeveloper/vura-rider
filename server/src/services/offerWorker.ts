@@ -14,6 +14,7 @@
 
 import type { Server as SocketIOServer } from "socket.io";
 import { expireOffers, reviveWaitingRides, sweepStaleDrivers } from "./dispatch";
+import { sweepDestinationSessionsOnce } from "./destinationSession";
 import { getDriverIndex } from "./driverIndex";
 import { getConfig } from "./config";
 
@@ -80,6 +81,14 @@ export function startOfferWorker(io: SocketIOServer): void {
           // Index hygiene: same cadence as the driver demotion sweep (~30s),
           // non-overlapping (evictStaleIndexOnce skips if still running).
           await evictStaleIndexOnce();
+          // Module 2: destination sessions end ONLY via sweep — 500 m arrival,
+          // offline, or the 3h timeout (§8.1, fixtures L7a/c/d). Same
+          // non-overlap guard pattern as the eviction above: a slow sweep
+          // makes the next tick skip rather than race it.
+          const destEnded = await sweepDestinationSessionsOnce(io);
+          if (destEnded > 0) {
+            console.log(`[offerWorker] auto-ended ${destEnded} destination session(s)`);
+          }
         }
       } catch (err: any) {
         console.warn("[offerWorker] tick failed:", err?.message);
@@ -98,6 +107,19 @@ export function startOfferWorker(io: SocketIOServer): void {
       })
       .catch(() => undefined);
   }, 4000);
+
+  // Module 2: a session that hit its end condition while the server was down
+  // (arrived / offline / 3h timeout) must be closed soon after boot — the
+  // daily-use count and the driver's banner both read the session row.
+  setTimeout(() => {
+    void sweepDestinationSessionsOnce(io)
+      .then((n) => {
+        if (n > 0) {
+          console.log(`[offerWorker] resumed: ${n} destination session(s) ended while down`);
+        }
+      })
+      .catch(() => undefined);
+  }, 6000);
 
   console.log("[offerWorker] started (2s tick · offer TTL 15s · driver stale 45s)");
 }

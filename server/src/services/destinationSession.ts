@@ -6,11 +6,13 @@
 //   • reject activation inside 1 km: "You're already close"
 //   • changing destination mid-mode = a NEW use (old end_reason='changed')
 //   • cancelling pushes the driver the reason (fixture L7b)
+//   • a non-overlapping sweep auto-ends arrived/offline/3h-timeout sessions
+//     (fixtures L7a/L7c/L7d) and pushes the reason
 //   • state lives in the database → survives crash/reconnect
 // Every activation/termination is also written to destination_events (audit).
 // ─────────────────────────────────────────────────────────────────────────────
 import { query, execute } from "../config/database";
-import { getDestinationConfig, DestinationConfig } from "./config";
+import { getDestinationConfig, DestinationConfig, getConfig } from "./config";
 import { haversineKm } from "../lib/h3";
 import { sendPushToUsers } from "./notify";
 import { bump } from "./metrics";
@@ -281,3 +283,154 @@ export async function getDestinationStatus(driverId: string): Promise<Destinatio
   const cfg = await getDestinationConfig();
   return buildStatus(driverId, cfg, await loadActive(driverId));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-END SWEEP (§8.1 end triggers / fixtures L7a, L7c, L7d)
+//
+// The session cannot end itself — something must WATCH for arrival, going
+// offline and the 3h timeout. This runs from offerWorker's ~30s hygiene slot
+// (the same cadence as Module 1's stale-index eviction) and carries its own
+// non-overlap guard: if a previous sweep is still running, the second call
+// returns 0 instead of racing the first one's UPDATEs.
+//
+// One row ends for exactly ONE reason: each session is classified once with a
+// fixed priority (arrived → offline → timeout_3h) and the close UPDATE carries
+// `ended_at IS NULL`, so a concurrent driver-initiated clear wins the row
+// first and this sweep skips push/counter/profile-wipe entirely (rowCount proof).
+// ────────────────────────────────────────────────────────────────────────────
+
+export type DestinationEndReason = "arrived" | "offline" | "timeout_3h";
+
+/** Structural slice of socket.io's `io.to(room).emit(...)` — tests pass makeIo(). */
+export interface DestinationEmitTarget {
+  to(room: string): { emit(event: string, payload: unknown): unknown };
+}
+
+interface SweepRow {
+  id: string;
+  driver_id: string;
+  lat: number;
+  lng: number;
+  label: string;
+  expires_at: string | Date | null;
+  current_lat: number | null;
+  current_lng: number | null;
+  last_location_at: string | Date | null;
+  is_online: boolean | null;
+  status: string;
+  firebase_uid: string | null;
+}
+
+/**
+ * One active session → the reason it must end, or null to keep it running.
+ * Exported for unit tests: the precedence order and the freshness guard on the
+ * arrival check are the two subtle bits.
+ *
+ * L7a (arrived) is only trusted with a GPS fix younger than
+ * `max_position_age_seconds` (Module 1's position-age config): a phone parked
+ * at the drop-off an hour ago has not "arrived", and ending on a stale
+ * coordinate is how a working mode dies while the app sits in a pocket.
+ */
+export function classifyDestinationEnd(
+  row: SweepRow,
+  destCfg: DestinationConfig,
+  mainCfg: { max_position_age_seconds: number }
+): DestinationEndReason | null {
+  if (
+    row.current_lat != null &&
+    row.current_lng != null &&
+    row.last_location_at != null &&
+    Date.now() - new Date(row.last_location_at).getTime() <=
+      mainCfg.max_position_age_seconds * 1000 &&
+    haversineKm(row.current_lat, row.current_lng, row.lat, row.lng) <=
+      destCfg.destination_arrival_radius_km
+  ) {
+    return "arrived";
+  }
+  // L7c: explicit driver:online=false / 15-min safety timeout set is_online
+  // false; the stale sweep demotes status to 'offline'. Either counts.
+  if (row.is_online === false || row.status === "offline") return "offline";
+  // L7d: the 3h clock written at activation. A NULL expiry (row written before
+  // 002 ran) never times out — failing OPEN so a legacy row is never mass-ended.
+  if (row.expires_at != null && new Date(row.expires_at).getTime() <= Date.now()) {
+    return "timeout_3h";
+  }
+  return null;
+}
+
+const END_COPY: Record<DestinationEndReason, string> = {
+  arrived: "You've arrived at your destination, so destination mode ended.",
+  offline: "You went offline, so destination mode ended.",
+  timeout_3h: "Your 3 hour destination mode limit was reached.",
+};
+
+let sweeping = false;
+
+/**
+ * Close every session that has hit an end condition. Returns how many were
+ * ended by THIS run (0 also when a run was skipped by the guard).
+ */
+export async function sweepDestinationSessionsOnce(
+  io: DestinationEmitTarget
+): Promise<number> {
+  if (sweeping) return 0; // a run is already in flight — never overlap
+  sweeping = true;
+  try {
+    const destCfg = await getDestinationConfig();
+    const mainCfg = await getConfig();
+    const rows = await query<SweepRow>(
+      `SELECT ds.id, ds.driver_id, ds.lat, ds.lng, ds.label,
+              ds.destination_expires_at AS expires_at,
+              dp.current_lat, dp.current_lng, dp.last_location_at,
+              dp.is_online, COALESCE(dp.status, 'offline') AS status,
+              u.firebase_uid
+         FROM destination_sessions ds
+         JOIN driver_profiles dp ON dp.user_id = ds.driver_id
+         JOIN users u ON u.id = ds.driver_id
+        WHERE ds.ended_at IS NULL`
+    );
+    let ended = 0;
+    for (const row of rows) {
+      const reason = classifyDestinationEnd(row, destCfg, mainCfg);
+      if (!reason) continue;
+      const closed = await execute(
+        `UPDATE destination_sessions
+            SET ended_at = NOW(), end_reason = $2
+          WHERE id = $1 AND ended_at IS NULL`,
+        [row.id, reason]
+      );
+      if (!closed?.rowCount) continue; // someone else closed it first — their win
+      await execute(
+        `UPDATE driver_profiles
+            SET destination_lat = NULL, destination_lng = NULL, destination_label = NULL,
+                destination_set_at = NULL, destination_expires_at = NULL, updated_at = NOW()
+          WHERE user_id = $1`,
+        [row.driver_id]
+      ).catch(() => undefined);
+      await logEvent(row.driver_id, "ended", { reason, via: "sweep", to: row.label });
+      bump("destination_ended");
+      ended += 1;
+      console.log(
+        `[destination] sweep ended session ${row.id} driver=${row.driver_id} reason=${reason}`
+      );
+      if (row.firebase_uid) {
+        io.to(`user:${row.firebase_uid}`).emit("driver:destination:ended", { reason });
+      }
+      void sendPushToUsers([row.driver_id], {
+        type: "destination_mode_ended",
+        title: "Destination mode ended",
+        body: END_COPY[reason],
+        highPriority: true,
+        data: { reason },
+      }).catch(() => undefined);
+    }
+    return ended;
+  } catch (err: any) {
+    // Never let a sweep failure kill the worker loop.
+    console.warn("[destination] sweep failed:", err?.message || err);
+    return 0;
+  } finally {
+    sweeping = false;
+  }
+}
+

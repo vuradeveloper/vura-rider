@@ -9,8 +9,13 @@ vi.mock("../config/database", async () => (await import("./testHarness")).db);
 vi.mock("./config", async () => (await import("./testHarness")).appConfig);
 vi.mock("./notify", async () => (await import("./testHarness")).notify);
 
-import { activateDestination, clearDestination, getDestinationStatus } from "./destinationSession";
-import { db, resetHarness, patchDestinationConfig, notify } from "./testHarness";
+import {
+  activateDestination,
+  clearDestination,
+  getDestinationStatus,
+  sweepDestinationSessionsOnce,
+} from "./destinationSession";
+import { db, resetHarness, patchDestinationConfig, patchConfig, notify, makeIo } from "./testHarness";
 import { getCounters } from "./metrics";
 
 /** Route db.query calls by SQL fragment (first match wins). */
@@ -211,5 +216,133 @@ describe("clearDestination / getDestinationStatus", () => {
     route({ "COUNT(*)": usageRow(2), "FROM destination_sessions": [] });
     const idle = await getDestinationStatus("d1");
     expect(idle).toMatchObject({ active: false, banner: null, uses_today: 2 });
+  });
+});
+
+describe("sweepDestinationSessionsOnce (auto-end: L7a / L7c / L7d)", () => {
+  /** Live position ~7 km from the destination — online, not expired: keep. */
+  const row = (over: Partial<Record<string, unknown>> = {}) => ({
+    id: "sess-1",
+    driver_id: "d1",
+    lat: -26.145,
+    lng: 28.04, // Rosebank
+    label: "Rosebank",
+    expires_at: new Date(Date.now() + 3 * 3600_000),
+    current_lat: -26.2,
+    current_lng: 28.1,
+    last_location_at: new Date(),
+    is_online: true,
+    status: "available",
+    firebase_uid: "fb-d1",
+    ...over,
+  });
+  const sweepRoute = (rows: any[]) => route({ "ds.ended_at IS NULL": rows });
+  const closedReasons = () => calls("UPDATE destination_sessions").map((c: any[]) => c[1]);
+
+  it("L7a: within 500 m with a fresh fix -> 'arrived' + push + socket + counter", async () => {
+    // 0.003° north of the destination ≈ 0.33 km — inside the 500 m radius.
+    sweepRoute([row({ current_lat: -26.142, current_lng: 28.04 })]);
+    const { io, emitted } = makeIo();
+
+    expect(await sweepDestinationSessionsOnce(io)).toBe(1);
+    expect(closedReasons()).toEqual([["sess-1", "arrived"]]);
+    expect(calls("destination_lat = NULL")).toHaveLength(1); // profile wiped
+    expect(calls("destination_events")).toHaveLength(1); // audit row
+    expect(getCounters().destination_ended).toBe(1);
+    expect(notify.sendPushToUsers).toHaveBeenCalledWith(
+      ["d1"],
+      expect.objectContaining({
+        type: "destination_mode_ended",
+        data: { reason: "arrived" },
+      })
+    );
+    expect(emitted).toContainEqual({
+      room: "user:fb-d1",
+      event: "driver:destination:ended",
+      payload: { reason: "arrived" },
+    });
+  });
+
+  it("L7c: offline via is_online=false OR status='offline' -> 'offline'", async () => {
+    sweepRoute([row({ is_online: false })]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(closedReasons()).toEqual([["sess-1", "offline"]]);
+
+    resetHarness();
+    patchDestinationConfig({ destination_matching_enabled: true });
+    sweepRoute([row({ is_online: true, status: "offline" })]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(closedReasons()).toEqual([["sess-1", "offline"]]);
+  });
+
+  it("L7d: the 3h clock expired -> 'timeout_3h'", async () => {
+    sweepRoute([row({ expires_at: new Date(Date.now() - 1000) })]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(closedReasons()).toEqual([["sess-1", "timeout_3h"]]);
+    expect(getCounters().destination_ended).toBe(1);
+  });
+
+  it("stale position never counts as arrived: the session stays open", async () => {
+    patchConfig({ max_position_age_seconds: 300 });
+    sweepRoute([
+      row({
+        current_lat: -26.145, // parked AT the destination...
+        current_lng: 28.04,
+        last_location_at: new Date(Date.now() - 600_000), // ...but fix is 10 min old
+      }),
+    ]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(0);
+    expect(calls("UPDATE destination_sessions")).toHaveLength(0);
+    expect(getCounters().destination_ended).toBe(0);
+  });
+
+  it("one row ends for ONE reason: arrived > offline > timeout_3h", async () => {
+    sweepRoute([
+      row({
+        current_lat: -26.142,
+        current_lng: 28.04,
+        is_online: false,
+        expires_at: new Date(Date.now() - 1000),
+      }),
+    ]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(closedReasons()).toEqual([["sess-1", "arrived"]]);
+
+    resetHarness();
+    patchDestinationConfig({ destination_matching_enabled: true });
+    sweepRoute([row({ is_online: false, expires_at: new Date(Date.now() - 1000) })]);
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(1);
+    expect(closedReasons()).toEqual([["sess-1", "offline"]]);
+  });
+
+  it("a session closed by someone else mid-sweep (rowCount=0) is skipped entirely", async () => {
+    sweepRoute([row({ is_online: false })]);
+    db.execute.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // the close UPDATE
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(0);
+    expect(calls("destination_lat = NULL")).toHaveLength(0);
+    expect(notify.sendPushToUsers).not.toHaveBeenCalled();
+    expect(getCounters().destination_ended).toBe(0);
+  });
+
+  it("never overlaps itself: a second sweep while one is in flight returns 0", async () => {
+    let release!: () => void;
+    let queried = false;
+    db.query.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          queried = true;
+          release = () => resolve([]);
+        })
+    );
+    const { io } = makeIo();
+
+    const first = sweepDestinationSessionsOnce(io);
+    // The guard trips synchronously — before the first run even reaches its SELECT.
+    expect(await sweepDestinationSessionsOnce(io)).toBe(0);
+    for (let i = 0; i < 50 && !queried; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(queried).toBe(true);
+    release();
+    expect(await first).toBe(0);
+    expect(db.query).toHaveBeenCalledTimes(1); // only the first run ever queried
   });
 });

@@ -71,8 +71,11 @@ export interface DriverIndex {
  * which is how the semantics drift apart. Everything now resolves through here,
  * so there is exactly one place that decides who can be offered a ride.
  *
- * When a new availability status is added (Module 2's destination mode will add
- * one), it is added HERE and nowhere else.
+ * Module 2's destination mode deliberately does NOT add a status (restatement
+ * Q3, CHANGED): the driver stays 'available' and gets destination ATTRIBUTES
+ * instead — the destinationFit predicate in dispatch.ts restricts who they
+ * match. Should a genuine new availability status ever arrive, it is added
+ * HERE and nowhere else.
  */
 export const MATCHABLE_STATUSES = ["available"] as const;
 
