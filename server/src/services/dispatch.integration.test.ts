@@ -269,7 +269,8 @@ describe.skipIf(!enabled)("migration 001 + 001b against real Postgres", () => {
     expect(v.destination_max_activations_per_day).toBe(2);
     expect(v.destination_reject_radius_km).toBe(1);
     expect(v.destination_arrival_radius_km).toBe(0.5);
-    expect(v.destination_timeout_hours).toBe(3);
+    expect(v.destination_offline_grace_seconds).toBe(300);
+    expect(v.destination_max_minutes_without_trip).toBe(180);
     expect(v.destination_match_dropoff_radius_km).toBe(3);
     expect(v.destination_match_cross_track_km).toBe(5);
     expect(v.destination_match_along_tolerance_km).toBe(0.5);
