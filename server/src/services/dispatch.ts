@@ -25,6 +25,8 @@ import { query, queryOne, execute, withTransaction } from "../config/database";
 import { sendPushToUsers } from "./notify";
 import { attachVehicleImages } from "./vehicleImages";
 import { trace, startTrace } from "./trace";
+import { destinationFit, FitThresholds } from "./destinationFit";
+import { getDestinationConfig } from "./config";
 import { getConfig } from "./config";
 import { getDriverIndex, MATCHABLE_STATUSES } from "./driverIndex";
 import { cellsAround } from "../lib/h3";
@@ -517,14 +519,92 @@ async function findCandidatesH3(
   );
   if (rows.length === 0) return [];
 
+  // ── Module 2: destination-mode filter (approved §8.2 rule, Q5) ────────────
+  // Only allowlisted drivers WITH a live destination are evaluated (Q7/Q12);
+  // everyone else passes through untouched. Per-driver fail-closed (Q13): a
+  // throwing predicate removes THAT driver, logs and counts — the query never
+  // aborts for the rest. Flag off / empty allowlist ⇒ no extra queries, no
+  // trace stage, behaviour byte-identical to Module 1.
+  let pool = rows;
+  const dcfg = await getDestinationConfig();
+  const allow = new Set(dcfg.destination_rollout_driver_ids);
+  if (
+    dcfg.destination_matching_enabled &&
+    allow.size > 0 &&
+    rows.some((r) => allow.has(String(r.id)))
+  ) {
+    const ride = await queryOne<{ destination_lat: number | null; destination_lng: number | null }>(
+      `SELECT destination_lat, destination_lng FROM rides WHERE id = $1`,
+      [rideId]
+    ).catch(() => null);
+    const dests = await query<{ user_id: string; destination_lat: number; destination_lng: number }>(
+      `SELECT user_id, destination_lat, destination_lng FROM driver_profiles
+        WHERE user_id = ANY($1::uuid[])
+          AND destination_lat IS NOT NULL AND destination_lng IS NOT NULL`,
+      [rows.filter((r) => allow.has(String(r.id))).map((r) => r.id)]
+    ).catch(() => []);
+    const destBy = new Map(dests.map((d) => [d.user_id, d]));
+    const X =
+      ride?.destination_lat != null && ride.destination_lng != null
+        ? { lat: Number(ride.destination_lat), lng: Number(ride.destination_lng) }
+        : null;
+    const P = { lat: pickupLat, lng: pickupLng };
+    const th: FitThresholds = {
+      dropoffRadiusKm: dcfg.destination_match_dropoff_radius_km,
+      crossTrackKm: dcfg.destination_match_cross_track_km,
+      alongTolKm: dcfg.destination_match_along_tolerance_km,
+    };
+    let considered = 0;
+    let removed = 0;
+    let errors = 0;
+    pool = [];
+    for (const row of rows) {
+      const dest = allow.has(String(row.id)) ? destBy.get(row.id) : undefined;
+      if (!dest) {
+        pool.push(row); // not in the rollout, or allowlisted but NOT in destination mode
+        continue;
+      }
+      considered += 1;
+      try {
+        const verdict = destinationFit(
+          { lat: Number(row.current_lat), lng: Number(row.current_lng) },
+          { lat: Number(dest.destination_lat), lng: Number(dest.destination_lng) },
+          P,
+          X,
+          th
+        );
+        if (verdict === "accept") {
+          pool.push(row);
+        } else {
+          removed += 1;
+          bump("destination_filtered");
+        }
+      } catch (err: any) {
+        // Q13: fail closed for THIS driver only — the ride keeps serving.
+        errors += 1;
+        bump("destination_predicate_error");
+        console.warn(
+          `[dispatch] destinationFit threw driver=${row.id} ride=${rideId}: ${err?.message || err}`
+        );
+      }
+    }
+    trace(rideId, "destination_filter", {
+      considered,
+      kept: pool.length,
+      removed,
+      errors,
+      allowlist: allow.size,
+    });
+  }
+
   // 6. Rank by ROAD ETA (one OSRM matrix call for the pool), haversine
   //    fallback per entry — never a reason to delay the offer.
   const etas = await etaMinutesList(
     { lat: pickupLat, lng: pickupLng },
-    rows.map((r) => ({ lat: Number(r.current_lat), lng: Number(r.current_lng) })),
+    pool.map((r) => ({ lat: Number(r.current_lat), lng: Number(r.current_lng) })),
     cfg.avg_speed_kmh
   );
-  const ranked = rows
+  const ranked = pool
     .map((row, i) => ({ row, eta: etas[i] }))
     .sort((a, b) => a.eta - b.eta)
     .map((x) => x.row);
