@@ -43,6 +43,38 @@ git add dist && git commit -m "deploy: rebuild server/dist for RC1 (12ae348)"
 git status --porcelain server/dist        # from repo root — must be CLEAN now
 ```
 
+### 1b. HARD GATE — dist must not predate the commit (**checklist FAILS here**)
+
+Do not proceed to §2 until **both** checks exit 0. This is not advisory: a green
+`tsc`/`vitest` run proves `src` is healthy, not that `dist` — the artefact EB
+actually boots — contains it. Real incident that motivated this gate:
+`server/dist/services/dispatch.js` shipped `DRIVER_STALE_SECONDS = 45` while
+`server/src/services/dispatch.ts` had `20` for days, because `dist` was last
+committed before the source change (see §4 boot-log row, which still says `45s`).
+
+```powershell
+# CHECK 1 — committed dist is byte-identical to a fresh build of committed src.
+cd server
+npm run build
+$diff = git status --porcelain dist
+if ($diff) { Write-Error "FAIL: dist differs from a fresh build — commit it (§1a) first"; exit 1 }
+
+# CHECK 2 — no commit touched server/src AFTER the last commit that touched
+# server/dist (i.e. dist does not predate the source it must contain).
+# NOTE: still inside server/ — git resolves pathspecs relative to the cwd,
+# so the pathspecs are `src` and `dist` here (NOT server/src).
+$srcT  = [int](git log -1 --format=%ct -- src)
+$distT = [int](git log -1 --format=%ct -- dist)
+if ($distT -lt $srcT) {
+  Write-Error "FAIL: server/dist predates the newest server/src commit — rebuild + commit (§1a). If the rebuild is byte-identical (comment/doc-only src change), record freshness anyway: git commit --allow-empty -m 'deploy: server/dist current with <sha>'"
+  exit 1
+}
+Write-Host "dist gate OK"
+```
+
+Both checks run from the repo root's `server/` and must print `dist gate OK`;
+any `Write-Error` means **STOP — the deploy checklist has failed** at §1b.
+
 Ship `node_modules` note: `.ebignore` re-includes `server/node_modules` so a
 fresh instance boots without a 100 MB install — only pure-JS packages are safe
 there (the `sharp`/`@img/sharp-win32-x64` trap from `_LIVE_STATE.md`; both EB
@@ -90,6 +122,14 @@ constraint) and always passes its own slash-free label.
 | `GET /api/dev/diag?key=$DEV_LOG_READ_KEY` | answers; `sharp.loads=true`; dispatch/queue blocks present (wrong key → `401 {"error":"bad read key"}`; missing route → `404 {"error":"Route not found"}`) |
 | `GET /debug/counters` | reachable; offer counters moving when a ride is booked |
 | EB console | exactly **1** instance, deploy version = `vura-12ae348-<ts>` |
+
+> **Note on the boot-log row:** `driver stale 45s` is a **hardcoded literal**
+> in `server/src/services/offerWorker.ts` (`startOfferWorker`), not a read of
+> any threshold — it prints `45s` regardless of the real value. The threshold
+> actually applied by the demotion sweep is `DRIVER_STALE_SECONDS` compiled
+> into `dist` (45 in a stale dist, 20 in current `src`), and index eviction
+> separately uses `app_config.stale_seconds` (40). Do not use the log line as
+> proof of the live threshold; check `server/dist/services/dispatch.js` instead.
 
 Then run **`MODULE1_TEST.md` §1–§6** end-to-end (driver online → GPS ping →
 flag on → offer → accept → trace). Only after it passes, do the Module 1
