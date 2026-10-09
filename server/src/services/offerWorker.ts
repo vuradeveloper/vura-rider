@@ -13,9 +13,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Server as SocketIOServer } from "socket.io";
-import { expireOffers, reviveWaitingRides, sweepStaleDrivers } from "./dispatch";
+import { execFileSync } from "child_process";
+import {
+  expireOffers,
+  reviveWaitingRides,
+  sweepStaleDrivers,
+  DRIVER_STALE_SECONDS,
+  LOCATION_FRESH_SECONDS,
+  OFFER_TTL_SECONDS,
+} from "./dispatch";
 import { getDriverIndex } from "./driverIndex";
 import { getConfig } from "./config";
+import type { AppConfig } from "./config";
 
 const TICK_MS = 2000;
 const SWEEP_EVERY_TICKS = 15;
@@ -60,6 +69,53 @@ export async function evictStaleIndexOnce(): Promise<number> {
   }
 }
 
+/**
+ * Short hash of the running build, so a boot log line can be matched to the
+ * commit (and therefore the server/dist rebuild) that produced it. Order:
+ *   1. BUILD_COMMIT env — the only source that works when the deployed
+ *      artifact is a zip without a .git directory (Elastic Beanstalk);
+ *   2. `git rev-parse` — dev machines and source checkouts;
+ *   3. "unknown" — never invent a hash.
+ */
+export function getBuildCommit(): string {
+  const fromEnv = process.env.BUILD_COMMIT?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const fromGit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000,
+    }).trim();
+    if (/^[0-9a-f]{4,40}$/i.test(fromGit)) return fromGit;
+  } catch {
+    // no git / not a checkout — fall through
+  }
+  return "unknown";
+}
+
+/**
+ * The boot line. It used to hardcode "driver stale 45s", which was wrong in
+ * two different ways: the compiled demotion threshold is DRIVER_STALE_SECONDS
+ * (20 in src; whatever the deployed dist was built with), and H3 index
+ * eviction is a THIRD, separate value (app_config stale_seconds, 40 today).
+ * Print every real number plus the build hash so an audit can verify a running
+ * server without reading source.
+ *
+ * Pure on purpose — unit-tested in offerWorker.boot.test.ts.
+ */
+export function formatBootLog(
+  cfg: Pick<AppConfig, "stale_seconds"> | null,
+  buildCommit: string
+): string {
+  const evict = cfg ? `${cfg.stale_seconds}s` : "unknown";
+  return (
+    `[offerWorker] started (2s tick · offer TTL ${OFFER_TTL_SECONDS}s · ` +
+    `driver stale ${DRIVER_STALE_SECONDS}s (demote) · ` +
+    `loc fresh ${LOCATION_FRESH_SECONDS}s (candidates) · ` +
+    `index evict ${evict} (app_config) · build ${buildCommit})`
+  );
+}
+
 export function startOfferWorker(io: SocketIOServer): void {
   if (timer) return;
 
@@ -99,7 +155,16 @@ export function startOfferWorker(io: SocketIOServer): void {
       .catch(() => undefined);
   }, 4000);
 
-  console.log("[offerWorker] started (2s tick · offer TTL 15s · driver stale 45s)");
+  // Boot line: async because stale_seconds lives in app_config (10s cache).
+  // A config-read failure must never swallow the boot line — the compiled
+  // constants and the build hash still print, index evict marked unknown.
+  void getConfig().then(
+    (cfg) => console.log(formatBootLog(cfg, getBuildCommit())),
+    (err: any) => {
+      console.warn(`[offerWorker] app_config unread at boot: ${err?.message}`);
+      console.log(formatBootLog(null, getBuildCommit()));
+    }
+  );
 }
 
 export function stopOfferWorker(): void {
