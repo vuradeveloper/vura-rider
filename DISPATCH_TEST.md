@@ -120,5 +120,10 @@ git revert <sha>..<sha>    # a range
 The 20s freshness change (`bb3441e`) is the one most likely to need reverting
 in the field: if drivers start dropping off dispatch during testing, their GPS
 is flapping and `LOCATION_FRESH_SECONDS` / `DRIVER_STALE_SECONDS` are the knobs.
-Raising them back to 30/45 is the quickest mitigation and does not require a
-code change — they are read from constants on boot.
+Raising them (e.g. back toward the old 30/45) IS a code change: both are
+compile-time constants in `server/src/services/dispatch.ts`, so a bump means
+editing source, rebuilding `server/dist` and redeploying. Verify the new values
+actually shipped by reading the `[offerWorker] started` boot line — it prints
+the compiled constants, the config value and the build hash (no more hardcoded
+"45s"). The only threshold tunable without a deploy is `app_config.stale_seconds`
+(H3 index eviction, 40 today): a SQL UPDATE, no restart, no rebuild.

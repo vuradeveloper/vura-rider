@@ -34,8 +34,12 @@ export interface AppConfig {
   h3_heatmap_res: number;
   /**
    * A driver with no update for this long is evicted from the index.
-   * 40s today because the shipped app pushes GPS every 15s; drop to 20s once
-   * the 4s heartbeat APK is live (Q7). Both live in config, never in code.
+   * 40s today: the shipped driver app pushes GPS every 15s and a heartbeat
+   * every 10s. Tunable only through app_config — never in code; revisit when
+   * the 4s location/heartbeat intervals planned for the driver app ship.
+   * NOTE: a DIFFERENT number from dispatch's DRIVER_STALE_SECONDS and
+   * LOCATION_FRESH_SECONDS constants (demotion sweep / candidate freshness).
+   * The [offerWorker] boot line prints all three side by side, labelled.
    */
   stale_seconds: number;
   /**

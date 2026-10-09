@@ -1,7 +1,8 @@
-# DEPLOY_RC1.md — deploy `release-candidate-1` to production
+# DEPLOY_RC1.md — deploy `fix/rc1-stale-boot-log` to production
 
-**Branch:** `release-candidate-1` @ `12ae348` (18 commits ahead of `main`,
-already on `origin`).
+**Branch:** `fix/rc1-stale-boot-log` @ `3114340` = `release-candidate-1`
+(`12ae348`, 18 commits ahead of `main`, on `origin`) + staleness fixes
+(`2da9888` real boot-log thresholds, `3114340` stale comments).
 **Target:** AWS Elastic Beanstalk, environment `vura-rider-prod`, region
 `af-south-1`, **min=max=1 instance** (hard requirement — see §5).
 
@@ -10,7 +11,7 @@ push-delivery fixes + the real-Postgres migration guard + the single-instance
 boot warning. It contains **no new migration** (001/001b already applied when
 Module 1 was prepared — verify, don't re-run blindly).
 
-> **This document deploys. It does not merge.** `release-candidate-1` stays a
+> **This document deploys. It does not merge.** `fix/rc1-stale-boot-log` stays a
 > branch; merging into `main` is a separate, deliberate decision after the
 > verification run passes.
 
@@ -19,8 +20,8 @@ Module 1 was prepared — verify, don't re-run blindly).
 ## 1. Preflight gates (run on your machine, from the branch)
 
 ```powershell
-git checkout release-candidate-1 && git pull
-git --no-pager log --oneline -1          # expect 12ae348 ...
+git checkout fix/rc1-stale-boot-log && git pull
+git --no-pager log --oneline -1          # expect 3114340 ...
 cd server
 npx tsc --noEmit                          # type gate — must be 0 errors
 npx vitest run                            # mocked suite — all green, no DB needed
@@ -39,7 +40,7 @@ code with a green test run.
 cd server
 npm run build
 git status --porcelain dist               # must show changes (it is stale)
-git add dist && git commit -m "deploy: rebuild server/dist for RC1 (12ae348)"
+git add dist && git commit -m "deploy: rebuild server/dist for RC1 (3114340)"
 git status --porcelain server/dist        # from repo root — must be CLEAN now
 ```
 
@@ -50,7 +51,8 @@ Do not proceed to §2 until **both** checks exit 0. This is not advisory: a gree
 actually boots — contains it. Real incident that motivated this gate:
 `server/dist/services/dispatch.js` shipped `DRIVER_STALE_SECONDS = 45` while
 `server/src/services/dispatch.ts` had `20` for days, because `dist` was last
-committed before the source change (see §4 boot-log row, which still says `45s`).
+committed before the source change (the stale `45s` boot line this branch fixes
+in `2da9888`).
 
 ```powershell
 # CHECK 1 — committed dist is byte-identical to a fresh build of committed src.
@@ -105,7 +107,7 @@ Full checklist: `server/migrations/TEST_MIGRATION.md` (§0–§4).
 ## 3. Deploy
 
 ```bash
-git checkout release-candidate-1
+git checkout fix/rc1-stale-boot-log
 bash deploy/deploy.sh vura-rider-prod     # = eb deploy --label vura-<short>-<ts>
 ```
 
@@ -117,19 +119,18 @@ constraint) and always passes its own slash-free label.
 | Check | Expect |
 |---|---|
 | `curl https://<host>/health` | `{"status":"ok",...}` |
-| boot log | `[offerWorker] started (2s tick · offer TTL 15s · driver stale 45s)` |
+| boot log | `[offerWorker] started (2s tick · offer TTL 15s · driver stale 20s (demote) · loc fresh 20s (candidates) · index evict 40s (app_config) · build <short-sha>)` |
 | boot log | instance id line + `WARNING: multi-instance delivery is unsupported until a socket.io adapter exists` |
 | `GET /api/dev/diag?key=$DEV_LOG_READ_KEY` | answers; `sharp.loads=true`; dispatch/queue blocks present (wrong key → `401 {"error":"bad read key"}`; missing route → `404 {"error":"Route not found"}`) |
 | `GET /debug/counters` | reachable; offer counters moving when a ride is booked |
-| EB console | exactly **1** instance, deploy version = `vura-12ae348-<ts>` |
+| EB console | exactly **1** instance, deploy version = `vura-3114340-<ts>` |
 
-> **Note on the boot-log row:** `driver stale 45s` is a **hardcoded literal**
-> in `server/src/services/offerWorker.ts` (`startOfferWorker`), not a read of
-> any threshold — it prints `45s` regardless of the real value. The threshold
-> actually applied by the demotion sweep is `DRIVER_STALE_SECONDS` compiled
-> into `dist` (45 in a stale dist, 20 in current `src`), and index eviction
-> separately uses `app_config.stale_seconds` (40). Do not use the log line as
-> proof of the live threshold; check `server/dist/services/dispatch.js` instead.
+> **Note on the boot-log row:** as of `2da9888` this branch builds the line
+> with `formatBootLog()` from live values — `driver stale` = `DRIVER_STALE_SECONDS`
+> (20, demote), `loc fresh` = `LOCATION_FRESH_SECONDS` (20, candidate eligibility),
+> `index evict` = `app_config.stale_seconds` (40) — plus the build hash. The old
+> hardcoded `driver stale 45s` literal is gone: if you still see `45s`, the
+> deployed `dist` predates `2da9888` — go back to §1a/§1b.
 
 Then run **`MODULE1_TEST.md` §1–§6** end-to-end (driver online → GPS ping →
 flag on → offer → accept → trace). Only after it passes, do the Module 1
