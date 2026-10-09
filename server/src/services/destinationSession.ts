@@ -165,8 +165,41 @@ async function buildStatus(
  * Set (or change) the driver's destination — one session per use.
  * Idempotent for the SAME destination; a different one closes the old session
  * as 'changed' and opens a new one (counts as a new use, §8.1).
+ *
+ * DOUBLE-ACTIVATION GUARD: the driver app's dual contract can deliver the SAME
+ * tap twice — the socket leg plus, when its ack is late (4 s), the REST
+ * fallback. The checks inside are read-then-write (loadActive → INSERT), so
+ * two CONCURRENT calls could both see "no session" and both spend a daily use.
+ * Activations are therefore serialized per driver: the second call waits, then
+ * runs against the state the first one committed — identical coordinates hit
+ * the idempotent same-destination path (one use, one session, the same answer
+ * on both transports); different coordinates are processed as one ordered
+ * 'changed'. The sequential late-REST case was already safe via that
+ * idempotent path; this closes the concurrent window it creates.
+ *
+ * In-memory per process: correct for the current single-instance server (REST
+ * + socket.io in one Node process). A multi-instance deploy needs a DB-level
+ * guard instead (transaction-scoped advisory lock, or a partial unique index
+ * on destination_sessions(driver_id) WHERE ended_at IS NULL).
  */
-export async function activateDestination(
+const activationChain = new Map<string, Promise<ActivateResult>>();
+
+export function activateDestination(
+  driverId: string,
+  input: SetDestinationInput
+): Promise<ActivateResult> {
+  const prev = activationChain.get(driverId) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined) // a failed activation must never poison the chain
+    .then(() => activateDestinationOnce(driverId, input));
+  const tracked = next.finally(() => {
+    if (activationChain.get(driverId) === tracked) activationChain.delete(driverId);
+  });
+  activationChain.set(driverId, tracked);
+  return tracked;
+}
+
+async function activateDestinationOnce(
   driverId: string,
   input: SetDestinationInput
 ): Promise<ActivateResult> {

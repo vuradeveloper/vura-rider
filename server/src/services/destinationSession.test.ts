@@ -181,6 +181,78 @@ describe("activateDestination", () => {
   });
 });
 
+// ── DOUBLE-ACTIVATION GUARD ──────────────────────────────────────────────────
+// The client's dual contract fires the REST fallback when the socket ack is
+// late (4 s). If the socket leg is still mid-flight (slow DB), both requests
+// run AT ONCE — without per-driver serialization both saw "no session" and
+// both INSERTed a row, spending two daily uses for one tap. These tests use a
+// STATEFUL mock (an `active` variable the INSERT sets) because the static
+// route() helper cannot see the first request's write.
+describe("double-activation guard (concurrent socket + REST legs)", () => {
+  /** Slow limit-check keeps both legs in flight together. */
+  function statefulRoute(delayMs = 15): void {
+    let active: any = null;
+    db.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("COUNT(*)")) {
+        await new Promise((r) => setTimeout(r, delayMs)); // the "slow database"
+        return [{ n: active ? 1 : 0, sast_day: "2026-10-08" }];
+      }
+      if (sql.includes("FROM driver_profiles")) return [PROFILE_OK];
+      if (sql.includes("FROM destination_sessions")) return active ? [active] : [];
+      return [];
+    });
+    db.execute.mockImplementation(async (sql: string, params?: any[]) => {
+      if (sql.includes("INSERT INTO destination_sessions")) {
+        active = {
+          id: "s1",
+          lat: params?.[1],
+          lng: params?.[2],
+          label: params?.[3],
+          expires_at: null,
+        };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+  }
+
+  it("one tap, two transports: concurrent IDENTICAL activations spend ONE use", async () => {
+    statefulRoute();
+    const [a, b] = await Promise.all([
+      activateDestination("d1", { lat: -26.1, lng: 28.4, label: "Sandton" }),
+      activateDestination("d1", { lat: -26.1, lng: 28.4, label: "Sandton" }),
+    ]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    // The guard's whole point: exactly ONE session row and ONE daily use.
+    expect(calls("INSERT INTO destination_sessions")).toHaveLength(1);
+    expect(calls("end_reason = 'changed'")).toHaveLength(0);
+    expect(getCounters().destination_activated).toBe(1);
+    // Both transports answered with the SAME session (the second hit the
+    // idempotent same-destination path against the first one's state).
+    if (a.ok && b.ok) {
+      expect(a.status.active).toBe(true);
+      expect(b.status.active).toBe(true);
+      expect(b.status.label).toBe("Sandton");
+    }
+  });
+
+  it("concurrent DIFFERENT destinations process in order: one 'changed', two uses", async () => {
+    statefulRoute();
+    const [a, b] = await Promise.all([
+      activateDestination("d1", { lat: -26.1, lng: 28.4, label: "Sandton" }),
+      activateDestination("d1", { lat: -26.2, lng: 28.0, label: "Airport" }),
+    ]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    // A genuine change is still a new use — but exactly ONE change, not two
+    // racing sessions: the second request ran after the first committed.
+    const changed = calls("end_reason = 'changed'");
+    expect(changed).toHaveLength(1);
+    expect(calls("INSERT INTO destination_sessions")).toHaveLength(2);
+    if (b.ok) expect(b.status.label).toBe("Airport");
+  });
+});
+
 describe("clearDestination / getDestinationStatus", () => {
   it("L7b: cancel ends the session as 'cancelled', clears the profile, pushes the reason", async () => {
     route({
