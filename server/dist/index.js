@@ -40,6 +40,7 @@ exports.io = void 0;
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const http_1 = __importDefault(require("http"));
+const os_1 = require("os");
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const morgan_1 = __importDefault(require("morgan"));
@@ -70,11 +71,13 @@ const face_1 = __importDefault(require("./routes/face"));
 const devLogs_1 = __importDefault(require("./routes/devLogs"));
 const devDispatch_1 = __importDefault(require("./routes/devDispatch"));
 const devDiag_1 = __importDefault(require("./routes/devDiag"));
+const debugTrace_1 = __importDefault(require("./routes/debugTrace"));
 const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmin"));
 const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const offerWorker_1 = require("./services/offerWorker");
+const eta_1 = require("./services/eta");
 const OsmPlaceSyncService_1 = require("./services/OsmPlaceSyncService");
 // ── Socket handlers ──
 const handlers_1 = require("./socket/handlers");
@@ -117,6 +120,9 @@ app.use("/api/dev/logs", devLogs_1.default);
 // Dispatch inspector (read-only, same read key): see the whole offer trail for a
 // ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
 app.use("/api/dev/dispatch", devDispatch_1.default);
+// Admin-only trip trace: GET /debug/trips/:id/trace (Firebase bearer + ADMIN_EMAILS).
+// Mounted with the other dev routes, before the global limiter.
+app.use("/debug", debugTrace_1.default);
 // Environment diagnostics (read-only, same read key): which build is actually live,
 // whether sharp can encode, whether S3 accepts a real write, and WHY the newest
 // vehicle photos have no image — GET /api/dev/diag?key=…&s3=1
@@ -627,6 +633,10 @@ async function start() {
     // Driver dispatch runs on the DB, not on setTimeout (a restart must not strand
     // a rider waiting for an offer that will never expire).
     (0, offerWorker_1.startOfferWorker)(io);
+    // Report the ETA provider decision ONCE at boot: ROUTE_PROVIDER_URL set ->
+    // OSRM-compatible table API; unset -> "ETA provider not configured" and
+    // haversine ranking only (never the public OSRM demo in production).
+    (0, eta_1.logEtaProviderStatus)();
     // 2. Init Firebase Admin
     try {
         (0, firebase_1.getFirebaseApp)();
@@ -639,6 +649,16 @@ async function start() {
         console.log(`✓ Server running on http://localhost:${PORT}`);
         console.log(`✓ Allowed origins: ${allowedOrigins.join(", ")}`);
         console.log(`✓ Environment: ${process.env.NODE_ENV || "development"}`);
+        // SINGLE-INSTANCE DEPLOY PRECONDITION (MODULE1_TEST.md): socket.io has no
+        // shared adapter on this stack, so rooms, hasLiveSocket() and
+        // io.to(room).emit() are all PER-PROCESS. A second instance silently
+        // splits offer delivery — instance A sees an empty room for a driver
+        // connected to instance B and can never reach it.
+        const instanceId = process.env.EC2_INSTANCE_ID || process.env.INSTANCE_ID || (0, os_1.hostname)();
+        console.log(`✓ Instance: ${instanceId}`);
+        console.warn("[deploy] SINGLE-INSTANCE REQUIRED — socket.io has no shared adapter; " +
+            "multi-instance delivery is UNSUPPORTED. Keep Elastic Beanstalk " +
+            "min=max=1 and avoid rolling deployments with an additional batch.");
     });
 }
 start().catch((err) => {

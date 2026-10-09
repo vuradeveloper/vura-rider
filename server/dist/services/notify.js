@@ -61,6 +61,16 @@ async function logPushSend(userId, reference, result, detail) {
  * Both transports run: FCM (native/Capacitor apps) and Expo (legacy RN app), so a
  * user signed into either build is reachable. Never throws — a push failure must
  * not break a ride.
+ *
+ * HONEST RETURN CONTRACT (offer-dispatch skip safety depends on it):
+ *  - `N > 0`  — PROVEN: N device(s) accepted the push.
+ *  - `0`      — PROVEN nothing exists/accepted: the token lookups succeeded and
+ *               every reachable transport answered "0 delivered". An empty
+ *               token set is exactly this case, and dispatch is allowed to
+ *               skip an undeliverable offer on it.
+ *  - `null`   — UNKNOWN: a lookup or transport failed so the answer cannot be
+ *               trusted. Callers must never coerce this to 0 — a ride offer
+ *               may only be skipped on a PROVEN 0.
  */
 async function sendPushToUsers(userIds, msg) {
     const ids = (userIds || []).filter(Boolean);
@@ -73,12 +83,15 @@ async function sendPushToUsers(userIds, msg) {
         ...(msg.data || {}),
     };
     let sent = 0;
+    let unknown = false;
     let error = null;
     try {
         // ── 1. Native (FCM) ──────────────────────────────────────────────────────
-        const users = await (0, database_1.query)(`SELECT id, firebase_uid FROM users WHERE id = ANY($1::uuid[])`, [ids]).catch(() => []);
+        // No .catch(() => []): a FAILED lookup must surface as null (unknown), not
+        // masquerade as a proven "this user has no tokens" zero.
+        const users = await (0, database_1.query)(`SELECT id, firebase_uid FROM users WHERE id = ANY($1::uuid[])`, [ids]);
         const tokens = await (0, database_1.query)(`SELECT id, user_id, push_token, platform FROM device_tokens
-        WHERE user_id = ANY($1::uuid[]) AND is_active = TRUE`, [ids]).catch(() => []);
+        WHERE user_id = ANY($1::uuid[]) AND is_active = TRUE`, [ids]);
         if (tokens.length > 0) {
             const app = (0, firebase_1.getFirebaseApp)();
             const res = await app.messaging().sendEachForMulticast({
@@ -121,25 +134,49 @@ async function sendPushToUsers(userIds, msg) {
                 error = `${res.failureCount}/${tokens.length} FCM failures`;
         }
         // ── 2. Expo (legacy RN app) ──────────────────────────────────────────────
+        // Only for users WITHOUT an active FCM token: both transports running for
+        // the same user delivered a double notification (and made the `provider`
+        // label meaningless). The native path owns anyone with a live token row.
+        const fcmUserIds = new Set(tokens.map((t) => t.user_id));
         for (const u of users) {
             if (!u.firebase_uid)
+                continue;
+            if (fcmUserIds.has(u.id))
                 continue;
             const n = await (0, push_1.sendPushToUser)(u.firebase_uid, {
                 title: msg.title,
                 body: msg.body,
                 data: { ...data, rideId: msg.rideId ?? undefined },
-            }).catch(() => 0);
+            }).catch((err) => {
+                // Transport-level failure: this half of the answer is UNKNOWN.
+                unknown = true;
+                error = err?.message || String(err);
+                return 0;
+            });
             sent += n;
         }
-        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, sent > 0 ? (error ? "partial" : "sent") : "skipped", error, tokens.length > 0 ? "fcm" : "expo");
-        await logPushSend(ids[0], msg.rideId ?? "", sent > 0 ? "sent" : "none", error ?? `${sent} device(s)`);
+        // Provider = the transport that ACTUALLY spoke for the logged user
+        // (ids[0]): FCM only if that user had an active token row, Expo only if
+        // the Expo leg actually ran for them, "none" otherwise. The old label
+        // ("any FCM token in the batch?") lied whenever both/neither applied.
+        const fcmForFirst = tokens.some((t) => t.user_id === ids[0]);
+        const expoForFirst = !fcmForFirst && users.some((u) => u.id === ids[0] && !!u.firebase_uid);
+        const provider = fcmForFirst ? "fcm" : expoForFirst ? "expo" : "none";
+        // Logging must never flip a proven answer (or a proven zero) into unknown,
+        // so both sinks are fire-and-forget here.
+        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, sent > 0 ? (error ? "partial" : "sent") : "skipped", error, provider).catch(() => undefined);
+        await logPushSend(ids[0], msg.rideId ?? "", sent > 0 ? "sent" : "none", error ?? `${sent} device(s)`).catch(() => undefined);
     }
     catch (err) {
+        // A lookup or the FCM transport failed before any proof arrived: UNKNOWN.
+        unknown = true;
         error = err?.message || String(err);
         console.warn("[notify] push failed:", error);
-        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, "error", error, "fcm");
+        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, "error", error, "unknown").catch(() => undefined);
     }
-    return sent;
+    if (sent > 0)
+        return sent;
+    return unknown ? null : 0;
 }
 /** Convenience: one user (driver offer, rider milestones). */
 function sendPushToUser(userId, msg) {

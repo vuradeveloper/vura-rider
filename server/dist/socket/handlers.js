@@ -4,16 +4,89 @@ exports.setupSocketHandlers = setupSocketHandlers;
 const firebase_1 = require("../config/firebase");
 const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
-const push_1 = require("../services/push");
+const notify_1 = require("../services/notify");
 const rideSim_1 = require("../services/rideSim");
 const dispatch_1 = require("../services/dispatch");
+const trace_1 = require("../services/trace");
+const driverIndex_1 = require("../services/driverIndex");
+const metrics_1 = require("../services/metrics");
+const destinationSession_1 = require("../services/destinationSession");
+const pendingRequest = new WeakMap();
+/** Stamp the rider's tap. Returns the clock so the caller can keep it. */
+function markRequestReceived(socket) {
+    const ctx = { t0: Date.now(), traceId: crypto.randomUUID() };
+    pendingRequest.set(socket, ctx);
+    return ctx;
+}
+/** Write the first two stages under the real ride id, preserving the tap clock. */
+function traceRequestAndSave(rideId, socket, extra) {
+    const ctx = pendingRequest.get(socket);
+    pendingRequest.delete(socket);
+    if (!rideId || !ctx)
+        return;
+    // Adopt the tap's trace_id for the ride, so every later stage lines up with it.
+    (0, trace_1.startTrace)(rideId);
+    const adopted = (0, trace_1.startTrace)(rideId);
+    adopted.traceId = ctx.traceId;
+    adopted.t0 = ctx.t0;
+    (0, trace_1.trace)(rideId, "request_received", { ...extra, ms_from_start: 0, at: new Date(ctx.t0).toISOString() });
+}
 // Push a ride milestone to a user's registered devices. firebaseUid is the
-// riders/driver Firebase account id (stored on users.firebase_uid).
-function notifyUser(firebaseUid, title, body, data) {
+// rider's/driver's Firebase account id (stored on users.firebase_uid).
+//
+// WHY THIS NO LONGER USES services/push.ts
+//
+// services/push.ts is the LEGACY Expo-only sender: it accepts just
+// ExponentPushToken[...] tokens. The apps actually being shipped are Capacitor
+// APKs, which cannot mint an Expo token, so every milestone sent through here
+// ("Driver arrived", "Ride complete", the cancellations) reached NOTHING on a
+// backgrounded phone -- no socket, no notification. Only dispatch's offer path
+// reached FCM, because it already went through services/notify.ts.
+//
+// services/notify.ts is the real sender: FCM via firebase-admin with Android
+// priority high, a high-importance channel and apns time-sensitive, PLUS the
+// Expo fallback for the legacy RN build. Both transports, so nobody regresses.
+//
+// Note the key change: notify.ts keys on DB user ids, not Firebase uids, so the
+// uid is resolved here. That resolution is also recorded in the trace, so a
+// milestone that fails to resolve is visible instead of silent.
+function notifyUser(firebaseUid, title, body, data, rideId, type) {
     if (!firebaseUid)
         return;
-    Promise.resolve((0, push_1.sendPushToUser)(firebaseUid, { title, body, data }))
-        .catch((err) => console.warn("push:", err?.message));
+    void (async () => {
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
+        if (!user) {
+            // Unresolvable uid: log it rather than dropping the notification silently.
+            console.warn(`[push] no DB user for firebase uid; dropped "${title}"`);
+            return;
+        }
+        // FCM data values must be strings, so coerce rather than trusting callers.
+        const stringData = {};
+        for (const [k, v] of Object.entries(data || {})) {
+            if (v == null)
+                continue;
+            stringData[k] = String(v);
+        }
+        const delivered = await (0, notify_1.sendPushToUsers)([user.id], {
+            type: type || "trip_update",
+            title,
+            body,
+            rideId: rideId ?? null,
+            // Milestones like "Driver arrived" are worth waking a phone for.
+            highPriority: true,
+            data: stringData,
+        });
+        if (rideId) {
+            (0, trace_1.trace)(rideId, "milestone_push", {
+                type: type || "trip_update",
+                delivered,
+                ok: (delivered ?? 0) > 0,
+            });
+        }
+        if (!delivered) {
+            console.warn(`[push] milestone "${title}" reached 0 devices (ride=${rideId ?? "-"})`);
+        }
+    })().catch((err) => console.warn("[push] milestone failed:", err?.message));
 }
 function setupSocketHandlers(io) {
     // Auth middleware
@@ -110,8 +183,41 @@ function setupSocketHandlers(io) {
                 console.error("passenger:connect error:", err.message);
             }
         });
+        // ── Driver confirms the offer actually reached the device ──────────────────
+        // "offer_sent" only proves the server handed the event to socket.io. It says
+        // nothing about whether the phone rendered it. This ack is what distinguishes
+        // "the offer was sent" from "the offer arrived" -- the difference between a
+        // dispatch bug and a dead socket.
+        socket.on("driver:ride:offer:ack", async (data) => {
+            try {
+                const rideId = String(data?.rideId || data?.id || "");
+                if (!/^[0-9a-f-]{36}$/i.test(rideId))
+                    return;
+                const driverId = await getDbUserId();
+                if (!driverId)
+                    return;
+                (0, trace_1.trace)(rideId, "offer_delivered_ack", {
+                    driver_id: driverId,
+                    channel: data?.channel === "push" ? "push" : "socket",
+                    offer_id: data?.offerId ?? null,
+                });
+                await (0, dispatch_1.logRideEvent)(rideId, driverId, "offer_delivered_ack", {
+                    channel: data?.channel ?? "socket",
+                });
+                // Delivery hardening: every confirmed arrival counts. The counterpart
+                // offer_not_acked is bumped in expireOffers when an offer closes with
+                // no such ack on record.
+                (0, metrics_1.bump)("offer_acked");
+            }
+            catch (err) {
+                console.warn("offer ack failed:", err?.message);
+            }
+        });
         // ── Passenger: request ride ──
         socket.on("passenger:ride:request", async (data) => {
+            // Clock the rider's tap BEFORE any await, so ms_from_start reflects the real
+            // rider-tap -> server-entry cost rather than starting late.
+            markRequestReceived(socket);
             try {
                 const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops } = data;
                 let dbUserId = await getDbUserId();
@@ -283,6 +389,10 @@ function setupSocketHandlers(io) {
                 if (paymentReference) {
                     await (0, database_1.execute)("UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2", [ride?.id, paymentReference]).catch(() => { });
                 }
+                traceRequestAndSave(ride?.id ?? null, socket, {
+                    has_pickup_coords: Number.isFinite(Number(pickupLat)) && Number.isFinite(Number(pickupLng)),
+                });
+                (0, trace_1.trace)(ride?.id ?? null, "trip_saved", { payment_method: paymentMethod || "cash" });
                 socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
                 if (ride)
                     socket.join(`ride:${ride.id}`);
@@ -381,7 +491,7 @@ function setupSocketHandlers(io) {
                 (async () => {
                     const drv = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r LEFT JOIN users u ON u.id = r.driver_id WHERE r.id = $1", [rideId]).catch(() => null);
                     if (drv?.firebase_uid) {
-                        notifyUser(drv.firebase_uid, "Ride cancelled", "The rider cancelled this ride.", { ride_id: rideId });
+                        notifyUser(drv.firebase_uid, "Ride cancelled", "The rider cancelled this ride.", { ride_id: rideId }, rideId, "ride_cancelled");
                     }
                 })();
                 // ── Auto-refund (async, non-blocking) ──
@@ -592,7 +702,7 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                await (0, database_1.execute)(`UPDATE driver_profiles
+                const updated = await (0, database_1.execute)(`UPDATE driver_profiles
            SET current_lat = $1, current_lng = $2,
                current_heading = COALESCE($3, current_heading),
                last_location_at = NOW(),
@@ -602,7 +712,34 @@ function setupSocketHandlers(io) {
                  ELSE COALESCE(status, 'offline')
                END,
                updated_at = NOW()
-           WHERE user_id = $4`, [lat, lng, heading ?? null, dbUserId]);
+           WHERE user_id = $4
+           RETURNING status, destination_lat, destination_lng`, [lat, lng, heading ?? null, dbUserId]);
+                // Module 1: mirror the ping into the H3 driver index. Fire-and-forget —
+                // an index failure must never drop a GPS update the share page and
+                // dispatch fallback both rely on. Every ping re-computes the cell, so
+                // the row follows the driver across cell boundaries automatically.
+                const statusAfterPing = updated.rows?.[0]?.status;
+                if (statusAfterPing) {
+                    void (0, driverIndex_1.getDriverIndex)()
+                        .upsert({
+                        userId: dbUserId,
+                        lat: Number(lat),
+                        lng: Number(lng),
+                        heading: heading ?? null,
+                        status: statusAfterPing,
+                    })
+                        .catch((err) => (0, metrics_1.noteIndexUpsertFailure)(dbUserId, err));
+                }
+                // Module 2: arrival check on EVERY ping (the ~30s sweep stays as
+                // backup). The UPDATE above already told us whether this driver has a
+                // destination — drivers without one never pay for the extra query —
+                // and this ping is a fresh fix, so the haversine needs no age guard.
+                // Row-guarded inside: a race with the sweep ends the session exactly
+                // once (one push, one counter, one daily use).
+                const destRow = updated.rows?.[0];
+                if (destRow?.destination_lat != null && destRow?.destination_lng != null) {
+                    void (0, destinationSession_1.onDriverPingPosition)(io, dbUserId, Number(lat), Number(lng)).catch((err) => console.warn("[destination] ping arrival check failed:", err?.message || err));
+                }
                 // Broadcast the driver's live position to the rider(s) of any ACTIVE
                 // ride this driver is on, so the rider's car follows the real driver
                 // (single source of truth — no per-app simulation).
@@ -657,6 +794,20 @@ function setupSocketHandlers(io) {
                 // Join/leave the drivers room so we can broadcast queue counts.
                 if (online === true) {
                     socket.join("drivers");
+                    // Module 1: refresh the index row (status + last position) if we have
+                    // one — the next driver:location ping re-upserts coords anyway, so a
+                    // driver who never pinged simply has no row and needs none here.
+                    void (async () => {
+                        const prof = await (0, database_1.queryOne)("SELECT current_lat, current_lng, status FROM driver_profiles WHERE user_id = $1", [dbUserId]).catch(() => null);
+                        if (prof?.current_lat != null && prof.current_lng != null) {
+                            await (0, driverIndex_1.getDriverIndex)().upsert({
+                                userId: dbUserId,
+                                lat: Number(prof.current_lat),
+                                lng: Number(prof.current_lng),
+                                status: prof.status || "available",
+                            });
+                        }
+                    })().catch((err) => (0, metrics_1.noteIndexUpsertFailure)(dbUserId, err));
                     await broadcastRiderQueue();
                     // A driver just became available: give them any ride that is still waiting
                     // (including one parked as 'no_drivers'), instead of making the rider wait
@@ -665,6 +816,9 @@ function setupSocketHandlers(io) {
                 }
                 else {
                     socket.leave("drivers");
+                    // Offline drivers leave the index immediately: a queued offer to a
+                    // driver who just closed the app is a lost round for the rider.
+                    void (0, driverIndex_1.getDriverIndex)().remove(dbUserId).catch(() => false);
                 }
             }
             catch (err) {
@@ -733,7 +887,7 @@ function setupSocketHandlers(io) {
                     const isScheduled = (ride?.status ?? "") === "scheduled";
                     notifyUser(passenger?.firebase_uid, isScheduled ? "Driver assigned" : "Driver found", isScheduled
                         ? `${driver?.full_name || "Your driver"} is confirmed for your scheduled ride. They'll pick you up at the booked time.`
-                        : `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`, { ride_id: rideId, scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined });
+                        : `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`, { ride_id: rideId, scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined }, rideId, "ride_accepted");
                 })();
                 socket.emit("ride:accepted:ack", { success: true, rideId });
                 // A ride was taken — refresh the rider-request count for drivers.
@@ -782,17 +936,96 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                await (0, database_1.execute)(`UPDATE driver_profiles
+                const updated = await (0, database_1.execute)(`UPDATE driver_profiles
               SET last_heartbeat_at = NOW(),
                   status = CASE
                     WHEN COALESCE(status, 'offline') = 'offline' AND is_online THEN 'available'
                     ELSE COALESCE(status, 'offline')
                   END,
                   updated_at = NOW()
-            WHERE user_id = $1`, [dbUserId]).catch(() => undefined);
+            WHERE user_id = $1
+        RETURNING status`, [dbUserId]).catch(() => undefined);
+                // MODULE 1 FIX: the heartbeat must also refresh driver_cells, or a
+                // stationary driver (app alive, GPS quiet) is evicted from the index
+                // after stale_seconds and vanishes from H3 matching even though
+                // driver_profiles still counts them as fresh. Fire-and-forget like
+                // every other index write — a failed touch must never break the
+                // heartbeat itself.
+                const status = updated?.rows?.[0]?.status;
+                if (status !== undefined) {
+                    void (0, driverIndex_1.getDriverIndex)()
+                        .touch(dbUserId, status)
+                        .catch((err) => (0, metrics_1.noteIndexUpsertFailure)(dbUserId, err));
+                }
             }
             catch (err) {
                 console.warn("driver heartbeat failed:", err?.message);
+            }
+        });
+        // ── Module 2: destination mode — set / clear (§8.1) ───────────────────────
+        // The driver declares where they are heading; dispatch then only offers
+        // rides whose drop-off fits that direction (destinationFit in
+        // findCandidatesH3). Both acks carry the service result VERBATIM —
+        // { ok:true, status } or { ok:false, error, message } — the exact shape
+        // REST returns, so the app handles one contract either way.
+        socket.on("driver:destination:set", async (data) => {
+            try {
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                const result = await (0, destinationSession_1.activateDestination)(dbUserId, {
+                    lat: data?.lat,
+                    lng: data?.lng,
+                    label: data?.label,
+                });
+                socket.emit("driver:destination:set:ack", result);
+            }
+            catch (err) {
+                console.warn("driver:destination:set failed:", err?.message || err);
+                socket.emit("driver:destination:set:ack", {
+                    ok: false,
+                    error: "internal",
+                    message: "Destination service error — try again",
+                });
+            }
+        });
+        socket.on("driver:destination:clear", async () => {
+            try {
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                const result = await (0, destinationSession_1.clearDestination)(dbUserId);
+                socket.emit("driver:destination:clear:ack", result);
+            }
+            catch (err) {
+                console.warn("driver:destination:clear failed:", err?.message || err);
+                socket.emit("driver:destination:clear:ack", {
+                    ok: false,
+                    error: "internal",
+                    message: "Destination service error — try again",
+                });
+            }
+        });
+        // Read-only status for the banner (§8.1/f). Wraps the same
+        // DestinationStatus the REST GET returns as { ok:true, status } so the app
+        // parses set/clear/status acks with ONE shape.
+        socket.on("driver:destination:status", async () => {
+            try {
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                socket.emit("driver:destination:status:ack", {
+                    ok: true,
+                    status: await (0, destinationSession_1.getDestinationStatus)(dbUserId),
+                });
+            }
+            catch (err) {
+                console.warn("driver:destination:status failed:", err?.message || err);
+                socket.emit("driver:destination:status:ack", {
+                    ok: false,
+                    error: "internal",
+                    message: "Destination service error — try again",
+                });
             }
         });
         socket.on("driver:ride:cancel", async (data) => {
@@ -837,7 +1070,7 @@ function setupSocketHandlers(io) {
                 const pax = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null);
                 if (pax?.firebase_uid) {
                     io.to(`user:${pax.firebase_uid}`).emit("ride:cancelled", cancelPayload);
-                    notifyUser(pax.firebase_uid, "Ride cancelled", "Your driver cancelled the trip.", { ride_id: rideId });
+                    notifyUser(pax.firebase_uid, "Ride cancelled", "Your driver cancelled the trip.", { ride_id: rideId }, rideId, "ride_cancelled");
                 }
                 // Drivers still holding an Accept card for this ride lose it immediately.
                 io.to("drivers").emit("ride:cancelled", cancelPayload);
@@ -878,7 +1111,7 @@ function setupSocketHandlers(io) {
                         .join(" ") || "Your driver";
                     if (p?.fb)
                         io.to(`user:${p.fb}`).emit("ride:driver:arrived");
-                    notifyUser(p?.fb, "Driver arrived", `${who} has arrived at your pickup point.`, { ride_id: rideId });
+                    notifyUser(p?.fb, "Driver arrived", `${who} has arrived at your pickup point.`, { ride_id: rideId }, rideId, "driver_arrived");
                 })();
             }
             catch (err) {
@@ -916,11 +1149,19 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                const ride = await (0, database_1.queryOne)("SELECT id, driver_id, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
+                const ride = await (0, database_1.queryOne)("SELECT id, driver_id, status, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
                 if (!ride)
                     return;
                 await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2", [ride.fare, rideId]);
                 (0, rideSim_1.stopServerRideSim)(rideId);
+                // Module 2: the FIRST completion of this trip increments the active
+                // session's trips_completed and resets the idle timer to
+                // destination_max_minutes_without_trip (fire-and-forget — destination
+                // bookkeeping must never block or fail a ride; a re-fired event for an
+                // already-completed ride is skipped so the counter stays truthful).
+                if (ride.status !== "completed") {
+                    void (0, destinationSession_1.noteDestinationTripCompleted)(dbUserId, rideId).catch(() => undefined);
+                }
                 // Record the driver's earnings so the wallet / pending-earnings
                 // endpoint shows the real amount the driver earned from this ride.
                 try {
@@ -937,7 +1178,7 @@ function setupSocketHandlers(io) {
                     const p = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r JOIN users u ON u.id = r.passenger_id WHERE r.id = $1", [rideId]).catch(() => null);
                     if (p?.firebase_uid)
                         io.to(`user:${p.firebase_uid}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
-                    notifyUser(p?.firebase_uid, "Ride complete", "You've arrived at your destination. Thanks for riding with Vura!", { ride_id: rideId });
+                    notifyUser(p?.firebase_uid, "Ride complete", "You've arrived at your destination. Thanks for riding with Vura!", { ride_id: rideId }, rideId, "trip_completed");
                 })();
             }
             catch (err) {

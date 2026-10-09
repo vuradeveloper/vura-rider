@@ -1,12 +1,22 @@
 import type { Server as SocketIOServer } from "socket.io";
+import type { AppConfig } from "./config";
 /** How long one driver has to answer before the ride moves on. */
 export declare const OFFER_TTL_SECONDS = 15;
 /** A driver is only a candidate if we heard from them this recently. */
-export declare const LOCATION_FRESH_SECONDS = 30;
+export declare const LOCATION_FRESH_SECONDS = 20;
 /** Stop offering after this many rounds so a ride can't churn forever. */
 export declare const MAX_OFFER_ROUNDS = 12;
+/**
+ * Does the driver's personal room hold a connected socket RIGHT NOW?
+ *
+ * The truthful replacement for the old `Boolean(firebase_uid)` guess: a uid
+ * says the driver once logged in, nothing about this instant. Reads the same
+ * socket.io v4 structure production emits into (handlers.ts joins `user:<uid>`
+ * on connect). No adapter or no room => nobody is listening. Never throws.
+ */
+export declare function hasLiveSocket(io: unknown, room: string): boolean;
 /** No location/heartbeat for this long while "available" => demote to offline. */
-export declare const DRIVER_STALE_SECONDS = 45;
+export declare const DRIVER_STALE_SECONDS = 20;
 type OfferResult = {
     offered: boolean;
     driverId?: string;
@@ -24,10 +34,64 @@ export interface Candidate {
     distance_km: number;
 }
 /**
- * Closest drivers who are: available, recently heard from, not already offered
- * this ride, not on another trip, and not the rider themselves.
+ * How many 15s offer rounds fit inside search_timeout_ms (90s / 15s = 6).
+ * Round maxRounds+1 returns zero candidates, offerToNextDriver parks the ride
+ * and emits ride:no:drivers — so the rider-facing "no drivers" lands at ~90s,
+ * not MAX_OFFER_ROUNDS * 15s = 180s. Capped by MAX_OFFER_ROUNDS so the flag-on
+// path can never exceed the global churn guard either.
  */
-export declare function findCandidates(rideId: string, pickupLat: number, pickupLng: number, limit?: number, ignorePreviousOffers?: boolean): Promise<Candidate[]>;
+export declare function h3MaxOfferRounds(cfg: {
+    search_timeout_ms: number;
+    offer_ttl_seconds: number;
+}): number;
+/**
+ * Escalation ladder: rounds are spread evenly across match_radius_km, so with
+ * [3,5,7] and a 6-round budget it is 3km -> rounds 1-2, 5km -> 3-4, 7km -> 5-6.
+ * null past the budget = stop searching (caller reports no-drivers).
+ */
+export declare function radiusForRound(round: number, ladder: number[], maxRounds: number): number | null;
+/**
+ * Stable 0-99 bucket for a rider id (FNV-1a).
+ *
+ * Deterministic across processes and deploys — the same rider always lands in
+ * the same bucket, so raising h3_rollout_percent widens the cohort but never
+ * flips an individual rider's path back and forth between requests.
+ */
+export declare function riderBucket(riderId: string): number;
+export type H3RolloutDecision = {
+    useH3: boolean;
+    reason: string;
+};
+type RolloutConfig = Pick<AppConfig, "h3_matching_enabled" | "h3_rollout_mode" | "h3_rollout_rider_ids" | "h3_rollout_percent">;
+/**
+ * Which path serves THIS ride. Master kill switch first: h3_matching_enabled
+ * false => legacy for everyone, no matter what the rollout says.
+ * Pure function — no cache, no I/O — so allowlist changes take effect on the
+ * next request even inside the 10s config cache window... (the config values
+ * themselves still refresh every 10s like everything else).
+ */
+export declare function decideH3Path(cfg: RolloutConfig, riderId: string | null): H3RolloutDecision;
+/**
+ * Matching entry point — rollout + kill-switch decision (one place).
+ *
+ * EVERY call records a `matching_path` trace stage {path: "h3"|"legacy",
+ * reason}, so each ride shows exactly which path served it and why.
+ *
+ *   legacy  : the original haversine query above, byte-for-byte unchanged —
+ *             used when the kill switch is off, the rollout excludes this
+ *             rider, the mode is 'off', or config cannot be read.
+ *   h3      : H3 cell lookup -> exact haversine <= radius -> eligibility
+ *             filters (MATCHABLE_STATUSES from driverIndex, vehicle category,
+ *             min rating, driver_blocks) -> rank by road ETA (haversine
+ *             fallback) -> a ranked pool for the one-at-a-time offer loop.
+ *
+ * FAILURE POLICY: any throw anywhere in the H3 path (config, index, SQL, ETA)
+ * is logged with an `h3_path_failed` trace stage and the request re-runs on the
+ * haversine path. The rider is never left waiting and matching never fails
+ * closed; a cold index (rollout guard) or empty area also falls back rather
+ * than reporting a false "no drivers".
+ */
+export declare function findCandidates(rideId: string, pickupLat: number, pickupLng: number, limit?: number, ignorePreviousOffers?: boolean, round?: number, riderId?: string | null): Promise<Candidate[]>;
 export interface DispatchRide {
     id: string;
     status: string;

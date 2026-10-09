@@ -8,6 +8,7 @@ const AffiliateService_1 = require("../services/AffiliateService");
 const rideSim_1 = require("../services/rideSim");
 const dispatch_1 = require("../services/dispatch");
 const vehicleImages_1 = require("../services/vehicleImages");
+const trace_1 = require("../services/trace");
 const router = (0, express_1.Router)();
 // GET /api/rides/me/active-state â€” ONE call that rebuilds the app's world.
 //
@@ -81,6 +82,132 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
     }
 });
 // POST /api/rides/:id/accept â€” REST twin of the `driver:ride:accept` socket event.
+// Idempotent + atomic (see services/dispatch.ts acceptRide): safe to retry, and two
+// drivers accepting at the same moment can never both win.
+router.post("/request", auth_1.requireAuth, async (req, res) => {
+    // WHY THIS EXISTS
+    //
+    // Until now a ride could ONLY be created by emitting the `passenger:ride:request`
+    // socket event. If the rider's socket was down, reconnecting, or mid-token-
+    // refresh at the moment they tapped Book, no ride was created at all -- or one
+    // was created but nothing dispatched it, and it only got picked up whenever
+    // reviveWaitingRides happened to run. Dispatch must not depend on a long-lived
+    // connection: the request should not care whether the caller can hold a socket.
+    //
+    // THE ORDERING, which is the entire point:
+    //   1. INSERT the ride                  (the only thing we wait for)
+    //   2. respond 201 with id + SEARCHING  (rider shows "Finding your driver...")
+    //   3. THEN start dispatch, un-awaited
+    //
+    // Dispatch runs AFTER the response is written, so ranking, socket delivery and
+    // push can never add latency to the booking. Deliberately not awaited, and it
+    // never rejects into an unhandled rejection.
+    //
+    // NOTE: no Paystack pre-authorisation on this path. The socket path awaits a live
+    // network call to Paystack BEFORE inserting the ride, which can add hundreds of
+    // ms to every card booking. Charging is settled outside this call.
+    const t0 = Date.now();
+    try {
+        const rider = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!rider) {
+            res.status(403).json({ error: "Account not synced yet. Try again in a moment." });
+            return;
+        }
+        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, fare, deviceId, waypoints, stops, } = req.body || {};
+        // Coordinates are mandatory: without them dispatch cannot match
+        // (offerToNextDriver returns ride_has_no_pickup_coords) and the rider would sit
+        // on "Finding your driver..." forever. Fail loudly now rather than accepting a
+        // ride we already know we cannot dispatch.
+        if (!Number.isFinite(Number(pickupLat)) || !Number.isFinite(Number(pickupLng))) {
+            res.status(400).json({ error: "Pickup coordinates are required" });
+            return;
+        }
+        const rideWaypoints = (Array.isArray(waypoints) ? waypoints : Array.isArray(stops) ? stops : [])
+            .filter((w) => w && Number.isFinite(Number(w?.lat)) && Number.isFinite(Number(w?.lng)))
+            .slice(0, 8)
+            .map((w) => ({ address: String(w?.address ?? ""), lat: Number(w.lat), lng: Number(w.lng) }));
+        // One rider, one live ride. A double-tap or a client retry must not create two
+        // rides that two drivers could each accept.
+        const existing = await (0, database_1.queryOne)(`SELECT id, status FROM rides
+        WHERE passenger_id = $1
+          AND status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
+        ORDER BY created_at DESC LIMIT 1`, [rider.id]).catch(() => null);
+        if (existing?.id) {
+            // Reuse it, but still make sure dispatch is running for it.
+            res.status(200).json({
+                rideId: existing.id,
+                status: existing.status,
+                reused: true,
+                ms: Date.now() - t0,
+            });
+            const ioReuse = global.__vuraIo;
+            if (ioReuse && ["searching", "scheduled"].includes(existing.status)) {
+                res.on("finish", () => void (0, dispatch_1.startDispatch)(ioReuse, existing.id).catch(() => undefined));
+            }
+            return;
+        }
+        const ride = await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                          destination_address, destination_lat, destination_lng,
+                          status, estimated_fare, payment_method, device_id, waypoints)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
+       RETURNING id, status`, [
+            rider.id,
+            pickupAddress ?? null,
+            Number(pickupLat), Number(pickupLng),
+            destinationAddress ?? null,
+            Number.isFinite(Number(destinationLat)) ? Number(destinationLat) : null,
+            Number.isFinite(Number(destinationLng)) ? Number(destinationLng) : null,
+            fare != null ? Number(fare) : null,
+            paymentMethod || null,
+            deviceId || null,
+            rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
+        ]);
+        if (!ride?.id) {
+            res.status(500).json({ error: "Could not create the ride" });
+            return;
+        }
+        // Start the trace here so trip_saved / dispatch_started / drivers_found /
+        // offer_sent all share one trace_id for this ride.
+        (0, trace_1.startTrace)(ride.id);
+        (0, trace_1.trace)(ride.id, "request_received", {
+            source: "rest",
+            ms_from_start: 0,
+            at: new Date(t0).toISOString(),
+        });
+        (0, trace_1.trace)(ride.id, "trip_saved", {
+            source: "rest",
+            payment_method: paymentMethod || "cash",
+        });
+        await (0, dispatch_1.logRideEvent)(ride.id, null, "ride_requested", { source: "rest" }).catch(() => undefined);
+        const io = global.__vuraIo;
+        // 201 + SEARCHING. The rider can render "Finding your driver..." and this
+        // response waits on no matching work at all.
+        res.status(201).json({
+            rideId: ride.id,
+            status: "searching",
+            ms: Date.now() - t0,
+            dispatching: Boolean(io),
+        });
+        // Dispatch AFTER the response is flushed. `io` can be undefined during a
+        // deploy restart; the offerWorker still picks the ride up on its next tick via
+        // reviveWaitingRides, so a ride is never lost.
+        if (io) {
+            res.on("finish", () => {
+                void (0, dispatch_1.startDispatch)(io, ride.id).catch((err) => {
+                    console.error(`[rides] startDispatch FAILED ride=${ride.id}:`, err?.message || err);
+                });
+            });
+        }
+    }
+    catch (err) {
+        console.error("POST /api/rides/request error:", err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: err.message || "Could not create the ride" });
+        }
+    }
+});
+// POST /api/rides/:id/accept
+// REST twin of the `driver:ride:accept` socket event.
 // Idempotent + atomic (see services/dispatch.ts acceptRide): safe to retry, and two
 // drivers accepting at the same moment can never both win.
 router.post("/:id/accept", auth_1.requireAuth, async (req, res) => {
@@ -265,6 +392,30 @@ router.get("/history", auth_1.requireAuth, async (req, res) => {
 // GET /api/rides/available â€” Rides still searching for a driver (driver-side poll)
 router.get("/available", auth_1.requireAuth, async (_req, res) => {
     try {
+        // SCOPE THIS TO THE DRIVER WHO IS ASKING.
+        //
+        // This endpoint used to return EVERY searching ride on the platform, newest
+        // first, and the app simply took the first one (App.tsx: live[0]). That meant
+        // a driver in Cape Town was shown a rider in Pretoria, every driver in the
+        // country raced for the same ride, and acceptRide had to reject the losers
+        // with "Another driver is reviewing this ride".
+        //
+        // It is kept as the FALLBACK for a missed socket event -- deliberately so.
+        // Two rules protect that:
+        //   * A driver with no GPS fix still sees everything. Staying available must
+        //     never depend on having coordinates (see commit 107a87a).
+        //   * Rides with no pickup coords are still returned. Dispatch cannot match
+        //     them either (offerToNextDriver bails with ride_has_no_pickup_coords),
+        //     so hiding them here would only hide the diagnosis.
+        const me = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [_req.userId]);
+        const dp = me
+            ? await (0, database_1.queryOne)("SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1", [me.id]).catch(() => null)
+            : null;
+        const hasCoords = dp?.current_lat != null && dp?.current_lng != null;
+        // Default 3 km, overridable per deployment. Generous enough that a driver
+        // who is genuinely close is never left out; tight enough to stop a city-wide
+        // broadcast.
+        const radiusKm = Number(process.env.DISPATCH_RADIUS_KM || 3);
         // Newest first so a fresh booking is NEVER hidden behind old stale
         // "searching" rides that nobody accepted. Only show rides younger than
         // 30 minutes so abandoned/stuck requests drop out automatically.
@@ -276,16 +427,58 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         // BEFORE the pickup time (driver pre-accept). Drivers see them with a
         // "Scheduled" badge and can claim them early â€” driver:ride:accept
         // accepts status 'scheduled' (see socket handlers).
+        // Haversine against the ASKING driver's position. When they have no fix
+        // ($3::boolean false) the radius test passes for every ride, so behaviour is
+        // unchanged from before for a driver without a GPS fix.
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
-              CASE WHEN r.status = 'scheduled' THEN TRUE ELSE FALSE END AS is_scheduled
-       FROM rides r
-       LEFT JOIN users u ON u.id = r.passenger_id
-       WHERE (r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
-          OR (r.status = 'scheduled' AND r.scheduled_at > NOW())
-       ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END, r.created_at DESC
-       LIMIT 20`);
-        res.json({ rides: (rows || []).map((row) => mapRide(row)) });
+              CASE WHEN r.status = 'scheduled' THEN TRUE ELSE FALSE END AS is_scheduled,
+              -- Distance is only meaningful when we actually know where the
+              -- asking driver is. Without a fix it would be measured from
+              -- (0,0) in the Gulf of Guinea and could reorder a no-GPS
+              -- driver's list nonsensically, so it is left NULL and ordering
+              -- falls back to newest-first -- exactly the old behaviour.
+              CASE WHEN $3::boolean AND r.pickup_lat IS NOT NULL AND r.pickup_lng IS NOT NULL
+                THEN (6371 * acos(LEAST(1, GREATEST(-1,
+                  cos(radians($2)) * cos(radians(r.pickup_lat)) *
+                    cos(radians(r.pickup_lng) - radians($1)) +
+                  sin(radians($2)) * sin(radians(r.pickup_lat))
+                ))))
+              END AS distance_km
+         FROM rides r
+         LEFT JOIN users u ON u.id = r.passenger_id
+        WHERE ((r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
+           OR (r.status = 'scheduled' AND r.scheduled_at > NOW()))
+          -- Keep rides whose pickup coords are missing: dispatch cannot match
+          -- them either, so hiding them here would only hide the diagnosis.
+          AND (NOT $3::boolean
+               OR r.pickup_lat IS NULL OR r.pickup_lng IS NULL
+               OR (6371 * acos(LEAST(1, GREATEST(-1,
+                     cos(radians($2)) * cos(radians(r.pickup_lat)) *
+                       cos(radians(r.pickup_lng) - radians($1)) +
+                     sin(radians($2)) * sin(radians(r.pickup_lat))
+                   )))) <= $4::double precision)
+        -- Nearest first (not merely newest) so the closest real option is what
+        -- the driver sees. Scheduled rides still sort ahead of live ones so
+        -- pre-accept keeps working.
+        -- NULLS LAST: rides we could not measure sort after measured ones, so a
+        -- no-GPS driver keeps newest-first ordering among the unmeasurable.
+        ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END,
+                 distance_km ASC NULLS LAST,
+                 r.created_at DESC
+        LIMIT 20`, [
+            hasCoords ? Number(dp.current_lng) : 0,
+            hasCoords ? Number(dp.current_lat) : 0,
+            hasCoords,
+            radiusKm,
+        ]);
+        res.json({
+            rides: (rows || []).map((row) => mapRide(row)),
+            // Lets the app and debug distinguish "nothing near you" from "you have no
+            // GPS fix, so this list is unfiltered".
+            scoped: hasCoords,
+            radius_km: hasCoords ? radiusKm : null,
+        });
     }
     catch (err) {
         console.error("Available rides error:", err);

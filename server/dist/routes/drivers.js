@@ -4,10 +4,13 @@ const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const dispatch_1 = require("../services/dispatch");
+const driverIndex_1 = require("../services/driverIndex");
+const metrics_1 = require("../services/metrics");
 const vehicleImages_1 = require("../services/vehicleImages");
 const vehicleCatalogue_1 = require("../data/vehicleCatalogue");
 const vehicleImages_2 = require("../services/vehicleImages");
 const tier_classifier_1 = require("../lib/tier-classifier");
+const destinationSession_1 = require("../services/destinationSession");
 const router = (0, express_1.Router)();
 // GET /api/drivers/stats — Get driver statistics
 router.get("/stats", auth_1.requireAuth, async (req, res) => {
@@ -303,6 +306,24 @@ router.post("/online", auth_1.requireAuth, async (req, res) => {
              updated_at = NOW()
        RETURNING user_id, is_online, status, last_heartbeat_at`, [dbUser.id, online, status]).catch(() => null);
         console.log(`[driver] online_intent=${online} status=${status} driver=${dbUser.id}`);
+        // Module 1: keep the H3 index in step with the REST intent toggle too —
+        // offline removes the row, online refreshes status/coords when known.
+        if (online) {
+            void (async () => {
+                const prof = await (0, database_1.queryOne)("SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1", [dbUser.id]).catch(() => null);
+                if (prof?.current_lat != null && prof.current_lng != null) {
+                    await (0, driverIndex_1.getDriverIndex)().upsert({
+                        userId: dbUser.id,
+                        lat: Number(prof.current_lat),
+                        lng: Number(prof.current_lng),
+                        status,
+                    });
+                }
+            })().catch((err) => (0, metrics_1.noteIndexUpsertFailure)(dbUser.id, err));
+        }
+        else {
+            void (0, driverIndex_1.getDriverIndex)().remove(dbUser.id).catch(() => false);
+        }
         if (online)
             void (0, dispatch_1.reviveWaitingRides)(global.__vuraIo).catch(() => 0);
         res.json({ ok: true, online_intent: !!row?.is_online, status: row?.status || status });
@@ -321,6 +342,10 @@ router.post("/offline", auth_1.requireAuth, async (req, res) => {
     }
     await (0, database_1.execute)(`UPDATE driver_profiles SET is_online = FALSE, status = 'offline', updated_at = NOW()
       WHERE user_id = $1`, [dbUser.id]).catch(() => undefined);
+    // Module 1: offline means unofferable — drop the index row now rather than
+    // waiting for stale eviction (a pending offer to a gone driver is a lost
+    // round for a waiting rider).
+    void (0, driverIndex_1.getDriverIndex)().remove(dbUser.id).catch(() => false);
     console.log(`[driver] online_intent=false status=offline driver=${dbUser.id}`);
     res.json({ ok: true, online_intent: false, status: "offline" });
 });
@@ -402,6 +427,193 @@ router.post("/vehicle/classify", auth_1.requireAuth, async (req, res) => {
     catch (err) {
         console.error("vehicle classify error:", err?.message || err);
         res.status(500).json({ error: "Failed to classify vehicle" });
+    }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// THE DRIVER ONBOARDING RECORD
+//
+// One canonical, per-driver payload that BOTH the driver app and the admin app
+// render. The driver app's "Your driver profile" screen and the admin's driver
+// detail screen read THIS endpoint (admin via /api/admin/drivers/:id), so the
+// two can never disagree about what a driver has entered.
+//
+// Everything comes straight from Postgres -- nothing is assembled from whatever
+// the phone happens to have cached. That is the point: a driver can install the
+// APK, sign in on a new phone, and still see their full record.
+//
+// Progress is DERIVED here rather than stored, so it cannot drift out of sync
+// with the rows it describes.
+// ─────────────────────────────────────────────────────────────────────────────
+/** Document types a driver must clear before the account can go live. */
+const REQUIRED_DOC_TYPES = [
+    "drivers_license",
+    "id_document",
+    "prdp",
+    "criminal_record",
+    "license_disk",
+    "carscan_report",
+];
+const DOC_TYPE_LABEL = {
+    drivers_license: "Driver's licence",
+    id_document: "ID document",
+    prdp: "PRDP licence",
+    criminal_record: "Criminal record check",
+    license_disk: "Licence disc",
+    carscan_report: "CarScan report",
+    vehicle_scan: "Vehicle scan",
+};
+function buildOnboardingSteps(user, profile, docs, face) {
+    const approved = new Set(docs.filter((d) => d.status === "approved").map((d) => d.doc_type));
+    const submitted = new Set(docs.map((d) => d.doc_type));
+    const steps = [];
+    const name = user.full_name ? String(user.full_name).trim() : "";
+    const phone = user.phone_number ? String(user.phone_number).trim() : "";
+    steps.push({ key: "full_name", label: "Legal name", done: name.length > 0, detail: name || "Not entered yet" });
+    steps.push({ key: "phone", label: "Phone number", done: phone.length > 0, detail: phone || "Not entered yet" });
+    steps.push({ key: "profile_photo", label: "Profile photo", done: Boolean(user.profile_photo_url), detail: user.profile_photo_url ? "Uploaded" : "Not uploaded yet" });
+    const make = profile?.vehicle_make ? String(profile.vehicle_make).trim() : "";
+    const model = profile?.vehicle_model ? String(profile.vehicle_model).trim() : "";
+    steps.push({ key: "vehicle", label: "Vehicle make and model", done: make.length > 0 && model.length > 0, detail: make ? `${make} ${model}`.trim() : "Not entered yet" });
+    const plate = profile?.license_plate ? String(profile.license_plate).trim() : "";
+    steps.push({ key: "license_plate", label: "Number plate", done: plate.length > 0, detail: plate || "Not entered yet" });
+    steps.push({ key: "vehicle_photo", label: "Vehicle photo", done: Boolean(profile?.vehicle_image_url), detail: profile?.vehicle_image_url ? "Uploaded" : "Not uploaded yet" });
+    for (const type of REQUIRED_DOC_TYPES) {
+        steps.push({
+            key: `doc:${type}`,
+            label: DOC_TYPE_LABEL[type] ?? type,
+            done: approved.has(type),
+            detail: approved.has(type) ? "Approved" : submitted.has(type) ? "Awaiting review" : "Not uploaded yet",
+        });
+    }
+    steps.push({
+        key: "face_scan",
+        label: "Facial recognition scan",
+        done: Boolean(face?.verified),
+        detail: face ? (face.verified ? "Verified" : face.status || "Recorded, not verified") : "Not done yet",
+    });
+    return steps;
+}
+// GET /api/drivers/me/onboarding -- everything about THIS driver, in one payload.
+router.get("/me/onboarding", auth_1.requireAuth, async (req, res) => {
+    try {
+        const user = await (0, database_1.queryOne)("SELECT * FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!user) {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
+        // driver_profiles is created lazily, so its absence is normal early on and
+        // must NOT be an error.
+        const profile = await (0, database_1.queryOne)("SELECT * FROM driver_profiles WHERE user_id = $1", [user.id]);
+        const docs = await (0, database_1.query)(`SELECT id, doc_type, file_name, mime_type, size_bytes, status, note, created_at
+         FROM driver_documents WHERE driver_id = $1 ORDER BY created_at DESC`, [user.id]);
+        // No face scan yet is normal, so this must never 500 the whole payload --
+        // the driver still needs to see their profile.
+        const face = await (0, database_1.queryOne)(`SELECT id, verified, method, status, note, created_at
+         FROM face_verifications WHERE driver_id = $1 ORDER BY created_at DESC LIMIT 1`, [user.id]).catch(() => null);
+        const stats = await (0, database_1.queryOne)(`SELECT
+         (SELECT COUNT(*) FROM rides WHERE driver_id = $1 AND status = 'completed')::int AS completed_rides,
+         (SELECT COUNT(*) FROM ratings WHERE driver_id = $1)::int AS ratings_count,
+         (SELECT COALESCE(AVG(score), 0) FROM ratings WHERE driver_id = $1)::float AS rating_average`, [user.id]);
+        const steps = buildOnboardingSteps(user, profile, docs, face);
+        const completed = steps.filter((s) => s.done).length;
+        // Mirror the /me fallback so both endpoints agree: if every required document
+        // is explicitly approved the driver is approved, whatever the cached column says.
+        const allDocsApproved = REQUIRED_DOC_TYPES.every((t) => docs.some((d) => d.doc_type === t && d.status === "approved"));
+        res.json({
+            user,
+            profile: profile || null,
+            documents: docs,
+            face_scan: face || null,
+            stats: {
+                completed_rides: stats?.completed_rides ?? 0,
+                ratings_count: stats?.ratings_count ?? 0,
+                rating_average: stats?.rating_average ?? 0,
+            },
+            verification_status: allDocsApproved ? "approved" : profile?.verification_status || "pending",
+            progress: {
+                steps,
+                completed,
+                total: steps.length,
+                percent: steps.length ? Math.round((completed / steps.length) * 100) : 0,
+            },
+            updated_at: new Date().toISOString(),
+        });
+    }
+    catch (err) {
+        console.error("Driver onboarding error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE 2 — DESTINATION MODE (§8.1)
+//
+// The same service the socket events call, over HTTP: the driver app picks
+// whichever transport it has and both produce identical bodies. State lives
+// in destination_sessions / driver_profiles (columns from 002), never in the
+// request — a reconnect or restart replays the same status.
+// ────────────────────────────────────────────────────────────────────────────
+/** Resolve the caller to the driver_profiles OWNER — same rule as GET /stats. */
+async function resolveDriverId(firebaseUid) {
+    const user = await (0, database_1.queryOne)(`SELECT u.id
+       FROM users u
+       LEFT JOIN driver_profiles dp ON dp.user_id = u.id
+      WHERE u.firebase_uid = $1
+        AND (dp.user_id IS NOT NULL OR u.role = 'driver')`, [firebaseUid]);
+    return user?.id ?? null;
+}
+// Service error → HTTP status comes from DESTINATION_ERROR_HTTP_STATUS in the
+// service (next to the ActivateErrorCode union) so REST and socket can never
+// disagree — it is unit-tested against every code.
+// GET /api/drivers/destination — banner/status (active?, label, uses_today...).
+router.get("/destination", auth_1.requireAuth, async (req, res) => {
+    try {
+        const driverId = await resolveDriverId(req.userId);
+        if (!driverId) {
+            res.status(403).json({ error: "Driver profile not found" });
+            return;
+        }
+        res.json(await (0, destinationSession_1.getDestinationStatus)(driverId));
+    }
+    catch (err) {
+        console.error("Destination status error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// POST /api/drivers/destination — activate (or CHANGE: the old session closes
+// as 'changed' and the new one counts as today's next use, §8.1/Q1).
+router.post("/destination", auth_1.requireAuth, async (req, res) => {
+    try {
+        const driverId = await resolveDriverId(req.userId);
+        if (!driverId) {
+            res.status(403).json({ error: "Driver profile not found" });
+            return;
+        }
+        const { lat, lng, label } = req.body || {};
+        const result = await (0, destinationSession_1.activateDestination)(driverId, { lat, lng, label });
+        if (result.ok) {
+            res.json(result.status);
+            return;
+        }
+        res.status(destinationSession_1.DESTINATION_ERROR_HTTP_STATUS[result.error] ?? 400).json({ error: result.message, code: result.error });
+    }
+    catch (err) {
+        console.error("Destination set error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// DELETE /api/drivers/destination — cancel the mode (idempotent; L7b push).
+router.delete("/destination", auth_1.requireAuth, async (req, res) => {
+    try {
+        const driverId = await resolveDriverId(req.userId);
+        if (!driverId) {
+            res.status(403).json({ error: "Driver profile not found" });
+            return;
+        }
+        res.json((await (0, destinationSession_1.clearDestination)(driverId)).status);
+    }
+    catch (err) {
+        console.error("Destination clear error:", err);
+        res.status(500).json({ error: err.message });
     }
 });
 exports.default = router;

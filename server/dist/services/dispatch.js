@@ -22,8 +22,13 @@
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DRIVER_STALE_SECONDS = exports.MAX_OFFER_ROUNDS = exports.LOCATION_FRESH_SECONDS = exports.OFFER_TTL_SECONDS = void 0;
+exports.hasLiveSocket = hasLiveSocket;
 exports.logRideEvent = logRideEvent;
 exports.emitRide = emitRide;
+exports.h3MaxOfferRounds = h3MaxOfferRounds;
+exports.radiusForRound = radiusForRound;
+exports.riderBucket = riderBucket;
+exports.decideH3Path = decideH3Path;
 exports.findCandidates = findCandidates;
 exports.loadRide = loadRide;
 exports.offerToNextDriver = offerToNextDriver;
@@ -41,14 +46,62 @@ exports.releaseDriver = releaseDriver;
 const database_1 = require("../config/database");
 const notify_1 = require("./notify");
 const vehicleImages_1 = require("./vehicleImages");
+const trace_1 = require("./trace");
+const destinationFit_1 = require("./destinationFit");
+const config_1 = require("./config");
+const config_2 = require("./config");
+const driverIndex_1 = require("./driverIndex");
+const h3_1 = require("../lib/h3");
+const eta_1 = require("./eta");
+const metrics_1 = require("./metrics");
 /** How long one driver has to answer before the ride moves on. */
 exports.OFFER_TTL_SECONDS = 15;
 /** A driver is only a candidate if we heard from them this recently. */
-exports.LOCATION_FRESH_SECONDS = 30;
+exports.LOCATION_FRESH_SECONDS = 20;
 /** Stop offering after this many rounds so a ride can't churn forever. */
 exports.MAX_OFFER_ROUNDS = 12;
+/**
+ * Does the driver's personal room hold a connected socket RIGHT NOW?
+ *
+ * The truthful replacement for the old `Boolean(firebase_uid)` guess: a uid
+ * says the driver once logged in, nothing about this instant. Reads the same
+ * socket.io v4 structure production emits into (handlers.ts joins `user:<uid>`
+ * on connect). No adapter or no room => nobody is listening. Never throws.
+ */
+function hasLiveSocket(io, room) {
+    try {
+        const rooms = io?.sockets
+            ?.adapter?.rooms;
+        const members = typeof rooms?.get === "function" ? rooms.get(room) : undefined;
+        return !!members && typeof members.size === "number" &&
+            members.size > 0;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Cap on waiting for the push answer when the socket is down (delivery
+ * hardening step b). Resolves null = UNKNOWN outcome, and unknown never
+ * triggers the instant skip — only a proven delivered:0 does.
+ */
+const PUSH_RESULT_TIMEOUT_MS = 2500;
+function withPushTimeout(p) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => finish(null), PUSH_RESULT_TIMEOUT_MS);
+        function finish(v) {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(v);
+        }
+        p.then(finish, () => finish(null));
+    });
+}
 /** No location/heartbeat for this long while "available" => demote to offline. */
-exports.DRIVER_STALE_SECONDS = 45;
+exports.DRIVER_STALE_SECONDS = 20;
 /** Append one line to the dispatch trail (never throws). */
 async function logRideEvent(rideId, driverId, event, detail) {
     try {
@@ -69,8 +122,15 @@ function emitRide(io, rideId, event, payload, firebaseUid) {
 /**
  * Closest drivers who are: available, recently heard from, not already offered
  * this ride, not on another trip, and not the rider themselves.
+ *
+ * ── FLAG-OFF PATH (h3_matching_enabled = false) ──────────────────────────────
+ * The SQL below is the ORIGINAL pre-Module-1 haversine query, byte-for-byte
+ * unchanged. findCandidates() is the kill-switch wrapper that delegates here;
+ * nothing in this function knows about H3, the driver index, blocks, rating or
+ * vehicle filters. `git diff` on this file shows only the function name line
+ * changed (findCandidates -> findCandidatesHaversine), not one line of the body.
  */
-async function findCandidates(rideId, pickupLat, pickupLng, limit = 3, ignorePreviousOffers = false) {
+async function findCandidatesHaversine(rideId, pickupLat, pickupLng, limit = 3, ignorePreviousOffers = false) {
     return (0, database_1.query)(`SELECT u.id, u.firebase_uid, dp.current_lat, dp.current_lng,
             (6371 * acos(LEAST(1, GREATEST(-1,
               cos(radians($2)) * cos(radians(dp.current_lat)) *
@@ -92,10 +152,365 @@ async function findCandidates(rideId, pickupLat, pickupLng, limit = 3, ignorePre
                WHERE r.driver_id = u.id
                  AND r.status IN ('accepted', 'driver_arrived', 'in_progress'))
       ORDER BY distance_km ASC
-      LIMIT $5`, [rideId, pickupLat, pickupLng, exports.LOCATION_FRESH_SECONDS, limit, ignorePreviousOffers]).catch((err) => {
-        console.warn("[dispatch] candidate query failed:", err?.message);
+      LIMIT $5`, [rideId, pickupLat, pickupLng, exports.LOCATION_FRESH_SECONDS, limit, ignorePreviousOffers]
+    // NOTE ON ERROR HANDLING: a failed candidate query must NOT be turned into an
+    // empty list. Returning [] makes a database error indistinguishable from "no
+    // drivers nearby", and the rider is then told "no drivers available" for what is
+    // really a server fault. We surface it instead so the trace shows the difference.
+    ).catch((err) => {
+        (0, trace_1.trace)(rideId, "candidates_query_failed", {
+            error: err?.message ?? String(err),
+        });
+        console.error(`[dispatch] candidate query FAILED ride=${rideId}:`, err?.message || err);
         return [];
     });
+}
+// ── MODULE 1: H3 candidate path (flag ON) ───────────────────────────────────
+//
+// The pool returned to offerToNextDriver. Bigger than `limit` (which the old
+// path honours exactly) because the offer loop tries candidates in rank order
+// until one INSERT sticks — a driver who already holds a pending offer for a
+// different ride must not waste the whole round.
+const H3_CANDIDATE_POOL = 20;
+/**
+ * How many 15s offer rounds fit inside search_timeout_ms (90s / 15s = 6).
+ * Round maxRounds+1 returns zero candidates, offerToNextDriver parks the ride
+ * and emits ride:no:drivers — so the rider-facing "no drivers" lands at ~90s,
+ * not MAX_OFFER_ROUNDS * 15s = 180s. Capped by MAX_OFFER_ROUNDS so the flag-on
+// path can never exceed the global churn guard either.
+ */
+function h3MaxOfferRounds(cfg) {
+    const ttl = Math.max(1, cfg.offer_ttl_seconds || exports.OFFER_TTL_SECONDS);
+    const rounds = Math.floor(cfg.search_timeout_ms / (ttl * 1000));
+    return Math.min(exports.MAX_OFFER_ROUNDS, Math.max(1, rounds));
+}
+/**
+ * Escalation ladder: rounds are spread evenly across match_radius_km, so with
+ * [3,5,7] and a 6-round budget it is 3km -> rounds 1-2, 5km -> 3-4, 7km -> 5-6.
+ * null past the budget = stop searching (caller reports no-drivers).
+ */
+function radiusForRound(round, ladder, maxRounds) {
+    if (!Number.isFinite(round) || round > maxRounds)
+        return null;
+    const rungs = ladder.length > 0 ? ladder : [3];
+    const idx = Math.min(rungs.length - 1, Math.floor(((Math.max(1, round) - 1) * rungs.length) / Math.max(1, maxRounds)));
+    return rungs[idx];
+}
+/**
+ * Stable 0-99 bucket for a rider id (FNV-1a).
+ *
+ * Deterministic across processes and deploys — the same rider always lands in
+ * the same bucket, so raising h3_rollout_percent widens the cohort but never
+ * flips an individual rider's path back and forth between requests.
+ */
+function riderBucket(riderId) {
+    let h = 0x811c9dc5;
+    const s = String(riderId).toLowerCase();
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0) % 100;
+}
+/**
+ * Which path serves THIS ride. Master kill switch first: h3_matching_enabled
+ * false => legacy for everyone, no matter what the rollout says.
+ * Pure function — no cache, no I/O — so allowlist changes take effect on the
+ * next request even inside the 10s config cache window... (the config values
+ * themselves still refresh every 10s like everything else).
+ */
+function decideH3Path(cfg, riderId) {
+    if (!cfg.h3_matching_enabled)
+        return { useH3: false, reason: "kill_switch_off" };
+    switch (cfg.h3_rollout_mode) {
+        case "all":
+            return { useH3: true, reason: "rollout_all" };
+        case "allowlist": {
+            const id = (riderId || "").trim().toLowerCase();
+            if (id && cfg.h3_rollout_rider_ids.includes(id)) {
+                return { useH3: true, reason: "rollout_allowlist" };
+            }
+            return { useH3: false, reason: "rollout_not_allowlisted" };
+        }
+        case "percent": {
+            if (!riderId)
+                return { useH3: false, reason: "rollout_percent_no_rider" };
+            const bucket = riderBucket(riderId);
+            const useH3 = bucket < cfg.h3_rollout_percent;
+            return { useH3, reason: `rollout_percent_${bucket}` };
+        }
+        case "off":
+        default:
+            return { useH3: false, reason: "rollout_off" };
+    }
+}
+/**
+ * Matching entry point — rollout + kill-switch decision (one place).
+ *
+ * EVERY call records a `matching_path` trace stage {path: "h3"|"legacy",
+ * reason}, so each ride shows exactly which path served it and why.
+ *
+ *   legacy  : the original haversine query above, byte-for-byte unchanged —
+ *             used when the kill switch is off, the rollout excludes this
+ *             rider, the mode is 'off', or config cannot be read.
+ *   h3      : H3 cell lookup -> exact haversine <= radius -> eligibility
+ *             filters (MATCHABLE_STATUSES from driverIndex, vehicle category,
+ *             min rating, driver_blocks) -> rank by road ETA (haversine
+ *             fallback) -> a ranked pool for the one-at-a-time offer loop.
+ *
+ * FAILURE POLICY: any throw anywhere in the H3 path (config, index, SQL, ETA)
+ * is logged with an `h3_path_failed` trace stage and the request re-runs on the
+ * haversine path. The rider is never left waiting and matching never fails
+ * closed; a cold index (rollout guard) or empty area also falls back rather
+ * than reporting a false "no drivers".
+ */
+async function findCandidates(rideId, pickupLat, pickupLng, limit = 3, ignorePreviousOffers = false, round = 1, riderId = null) {
+    let decision;
+    try {
+        const cfg = await (0, config_2.getConfig)();
+        decision = decideH3Path(cfg, riderId);
+    }
+    catch (err) {
+        // Unknown config => legacy. Never fail closed on a config read.
+        decision = { useH3: false, reason: "config_error" };
+        console.warn(`[dispatch] config read failed, using legacy path ride=${rideId}:`, err?.message || err);
+    }
+    (0, trace_1.trace)(rideId, "matching_path", {
+        path: decision.useH3 ? "h3" : "legacy",
+        reason: decision.reason,
+    });
+    if (!decision.useH3) {
+        return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
+    }
+    try {
+        return await findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers, round);
+    }
+    catch (err) {
+        // NEVER fail silently, NEVER leave the rider waiting: say what broke, then
+        // run the old path for this request.
+        (0, trace_1.trace)(rideId, "h3_path_failed", {
+            round,
+            error: err?.message ?? String(err),
+        });
+        console.error(`[dispatch] H3 path FAILED ride=${rideId} (falling back to haversine):`, err?.message || err);
+        (0, metrics_1.bump)("h3_path_failures");
+        (0, metrics_1.bump)("fallback_used");
+        return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
+    }
+}
+/** Flag-ON implementation. Throwing here is safe: findCandidates catches. */
+async function findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers, round) {
+    const cfg = await (0, config_2.getConfig)();
+    const maxRounds = h3MaxOfferRounds(cfg);
+    const radiusKm = radiusForRound(round, cfg.match_radius_km, maxRounds);
+    if (radiusKm == null) {
+        // ~90s of searching: zero candidates makes offerToNextDriver park the ride
+        // and emit ride:no:drivers — the rider-facing stop, no code path left open.
+        (0, trace_1.trace)(rideId, "h3_search_timeout", {
+            round,
+            max_rounds: maxRounds,
+            search_timeout_ms: cfg.search_timeout_ms,
+        });
+        console.log(`[dispatch] H3 search budget exhausted ride=${rideId} round=${round}/${maxRounds} -> no drivers`);
+        return [];
+    }
+    // 1. ROLLOUT GUARD: flag ON but the index has no fresh rows anywhere ->
+    //    this is "nobody has pinged since boot / migration just applied", not
+    //    "no drivers exist". Serve this request from the old path and SAY why,
+    //    so a flag turned on before the writers are live cannot strand riders.
+    const index = (0, driverIndex_1.getDriverIndex)();
+    const freshTotal = await index.countFresh(cfg.stale_seconds);
+    if (freshTotal === 0) {
+        (0, trace_1.trace)(rideId, "h3_index_cold", { stale_seconds: cfg.stale_seconds });
+        console.log(`[dispatch] rollout guard: driver_cells has 0 fresh rows (within ${cfg.stale_seconds}s); using haversine for ride=${rideId}`);
+        (0, metrics_1.bump)("fallback_used");
+        return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
+    }
+    // 2. Cells that could contain a point within radiusKm. gridDisk gives
+    //    CANDIDATES only — the exact haversine arrives in the SQL below.
+    const { cells, k } = (0, h3_1.cellsAround)(pickupLat, pickupLng, radiusKm, cfg.h3_match_res);
+    // 3. Who the index thinks is in those cells, seen within stale_seconds.
+    const indexed = await index.getDriversInCells(cells, 500);
+    const now = Date.now();
+    const freshIds = indexed
+        .filter((d) => {
+        const seen = Date.parse(d.lastSeenAt);
+        return Number.isFinite(seen) && now - seen <= cfg.stale_seconds * 1000;
+    })
+        .map((d) => d.userId);
+    if (freshIds.length === 0) {
+        // The index is empty FOR THIS AREA while globally fresh — usually a
+        // deployment gap in the writers, NOT "no drivers exist". Falling back
+        // keeps the rider served; the warn makes the gap visible.
+        (0, trace_1.trace)(rideId, "h3_index_empty", { cells: cells.length, radius_km: radiusKm });
+        console.warn(`[dispatch] H3 index has 0 fresh drivers ride=${rideId} cells=${cells.length} radius=${radiusKm}km; falling back to haversine`);
+        (0, metrics_1.bump)("fallback_used");
+        return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
+    }
+    // 4. One offer per driver — enforced TWICE:
+    //    a) here: pending offers for these drivers are locked with FOR UPDATE
+    //       SKIP LOCKED inside one transaction (skips rows a concurrent
+    //       dispatcher is mid-flight on instead of blocking dispatch);
+    //    b) at insert time: the 001b partial unique index
+    //       (driver_id) WHERE status='pending' refuses the duplicate outright.
+    const busyRows = await (0, database_1.withTransaction)(async (client) => {
+        const r = await client.query(`SELECT driver_id FROM ride_offers
+        WHERE status = 'pending' AND driver_id = ANY($1::uuid[])
+        ORDER BY driver_id
+        FOR UPDATE SKIP LOCKED`, [freshIds]);
+        return r.rows;
+    });
+    const busy = new Set(busyRows.map((r) => r.driver_id));
+    const availableIds = freshIds.filter((id) => !busy.has(id));
+    if (availableIds.length === 0) {
+        (0, trace_1.trace)(rideId, "h3_all_busy", { busy: busy.size });
+        console.warn(`[dispatch] every H3 candidate already holds a pending offer ride=${rideId} busy=${busy.size}`);
+        return [];
+    }
+    // 5. Eligibility, in SQL over driver_profiles (the source of truth for
+    //    status/online/freshness — the index only narrows the scan to ids):
+    //    matchable status via the MATCHABLE_STATUSES constant, not-on-a-trip,
+    //    not-already-offered, not-the-rider, driver_blocks (Q9), vehicle
+    //    category, min rating, POSITION AGE (max_position_age_seconds — GPS-fix
+    //    age, deliberately SEPARATE from heartbeat liveness above), and the
+    //    EXACT haversine <= radius, because hex cells are not circles.
+    const rows = await (0, database_1.query)(`SELECT u.id, u.firebase_uid, dp.current_lat, dp.current_lng,
+            (6371 * acos(LEAST(1, GREATEST(-1,
+              cos(radians($4)) * cos(radians(dp.current_lat)) *
+                cos(radians(dp.current_lng) - radians($5)) +
+              sin(radians($4)) * sin(radians(dp.current_lat))
+            )))) AS distance_km
+       FROM driver_profiles dp
+       JOIN users u ON u.id = dp.user_id
+      WHERE u.id = ANY($1::uuid[])
+        AND COALESCE(dp.status, CASE WHEN dp.is_online THEN 'available' ELSE 'offline' END) = ANY($2::text[])
+        AND dp.is_online = TRUE
+        AND dp.current_lat IS NOT NULL AND dp.current_lng IS NOT NULL
+        AND GREATEST(COALESCE(dp.last_location_at, dp.updated_at),
+                     COALESCE(dp.last_heartbeat_at, dp.updated_at))
+            > NOW() - make_interval(secs => $3::double precision)
+        AND u.id <> COALESCE((SELECT passenger_id FROM rides WHERE id = $6), '00000000-0000-0000-0000-000000000000'::uuid)
+        AND ($7::boolean OR NOT EXISTS (SELECT 1 FROM ride_offers ro WHERE ro.ride_id = $6 AND ro.driver_id = u.id))
+        AND NOT EXISTS (
+              SELECT 1 FROM rides r
+               WHERE r.driver_id = u.id
+                 AND r.status IN ('accepted', 'driver_arrived', 'in_progress'))
+        AND NOT EXISTS (
+              SELECT 1 FROM driver_blocks blk
+               WHERE blk.rider_id = COALESCE((SELECT passenger_id FROM rides WHERE id = $6), '00000000-0000-0000-0000-000000000000'::uuid)
+                 AND blk.driver_id = u.id)
+        AND ($8::text IS NULL OR dp.vehicle_category = $8)
+        AND COALESCE(dp.rating_avg, 0) >= $9::double precision
+        -- POSITION AGE: last GPS fix must be newer than max_position_age_seconds.
+        -- Heartbeats (last_heartbeat_at) keep a driver ALIVE via the freshness
+        -- clause above but never refresh this — a heartbeat-only driver with a
+        -- 10-minute-old position is excluded here and only here.
+        AND COALESCE(dp.last_location_at, dp.updated_at)
+            > NOW() - make_interval(secs => $12::double precision)
+        AND (6371 * acos(LEAST(1, GREATEST(-1,
+              cos(radians($4)) * cos(radians(dp.current_lat)) *
+                cos(radians(dp.current_lng) - radians($5)) +
+              sin(radians($4)) * sin(radians(dp.current_lat))
+            )))) <= $10::double precision
+      ORDER BY distance_km ASC
+      LIMIT $11`, [
+        availableIds,
+        [...driverIndex_1.MATCHABLE_STATUSES],
+        cfg.stale_seconds,
+        pickupLat,
+        pickupLng,
+        rideId,
+        ignorePreviousOffers,
+        cfg.required_vehicle_category,
+        cfg.min_driver_rating,
+        radiusKm,
+        H3_CANDIDATE_POOL,
+        cfg.max_position_age_seconds,
+    ]);
+    if (rows.length === 0)
+        return [];
+    // ── Module 2: destination-mode filter (approved §8.2 rule, Q5) ────────────
+    // Only allowlisted drivers WITH a live destination are evaluated (Q7/Q12);
+    // everyone else passes through untouched. Per-driver fail-closed (Q13): a
+    // throwing predicate removes THAT driver, logs and counts — the query never
+    // aborts for the rest. Flag off / empty allowlist ⇒ no extra queries, no
+    // trace stage, behaviour byte-identical to Module 1.
+    let pool = rows;
+    const dcfg = await (0, config_1.getDestinationConfig)();
+    const allow = new Set(dcfg.destination_rollout_driver_ids);
+    if (dcfg.destination_matching_enabled &&
+        allow.size > 0 &&
+        rows.some((r) => allow.has(String(r.id)))) {
+        const ride = await (0, database_1.queryOne)(`SELECT destination_lat, destination_lng FROM rides WHERE id = $1`, [rideId]).catch(() => null);
+        const dests = await (0, database_1.query)(`SELECT user_id, destination_lat, destination_lng FROM driver_profiles
+        WHERE user_id = ANY($1::uuid[])
+          AND destination_lat IS NOT NULL AND destination_lng IS NOT NULL`, [rows.filter((r) => allow.has(String(r.id))).map((r) => r.id)]).catch(() => []);
+        const destBy = new Map(dests.map((d) => [d.user_id, d]));
+        const X = ride?.destination_lat != null && ride.destination_lng != null
+            ? { lat: Number(ride.destination_lat), lng: Number(ride.destination_lng) }
+            : null;
+        const P = { lat: pickupLat, lng: pickupLng };
+        const th = {
+            dropoffRadiusKm: dcfg.destination_match_dropoff_radius_km,
+            crossTrackKm: dcfg.destination_match_cross_track_km,
+            alongTolKm: dcfg.destination_match_along_tolerance_km,
+        };
+        let considered = 0;
+        let removed = 0;
+        let errors = 0;
+        pool = [];
+        for (const row of rows) {
+            const dest = allow.has(String(row.id)) ? destBy.get(row.id) : undefined;
+            if (!dest) {
+                pool.push(row); // not in the rollout, or allowlisted but NOT in destination mode
+                continue;
+            }
+            considered += 1;
+            try {
+                const verdict = (0, destinationFit_1.destinationFit)({ lat: Number(row.current_lat), lng: Number(row.current_lng) }, { lat: Number(dest.destination_lat), lng: Number(dest.destination_lng) }, P, X, th);
+                if (verdict === "accept") {
+                    pool.push(row);
+                }
+                else {
+                    removed += 1;
+                    (0, metrics_1.bump)("destination_filtered");
+                }
+            }
+            catch (err) {
+                // Q13: fail closed for THIS driver only — the ride keeps serving.
+                errors += 1;
+                (0, metrics_1.bump)("destination_predicate_error");
+                console.warn(`[dispatch] destinationFit threw driver=${row.id} ride=${rideId}: ${err?.message || err}`);
+            }
+        }
+        (0, trace_1.trace)(rideId, "destination_filter", {
+            considered,
+            kept: pool.length,
+            removed,
+            errors,
+            allowlist: allow.size,
+        });
+    }
+    // 6. Rank by ROAD ETA (one OSRM matrix call for the pool), haversine
+    //    fallback per entry — never a reason to delay the offer.
+    const etas = await (0, eta_1.etaMinutesList)({ lat: pickupLat, lng: pickupLng }, pool.map((r) => ({ lat: Number(r.current_lat), lng: Number(r.current_lng) })), cfg.avg_speed_kmh);
+    const ranked = pool
+        .map((row, i) => ({ row, eta: etas[i] }))
+        .sort((a, b) => a.eta - b.eta)
+        .map((x) => x.row);
+    (0, trace_1.trace)(rideId, "h3_candidates", {
+        round,
+        radius_km: radiusKm,
+        rings: k,
+        cells: cells.length,
+        indexed_fresh: freshIds.length,
+        busy: busy.size,
+        eligible: ranked.length,
+        eta_source: "road_with_haversine_fallback",
+    });
+    // The flag-on pool is what the one-at-a-time offer loop picks from; `limit`
+    // stays meaningful for any caller that asks for a specific count.
+    return ranked.slice(0, Math.max(limit, H3_CANDIDATE_POOL));
 }
 async function loadRide(rideId) {
     return (0, database_1.queryOne)(`SELECT r.id, r.status, r.passenger_id, r.pickup_address, r.pickup_lat, r.pickup_lng,
@@ -105,7 +520,14 @@ async function loadRide(rideId) {
             u.firebase_uid AS passenger_fb
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
-      WHERE r.id = $1`, [rideId]).catch(() => null);
+      WHERE r.id = $1`, [rideId]
+    // loadRide returning null means "no such ride" to every caller, so a database
+    // fault here is indistinguishable from a deleted ride -- and offerToNextDriver
+    // then returns ride_not_found and silently stops trying. Surface it.
+    ).catch((err) => {
+        console.error(`[dispatch] loadRide FAILED ride=${rideId}:`, err?.message || err);
+        return null;
+    });
 }
 /**
  * Offer the ride to the closest not-yet-tried driver.
@@ -143,7 +565,64 @@ async function offerToNextDriver(io, rideId, round, opts) {
         await markNoDrivers(io, rideId);
         return { offered: false, reason: "too_many_rounds" };
     }
-    const candidates = await findCandidates(rideId, ride.pickup_lat, ride.pickup_lng, 1, reviving);
+    /**
+     * Push for ONE offer attempt. Resolves with the number of devices the push
+     * reached, or null when the outcome is UNKNOWN (send rejected / timed out).
+     * Only a known 0 may trigger the instant skip (hardening step b) — a flaky
+     * network on the server side must never cost a driver their offer.
+     */
+    const sendOfferPush = (driverId, offerId, fare) => Promise.resolve()
+        .then(() => (0, notify_1.sendPushToUsers)([driverId], {
+        type: "ride_offer",
+        title: "New ride request",
+        body: `${ride.pickup_address || "Pickup"} · R${fare.toFixed(2)} — tap to accept`,
+        rideId,
+        offerId,
+        highPriority: true,
+        data: { channel: "offers", offer_id: offerId },
+    }))
+        .then((n) => {
+        if (typeof n !== "number") {
+            // notify answered UNKNOWN (lookup/transport failed). Keep it UNKNOWN:
+            // never coerce to 0, because a 0 is skip-eligible downstream and a
+            // flaky server must not cost a driver their offer (see withPushTimeout).
+            (0, metrics_1.bump)("push_delivered_zero");
+            (0, trace_1.trace)(rideId, "push_result", {
+                driver_id: driverId,
+                delivered: 0,
+                ok: false,
+                error: "push_outcome_unknown",
+            });
+            return null;
+        }
+        const delivered = n;
+        if (delivered <= 0)
+            (0, metrics_1.bump)("push_delivered_zero");
+        (0, trace_1.trace)(rideId, "push_result", { driver_id: driverId, delivered, ok: delivered > 0 });
+        if (!delivered) {
+            console.warn(`[dispatch] push delivered 0 devices driver=${driverId} ride=${rideId}; ` +
+                `socket is the only remaining channel`);
+        }
+        return delivered;
+    })
+        .catch((err) => {
+        // UNKNOWN, not zero: counted (the trace records delivered:0) but not
+        // skip-eligible — see withPushTimeout.
+        (0, metrics_1.bump)("push_delivered_zero");
+        (0, trace_1.trace)(rideId, "push_result", {
+            driver_id: driverId,
+            delivered: 0,
+            ok: false,
+            error: err?.message ?? String(err),
+        });
+        console.warn(`[dispatch] push failed driver=${driverId}:`, err?.message);
+        return null;
+    });
+    const candidates = await findCandidates(rideId, ride.pickup_lat, ride.pickup_lng, 1, reviving, nextRound, ride.passenger_id ?? null);
+    // The COUNT is the single most useful number in the whole trace: 0 means the
+    // driver was invisible to dispatch (offline / stale GPS / on a trip), which is
+    // a completely different problem from "the offer was sent but never arrived".
+    (0, trace_1.trace)(rideId, "drivers_found", { count: candidates.length });
     await logRideEvent(rideId, null, "candidates_found", {
         round: nextRound,
         count: candidates.length,
@@ -152,69 +631,193 @@ async function offerToNextDriver(io, rideId, round, opts) {
         await markNoDrivers(io, rideId);
         return { offered: false, reason: "no_candidates" };
     }
-    const driver = candidates[0];
-    const offer = await (0, database_1.queryOne)(`INSERT INTO ride_offers (ride_id, driver_id, status, expires_at, round)
-     VALUES ($1, $2, 'pending', NOW() + make_interval(secs => $3::double precision), $4)
-     ON CONFLICT (ride_id, driver_id) DO NOTHING
-     RETURNING id, expires_at`, [rideId, driver.id, exports.OFFER_TTL_SECONDS, nextRound]).catch((err) => {
-        console.warn("[dispatch] offer insert failed:", err?.message);
-        return null;
-    });
-    if (!offer)
-        return { offered: false, reason: "offer_conflict" };
-    await (0, database_1.execute)(`UPDATE rides SET offer_round = $2, updated_at = NOW() WHERE id = $1`, [
-        rideId,
-        nextRound,
-    ]).catch(() => undefined);
-    const payload = {
-        id: rideId,
-        offerId: offer.id,
-        expiresAt: offer.expires_at,
-        secondsRemaining: exports.OFFER_TTL_SECONDS,
-        round: nextRound,
-        version: (ride.version || 0) + 1,
-        pickupAddress: ride.pickup_address,
-        pickupLat: ride.pickup_lat,
-        pickupLng: ride.pickup_lng,
-        destinationAddress: ride.destination_address,
-        destinationLat: ride.destination_lat,
-        destinationLng: ride.destination_lng,
-        fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
-        paymentMethod: ride.payment_method || "cash",
-        waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
-        stops: Array.isArray(ride.waypoints) ? ride.waypoints : [],
-        riderName: "Rider",
-        riderRating: 5,
-        distanceToPickupKm: Number(driver.distance_km?.toFixed?.(2) ?? driver.distance_km),
-    };
-    if (driver.firebase_uid) {
-        io.to(`user:${driver.firebase_uid}`).emit("ride:offer", payload);
-        io.to(`user:${driver.firebase_uid}`).emit("ride:request", payload);
+    // ONE offer at a time: candidates arrive in rank order (ETA under flag-on,
+    // distance under flag-off where there is exactly one), and the loop stops at
+    // the first INSERT that sticks. The 001b partial unique index
+    // (driver_id WHERE status='pending') is what actually refuses a driver who
+    // already holds a pending offer for ANOTHER ride — that conflict is skipped
+    // to the next candidate instead of burning the round; every other error keeps
+    // the original behaviour (loud trace + log, round not sent).
+    let driver = null;
+    let offer = null;
+    // Candidates skipped for being unreachable (socket down + push delivered 0).
+    let undeliverable = 0;
+    for (const candidate of candidates) {
+        const res = await (0, database_1.queryOne)(`INSERT INTO ride_offers (ride_id, driver_id, status, expires_at, round)
+       VALUES ($1, $2, 'pending', NOW() + make_interval(secs => $3::double precision), $4)
+       ON CONFLICT (ride_id, driver_id) DO NOTHING
+       RETURNING id, expires_at`, [rideId, candidate.id, exports.OFFER_TTL_SECONDS, nextRound]).catch((err) => {
+            // "offer_conflict" (the ON CONFLICT DO NOTHING path) is a normal, expected
+            // outcome. Any OTHER database error is NOT -- it means the offer was never
+            // created, so no driver is being asked and the ride would sit forever. It now
+            // gets its own trace stage and a loud log instead of a quiet `null`.
+            const isBusy = /duplicate key|unique_violation/i.test(err?.code + " " + (err?.message ?? ""));
+            if (isBusy) {
+                // Pending offer for a DIFFERENT ride (001b index): next candidate.
+                (0, trace_1.trace)(rideId, "offer_driver_busy", {
+                    driver_id: candidate.id,
+                    round: nextRound,
+                });
+                (0, metrics_1.bump)("offer_driver_busy");
+                console.warn(`[dispatch] driver already holds a pending offer, trying next candidate ride=${rideId} driver=${candidate.id}`);
+                return "busy";
+            }
+            (0, trace_1.trace)(rideId, "offer_insert_failed", {
+                driver_id: candidate.id,
+                round: nextRound,
+                error: err?.message ?? String(err),
+            });
+            console.error(`[dispatch] offer INSERT failed ride=${rideId} driver=${candidate.id}:`, err?.message || err);
+            return "failed";
+        });
+        if (res === "failed")
+            return { offered: false, reason: "offer_conflict" };
+        if (res === "busy")
+            continue;
+        if (!res) {
+            // This ride was already offered to this driver (per-ride conflict).
+            (0, trace_1.trace)(rideId, "offer_conflict", {
+                driver_id: candidate.id,
+                round: nextRound,
+            });
+            console.warn("[dispatch] offer insert conflicted (already offered):", candidate.id);
+            continue;
+        }
+        // ── Deliver BEFORE declaring this candidate the winner ──────────────────
+        // Truthful liveness AT EMIT TIME (step a: socket_connected, not "has a
+        // uid") and — step b — a driver we cannot reach at all (empty socket room
+        // AND push delivered 0) is skipped NOW instead of holding the round for
+        // the full 15s TTL.
+        const room = candidate.firebase_uid ? `user:${candidate.firebase_uid}` : null;
+        const socketConnected = !!room && hasLiveSocket(io, room);
+        if (!socketConnected)
+            (0, metrics_1.bump)("offer_socket_down");
+        await (0, database_1.execute)(`UPDATE rides SET offer_round = $2, updated_at = NOW() WHERE id = $1`, [
+            rideId,
+            nextRound,
+        ]).catch(() => undefined);
+        const payload = {
+            id: rideId,
+            offerId: res.id,
+            expiresAt: res.expires_at,
+            secondsRemaining: exports.OFFER_TTL_SECONDS,
+            round: nextRound,
+            version: (ride.version || 0) + 1,
+            pickupAddress: ride.pickup_address,
+            pickupLat: ride.pickup_lat,
+            pickupLng: ride.pickup_lng,
+            destinationAddress: ride.destination_address,
+            destinationLat: ride.destination_lat,
+            destinationLng: ride.destination_lng,
+            fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
+            paymentMethod: ride.payment_method || "cash",
+            waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
+            stops: Array.isArray(ride.waypoints) ? ride.waypoints : [],
+            riderName: "Rider",
+            riderRating: 5,
+            distanceToPickupKm: Number(candidate.distance_km?.toFixed?.(2) ?? candidate.distance_km),
+        };
+        if (room) {
+            io.to(room).emit("ride:offer", payload);
+            io.to(room).emit("ride:request", payload);
+        }
+        await logRideEvent(rideId, candidate.id, "offer_sent", {
+            round: nextRound,
+            distanceKm: payload.distanceToPickupKm,
+            expiresIn: exports.OFFER_TTL_SECONDS,
+            socket: socketConnected,
+        });
+        // `channel` and `socket_connected` are derived from the ADAPTER ROOM at
+        // emit time — an empty room is push_only regardless of the uid.
+        (0, trace_1.trace)(rideId, "offer_sent", {
+            driver_id: candidate.id,
+            channel: socketConnected ? "socket" : "push_only",
+            socket_connected: socketConnected,
+            distance_km: payload.distanceToPickupKm,
+        });
+        const push = sendOfferPush(candidate.id, res.id, payload.fare);
+        if (socketConnected) {
+            // Live socket: push is belt-and-braces and is never awaited.
+            void push;
+            driver = candidate;
+            offer = res;
+            break;
+        }
+        const delivered = await withPushTimeout(push);
+        if (delivered === 0) {
+            // PROVEN delivered:0 — which includes "this user has no push token at
+            // all" (the sender returns 0 only after SUCCESSFUL token lookups and
+            // transport answers). hasLiveSocket() alone can never reach this branch:
+            // it only selects the channel. Socket down AND push reached nobody: this
+            // offer can never be seen. Close it immediately and try the NEXT
+            // candidate in this same round.
+            await (0, database_1.execute)(`UPDATE ride_offers SET status = 'expired', decline_reason = 'undeliverable', updated_at = NOW()
+          WHERE id = $1 AND status = 'pending'`, [res.id]).catch(() => undefined);
+            (0, trace_1.trace)(rideId, "offer_undeliverable", {
+                driver_id: candidate.id,
+                round: nextRound,
+                socket_connected: false,
+                push_delivered: 0,
+            });
+            console.warn(`[dispatch] offer undeliverable (socket down + push delivered 0) ride=${rideId} driver=${candidate.id}; trying next candidate`);
+            (0, metrics_1.bump)("offer_undeliverable");
+            undeliverable += 1;
+            continue;
+        }
+        if (delivered === null) {
+            // UNKNOWN (notify could not answer / timed out): NEVER skip on an
+            // unproven result — the offer stays pending and owns its full TTL.
+            (0, trace_1.trace)(rideId, "push_result_unknown", {
+                driver_id: candidate.id,
+                round: nextRound,
+                socket_connected: socketConnected,
+            });
+        }
+        driver = candidate;
+        offer = res;
+        break;
     }
-    await logRideEvent(rideId, driver.id, "offer_sent", {
-        round: nextRound,
-        distanceKm: payload.distanceToPickupKm,
-        expiresIn: exports.OFFER_TTL_SECONDS,
-        socket: Boolean(driver.firebase_uid),
-    });
-    void (0, notify_1.sendPushToUsers)([driver.id], {
-        type: "ride_offer",
-        title: "New ride request",
-        body: `${ride.pickup_address || "Pickup"} Â· R${payload.fare.toFixed(2)} â€” tap to accept`,
-        rideId,
-        offerId: offer.id,
-        highPriority: true,
-        data: { channel: "offers", offer_id: offer.id },
-    }).catch(() => 0);
+    if (!offer || !driver) {
+        if (undeliverable > 0) {
+            // Nobody in this round was reachable. Advance exactly like expireOffers
+            // and declineOffer do, so the rider never waits on an offer that does
+            // not exist. try/catch: a failed status read must not throw here.
+            let current = null;
+            try {
+                current =
+                    (await (0, database_1.queryOne)(`SELECT status FROM rides WHERE id = $1`, [
+                        rideId,
+                    ])) ?? null;
+            }
+            catch {
+                current = null;
+            }
+            if (current && ["searching", "scheduled"].includes(current.status)) {
+                return offerToNextDriver(io, rideId, nextRound + 1);
+            }
+            return { offered: false, reason: "offer_undeliverable" };
+        }
+        return { offered: false, reason: "offer_conflict" };
+    }
+    // Emit, traces and push all happened inside the loop, per candidate.
     return { offered: true, driverId: driver.id };
 }
 /** No driver left (or too many rounds): park the ride and tell the rider. */
 async function markNoDrivers(io, rideId) {
     const upd = await (0, database_1.execute)(`UPDATE rides SET status = 'no_drivers', no_drivers_at = NOW(), updated_at = NOW(),
                       version = COALESCE(version, 0) + 1
-      WHERE id = $1 AND status IN ('searching', 'scheduled')`, [rideId]).catch(() => ({ rowCount: 0, rows: [] }));
+      WHERE id = $1 AND status IN ('searching', 'scheduled')`, [rideId]
+    // A failed UPDATE here would otherwise look exactly like "someone else
+    // already changed the status" (rowCount 0), so the rider would never be told
+    // and the ride would stay 'searching' with nobody working on it.
+    ).catch((err) => {
+        console.error(`[dispatch] markNoDrivers UPDATE FAILED ride=${rideId}:`, err?.message || err);
+        return { rowCount: 0, rows: [] };
+    });
     if (!upd.rowCount)
         return;
+    // The ride was actually parked with a rider-facing "no drivers" — count it.
+    (0, metrics_1.bump)("no_drivers");
     await (0, database_1.execute)(`UPDATE ride_offers SET status = 'expired', decline_reason = 'no_drivers', updated_at = NOW()
       WHERE ride_id = $1 AND status = 'pending'`, [rideId]).catch(() => undefined);
     const ride = await loadRide(rideId);
@@ -231,6 +834,10 @@ async function markNoDrivers(io, rideId) {
 }
 /** Entry point when a rider books (socket handler calls this after INSERT). */
 async function startDispatch(io, rideId) {
+    // Mint the trace BEFORE the first stage is written, so request_received and
+    // dispatch_started share one trace_id and can be timed against each other.
+    (0, trace_1.startTrace)(rideId);
+    (0, trace_1.trace)(rideId, "dispatch_started");
     await logRideEvent(rideId, null, "ride_requested", {});
     return offerToNextDriver(io, rideId, 1);
 }
@@ -282,6 +889,11 @@ async function acceptRide(io, params) {
               version = COALESCE(version, 0) + 1
         WHERE id = $2 AND status IN ('searching', 'scheduled', 'no_drivers')
         RETURNING COALESCE(version, 0) AS version`, [driverId, rideId]);
+        // 0 rows here is the NORMAL losing path: another driver won the race, or the
+        // 15s window closed. It is a clean business error, not a fault. A real database
+        // error is NOT swallowed here -- this query is deliberately un-caught so
+        // withTransaction rolls back and the caller sees a genuine 500 rather than a
+        // misleading "Ride no longer available".
         if ((upd.rowCount ?? 0) === 0)
             return { ok: false, error: "Ride no longer available" };
         // Everyone else stops being asked; this driver becomes busy.
@@ -302,6 +914,13 @@ async function acceptRide(io, params) {
     });
     if (!result.ok)
         return result;
+    // The LAST stage of a healthy trace: request -> saved -> dispatch -> drivers
+    // found -> offer sent -> delivered ack -> response. Once this lands,
+    // total_ms is the true rider-tap-to-driver-decision latency.
+    (0, trace_1.trace)(rideId, "driver_response", {
+        driver_id: driverId,
+        response: result.duplicate ? "accept_duplicate" : "accept",
+    });
     await logRideEvent(rideId, driverId, result.duplicate ? "accept_duplicate" : "ride_accepted", {
         version: result.version,
     });
@@ -396,6 +1015,7 @@ async function declineOffer(io, params) {
     }
     const offer = await (0, database_1.queryOne)(`SELECT round FROM ride_offers WHERE ride_id = $1 AND driver_id = $2
       ORDER BY created_at DESC LIMIT 1`, [rideId, driverId]).catch(() => null);
+    (0, trace_1.trace)(rideId, "driver_response", { driver_id: driverId, response: "decline", reason: reason ?? "declined" });
     await logRideEvent(rideId, driverId, "offer_declined", { reason, round: offer?.round });
     await offerToNextDriver(io, rideId, (offer?.round ?? 1) + 1);
     return { ok: true };
@@ -411,6 +1031,34 @@ async function expireOffers(io) {
     const due = await (0, database_1.query)(`SELECT id, ride_id, driver_id, round FROM ride_offers
       WHERE status = 'pending' AND expires_at <= NOW()
       ORDER BY expires_at ASC LIMIT 40`).catch(() => []);
+    // Which of these offers did the DEVICE ever confirm (driver:ride:offer:ack)?
+    // offer_not_acked counts offers that close with no ack on record — the
+    // counterpart to offer_acked (bumped on receipt in handlers.ts). Read via
+    // execute() inside try/catch: an ack-accounting problem must never be able
+    // to block offer expiry, and this keeps the db.query slot free for the
+    // candidates query of the re-offer below.
+    const acked = new Set();
+    if (due.length > 0) {
+        try {
+            const res = await (0, database_1.execute)(`SELECT ride_id, detail FROM ride_events
+          WHERE event = 'trace:offer_delivered_ack'
+            AND ride_id = ANY($1::uuid[])`, [[...new Set(due.map((o) => o.ride_id))]]);
+            for (const r of res?.rows ?? []) {
+                try {
+                    const d = typeof r.detail === "string" ? JSON.parse(r.detail) : r.detail;
+                    const driverId = d?.driver_id;
+                    if (driverId)
+                        acked.add(`${r.ride_id}:${driverId}`);
+                }
+                catch {
+                    /* unparsable ack row = not acked */
+                }
+            }
+        }
+        catch {
+            /* best-effort: expiry must proceed without ack knowledge */
+        }
+    }
     let handled = 0;
     for (const offer of due) {
         const upd = await (0, database_1.execute)(`UPDATE ride_offers SET status = 'expired', updated_at = NOW()
@@ -418,6 +1066,8 @@ async function expireOffers(io) {
         if (!upd.rowCount)
             continue;
         handled += 1;
+        if (!acked.has(`${offer.ride_id}:${offer.driver_id}`))
+            (0, metrics_1.bump)("offer_not_acked");
         await logRideEvent(offer.ride_id, offer.driver_id, "offer_expired", { round: offer.round });
         const ride = await (0, database_1.queryOne)(`SELECT status FROM rides WHERE id = $1`, [offer.ride_id]).catch(() => null);
         if (ride && ["searching", "scheduled"].includes(ride.status)) {

@@ -2,6 +2,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = require("../config/database");
+// Plain static imports (NOT top-level await -- this project compiles to CommonJS,
+// where top-level await is a hard compile error).
+const trace_1 = require("../services/trace");
+const dispatch_1 = require("../services/dispatch");
 // ── Dispatch inspector ────────────────────────────────────────────────────────
 //   GET /api/dev/dispatch?key=<DEV_LOG_READ_KEY>&rideId=<uuid>
 //   GET /api/dev/dispatch?key=<DEV_LOG_READ_KEY>            (latest activity)
@@ -65,15 +69,76 @@ router.get("/", async (req, res) => {
             events,
             drivers,
             config: {
-                offerTtlSeconds: 15,
-                candidateFreshnessSeconds: 30,
-                driverStaleSeconds: 45,
-                maxOfferRounds: 12,
+                // Imported, not hardcoded: these used to be literal copies (30/45) that
+                // silently went stale the moment the constants in dispatch.ts changed, so
+                // the inspector would report a freshness window the server was not using.
+                offerTtlSeconds: dispatch_1.OFFER_TTL_SECONDS,
+                candidateFreshnessSeconds: dispatch_1.LOCATION_FRESH_SECONDS,
+                driverStaleSeconds: dispatch_1.DRIVER_STALE_SECONDS,
+                maxOfferRounds: dispatch_1.MAX_OFFER_ROUNDS,
+                availableRadiusKm: Number(process.env.DISPATCH_RADIUS_KM || 3),
             },
         });
     }
     catch (err) {
         res.status(500).json({ error: err?.message || "dispatch read failed" });
+    }
+});
+// ── Per-ride latency trace ────────────────────────────────────────────────────
+//   GET /api/dev/dispatch/trips/:id/trace?key=<DEV_LOG_READ_KEY>
+//
+// (This router is mounted at /api/dev/dispatch in index.ts:93, so the `trips/`
+//  segment below lands at /api/dev/dispatch/trips/:id/trace.)
+//
+// Answers the only question that matters when a ride "didn't arrive": WHERE did
+// the time go? Returns each stage with milliseconds-since-tap and the gap to the
+// previous stage, so the slow hop is named instead of guessed at.
+//
+// Stages that never fired are reported as `missing`, because a gap in the trail
+// is itself the diagnosis (e.g. no `drivers_found` means dispatch never ran).
+router.get("/trips/:id/trace", async (req, res) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+    const key = String(req.query.key || req.headers["x-dev-log-key"] || "");
+    if (!key || key !== READ_KEY) {
+        res.status(401).json({ error: "bad read key" });
+        return;
+    }
+    const rideId = String(req.params.id || "").trim();
+    if (!/^[0-9a-f-]{36}$/i.test(rideId)) {
+        res.status(400).json({ error: "ride id must be a uuid" });
+        return;
+    }
+    try {
+        const trace = await (0, trace_1.readTrace)(rideId);
+        const seen = new Set(trace.stages.map((s) => s.stage));
+        const missing = trace_1.TRACE_STAGES.filter((s) => !seen.has(s));
+        // The slowest hop, so "it was slow" becomes "request->trip_saved took 1200ms".
+        const slowest = trace.stages
+            .filter((s) => typeof s.ms_since_previous === "number")
+            .sort((a, b) => (b.ms_since_previous ?? 0) - (a.ms_since_previous ?? 0))[0] ?? null;
+        // Did any push actually reach a device? 0 across the board means the app is
+        // backgrounded and the Expo-token gap is the reason nothing arrived.
+        const pushResults = trace.stages.filter((s) => s.stage === "push_result");
+        const pushDelivered = pushResults.reduce((n, s) => n + Number(s.detail?.delivered ?? 0), 0);
+        res.json({
+            ...trace,
+            missing_stages: missing,
+            slowest_hop: slowest
+                ? { stage: slowest.stage, ms: slowest.ms_since_previous }
+                : null,
+            verdict: {
+                push_delivered: pushDelivered,
+                // No ack means the offer was sent but never confirmed on a device.
+                reached_device: seen.has("offer_delivered_ack"),
+                completed: seen.has("driver_response"),
+            },
+            budget_ms: 2000,
+            within_budget: trace.total_ms <= 2000,
+        });
+    }
+    catch (err) {
+        res.status(500).json({ error: err?.message || "trace read failed" });
     }
 });
 exports.default = router;
