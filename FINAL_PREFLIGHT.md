@@ -3,6 +3,13 @@
 **Branch:** `fix/rc1-stale-boot-log` @ `3114340` (= RC1 `12ae348` + staleness
 fixes `2da9888`, `3114340`). **No merge to main. No deploy until every step
 shows its "what I should see". Any miss → STOP — do not continue.**
+
+**ORDER (hard rule):**
+1. **Deploy this Module 1 branch FIRST** (`fix/rc1-stale-boot-log` → `vura-rider-prod`),
+   running §1–§10 in order — Step 10 (allowlist) must pass.
+2. **`main` is merged only AFTER Step 10's allowlist test passes** — never
+   before it, never in parallel with the deploy. Module 2 (`module2-destination`
+   / `release-candidate-2`, flags OFF) merges after that, same rule.
 Detail: `DEPLOY_RC1.md` · `server/migrations/TEST_MIGRATION.md` · `MODULE1_TEST.md`.
 
 ## Step 0 — Gates (this laptop, before anything else)
@@ -122,4 +129,5 @@ non-listed rider `legacy / rollout_not_allowlisted`; full flow green.
 kill switch (`h3_matching_enabled=false`), everyone legacy in seconds.
 
 **After:** DEPLOY_RC1 §7 known pre-existing issues (CarsXE budget; diag read key =
-instance's `DEV_LOG_READ_KEY`). **This deploys; it does not merge.**
+instance's `DEV_LOG_READ_KEY`). **This deploys; it does not merge.** `main` is
+merged only after Step 10 (allowlist) passes — see the ORDER rule at the top.
