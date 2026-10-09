@@ -12,6 +12,23 @@ Detail: `DEPLOY_RC1.md` · `server/migrations/TEST_MIGRATION.md` · `MODULE1_TES
 **See:** tsc 0 errors, vitest green, both checks print `dist gate OK`.
 **If not:** STOP (§1b exists precisely because `dist` was last built at `1f3a4c9`).
 
+## Step 0b — Debug-keystore backup (before ANY APK is built)
+
+Confirm both current production keystores are backed up to **two locations, one
+off-machine** (procedure: `KEYSTORE_PLAN.md` §3) before any APK is built or
+distributed:
+
+- `C:\Users\mbofh\.android\debug.keystore` — signs every installed figma-ui
+  driver APK (SHA-256 `B8:48:7F:…:9D`);
+- `C:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-driver\android\app\debug.keystore`
+  — the Expo app's key (SHA-256 `FA:C6:17:…:3B:9C`).
+
+**See:** both copies exist, and `keytool -list -v -keystore <copy> -storepass …`
+on each **copy** prints the same SHA-256 as the original; alias + passwords
+recorded in the password manager per `KEYSTORE_PLAN.md` §3 checklist.
+**If not:** STOP — losing the current signer makes in-place updates impossible
+for every already-installed driver APK.
+
 ## 1. EB min=max=1
 
 EB console → `vura-rider-prod` → Configuration: Auto Scaling **min=max=1**,
