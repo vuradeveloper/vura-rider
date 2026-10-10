@@ -1,5 +1,7 @@
 # DEPLOY_RC1.md — deploy `fix/rc1-stale-boot-log` to production
 
+> Console-first steps live in FINAL_PREFLIGHT.md; this file is reference only.
+
 **Branch:** `fix/rc1-stale-boot-log` @ `3114340` = `release-candidate-1`
 (`12ae348`, 18 commits ahead of `main`, on `origin`) + staleness fixes
 (`2da9888` real boot-log thresholds, `3114340` stale comments).
