@@ -331,31 +331,30 @@ limits/`PAYSTACK_*`/`RESEND_*`/`ADMIN_EMAILS`/`DEV_LOG_*_KEY`.
 
 ## 7b. Dry-run the tooling — find breakage TODAY, not on deploy day
 
+The console plan needs only **psql** (steps 3–6), **node** (Step 0 gates +
+the 8a rebuild), and **Git Bash** (the bash-labelled blocks) — no aws/eb CLI.
 **[PowerShell]** — every line must print a version, no "not recognized":
 
 ```powershell
-aws --version     # AWS CLI 2.x    — steps 2/4 (snapshot, restore) need it
-eb --version      # EB CLI 3.x     — steps 7/8 (`eb printenv`, deploy) need it
-psql --version    # psql 1x        — steps 5/6 need it
-node --version    # v22.x          — matches the EB `node.js-22` platform
+psql --version    # psql 1x — steps 3-6; PATH fix: Step 3.0
+node --version    # any LTS — Step 0 gates + the 8a `npm run build`
 ```
 
-**[Git Bash]** — run the SAME checks here, because step 8 executes in Git
-Bash and shells do not share PATH fixes you made in PowerShell only:
+**[Git Bash]** — run the SAME checks here, because the bash blocks execute
+in Git Bash and shells do not share PATH fixes you made in PowerShell only:
 
 ```bash
-aws --version; eb --version; psql --version; node --version
+psql --version; node --version
 bash --version    # GNU bash 5.x (Git Bash), NOT the WSL stub
-file deploy/deploy.sh   # must say "ASCII text" / "UTF-8 text" — NOT "with CRLF line terminators"
 ```
 
-**See:** five version lines from each shell. `deploy.sh` is LF in git (the
-root `.gitattributes` pins `eol=lf`); if `file` reports CRLF, the working copy
-is stale — fix with **[PowerShell]** `git rm --cached deploy/deploy.sh; git
-checkout -- deploy/deploy.sh`, re-check, then continue.
-**If not:** STOP — install/fix the missing tool now. On 2026-10-10 this laptop
-had **no `aws`, no `eb`** and only `C:\Program Files\PostgreSQL\18\bin` (off
-PATH) for `psql` — exactly the surprises Step 7b exists to catch.
+**See:** `psql` and `node` answer from **both** shells; `bash --version`
+prints GNU bash 5.x from the Git Bash app.
+**If not:** STOP — fix it now (psql PATH: Step 3.0; Git Bash: install Git
+for Windows). On 2026-10-10 this laptop had psql **off PATH** at
+`C:\Program Files\PostgreSQL\18\bin` — exactly the surprise Step 7b exists
+to catch. The aws/eb CLIs are **not** needed here — only for the optional
+Appendix A paths.
 
 ## 8. Deploy (AWS console) — build the zip, upload, roll back
 
@@ -477,7 +476,7 @@ Grab exactly this before anything else (paste output, don't paraphrase):
 | 5 (001) | the psql stderr of the failed run + `\dt` output |
 | 6 (001b) | the pre-check SELECT result (rows returned) + the psql stderr |
 | 7 (env vars) | screenshot of Configuration → Software → Environment properties + the list of missing/mismatched key names vs `deploy/production.env` (values may be masked) |
-| 7b (tooling) | the five version lines as printed (or the `not recognized` / `command not found` text) + `file deploy/deploy.sh` output |
+| 7b (tooling) | the psql/node/bash version lines as printed from each shell (or the `not recognized` / `command not found` text) |
 | 8 (deploy) | the 8b verification output (required/forbidden greps + zip size), the EB **Events** tab during the deploy (screenshot with the label), `curl /health` response + boot-log line |
 | 9 (three rides) | the three ride ids + each ride's `matching_path` trace stage from `/debug/trips/<id>/trace` |
 | 10 (allowlist) | both riders' `matching_path` stages captured in the same minute + the allowlist SQL you ran |
