@@ -88,13 +88,136 @@ aws rds create-db-snapshot --db-instance-identifier <ID> \
 **If tables/index missing** → continue; steps 5/6 apply them.
 **If anything else is unexpected** (duplicate `matching` rows, odd values) → STOP.
 
-## 4. Copy-test commands (against a RESTORE of the snapshot — never prod)
+## 4. Copy-test — restore the snapshot to a TEMPORARY instance, test, DELETE
 
-TEST_MIGRATION §0–§7 on the copy: `001` twice · seed duplicate · 001b pre-check
+Goal: run TEST_MIGRATION §0–§7 (001 twice · seed duplicate · 001b pre-check
 sees it · FIX → 0 rows · index `indisvalid=true` + enforced-23505 · kill switch
-toggles · rollback + re-apply.
-**See:** every §Sign-off box checked.
-**If any box fails:** STOP.
+toggles · rollback + re-apply) against a **copy** of the database. **Never
+point any of these commands at production** — every command below names the
+temporary instance explicitly; if an identifier you type does NOT contain
+`copytest`, STOP and retype it.
+
+Cost while it exists: roughly the hourly price of the chosen instance class
+plus storage for the full snapshot size (af-south-1 order of magnitude:
+db.t3.medium ≈ US$0.07–0.10/h, gp3 storage ≈ US$0.12/GB-month) — a one-hour
+copy-test lands around **US$1–3**. You are billed until deletion finishes, so
+step 4.6 is not optional. (Exact prices: AWS RDS pricing page for af-south-1 —
+not verified from this document.)
+
+**4.1 Restore the snapshot to a temporary instance — [PowerShell]:**
+
+```powershell
+aws rds restore-db-instance-from-db-snapshot `
+  --db-instance-identifier vura-copytest-$(Get-Date -Format yyyyMMdd-HHmm) `
+  --db-snapshot-identifier vura-pre-final-<yyyyMMdd-from-step-2> `
+  --db-instance-class db.t3.medium `
+  --no-publicly-accessible `
+  --copy-tags-to-snapshot
+```
+
+**[Git Bash]** equivalent:
+
+```bash
+aws rds restore-db-instance-from-db-snapshot \
+  --db-instance-identifier vura-copytest-$(date +%Y%m%d-%H%M) \
+  --db-snapshot-identifier vura-pre-final-<yyyyMMdd-from-step-2> \
+  --db-instance-class db.t3.medium \
+  --no-publicly-accessible \
+  --copy-tags-to-snapshot
+```
+
+**See:** JSON with `"DBInstanceStatus": "creating"` and your
+`vura-copytest-…` identifier. Class/flags: `db.t3.medium` is fine for testing
+(never pick a prod-sized class for a throwaway); `--no-publicly-accessible`
+keeps the copy off the internet — you then reach it only from inside the VPC
+(bastion / SSM port-forward). If you have no in-VPC route, replace
+`--no-publicly-accessible` with `--publicly-accessible` AND a dedicated
+security group that allows 5432 **only from your current IP/32** — an
+open-to-the-world copy of prod data is a STOP-grade mistake. A dedicated SG
+(add to the restore command as `--vpc-security-group-ids sg-…`):
+
+```powershell
+# [PowerShell] make one, scoped to your IP, if you go the public route:
+aws ec2 create-security-group --group-name vura-copytest-sg --description "temporary copy-test access" --vpc-id <vpc-id-of-prod-db>
+aws ec2 authorize-security-group-ingress --group-id <new-sg-id> --protocol tcp --port 5432 --cidr <your-ip>/32
+```
+
+**4.2 Wait for it to be available — [either shell]:**
+
+```powershell
+aws rds wait db-instance-available --db-instance-identifier vura-copytest-<…>
+```
+Takes ~5–15 min for a snapshot restore; the command prints nothing and exits
+0 when the instance is `available`. **If it times out (10 min default, re-run
+it) or ends in `failed`:** STOP.
+
+**4.3 Get its endpoint — [either shell]:**
+
+```powershell
+aws rds describe-db-instances --db-instance-identifier vura-copytest-<…> --query 'DBInstances[0].Endpoint.Address' --output text
+```
+**See:** one `vura-copytest-….…af-south-1.rds.amazonaws.com` hostname (or the
+in-VPC address). Note it as `COPY_HOST`.
+
+**4.4 Connect to the COPY — the snapshot carries the source instance's master
+username and password** (use the DB credentials already recorded in
+`deploy/production.env`); the initial database name is the source's:
+
+**[Git Bash]:**
+
+```bash
+export DATABASE_URL="postgres://<master-user>:<password>@<COPY_HOST>:5432/<dbname>"
+psql "$DATABASE_URL" -c "select version();"   # must answer with a PostgreSQL banner
+psql "$DATABASE_URL" -c "\dt"                 # pre-001 shape: the 4 Module-1 tables may or may not exist (this repo's prod already has 001 applied — TEST_MIGRATION §0's "must NOT exist" assumed a pre-Module-1 copy; if they exist, that itself is a recorded result, then continue)
+```
+
+**[PowerShell]:**
+
+```powershell
+$env:DATABASE_URL = "postgres://<master-user>:<password>@<COPY_HOST>:5432/<dbname>"
+psql $env:DATABASE_URL -c "select version();"
+```
+
+**If `select version()` fails:** STOP (wrong host/credentials — do NOT "fix"
+it by trying the prod endpoint).
+
+**4.5 Run the 001 + 001b tests against the COPY — TEST_MIGRATION §0–§7,
+[Git Bash] (PowerShell: swap `"$DATABASE_URL"` → `$env:DATABASE_URL`):**
+
+```bash
+cd server
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.sql   # run TWICE — exit 0 both times = idempotent
+psql "$DATABASE_URL" -c "SELECT key, value FROM app_config WHERE key='matching';"  # 1 row, enabled=false, mode='off'
+# then TEST_MIGRATION §2–§4: seed the duplicate pending offers (real UUIDs from the copy),
+#   pre-check SELECT shows pending_offers=2, run the FIX UPDATE, pre-check → 0 rows
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_ride_offers_one_active_per_driver ON ride_offers (driver_id) WHERE status='pending';"
+psql "$DATABASE_URL" -c "SELECT indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='idx_ride_offers_one_active_per_driver';"  # true
+#   then the enforced-23505 INSERT (must ERROR), §6 kill-switch UPDATE toggles, and §7:
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.rollback.sql
+psql "$DATABASE_URL" -c "\dt"   # the 4 tables gone; rides/ride_offers/users/driver_profiles row counts unchanged
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.sql   # re-apply works (apply→rollback→apply proven)
+```
+
+**See:** every §Sign-off box in TEST_MIGRATION checked, with the copy's real
+output behind each. **If any box fails:** STOP — capture the exact psql output
+(see "Stuck?" below) and do not proceed to steps 5–10.
+
+**4.6 DELETE the temporary instance — do this even if 4.5 STOPped — [either shell]:**
+
+```powershell
+aws rds delete-db-instance --db-instance-identifier vura-copytest-<…> --skip-final-snapshot
+```
+**See:** JSON `"DBInstanceStatus": "deleting"`; billing for the copy stops when
+it is gone (~5–10 min). If you created the temporary SG in 4.1, delete it too:
+
+```powershell
+aws ec2 delete-security-group --group-id <new-sg-id>
+```
+**If deletion refuses** (e.g. automated backups): re-run with
+`--delete-automated-backups`. A forgotten copytest instance is a monthly
+credit-card line item — confirm with
+`aws rds describe-db-instances --db-instance-identifier vura-copytest-<…>`
+that it ends in `DBInstanceNotFoundFault`.
 
 ## 5. 001 (prod)
 
