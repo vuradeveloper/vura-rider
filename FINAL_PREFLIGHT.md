@@ -1,8 +1,12 @@
 # FINAL_PREFLIGHT.md — ordered go-live checklist for `fix/rc1-stale-boot-log`
 
-**Branch:** `fix/rc1-stale-boot-log` @ `3114340` (= RC1 `12ae348` + staleness
-fixes `2da9888`, `3114340`). **No merge to main. No deploy until every step
-shows its "what I should see". Any miss → STOP — do not continue.**
+**Branch:** `fix/rc1-stale-boot-log` — **record the real tip before you start:**
+run (PowerShell, repo root) `git rev-parse --short HEAD` and write the value
+here: `HEAD = ________`. Trust that recorded value, not any hash printed in
+any document — this file once said `3114340` and went stale. **No merge to
+main. No deploy until every step shows its "what I should see". Any miss →
+STOP — do not continue.** (Provenance only: RC1 `12ae348` + staleness fixes
+`2da9888`, `3114340` — history, not the current tip.)
 
 **ORDER (hard rule):**
 1. **Deploy this Module 1 branch FIRST** (`fix/rc1-stale-boot-log` → `vura-rider-prod`),
@@ -98,7 +102,8 @@ Only if step 3 showed the index missing: pre-check SELECT must return **0 rows**
 ## 8. Deploy
 
 ```bash
-git checkout fix/rc1-stale-boot-log   # HEAD = 3114340 + any §0 dist commit
+git checkout fix/rc1-stale-boot-log
+git rev-parse --short HEAD     # MUST equal the SHA recorded at the top of this file
 bash deploy/deploy.sh vura-rider-prod
 ```
 **See:** label `vura-<short-sha>-<ts>` · `curl /health` → `{"status":"ok"}` ·
