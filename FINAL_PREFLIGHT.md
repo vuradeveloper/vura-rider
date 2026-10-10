@@ -80,7 +80,37 @@ aws rds create-db-snapshot --db-instance-identifier <ID> \
 **See:** snapshot reaches state `available` before step 5.
 **If not:** STOP.
 
-## 3. Pre-check SQL (read-only, prod) — DEPLOY_RC1 §2
+## 3. Pre-check SQL (read-only, prod)
+
+Run this (it is only SELECTs — safe against prod). **[Git Bash]**:
+
+```bash
+psql "$DATABASE_URL" <<'SQL'
+-- 001 + 001b must already exist (Module 1 prep):
+SELECT key FROM app_config WHERE key = 'matching';          -- 1 row
+SELECT h3_matching_enabled, h3_rollout_mode FROM app_config WHERE key='matching';
+--   seed was false/'off'; whatever it is NOW is the live rollout state
+SELECT COUNT(*) FROM information_schema.tables
+ WHERE table_name IN ('driver_cells','driver_blocks','driver_metrics');  -- 3
+-- 001b unique index present:
+SELECT indexname FROM pg_indexes WHERE tablename='ride_offers'
+ AND indexname = 'idx_ride_offers_one_active_per_driver';       -- 1 row
+SQL
+```
+
+**[PowerShell]** (same SQL — heredoc is bash-only; run the statements from a
+file):
+
+```powershell
+psql $env:DATABASE_URL -f precheck.sql   # precheck.sql = the four SELECTs above
+```
+
+**Paste this output back to your reviewer — these are the results that matter
+(and nothing else from the session):**
+1. the `matching` row: `h3_matching_enabled`, `h3_rollout_mode` (live rollout truth);
+2. the table COUNT (3);
+3. the index SELECT (1 row = present, 0 = missing);
+4. the snapshot name from step 2 + its `available` state.
 
 **See:** `matching` row = 1 · `driver_cells`+`driver_blocks`+`driver_metrics`
 = 3 tables · `idx_ride_offers_one_active_per_driver` present · record current
