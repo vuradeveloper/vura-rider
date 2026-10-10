@@ -14,11 +14,12 @@ STOP — do not continue.** (Provenance only: RC1 `12ae348` + staleness fixes
 2. **`main` is merged only AFTER Step 10's allowlist test passes** — never
    before it, never in parallel with the deploy. Module 2 (`module2-destination`
    / `release-candidate-2`, flags OFF) merges after that, same rule.
-**Shells (Windows):** every command block below is labelled **[PowerShell]** or
-**[Git Bash]** — run it in that shell only. `date +%Y…`, `"$DATABASE_URL"`,
-backslash continuations, and `bash deploy/deploy.sh` are Git Bash; `$env:…`,
-`` ` `` continuations, and `Get-Date` are PowerShell. Plain `bash` typed in
-PowerShell on this laptop resolves to the broken WSL stub — use the **Git Bash**
+**Shells (Windows):** this checklist is **AWS-console-first** — most steps need
+only a browser. Every block that is still a command is labelled **[PowerShell]**
+or **[Git Bash]**; optional CLI equivalents live in **Appendix A**. `date +%Y…`,
+`"$DATABASE_URL"` and backslash continuations are Git Bash; `$env:…`, `` ` ``
+continuations and `Get-Date` are PowerShell. Plain `bash` typed in PowerShell
+on this laptop resolves to the broken WSL stub — use the **Git Bash**
 Start-menu app (or `"C:\Program Files\Git\bin\bash.exe" -c "…"`).
 
 Detail: `DEPLOY_RC1.md` · `server/migrations/TEST_MIGRATION.md` · `MODULE1_TEST.md`.
@@ -55,30 +56,39 @@ recorded in the password manager per `KEYSTORE_PLAN.md` §3 checklist.
 **If not:** STOP — losing the current signer makes in-place updates impossible
 for every already-installed driver APK.
 
-## 1. EB min=max=1
+## 1. EB min=max=1 (AWS console)
 
-EB console → `vura-rider-prod` → Configuration: Auto Scaling **min=max=1**,
-deploy policy All-at-once (never `RollingWithAdditionalBatch`).
-**See:** exactly 1 instance, Health Green.
+Click-path (console names as of 2026 — if one moved, use the search box
+*inside* the console):
+
+1. AWS console top bar → region **Africa (Cape Town) af-south-1**.
+2. Services → **Elastic Beanstalk** → left nav **Environments** →
+   `vura-rider-prod` (application `vura-rider`).
+3. Left nav **Configuration** → card **Capacity** → **Edit**: Min = **1**,
+   Max = **1** → **Apply changes** (a green "no downtime" environment update
+   runs — wait for it to finish).
+4. Same page → **Rolling updates and deployments** card (older consoles:
+   inside Capacity) → Deployment policy = **All at once** — never
+   `Rolling with additional batch`.
+
+**See:** environment header shows Health **Ok** (green), the Instances tile
+shows exactly **1 instance**, and the environment-update event in **Events**
+finished green.
 **If not:** STOP — two instances double-tick `offerWorker` (DEPLOY_RC1 §5).
 
-## 2. Snapshot
+## 2. Snapshot (AWS console)
 
-**[PowerShell]:**
+1. Services → **RDS** → left nav **Databases** → click the prod instance
+   (its identifier is the `DB_HOST` from `deploy/production.env`, minus the
+   `.rds.amazonaws.com` suffix).
+2. Top-right **Actions** → **Take snapshot**.
+3. Snapshot name: `vura-pre-final-<yyyyMMdd>` (PowerShell: `Get-Date -Format
+   yyyyMMdd`; Git Bash: `date +%Y%m%d`) → **Take snapshot**.
+4. Left nav **Snapshots** → filter **Manual** → find yours.
 
-```powershell
-aws rds create-db-snapshot --db-instance-identifier <ID> `
-  --db-snapshot-identifier vura-pre-final-$(Get-Date -Format yyyyMMdd)
-```
-
-**[Git Bash]** (same snapshot, if you prefer Git Bash):
-
-```bash
-aws rds create-db-snapshot --db-instance-identifier <ID> \
-  --db-snapshot-identifier vura-pre-final-$(date +%Y%m%d)
-```
-**See:** snapshot reaches state `available` before step 5.
-**If not:** STOP.
+**See:** Status = **Available** (≈5–15 min) before step 5 (step 4 restores it).
+**If not** (Status **Failed**): STOP.
+(CLI equivalent: Appendix A.1.)
 
 ## 3. Pre-check SQL (read-only, prod)
 
@@ -134,60 +144,34 @@ copy-test lands around **US$1–3**. You are billed until deletion finishes, so
 step 4.6 is not optional. (Exact prices: AWS RDS pricing page for af-south-1 —
 not verified from this document.)
 
-**4.1 Restore the snapshot to a temporary instance — [PowerShell]:**
+**4.1 Restore the snapshot — AWS console:**
 
-```powershell
-aws rds restore-db-instance-from-db-snapshot `
-  --db-instance-identifier vura-copytest-$(Get-Date -Format yyyyMMdd-HHmm) `
-  --db-snapshot-identifier vura-pre-final-<yyyyMMdd-from-step-2> `
-  --db-instance-class db.t3.medium `
-  --no-publicly-accessible `
-  --copy-tags-to-snapshot
-```
+1. Services → **RDS** → left nav **Snapshots** → filter **Manual** →
+   select `vura-pre-final-<yyyyMMdd>` → **Actions** → **Restore snapshot**.
+2. On the restore page:
+   - **DB instance identifier**: `vura-copytest-<yyyyMMdd-HHmm>` — the name
+     MUST contain `copytest` (that is the never-prod guard);
+   - **Engine** unchanged; **Instance class**: `db.t3.medium` (never a
+     prod-sized class for a throwaway);
+   - **Connectivity**: same VPC + subnet group as prod (the default).
+     **Public access: No** — you reach it from inside the VPC (bastion /
+     SSM port-forward). Only if you have no in-VPC route: set **Yes** and
+     select a security group whose inbound rule allows 5432 **from your
+     IP/32 only** (create it first in EC2 → Security Groups; an
+     open-to-the-world copy of prod data is a STOP-grade mistake);
+   - no Multi-AZ; backups don't matter (it gets deleted).
+3. **Restore database instance**.
 
-**[Git Bash]** equivalent:
+**See:** Databases list shows `vura-copytest-…`, status **Creating**.
 
-```bash
-aws rds restore-db-instance-from-db-snapshot \
-  --db-instance-identifier vura-copytest-$(date +%Y%m%d-%H%M) \
-  --db-snapshot-identifier vura-pre-final-<yyyyMMdd-from-step-2> \
-  --db-instance-class db.t3.medium \
-  --no-publicly-accessible \
-  --copy-tags-to-snapshot
-```
+**4.2 Wait — [console]:** Databases → your copy → status **Available**
+(≈10–20 min). **If** it ends **Failed** (or the **Events** tab shows a
+restore-failed event): STOP.
 
-**See:** JSON with `"DBInstanceStatus": "creating"` and your
-`vura-copytest-…` identifier. Class/flags: `db.t3.medium` is fine for testing
-(never pick a prod-sized class for a throwaway); `--no-publicly-accessible`
-keeps the copy off the internet — you then reach it only from inside the VPC
-(bastion / SSM port-forward). If you have no in-VPC route, replace
-`--no-publicly-accessible` with `--publicly-accessible` AND a dedicated
-security group that allows 5432 **only from your current IP/32** — an
-open-to-the-world copy of prod data is a STOP-grade mistake. A dedicated SG
-(add to the restore command as `--vpc-security-group-ids sg-…`):
-
-```powershell
-# [PowerShell] make one, scoped to your IP, if you go the public route:
-aws ec2 create-security-group --group-name vura-copytest-sg --description "temporary copy-test access" --vpc-id <vpc-id-of-prod-db>
-aws ec2 authorize-security-group-ingress --group-id <new-sg-id> --protocol tcp --port 5432 --cidr <your-ip>/32
-```
-
-**4.2 Wait for it to be available — [either shell]:**
-
-```powershell
-aws rds wait db-instance-available --db-instance-identifier vura-copytest-<…>
-```
-Takes ~5–15 min for a snapshot restore; the command prints nothing and exits
-0 when the instance is `available`. **If it times out (10 min default, re-run
-it) or ends in `failed`:** STOP.
-
-**4.3 Get its endpoint — [either shell]:**
-
-```powershell
-aws rds describe-db-instances --db-instance-identifier vura-copytest-<…> --query 'DBInstances[0].Endpoint.Address' --output text
-```
-**See:** one `vura-copytest-….…af-south-1.rds.amazonaws.com` hostname (or the
-in-VPC address). Note it as `COPY_HOST`.
+**4.3 Endpoint — [console]:** Databases → `vura-copytest-…` →
+**Connectivity & security** tab → **Endpoint** + **Port** (5432). Note the
+hostname as `COPY_HOST`.
+(CLI equivalents for 4.1–4.3/4.6: Appendix A.2.)
 
 **4.4 Connect to the COPY — the snapshot carries the source instance's master
 username and password** (use the DB credentials already recorded in
@@ -232,22 +216,20 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.sql   
 output behind each. **If any box fails:** STOP — capture the exact psql output
 (see "Stuck?" below) and do not proceed to steps 5–10.
 
-**4.6 DELETE the temporary instance — do this even if 4.5 STOPped — [either shell]:**
+**4.6 DELETE the temporary instance — AWS console — do this even if 4.5 STOPped:**
 
-```powershell
-aws rds delete-db-instance --db-instance-identifier vura-copytest-<…> --skip-final-snapshot
-```
-**See:** JSON `"DBInstanceStatus": "deleting"`; billing for the copy stops when
-it is gone (~5–10 min). If you created the temporary SG in 4.1, delete it too:
+1. RDS → **Databases** → `vura-copytest-…` → **Actions** → **Delete**.
+2. Uncheck **Create final snapshot** (it is a throwaway), leave **Retain
+   automated backups** unchecked, type the instance name to confirm →
+   **Delete**.
 
-```powershell
-aws ec2 delete-security-group --group-id <new-sg-id>
-```
-**If deletion refuses** (e.g. automated backups): re-run with
-`--delete-automated-backups`. A forgotten copytest instance is a monthly
-credit-card line item — confirm with
-`aws rds describe-db-instances --db-instance-identifier vura-copytest-<…>`
-that it ends in `DBInstanceNotFoundFault`.
+**See:** status **Deleting**, then the instance disappears from the Databases
+list (≈5–15 min — you are billed until then). If you created a temporary
+security group: EC2 → **Security Groups** → `vura-copytest-sg` → **Actions**
+→ **Delete**.
+**If deletion is blocked:** the "Create final snapshot" box was left checked —
+uncheck and retry. A forgotten copytest instance is a monthly credit-card
+line item; confirm the Databases list no longer shows it.
 
 ## 5. 001 (prod)
 
@@ -287,17 +269,20 @@ psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/001b_offer_unique_index.
 **See:** index present + `indisvalid=true`.
 **Already present:** skip.
 
-## 7. Env vars
+## 7. Env vars (AWS console)
 
-**[PowerShell or Git Bash]** (the EB CLI works in both — `eb printenv`):
+1. Elastic Beanstalk → Environments → `vura-rider-prod` → left nav
+   **Configuration** → card **Software** → **Edit**.
+2. Scroll to **Environment properties** — the full name/value table.
 
-`eb printenv` vs `deploy/production.env` + the required table in
-`AWS-NEW-ACCOUNT-SETUP.md` §4 (`env.prod.example` template).
-**See:** every required var present — `NODE_ENV/PORT/DB_*/FIREBASE_*`
-(`FIREBASE_PRIVATE_KEY_B64` decodes)/`AWS_S3_*`/`ALLOWED_ORIGINS`/
-`PUBLIC_BASE_URL`/rate limits/`PAYSTACK_*`/`RESEND_*`/`ADMIN_EMAILS`/
-`DEV_LOG_*_KEY`.
-**If `DB_*` or `FIREBASE_*` missing or wrong:** STOP.
+**See:** every required var from `deploy/production.env` +
+`AWS-NEW-ACCOUNT-SETUP.md` §4 (`env.prod.example` template) exists with the
+same value — `NODE_ENV/PORT/DB_*/FIREBASE_*` (`FIREBASE_PRIVATE_KEY_B64`
+decodes to a PEM)/`AWS_S3_*`/`ALLOWED_ORIGINS`/`PUBLIC_BASE_URL`/rate
+limits/`PAYSTACK_*`/`RESEND_*`/`ADMIN_EMAILS`/`DEV_LOG_*_KEY`.
+**If `DB_*` or `FIREBASE_*` missing or wrong:** STOP (fix in the editor →
+**Apply changes** — that is an environment update; re-check Health after).
+(CLI equivalent: `eb printenv` — Appendix A.3.)
 
 ## 7b. Dry-run the tooling — find breakage TODAY, not on deploy day
 
@@ -383,12 +368,12 @@ Grab exactly this before anything else (paste output, don't paraphrase):
 | 0 (gates) | last 30 terminal lines — the `tsc` line, the vitest `Tests` summary, and the §1b `dist gate OK`/error text |
 | 0b (keystore) | `keytool -list` output for each **copy** (the SHA-256 line) + a screenshot of both backup locations |
 | 1 (EB) | EB console screenshot: Auto Scaling min/max values, Health status, instance count |
-| 2 (snapshot) | `aws rds describe-db-snapshots --db-snapshot-identifier <name> --query 'DBSnapshots[0].Status' --output text` output (must end `available`) |
+| 2 (snapshot) | the snapshot name you typed + RDS → Snapshots (Manual) showing it **Available** (screenshot) |
 | 3 (pre-check) | the four SELECT outputs exactly as psql printed them (this is also the reviewer paste) |
-| 4 (copy-test) | the failing command + its full output, and the TEST_MIGRATION sign-off table state; plus proof 4.6 ran (`DBInstanceNotFoundFault`) |
+| 4 (copy-test) | the failing command + its full output, and the TEST_MIGRATION sign-off table state; plus proof 4.6 ran (the Databases list no longer shows `vura-copytest-…`) |
 | 5 (001) | the psql stderr of the failed run + `\dt` output |
 | 6 (001b) | the pre-check SELECT result (rows returned) + the psql stderr |
-| 7 (env vars) | `eb printenv` output (mask values, keep key names) + the list of missing keys vs `deploy/production.env` |
+| 7 (env vars) | screenshot of Configuration → Software → Environment properties + the list of missing/mismatched key names vs `deploy/production.env` (values may be masked) |
 | 7b (tooling) | the five version lines as printed (or the `not recognized` / `command not found` text) + `file deploy/deploy.sh` output |
 | 8 (deploy) | the `eb deploy` line with the version label + `curl /health` response + the boot-log line (screenshot if the console scrolls) |
 | 9 (three rides) | the three ride ids + each ride's `matching_path` trace stage from `/debug/trips/<id>/trace` |
@@ -396,3 +381,40 @@ Grab exactly this before anything else (paste output, don't paraphrase):
 
 In every case also note: the exact step, the time, and the SHA from
 `git rev-parse --short HEAD` — an unlabelled screenshot is guesswork later.
+
+---
+
+## Appendix A — CLI versions (optional)
+
+The steps above need **no** CLI. Use these only if you prefer scripting —
+and note the aws/eb CLIs are **not installed on this laptop** (Step 7b no
+longer checks them; install them first if you go this way).
+
+### A.1 — Step 2 snapshot
+
+**[PowerShell]** (Git Bash: `date +%Y%m%d` instead of `Get-Date`):
+
+```powershell
+aws rds create-db-snapshot --db-instance-identifier <ID> `
+  --db-snapshot-identifier vura-pre-final-$(Get-Date -Format yyyyMMdd)
+```
+
+### A.2 — Step 4 restore / inspect / delete
+
+**[PowerShell]** (Git Bash: backslash continuations, `$(date +%Y%m%d-%H%M)`):
+
+```powershell
+aws rds restore-db-instance-from-db-snapshot `
+  --db-instance-identifier vura-copytest-$(Get-Date -Format yyyyMMdd-HHmm) `
+  --db-snapshot-identifier vura-pre-final-<yyyyMMdd> `
+  --db-instance-class db.t3.medium --no-publicly-accessible --copy-tags-to-snapshot
+aws rds wait db-instance-available --db-instance-identifier vura-copytest-<…>
+aws rds describe-db-instances --db-instance-identifier vura-copytest-<…> --query 'DBInstances[0].Endpoint.Address' --output text
+aws rds delete-db-instance --db-instance-identifier vura-copytest-<…> --skip-final-snapshot
+```
+
+### A.3 — Step 7 env vars
+
+```powershell
+eb printenv      # the same table the console shows in Step 7 → Software
+```
