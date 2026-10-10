@@ -373,3 +373,26 @@ kill switch (`h3_matching_enabled=false`), everyone legacy in seconds.
 **After:** DEPLOY_RC1 §7 known pre-existing issues (CarsXE budget; diag read key =
 instance's `DEV_LOG_READ_KEY`). **This deploys; it does not merge.** `main` is
 merged only after Step 10 (allowlist) passes — see the ORDER rule at the top.
+
+## Stuck? — the ONE thing to capture when a step says STOP
+
+Grab exactly this before anything else (paste output, don't paraphrase):
+
+| Step | Capture this |
+|---|---|
+| 0 (gates) | last 30 terminal lines — the `tsc` line, the vitest `Tests` summary, and the §1b `dist gate OK`/error text |
+| 0b (keystore) | `keytool -list` output for each **copy** (the SHA-256 line) + a screenshot of both backup locations |
+| 1 (EB) | EB console screenshot: Auto Scaling min/max values, Health status, instance count |
+| 2 (snapshot) | `aws rds describe-db-snapshots --db-snapshot-identifier <name> --query 'DBSnapshots[0].Status' --output text` output (must end `available`) |
+| 3 (pre-check) | the four SELECT outputs exactly as psql printed them (this is also the reviewer paste) |
+| 4 (copy-test) | the failing command + its full output, and the TEST_MIGRATION sign-off table state; plus proof 4.6 ran (`DBInstanceNotFoundFault`) |
+| 5 (001) | the psql stderr of the failed run + `\dt` output |
+| 6 (001b) | the pre-check SELECT result (rows returned) + the psql stderr |
+| 7 (env vars) | `eb printenv` output (mask values, keep key names) + the list of missing keys vs `deploy/production.env` |
+| 7b (tooling) | the five version lines as printed (or the `not recognized` / `command not found` text) + `file deploy/deploy.sh` output |
+| 8 (deploy) | the `eb deploy` line with the version label + `curl /health` response + the boot-log line (screenshot if the console scrolls) |
+| 9 (three rides) | the three ride ids + each ride's `matching_path` trace stage from `/debug/trips/<id>/trace` |
+| 10 (allowlist) | both riders' `matching_path` stages captured in the same minute + the allowlist SQL you ran |
+
+In every case also note: the exact step, the time, and the SHA from
+`git rev-parse --short HEAD` — an unlabelled screenshot is guesswork later.
