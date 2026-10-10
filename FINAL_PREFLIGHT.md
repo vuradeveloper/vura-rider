@@ -92,6 +92,49 @@ finished green.
 
 ## 3. Pre-check SQL (read-only, prod)
 
+### 3.0 Get psql + connect (Windows)
+
+**psql on PATH** — this laptop has PostgreSQL 18 at
+`C:\Program Files\PostgreSQL\18\bin` (off PATH). Add it: Settings → System
+→ About → **Advanced system settings** → **Environment Variables** → `Path`
+→ **Edit** → **New** → `C:\Program Files\PostgreSQL\18\bin` → OK. Open a
+**new** terminal: `psql --version` must answer.
+(Session-only alternative: `$env:Path += ';C:\Program Files\PostgreSQL\18\bin'`.)
+
+**Find the prod endpoint in the console:** RDS → Databases → prod instance →
+**Connectivity & security** tab → **Endpoint** (hostname) + **Port** (5432).
+The database name is usually `postgres` (the instance's initial database).
+
+**Your IP must be allowed** (same tab → **VPC security groups** → click the
+`sg-…` → EC2 console opens → **Inbound rules** → **Edit inbound rules** →
+add: Type **PostgreSQL**, Port **5432**, Source **My IP** → **Save**). Remove
+this rule when the checklist is done; never `0.0.0.0/0`.
+
+**GUI option (no psql):** **pgAdmin 4** (ships with PostgreSQL — Start menu →
+PostgreSQL 18 → pgAdmin 4) or **DBeaver** (dbeaver.io): connect dialog →
+host = the RDS **Endpoint**, port 5432, maintenance DB `postgres`, username =
+master user from `deploy/production.env`, password prompt. Run the four
+SELECTs in the Query tool.
+
+**Connect** (a password prompt beats putting secrets in shell history):
+
+```bash
+psql -h <ENDPOINT> -p 5432 -U <master-user> -d postgres     # [Git Bash or PowerShell]
+```
+
+**⚠ 001b warning (steps 4.5 and 6):** `CREATE UNIQUE INDEX CONCURRENTLY`
+**cannot run inside a transaction**. In psql: run it as ONE statement — no
+`BEGIN`, no `-1`/`--single-transaction` flag, don't paste the whole file as a
+script. **pgAdmin** Query tool: leave **autocommit ON** (the "Disable
+auto-commit" toolbar button must NOT be active) and execute the statement
+alone. **DBeaver**: the autocommit toggle must be ON — never "Execute
+script" with autocommit off (it wraps everything in one transaction). If an
+INVALID index is ever left behind:
+`DROP INDEX CONCURRENTLY IF EXISTS idx_ride_offers_one_active_per_driver;`
+(TEST_MIGRATION §5).
+
+### 3.1 The pre-check SQL
+
 Run this (it is only SELECTs — safe against prod). **[Git Bash]**:
 
 ```bash
@@ -239,8 +282,9 @@ Only if step 3 showed the 4 tables missing — **[Git Bash]**:
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.sql
 ```
 
-run it **twice**. **[PowerShell]** equivalent (`"$DATABASE_URL"` is bash
-syntax — PowerShell's env-var form is `$env:DATABASE_URL`):
+run it **twice** — connect exactly as Step 3.0. **[PowerShell]** equivalent
+(`"$DATABASE_URL"` is bash syntax — PowerShell's env-var form is
+`$env:DATABASE_URL`):
 
 ```powershell
 psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/001_h3_driver_index.sql
@@ -265,7 +309,8 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001b_offer_unique_index.sq
 psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/001b_offer_unique_index.sql
 ```
 
-(plain psql — **no wrapping transaction**, CONCURRENTLY).
+(plain psql — **no wrapping transaction**, CONCURRENTLY — if you use
+pgAdmin/DBeaver, re-read the Step 3.0 autocommit warning first).
 **See:** index present + `indisvalid=true`.
 **Already present:** skip.
 
