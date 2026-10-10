@@ -1,7 +1,10 @@
 # DEPLOY_MODULE2.md — deploy Module 2 (Set Destination) on top of RC1
 
-**Branch:** `module2-destination` @ `11b2f59` = `release-candidate-1` (ancestor)
-+ the Module 2 series (`4a`…`4g`, `4c-fix`, and the `4h` review fixes 1–5).
+**Branch:** `module2-destination` — run `git rev-parse --short HEAD` and record
+the SHA you are deploying; trust it over any hash in this document (the header
+once said `11b2f59` and went stale). The branch = `release-candidate-1`
+(ancestor) + the Module 2 series (`4a`…`4g`, `4c-fix`, and the `4h` review
+fixes 1–5) + the deploy/merge ORDER rule.
 **Target:** the same EB environment as RC1 — `vura-rider-prod`, `af-south-1`,
 **min=max=1 instance**.
 
@@ -21,11 +24,12 @@ it, never in parallel with the deploy. This document is only what comes after.
 ## 1. Preflight gates (from the branch, on your machine)
 
 ```powershell
-git checkout module2-destination && git pull
-git --no-pager log --oneline -1           # expect 11b2f59 ...
+git checkout module2-destination
+git pull
+git rev-parse --short HEAD           # record the real tip; trust this, not any hash in this doc
 cd server
 npx tsc --noEmit                           # 0 errors
-npx vitest run                             # 155 passed / 9 skipped (skip = real-PG only)
+npx vitest run                             # mocked suite green (skip = real-PG only)
 ```
 
 ### 1a. Rebuild and COMMIT `server/dist` (hard gate)
@@ -37,7 +41,8 @@ Deploying without this step ships months-old code with a green test run.
 ```powershell
 cd server
 npm run build
-git add dist && git commit -m "deploy: rebuild server/dist for Module 2 (11b2f59)"
+git add dist
+git commit -m "deploy: rebuild server/dist for Module 2 ($(git rev-parse --short HEAD))"
 git status --porcelain server/dist         # from repo root — must be CLEAN
 ```
 
@@ -46,11 +51,34 @@ git status --porcelain server/dist         # from repo root — must be CLEAN
 Additive only (`IF NOT EXISTS` / `ON CONFLICT DO NOTHING`), idempotent —
 apply **after a snapshot**:
 
+**[PowerShell]** (snapshot; the AWS CLI works in both shells — only the date
+syntax differs):
+
+```powershell
+aws rds create-db-snapshot --db-instance-identifier <ID> `
+  --db-snapshot-identifier vura-pre-module2-$(Get-Date -Format yyyyMMdd)
+```
+
+**[Git Bash]**:
+
 ```bash
 aws rds create-db-snapshot --db-instance-identifier <ID> \
   --db-snapshot-identifier vura-pre-module2-$(date +%Y%m%d)
+```
+
+Apply `002` twice (must exit 0 both runs). **[Git Bash]** — `"$DATABASE_URL"`
+is bash syntax:
+
+```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/migrations/002_destination_mode.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/migrations/002_destination_mode.sql   # must exit 0 again
+```
+
+**[PowerShell]** — the env-var form is `$env:DATABASE_URL`:
+
+```powershell
+psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f server/migrations/002_destination_mode.sql
+psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f server/migrations/002_destination_mode.sql   # must exit 0 again
 ```
 
 Verify (checklist: `server/migrations/TEST_MIGRATION.md` §002):
@@ -74,10 +102,16 @@ SELECT COUNT(*) FROM information_schema.tables
 Rollback script: `server/migrations/002_destination_mode.rollback.sql`
 (additive; destroys session history — `pg_dump destination_sessions destination_events` first).
 
-## 3. Deploy
+## 3. Deploy — **[Git Bash] only**
+
+Same requirements as FINAL_PREFLIGHT Step 8 (LF `deploy.sh`, `eb` on PATH
+inside Git Bash — the tooling dry-run is FINAL_PREFLIGHT Step 7b; the WSL-stub
+`bash` in PowerShell cannot run this script):
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 git checkout module2-destination
+git rev-parse --short HEAD    # record the SHA you are deploying
 bash deploy/deploy.sh vura-rider-prod      # eb deploy --label vura-<short>-<ts>
 ```
 
