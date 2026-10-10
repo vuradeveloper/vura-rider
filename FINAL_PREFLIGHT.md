@@ -312,29 +312,87 @@ checkout -- deploy/deploy.sh`, re-check, then continue.
 had **no `aws`, no `eb`** and only `C:\Program Files\PostgreSQL\18\bin` (off
 PATH) for `psql` — exactly the surprises Step 7b exists to catch.
 
-## 8. Deploy — **[Git Bash] only**
+## 8. Deploy (AWS console) — build the zip, upload, roll back
 
-Run in the **Git Bash** app (the WSL-stub `bash` in PowerShell cannot execute
-this script — Step 7b proved which `bash` you have):
+### 8a. Build the deployable zip on Windows — [PowerShell]
 
-```bash
-cd "$(git rev-parse --show-toplevel)"
+The zip mirrors what `eb deploy`'s `.ebignore` ships: **`Procfile`,
+`.gitignore`, `.platform/`, `.ebextensions/`, `server/`** — nothing else.
+It must NOT contain `server/node_modules` (the instance installs its own
+Linux deps: the `.platform` hooks run `npm install --omit=dev` and verify
+`dotenv` + `sharp` before the app starts), any `.env` (secrets live in Step
+7's Environment properties), the Expo app, or logs.
+
+```powershell
+# from the repo root, on the exact commit being deployed:
+cd 'c:\Users\mbofh\2026-PROJECTS\New Boomnut\vura-rider'
 git checkout fix/rc1-stale-boot-log
-git rev-parse --short HEAD     # MUST equal the SHA recorded at the top of this file
-bash deploy/deploy.sh vura-rider-prod
+$sha = git rev-parse --short HEAD      # MUST equal the SHA recorded at the top
+
+# rebuild dist so the zip carries fresh bytecode (Step 0 / §1b gate this):
+cd server; npm run build; cd ..
+
+# stage exactly the five shipping paths:
+$stage = "$env:TEMP\vura-eb\app"
+Remove-Item -Recurse -Force "$env:TEMP\vura-eb" -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $stage | Out-Null
+Copy-Item Procfile,.gitignore -Destination $stage
+Copy-Item .platform,.ebextensions -Destination $stage -Recurse
+Copy-Item server -Destination "$stage\server" -Recurse
+Remove-Item -Recurse -Force "$stage\server\node_modules","$stage\server\logs" -ErrorAction SilentlyContinue
+Get-ChildItem "$stage\server" -Filter *.log -File -Recurse | Remove-Item -Force
+Remove-Item -Force "$stage\server\.env" -ErrorAction SilentlyContinue
+
+# zip with Windows' built-in tar (bsdtar writes proper zip entries;
+# Compress-Archive stores backslashes that some Linux unzip tools choke on):
+$zip = "vura-$sha-$(Get-Date -Format yyyyMMdd-HHmm).zip"
+tar -a -c -f $zip -C $stage Procfile .gitignore .platform .ebextensions server
 ```
 
-`deploy.sh` needs: LF line endings (Step 7b checked), `git` + `date` (shipped
-with Git Bash), and `eb` **on PATH inside Git Bash** — if Git Bash says
-`eb: command not found` while PowerShell finds it, fix the PATH in Git Bash's
-`~/.bash_profile`, do not retype the deploy by hand.
-**See:** label `vura-<short-sha>-<ts>` · `curl /health` → `{"status":"ok"}` ·
-boot log = **new** line `… driver stale 20s (demote) · loc fresh 20s (candidates)
-· index evict 40s (app_config) · build <sha>` + instance id + single-instance
-warning · `/api/dev/diag` answers, `sharp.loads=true` · EB shows 1 instance on
-the new label.
+### 8b. Confirm the zip's contents BEFORE uploading — [PowerShell]
+
+```powershell
+tar -tf $zip | Select-String '^Procfile$|^\.platform/|^\.ebextensions/|^server/package.json|^server/dist/index.js'
+#   -> all five must print
+tar -tf $zip | Select-String 'node_modules|\.env$|figma-ui|expo|\.log$'
+#   -> must print NOTHING
+"{0:N1} MB" -f ((Get-Item $zip).Length / 1MB)   # expect a few MB, not hundreds
+```
+
+**See:** the five required entries print; the forbidden grep prints nothing;
+size is a few MB. **If not:** STOP — never upload a zip that fails 8b.
+
+### 8c. Upload it with a version label — [browser]
+
+1. Elastic Beanstalk → Environments → `vura-rider-prod` → button
+   **Upload and deploy** (top right of the environment dashboard).
+2. **Version label**: `vura-<sha>-<yyyyMMdd-HHmm>` — same as the zip name;
+   letters/digits/hyphen only, no slashes (that is what deploy.sh enforced).
+3. **Source** → Local file → **Choose file** → pick the 8a zip → **Deploy**.
+4. Watch **Events**: the deploy runs the `.platform` npm-install hooks
+   (~2–6 min for a node_modules-free zip) then the health check.
+
+**See:** the SAME verification as always — label `vura-<short-sha>-<ts>` on
+the environment · `curl /health` → `{"status":"ok"}` · boot log = **new** line
+`… driver stale 20s (demote) · loc fresh 20s (candidates) · index evict 40s
+(app_config) · build <sha>` + instance id + single-instance warning ·
+`/api/dev/diag` answers, `sharp.loads=true` · EB shows 1 instance on the new
+label, Health **Ok**.
 **If health fails, the old `45s` boot line appears, or >1 instance:** STOP →
 DEPLOY_RC1 §6 rollback ladder (config kill switch → redeploy → schema).
+
+### 8d. Roll back to the previous application version — [browser]
+
+1. Left nav **Application versions** (under the application) → the row
+   directly above your current label is the previous version.
+2. Select its radio button → **Deploy** (top right) → target
+   `vura-rider-prod` → **Deploy** → watch **Events** until Health is Ok.
+
+EB rollback = re-deploying an old application version's zip — it does NOT
+touch schema or environment properties; for code problems check the
+DEPLOY_RC1 §6 ladder order first (config kill switch before redeploy where
+it applies). (CLI equivalent — `deploy.sh`, needs aws+eb installed:
+Appendix A.4.)
 
 ## 9. Three rides
 
@@ -375,7 +433,7 @@ Grab exactly this before anything else (paste output, don't paraphrase):
 | 6 (001b) | the pre-check SELECT result (rows returned) + the psql stderr |
 | 7 (env vars) | screenshot of Configuration → Software → Environment properties + the list of missing/mismatched key names vs `deploy/production.env` (values may be masked) |
 | 7b (tooling) | the five version lines as printed (or the `not recognized` / `command not found` text) + `file deploy/deploy.sh` output |
-| 8 (deploy) | the `eb deploy` line with the version label + `curl /health` response + the boot-log line (screenshot if the console scrolls) |
+| 8 (deploy) | the 8b verification output (required/forbidden greps + zip size), the EB **Events** tab during the deploy (screenshot with the label), `curl /health` response + boot-log line |
 | 9 (three rides) | the three ride ids + each ride's `matching_path` trace stage from `/debug/trips/<id>/trace` |
 | 10 (allowlist) | both riders' `matching_path` stages captured in the same minute + the allowlist SQL you ran |
 
@@ -418,3 +476,21 @@ aws rds delete-db-instance --db-instance-identifier vura-copytest-<…> --skip-f
 ```powershell
 eb printenv      # the same table the console shows in Step 7 → Software
 ```
+
+### A.4 — Step 8 deploy via `deploy.sh` (**[Git Bash] only**; needs aws+eb
+installed — neither is on this laptop)
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+git checkout fix/rc1-stale-boot-log
+git rev-parse --short HEAD     # MUST equal the SHA recorded at the top of this file
+bash deploy/deploy.sh vura-rider-prod
+```
+
+`deploy.sh` needs: LF line endings (its git blob is LF, root
+`.gitattributes` pins `eol=lf` — if bash dies with `set: -o: pipefail: invalid
+option name`, the working copy is CRLF: fix with **[PowerShell]**
+`Remove-Item deploy/deploy.sh; git checkout -- deploy/deploy.sh`), `git` +
+`date` (shipped with Git Bash), and `eb` **on PATH inside Git Bash**. It
+uploads the same five shipping paths via `.ebignore` — including
+`server/node_modules` (minus native sharp dirs), unlike the 8a zip.
