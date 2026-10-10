@@ -10,8 +10,11 @@
 > server goes first with both flags OFF, is verified invisible, then rolled out
 > per driver. `module2-destination` stays a branch until a deliberate merge.
 
-**Order matters:** `DEPLOY_RC1.md` first (Module 1 must be live and verified —
-`MODULE2_TEST.md` §0 requires it). This document is only what comes after.
+**Order matters:** `DEPLOY_RC1.md` first — **deploy the Module 1 branch to
+production before anything in this document** (Module 1 must be live and
+verified — `MODULE2_TEST.md` §0 requires it), and **`main` is merged only
+after `FINAL_PREFLIGHT.md` Step 10's allowlist test passes** — never before
+it, never in parallel with the deploy. This document is only what comes after.
 
 ---
 
