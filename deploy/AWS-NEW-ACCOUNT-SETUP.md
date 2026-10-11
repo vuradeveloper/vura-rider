@@ -44,7 +44,7 @@ different account. This single fact explains the whole "wrong account / wrong em
 | `api` response headers | `Server: cloudflare`, `cf-cache-status: DYNAMIC`, `CF-RAY: …-JNB`, `alt-svc: h3`, HSTS + CSP + `X-Frame-Options: SAMEORIGIN` | `curl -I https://api.ridevura.com/health` |
 | Web site | `ridevura.com` → **308** → `https://www.ridevura.com/`, served by **Vercel** (`x-vercel-id: cpt1::…`) behind Cloudflare | `curl -I https://ridevura.com` |
 | API app | AWS Elastic Beanstalk app `vura-rider`, env `vura-rider-prod`, us-east-1, single instance, Node 22 (AL2023), `Procfile: cd server && node dist/index.js`, health `/health`, deploy timeout 1800s | `Procfile`, `.ebextensions/server-start.config` |
-| Database | RDS PostgreSQL `vura.cy1qwqwmkmvc.us-east-1.rds.amazonaws.com`, db `vura`, user `vura_admin`, SSL required, private (no public access) | `deploy/production.env`, `deploy/cape-town/01-create-rds.sh` |
+| Database | RDS PostgreSQL `vura-prod.c1mcea0s8maz.af-south-1.rds.amazonaws.com`, db `vura`, user `vura_admin`, SSL required, private (no public access) | `deploy/production.env`, `deploy/ACCOUNT.md` |
 | Auth | Firebase project **vura-f667d** (sender `678275862018`), shared by rider + driver apps; server verifies with the service-account JSON at `/opt/vura-rider/service-account.json` | `server/src/config/firebase.ts:24`, `lib/firebase.ts`, `vura-driver/lib/firebase.ts` |
 | Documents | S3 bucket from `AWS_S3_BUCKET` (**code default region is `af-south-1`** — always set `AWS_S3_REGION`) | `server/src/lib/s3.ts:15,22` |
 | Payments | Paystack LIVE, callback `https://api.ridevura.com/api/payments/return` | `deploy/production.env:38` |

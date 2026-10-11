@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-DB_HOST="${DB_HOST:-vura.cy1qwqwmkmvc.us-east-1.rds.amazonaws.com}"
+DB_HOST="${DB_HOST:-vura-prod.c1mcea0s8maz.af-south-1.rds.amazonaws.com}"
 DB_NAME="${DB_NAME:-vura}"
 DB_USER="${DB_USER:-vura_admin}"
 DB_PASSWORD="${DB_PASSWORD:-}"
