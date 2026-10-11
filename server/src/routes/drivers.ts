@@ -15,6 +15,7 @@ import {
 import { noteDriverVehicle } from "../services/vehicleImages";
 import { classifyVehicle, primaryTier } from "../lib/tier-classifier";
 import { activateDestination, clearDestination, getDestinationStatus, DESTINATION_ERROR_HTTP_STATUS } from "../services/destinationSession";
+import { computeTierStatus } from "../services/performanceTier";
 
 const router = Router();
 
@@ -640,6 +641,26 @@ router.delete("/destination", requireAuth, async (req: AuthRequest, res: Respons
     res.json((await clearDestination(driverId)).status);
   } catch (err: any) {
     console.error("Destination clear error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE 3 — PERFORMANCE TIER (Stage 2 driver Tier screen)
+//
+// Read-only status twin of the `driver:tier:status` socket event: the same
+// body either way, so the app's dual transport contract parses one shape.
+// `enabled:false` (flag off OR this driver outside the rollout) means hide the
+// screen — the app must not distinguish those two reasons. Commission data in
+// the payload is DISPLAY only; nothing here touches fares or payments.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/performance-tier", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const driverId = await resolveDriverId(req.userId!);
+    if (!driverId) { res.status(403).json({ error: "Driver profile not found" }); return; }
+    res.json(await computeTierStatus(driverId));
+  } catch (err: any) {
+    console.error("Performance tier status error:", err);
     res.status(500).json({ error: err.message });
   }
 });

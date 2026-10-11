@@ -11,6 +11,7 @@ const trace_1 = require("../services/trace");
 const driverIndex_1 = require("../services/driverIndex");
 const metrics_1 = require("../services/metrics");
 const destinationSession_1 = require("../services/destinationSession");
+const performanceTier_1 = require("../services/performanceTier");
 const pendingRequest = new WeakMap();
 /** Stamp the rider's tap. Returns the clock so the caller can keep it. */
 function markRequestReceived(socket) {
@@ -1025,6 +1026,30 @@ function setupSocketHandlers(io) {
                     ok: false,
                     error: "internal",
                     message: "Destination service error — try again",
+                });
+            }
+        });
+        // ── Module 3: performance tier status (Stage 2 driver Tier screen) ──
+        // Read-only, same {ok:true,status} wrapper as the destination acks so the
+        // app parses both contracts with ONE shape. `status.enabled === false`
+        // means hide the screen (flag off OR this driver outside the rollout) —
+        // the app must not distinguish those reasons.
+        socket.on("driver:tier:status", async () => {
+            try {
+                const dbUserId = await getDbUserId();
+                if (!dbUserId)
+                    return;
+                socket.emit("driver:tier:status:ack", {
+                    ok: true,
+                    status: await (0, performanceTier_1.computeTierStatus)(dbUserId),
+                });
+            }
+            catch (err) {
+                console.warn("driver:tier:status failed:", err?.message || err);
+                socket.emit("driver:tier:status:ack", {
+                    ok: false,
+                    error: "internal",
+                    message: "Tier service error — try again",
                 });
             }
         });

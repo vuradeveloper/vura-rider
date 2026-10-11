@@ -140,6 +140,13 @@ function destinationMigrationSql(): string {
   );
 }
 
+function tierMigrationSql(): string {
+  return readFileSync(
+    join(process.cwd(), "migrations", "003_performance_tier.sql"),
+    "utf8"
+  );
+}
+
 /** Create a driver with a fresh available profile at the given position. */
 async function seedDriver(over: {
   lat: number;
@@ -204,6 +211,9 @@ beforeAll(async () => {
   // Module 2 (002): applied twice — additive AND idempotent, same contract.
   await query(destinationMigrationSql());
   await query(destinationMigrationSql());
+  // Module 3 (003): applied twice — additive AND idempotent, same contract.
+  await query(tierMigrationSql());
+  await query(tierMigrationSql());
   // 001b: CREATE UNIQUE INDEX CONCURRENTLY cannot run inside a transaction, so
   // it is issued as its own single statement, exactly like psql autocommit.
   await query(
@@ -364,6 +374,72 @@ describe.skipIf(!enabled)("migration 001 + 001b against real Postgres", () => {
       [driverId]
     );
     expect(Number(pending[0].n)).toBe(1);
+  });
+});
+
+describe.skipIf(!enabled)("migration 003 against real Postgres", () => {
+  it("seeds four thresholds and the flag-off config row", async () => {
+    const th = await query<{ tier: string }>(
+      "SELECT tier FROM performance_tier_thresholds ORDER BY rank"
+    );
+    expect(th.map((r) => r.tier)).toEqual(["bronze", "silver", "gold", "platinum"]);
+    const rows = await query<{ value: any }>(
+      "SELECT value FROM app_config WHERE key = 'performance_tier'"
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value.performance_tier_enabled).toBe(false);
+    expect(rows[0].value.performance_tier_window_days).toBe(90);
+    expect(rows[0].value.performance_tier_grace_days).toBe(7);
+  });
+
+  it("nightly run ledger refuses a second run per SAST day; manual is not day-limited", async () => {
+    // Cross-run isolation: this file re-runs against the PERSISTENT scratch DB.
+    await execute("DELETE FROM performance_tier_runs WHERE trigger_source IN ('nightly', 'manual')");
+    const first = await query<{ id: string }>(
+      `INSERT INTO performance_tier_runs (run_date, trigger_source)
+       VALUES (((now() AT TIME ZONE 'Africa/Johannesburg')::date), 'nightly')
+       ON CONFLICT DO NOTHING RETURNING id`
+    );
+    expect(first).toHaveLength(1);
+    const second = await query(
+      `INSERT INTO performance_tier_runs (run_date, trigger_source)
+       VALUES (((now() AT TIME ZONE 'Africa/Johannesburg')::date), 'nightly')
+       ON CONFLICT DO NOTHING RETURNING id`
+    );
+    expect(second).toHaveLength(0); // the partial unique index refused it
+    const manual = await query<{ id: string }>(
+      `INSERT INTO performance_tier_runs (run_date, trigger_source)
+       VALUES (((now() AT TIME ZONE 'Africa/Johannesburg')::date), 'manual')
+       ON CONFLICT DO NOTHING RETURNING id`
+    );
+    expect(manual).toHaveLength(1);
+    await execute("DELETE FROM performance_tier_runs WHERE trigger_source IN ('nightly', 'manual')");
+  });
+
+  it("driver_tiers accepts a full snapshot row and upserts it", async () => {
+    const users = await query<{ id: string }>(
+      `INSERT INTO users (firebase_uid, role, full_name)
+       VALUES ($1, 'driver', 'IT Tier Driver') RETURNING id`,
+      [`it-tier-${randomUUID()}`]
+    );
+    const uid = users[0].id;
+    await execute(
+      `INSERT INTO driver_tiers (driver_id, tier, points, rating_avg, accept_percent, cancel_percent,
+                                 rides_completed, offers_received, offers_accepted, offers_timedout,
+                                 driver_cancels, window_start, window_end)
+       VALUES ($1, 'gold', 400, 4.75, 70, 6, 400, 500, 350, 100, 20, CURRENT_DATE - 90, CURRENT_DATE)`,
+      [uid]
+    );
+    const upd = await execute(
+      `UPDATE driver_tiers SET tier = 'platinum', at_risk = TRUE, demote_after = CURRENT_DATE + 7,
+                                demote_pending_tier = 'gold'
+        WHERE driver_id = $1`,
+      [uid]
+    );
+    expect(upd.rowCount).toBe(1);
+    await execute("DELETE FROM driver_tier_history WHERE driver_id = $1", [uid]);
+    await execute("DELETE FROM driver_tiers WHERE driver_id = $1", [uid]);
+    await execute("DELETE FROM users WHERE id = $1", [uid]);
   });
 });
 

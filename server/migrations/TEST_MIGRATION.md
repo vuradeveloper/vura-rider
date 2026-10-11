@@ -187,3 +187,26 @@ Additive only (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Apply **after** 001b.
 
 Automated: the integration test `applies 002 twice (idempotent) and seeds
 destination config flag OFF` asserts every row of this table.
+
+---
+
+## 003_performance_tier.sql (Module 3 — performance tier)
+
+Additive only (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`). Apply **after** 002.
+Nothing in 003 is read while `performance_tier_enabled=false` (the seed), so
+applying it in production is invisible until the deliberate rollout.
+
+| Check | Expect |
+|---|---|
+| Apply twice | no errors; second run changes nothing |
+| `SELECT tier FROM performance_tier_thresholds ORDER BY rank` | `bronze, silver, gold, platinum` with `0/4.0/0/20/25`, `150/4.6/60/10/22`, `400/4.75/70/6/20`, `800/4.85/80/4/18` |
+| `SELECT value FROM app_config WHERE key='performance_tier'` | exactly 1 row: `performance_tier_enabled=false`, empty allowlist, window `90`, grace `7`, recalc hour `2` |
+| Tables + index | `driver_tiers`, `driver_tier_history` (+ `idx_driver_tier_history_driver`), `performance_tier_runs` (+ the partial unique index `idx_performance_tier_runs_nightly`) |
+| Nightly guard | a second `INSERT INTO performance_tier_runs ... 'nightly'` for the same SAST day returns 0 rows (unique index refuses it); a `'manual'` row for the same day succeeds |
+| Rollback | run `003_performance_tier.rollback.sql` (drops the three tables + history index, deletes the config row), then re-apply |
+
+Automated by the integration suite (gated on `VURA_TEST_DB_PORT`): `beforeAll`
+applies 003 **twice** against the scratch container, and the
+`migration 003 against real Postgres` describe asserts the thresholds seed,
+the flag-off config row, the nightly-run guard, and a full `driver_tiers`
+snapshot insert/upsert.

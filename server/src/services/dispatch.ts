@@ -28,6 +28,7 @@ import { trace, startTrace } from "./trace";
 import { destinationFit, FitThresholds } from "./destinationFit";
 import { getDestinationConfig } from "./config";
 import { getConfig } from "./config";
+import { breakTierTies } from "./performanceTier";
 import { getDriverIndex, MATCHABLE_STATUSES } from "./driverIndex";
 import { cellsAround } from "../lib/h3";
 import { etaMinutesList } from "./eta";
@@ -604,10 +605,16 @@ async function findCandidatesH3(
     pool.map((r) => ({ lat: Number(r.current_lat), lng: Number(r.current_lng) })),
     cfg.avg_speed_kmh
   );
-  const ranked = pool
-    .map((row, i) => ({ row, eta: etas[i] }))
-    .sort((a, b) => a.eta - b.eta)
-    .map((x) => x.row);
+  // ── Module 3: equal-ETA tie-break (behind performance_tier_enabled) ──────
+  // Strict ETA ties are offered in pool order; with the flag ON the HIGHER
+  // performance tier wins the tie. Flag off (the seed) / config failure /
+  // no strict ties → breakTierTies returns the pairs untouched, and the
+  // legacy findCandidatesHaversine path never reaches this code at all.
+  const rankedPairs = await breakTierTies(
+    pool.map((row, i) => ({ row, eta: etas[i] })).sort((a, b) => a.eta - b.eta),
+    rideId
+  );
+  const ranked = rankedPairs.map((x) => x.row);
 
   trace(rideId, "h3_candidates", {
     round,

@@ -50,6 +50,7 @@ const trace_1 = require("./trace");
 const destinationFit_1 = require("./destinationFit");
 const config_1 = require("./config");
 const config_2 = require("./config");
+const performanceTier_1 = require("./performanceTier");
 const driverIndex_1 = require("./driverIndex");
 const h3_1 = require("../lib/h3");
 const eta_1 = require("./eta");
@@ -494,10 +495,13 @@ async function findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePrevi
     // 6. Rank by ROAD ETA (one OSRM matrix call for the pool), haversine
     //    fallback per entry — never a reason to delay the offer.
     const etas = await (0, eta_1.etaMinutesList)({ lat: pickupLat, lng: pickupLng }, pool.map((r) => ({ lat: Number(r.current_lat), lng: Number(r.current_lng) })), cfg.avg_speed_kmh);
-    const ranked = pool
-        .map((row, i) => ({ row, eta: etas[i] }))
-        .sort((a, b) => a.eta - b.eta)
-        .map((x) => x.row);
+    // ── Module 3: equal-ETA tie-break (behind performance_tier_enabled) ──────
+    // Strict ETA ties are offered in pool order; with the flag ON the HIGHER
+    // performance tier wins the tie. Flag off (the seed) / config failure /
+    // no strict ties → breakTierTies returns the pairs untouched, and the
+    // legacy findCandidatesHaversine path never reaches this code at all.
+    const rankedPairs = await (0, performanceTier_1.breakTierTies)(pool.map((row, i) => ({ row, eta: etas[i] })).sort((a, b) => a.eta - b.eta), rideId);
+    const ranked = rankedPairs.map((x) => x.row);
     (0, trace_1.trace)(rideId, "h3_candidates", {
         round,
         radius_km: radiusKm,

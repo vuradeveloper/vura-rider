@@ -19,13 +19,14 @@
 // redeploy. It is read from this same table so the same mechanism controls it.
 // ─────────────────────────────────────────────────────────────────────────────
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_DESTINATION_CONFIG = exports.DEFAULT_CONFIG = void 0;
+exports.DEFAULT_PERFORMANCE_TIER_CONFIG = exports.DEFAULT_DESTINATION_CONFIG = exports.DEFAULT_CONFIG = void 0;
 exports.getConfig = getConfig;
 exports.h3MatchingEnabled = h3MatchingEnabled;
 exports.invalidateConfigCache = invalidateConfigCache;
 exports.seedConfig = seedConfig;
 exports.allConfig = allConfig;
 exports.getDestinationConfig = getDestinationConfig;
+exports.getPerformanceTierConfig = getPerformanceTierConfig;
 const database_1 = require("../config/database");
 const h3_1 = require("../lib/h3");
 exports.DEFAULT_CONFIG = {
@@ -210,5 +211,64 @@ async function getDestinationConfig(force = false) {
     }
     destCachedAt = Date.now();
     return destCached;
+}
+exports.DEFAULT_PERFORMANCE_TIER_CONFIG = {
+    performance_tier_enabled: false,
+    performance_tier_rollout_driver_ids: [],
+    performance_tier_window_days: 90,
+    performance_tier_grace_days: 7,
+    performance_tier_recalc_hour_sast: 2,
+};
+function coercePerformanceTier(raw) {
+    const cfg = { ...exports.DEFAULT_PERFORMANCE_TIER_CONFIG };
+    if (!raw || typeof raw !== "object")
+        return cfg;
+    if (typeof raw.performance_tier_enabled === "boolean") {
+        cfg.performance_tier_enabled = raw.performance_tier_enabled;
+    }
+    if (Array.isArray(raw.performance_tier_rollout_driver_ids)) {
+        const ids = raw.performance_tier_rollout_driver_ids;
+        cfg.performance_tier_rollout_driver_ids = ids
+            .filter((id) => typeof id === "string")
+            .map((id) => id.trim().toLowerCase())
+            .filter(Boolean);
+    }
+    if (typeof raw.performance_tier_window_days === "number" &&
+        Number.isFinite(raw.performance_tier_window_days) &&
+        raw.performance_tier_window_days >= 1) {
+        cfg.performance_tier_window_days = Math.floor(raw.performance_tier_window_days);
+    }
+    if (typeof raw.performance_tier_grace_days === "number" &&
+        Number.isFinite(raw.performance_tier_grace_days) &&
+        raw.performance_tier_grace_days >= 0) {
+        cfg.performance_tier_grace_days = Math.floor(raw.performance_tier_grace_days);
+    }
+    if (typeof raw.performance_tier_recalc_hour_sast === "number" &&
+        Number.isFinite(raw.performance_tier_recalc_hour_sast) &&
+        raw.performance_tier_recalc_hour_sast >= 0 &&
+        raw.performance_tier_recalc_hour_sast <= 23) {
+        cfg.performance_tier_recalc_hour_sast = Math.floor(raw.performance_tier_recalc_hour_sast);
+    }
+    return cfg;
+}
+let tierCached = null;
+let tierCachedAt = 0;
+/**
+ * Performance-tier config (key `performance_tier`), same 10s cache and
+ * fail-to-defaults behaviour as getDestinationConfig: a missing row (before
+ * 003 runs, or after rollback) means the feature is OFF, never an exception.
+ */
+async function getPerformanceTierConfig(force = false) {
+    if (!force && tierCached && Date.now() - tierCachedAt < CACHE_MS)
+        return tierCached;
+    try {
+        const row = await (0, database_1.queryOne)("SELECT value FROM app_config WHERE key = 'performance_tier'");
+        tierCached = coercePerformanceTier(row?.value);
+    }
+    catch {
+        tierCached = { ...exports.DEFAULT_PERFORMANCE_TIER_CONFIG };
+    }
+    tierCachedAt = Date.now();
+    return tierCached;
 }
 //# sourceMappingURL=config.js.map

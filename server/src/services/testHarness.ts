@@ -79,11 +79,28 @@ export function patchDestinationConfig(patch: Partial<typeof TEST_DEST_CONFIG>):
   Object.assign(destConfigState, patch);
 }
 
+// ── Module 3 config mock (flag OFF by default; seed = 003) ───────────────────
+export const TEST_TIER_CONFIG = {
+  performance_tier_enabled: false,
+  performance_tier_rollout_driver_ids: [] as string[],
+  performance_tier_window_days: 90,
+  performance_tier_grace_days: 7,
+  performance_tier_recalc_hour_sast: 2,
+};
+
+let tierConfigState = { ...TEST_TIER_CONFIG };
+
+/** Change any performance-tier config value for one test. */
+export function patchTierConfig(patch: Partial<typeof TEST_TIER_CONFIG>): void {
+  Object.assign(tierConfigState, patch);
+}
+
 let configState = { ...TEST_CONFIG };
 
 export const appConfig = {
   getConfig: vi.fn(async (_force?: boolean) => ({ ...configState })),
   getDestinationConfig: vi.fn(async (_force?: boolean) => ({ ...destConfigState })),
+  getPerformanceTierConfig: vi.fn(async (_force?: boolean) => ({ ...tierConfigState })),
   h3MatchingEnabled: vi.fn(async () => configState.h3_matching_enabled),
   invalidateConfigCache: vi.fn(),
   seedConfig: vi.fn(async () => undefined),
@@ -115,6 +132,7 @@ export function resetHarness() {
   // Flag OFF + default thresholds: legacy tests exercise the haversine path.
   configState = { ...TEST_CONFIG };
   destConfigState = { ...TEST_DEST_CONFIG };
+  tierConfigState = { ...TEST_TIER_CONFIG };
   destConfigState = { ...TEST_DEST_CONFIG };
   // Dispatch counters start at zero for every test.
   resetCounters();

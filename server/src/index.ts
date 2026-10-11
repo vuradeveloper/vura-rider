@@ -40,6 +40,7 @@ import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/ve
 import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOfferWorker } from "./services/offerWorker";
+import { startPerformanceTierScheduler } from "./services/performanceTier";
 import { logEtaProviderStatus } from "./services/eta";
 import { startOsmPlaceSync, syncOsmPlaces, getOsmSyncStatus } from "./services/OsmPlaceSyncService";
 
@@ -215,6 +216,11 @@ setupSocketHandlers(io);
 
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 startScheduler(io);
+
+// Module 3: nightly performance-tier recalc (02:00 SAST + boot catch-up).
+// Inert while `performance_tier_enabled` is false — the 003 seed default —
+// so a deploy of this code changes nothing until the flag is deliberately on.
+startPerformanceTierScheduler(io);
 
 // Auto-sync new/updated named places from OpenStreetMap into community_places
 // (first import ~15s after boot, then every 6h) so buildings that get named on

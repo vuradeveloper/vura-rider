@@ -77,6 +77,7 @@ const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const offerWorker_1 = require("./services/offerWorker");
+const performanceTier_1 = require("./services/performanceTier");
 const eta_1 = require("./services/eta");
 const OsmPlaceSyncService_1 = require("./services/OsmPlaceSyncService");
 // ── Socket handlers ──
@@ -227,6 +228,10 @@ exports.io = io;
 global.__vuraIo = io;
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 (0, SchedulingService_1.startScheduler)(io);
+// Module 3: nightly performance-tier recalc (02:00 SAST + boot catch-up).
+// Inert while `performance_tier_enabled` is false — the 003 seed default —
+// so a deploy of this code changes nothing until the flag is deliberately on.
+(0, performanceTier_1.startPerformanceTierScheduler)(io);
 // Auto-sync new/updated named places from OpenStreetMap into community_places
 // (first import ~15s after boot, then every 6h) so buildings that get named on
 // OSM over time automatically become searchable in the app.

@@ -18,6 +18,7 @@ import { trace, startTrace } from "../services/trace";
 import { getDriverIndex } from "../services/driverIndex";
 import { noteIndexUpsertFailure, bump } from "../services/metrics";
 import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition, noteDestinationTripCompleted } from "../services/destinationSession";
+import { computeTierStatus } from "../services/performanceTier";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -1197,6 +1198,29 @@ export function setupSocketHandlers(io: SocketIOServer) {
           ok: false,
           error: "internal",
           message: "Destination service error — try again",
+        });
+      }
+    });
+
+    // ── Module 3: performance tier status (Stage 2 driver Tier screen) ──
+    // Read-only, same {ok:true,status} wrapper as the destination acks so the
+    // app parses both contracts with ONE shape. `status.enabled === false`
+    // means hide the screen (flag off OR this driver outside the rollout) —
+    // the app must not distinguish those reasons.
+    socket.on("driver:tier:status", async () => {
+      try {
+        const dbUserId = await getDbUserId();
+        if (!dbUserId) return;
+        socket.emit("driver:tier:status:ack", {
+          ok: true,
+          status: await computeTierStatus(dbUserId),
+        });
+      } catch (err: any) {
+        console.warn("driver:tier:status failed:", err?.message || err);
+        socket.emit("driver:tier:status:ack", {
+          ok: false,
+          error: "internal",
+          message: "Tier service error — try again",
         });
       }
     });

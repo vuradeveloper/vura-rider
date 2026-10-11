@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
+const performanceTier_1 = require("../services/performanceTier");
 const router = (0, express_1.Router)();
 function isAdmin(req) {
     const admins = (process.env.ADMIN_EMAILS || "")
@@ -130,6 +131,22 @@ router.get("/analytics", auth_1.requireAuth, async (req, res) => {
                 drivers: totals?.drivers || 0,
             },
         });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// POST /api/admin/performance-tiers/run — MANUAL Module 3 recalc trigger
+// (admin only). Same code path as the nightly 02:00 SAST scheduler; manual
+// runs are NOT day-limited (they are the operator's escape hatch) but still
+// require performance_tier_enabled=true — flag-off means inert, always.
+router.post("/performance-tiers/run", auth_1.requireAuth, async (req, res) => {
+    if (!isAdmin(req)) {
+        res.status(403).json({ error: "Admin only" });
+        return;
+    }
+    try {
+        res.json(await (0, performanceTier_1.recalculatePerformanceTiers)({ source: "manual" }));
     }
     catch (err) {
         res.status(500).json({ error: err.message });

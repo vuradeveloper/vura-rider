@@ -116,4 +116,23 @@ export declare const DEFAULT_DESTINATION_CONFIG: DestinationConfig;
  * means the feature is simply OFF, never an exception.
  */
 export declare function getDestinationConfig(force?: boolean): Promise<DestinationConfig>;
+export interface PerformanceTierConfig {
+    /** Master switch (seed false): recalc + H3 tie-break + Tier screens. */
+    performance_tier_enabled: boolean;
+    /** Driver-app Tier screen visibility (empty = hidden for everyone). */
+    performance_tier_rollout_driver_ids: string[];
+    /** Rolling metrics window in days (the spec's 90). */
+    performance_tier_window_days: number;
+    /** Demotion grace: at-risk drivers keep their tier this many days. */
+    performance_tier_grace_days: number;
+    /** Nightly recalc hour in SAST (2 = 02:00 Africa/Johannesburg). */
+    performance_tier_recalc_hour_sast: number;
+}
+export declare const DEFAULT_PERFORMANCE_TIER_CONFIG: PerformanceTierConfig;
+/**
+ * Performance-tier config (key `performance_tier`), same 10s cache and
+ * fail-to-defaults behaviour as getDestinationConfig: a missing row (before
+ * 003 runs, or after rollback) means the feature is OFF, never an exception.
+ */
+export declare function getPerformanceTierConfig(force?: boolean): Promise<PerformanceTierConfig>;
 //# sourceMappingURL=config.d.ts.map

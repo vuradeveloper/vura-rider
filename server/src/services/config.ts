@@ -314,3 +314,108 @@ export async function getDestinationConfig(force = false): Promise<DestinationCo
   destCachedAt = Date.now();
   return destCached;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE 3 — PERFORMANCE TIER config (flag + rollout + window/grace knobs).
+//
+// Same machinery as Module 2: a separate app_config row (key `performance_tier`),
+// its own 10s cache, and fail-to-defaults so a missing row (before 003 runs)
+// means the feature is simply OFF — never an exception.
+//
+// The per-tier THRESHOLDS (points/rating/accept/cancel/commission) live in the
+// `performance_tier_thresholds` TABLE (migration 003), not here: ops tunes them
+// with a SQL UPDATE and the next recalc picks them up, no deploy.
+//
+// TWO GATES, deliberately:
+//   performance_tier_enabled         master kill-switch — false (the seed) means
+//                                    the nightly recalc, the H3 matching
+//                                    tie-break AND the driver Tier screen are
+//                                    ALL inert: zero behaviour change.
+//   performance_tier_rollout_driver_ids  WHOSE driver app shows the Tier screen
+//                                    (empty = hidden for everyone, so the flag
+//                                    can be turned on to collect tier data
+//                                    before any driver sees a UI change).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PerformanceTierConfig {
+  /** Master switch (seed false): recalc + H3 tie-break + Tier screens. */
+  performance_tier_enabled: boolean;
+  /** Driver-app Tier screen visibility (empty = hidden for everyone). */
+  performance_tier_rollout_driver_ids: string[];
+  /** Rolling metrics window in days (the spec's 90). */
+  performance_tier_window_days: number;
+  /** Demotion grace: at-risk drivers keep their tier this many days. */
+  performance_tier_grace_days: number;
+  /** Nightly recalc hour in SAST (2 = 02:00 Africa/Johannesburg). */
+  performance_tier_recalc_hour_sast: number;
+}
+
+export const DEFAULT_PERFORMANCE_TIER_CONFIG: PerformanceTierConfig = {
+  performance_tier_enabled: false,
+  performance_tier_rollout_driver_ids: [],
+  performance_tier_window_days: 90,
+  performance_tier_grace_days: 7,
+  performance_tier_recalc_hour_sast: 2,
+};
+
+function coercePerformanceTier(raw: any): PerformanceTierConfig {
+  const cfg: PerformanceTierConfig = { ...DEFAULT_PERFORMANCE_TIER_CONFIG };
+  if (!raw || typeof raw !== "object") return cfg;
+  if (typeof raw.performance_tier_enabled === "boolean") {
+    cfg.performance_tier_enabled = raw.performance_tier_enabled;
+  }
+  if (Array.isArray(raw.performance_tier_rollout_driver_ids)) {
+    const ids: unknown[] = raw.performance_tier_rollout_driver_ids;
+    cfg.performance_tier_rollout_driver_ids = ids
+      .filter((id): id is string => typeof id === "string")
+      .map((id: string) => id.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  if (
+    typeof raw.performance_tier_window_days === "number" &&
+    Number.isFinite(raw.performance_tier_window_days) &&
+    raw.performance_tier_window_days >= 1
+  ) {
+    cfg.performance_tier_window_days = Math.floor(raw.performance_tier_window_days);
+  }
+  if (
+    typeof raw.performance_tier_grace_days === "number" &&
+    Number.isFinite(raw.performance_tier_grace_days) &&
+    raw.performance_tier_grace_days >= 0
+  ) {
+    cfg.performance_tier_grace_days = Math.floor(raw.performance_tier_grace_days);
+  }
+  if (
+    typeof raw.performance_tier_recalc_hour_sast === "number" &&
+    Number.isFinite(raw.performance_tier_recalc_hour_sast) &&
+    raw.performance_tier_recalc_hour_sast >= 0 &&
+    raw.performance_tier_recalc_hour_sast <= 23
+  ) {
+    cfg.performance_tier_recalc_hour_sast = Math.floor(raw.performance_tier_recalc_hour_sast);
+  }
+  return cfg;
+}
+
+let tierCached: PerformanceTierConfig | null = null;
+let tierCachedAt = 0;
+
+/**
+ * Performance-tier config (key `performance_tier`), same 10s cache and
+ * fail-to-defaults behaviour as getDestinationConfig: a missing row (before
+ * 003 runs, or after rollback) means the feature is OFF, never an exception.
+ */
+export async function getPerformanceTierConfig(
+  force = false
+): Promise<PerformanceTierConfig> {
+  if (!force && tierCached && Date.now() - tierCachedAt < CACHE_MS) return tierCached;
+  try {
+    const row = await queryOne<{ value: any }>(
+      "SELECT value FROM app_config WHERE key = 'performance_tier'"
+    );
+    tierCached = coercePerformanceTier(row?.value);
+  } catch {
+    tierCached = { ...DEFAULT_PERFORMANCE_TIER_CONFIG };
+  }
+  tierCachedAt = Date.now();
+  return tierCached;
+}
