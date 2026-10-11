@@ -2,11 +2,17 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = require("../config/database");
+const providerSeams_1 = require("../services/providerSeams");
 const router = (0, express_1.Router)();
-// Upstream routing provider. Point ROUTE_PROVIDER_URL at your own
-// self-hosted OSRM/Valhalla instance in production for the best speed.
-const UPSTREAM = process.env.ROUTE_PROVIDER_URL?.replace(/\/+$/, "") ||
-    "https://router.project-osrm.org";
+// Upstream routing provider — env seam (services/providerSeams.ts):
+//   ROUTE_PROVIDER_URL set -> that URL (self-hosted OSRM/Valhalla in production)
+//   unset + production     -> NO request is ever made: fetchUpstream throws
+//                             "Routing provider not configured" and the route
+//                             answers 503 — never the public
+//                             router.project-osrm.org demo, whose usage policy
+//                             bans production traffic.
+//   unset + dev            -> the public demo, so local flows keep working.
+// Read LAZILY per request (dotenv/import-order safe), never a module const.
 const ROUTE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MEMORY_CACHE_MAX = 500;
 const UPSTREAM_TIMEOUT_MS = 8000;
@@ -84,7 +90,12 @@ async function saveToDb(key, value) {
 async function fetchUpstream(points, overview) {
     // OSRM routing provider (free, keyless, same OSRM-style shape the app
     // parses: geometry.coordinates as [lng,lat], distance, duration).
-    const url = `${UPSTREAM}/route/v1/driving/${points}?geometries=geojson&overview=${overview}`;
+    const seam = (0, providerSeams_1.routeProvider)();
+    if (!seam.url) {
+        // Production without ROUTE_PROVIDER_URL: honest failure, never the demo.
+        throw new Error("Routing provider not configured (set ROUTE_PROVIDER_URL)");
+    }
+    const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
     try {
@@ -165,6 +176,11 @@ router.get("/", async (req, res) => {
         console.error("Route error:", err.message);
         if (err.message === "No route found") {
             res.status(404).json({ routes: [] });
+            return;
+        }
+        if (typeof err.message === "string" && err.message.startsWith("Routing provider not configured")) {
+            // Seam unset in production (see services/providerSeams.ts) — say so.
+            res.status(503).json({ error: err.message });
             return;
         }
         res.status(502).json({ error: "Routing failed, please try again" });

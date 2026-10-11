@@ -3,6 +3,7 @@ import { query, queryOne, execute } from "../config/database";
 import { attachVehicleImages } from "../services/vehicleImages";
 
 const router = Router();
+import { shareTileProvider } from "../services/providerSeams";
 
 // Ensure safety tables exist (best-effort) â€” a share GET must not 500 if the
 // table hasn't been created yet (e.g. first share before any POST ran).
@@ -99,6 +100,17 @@ export async function sharePage(req: Request, res: Response) {
 }
 
 function sharePageHtml(token: string): string {
+  // Tile seam (services/providerSeams.ts): SHARE_TILE_URL when set; the
+  // public OSM tile server only OUTSIDE production; production unset -> NO
+  // tile layer (markers + route line still render on the grey background)
+  // instead of silently hammering tile.openstreetmap.org, whose usage policy
+  // bans production traffic. Single quotes escaped so a hostile env value
+  // cannot break out of the JS string.
+  const tile = shareTileProvider();
+  const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  const tileLayerJs = tile.url
+    ? `L.tileLayer('${tile.url.replace(/'/g, "%27")}',{maxZoom:19,attribution:'${TILE_ATTRIBUTION}'}).addTo(map);`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -211,7 +223,7 @@ function sharePageHtml(token: string): string {
     PICKUP = hasPickup ? r.pickup : center;
     DROPOFF = hasDrop ? r.destination : r.pickup || center;
     map = L.map('map',{zoomControl:true,attributionControl:true}).setView([center[0],center[1]], 13);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+    ${tileLayerJs}
     if(hasPickup){
       L.marker([PICKUP[0],PICKUP[1]],{icon:L.divIcon({html:'<div style="background:#22c55e;width:22px;height:22px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff">P</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map);
     }

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
+const providerSeams_1 = require("../services/providerSeams");
 const router = (0, express_1.Router)();
 // Ensure table exists
 async function ensureTable() {
@@ -255,9 +256,12 @@ router.get("/geocode", auth_1.requireAuth, async (req, res) => {
         res.json({ provider: "here", items: [], queryTerms: [] });
         return;
     }
+    // SEARCH_PROVIDER (services/providerSeams.ts): "nominatim" skips HERE,
+    // "here" forbids the OSM fallback, unset = today's HERE-then-Nominatim.
+    const choice = (0, providerSeams_1.searchProviderChoice)();
     try {
         const HERE_KEY = process.env.HERE_API_KEY || "";
-        if (HERE_KEY) {
+        if (HERE_KEY && choice !== "nominatim_only") {
             // A bigger pool than we return: HERE mixes in category/chain rows that carry no
             // position, and those are dropped below. Slicing to `limit` first is what used to
             // hand the app a short list - or, with nothing left, a silent OSM fallback.
@@ -310,10 +314,28 @@ router.get("/geocode", auth_1.requireAuth, async (req, res) => {
                 });
                 return;
             }
+            if (choice === "here_only") {
+                // SEARCH_PROVIDER=here: no OSM leg — an empty HERE answer stays empty.
+                res.json({ provider: "here", bias: bias?.source || "none", items: [], queryTerms: [] });
+                return;
+            }
             console.warn(`[search] HERE returned no usable place for "${q}" (bias=${bias?.source || "none"}) - falling back to OSM`);
         }
-        const base = (process.env.NOMINATIM_URL?.replace(/\/+$/, "") ||
-            "https://nominatim.openstreetmap.org");
+        if (choice === "here_only") {
+            // HERE key absent AND SEARCH_PROVIDER=here — same honest empty.
+            res.json({ provider: "here", bias: bias?.source || "none", items: [], queryTerms: [] });
+            return;
+        }
+        // Nominatim seam (services/providerSeams.ts): NOMINATIM_URL when set;
+        // public demo only OUTSIDE production; production unset -> honest 503,
+        // never a silent call against nominatim.openstreetmap.org (its usage
+        // policy bans production traffic).
+        const seam = (0, providerSeams_1.geocoderProvider)();
+        if (!seam.url) {
+            res.status(503).json({ error: "Search provider not configured (set NOMINATIM_URL)" });
+            return;
+        }
+        const base = seam.url;
         const raw = (await fetch(`${base}/search?format=json&limit=${Math.max(limit, 12)}&q=${encodeURIComponent(q)}` +
             (bias ? `&lat=${bias.lat}&lon=${bias.lng}` : "") +
             (osmCountryCodes(inFilter) ? `&countrycodes=${osmCountryCodes(inFilter)}` : ""), { headers: { "User-Agent": "VuraRiderServer/1.0" } })

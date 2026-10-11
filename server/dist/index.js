@@ -79,6 +79,7 @@ const SchedulingService_1 = require("./services/SchedulingService");
 const offerWorker_1 = require("./services/offerWorker");
 const performanceTier_1 = require("./services/performanceTier");
 const eta_1 = require("./services/eta");
+const providerSeams_1 = require("./services/providerSeams");
 const OsmPlaceSyncService_1 = require("./services/OsmPlaceSyncService");
 // ── Socket handlers ──
 const handlers_1 = require("./socket/handlers");
@@ -642,6 +643,10 @@ async function start() {
     // OSRM-compatible table API; unset -> "ETA provider not configured" and
     // haversine ranking only (never the public OSRM demo in production).
     (0, eta_1.logEtaProviderStatus)();
+    // Item 4: the remaining external seams (route/geocode/tiles/search) in one
+    // table — env source or NOT CONFIGURED, so a missing production env var is
+    // visible in the boot log instead of a silent public-demo call.
+    (0, providerSeams_1.logProviderSeams)();
     // 2. Init Firebase Admin
     try {
         (0, firebase_1.getFirebaseApp)();
