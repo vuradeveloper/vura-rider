@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DESTINATION_ERROR_HTTP_STATUS = void 0;
+exports.inDestinationRollout = inDestinationRollout;
 exports.activateDestination = activateDestination;
 exports.clearDestination = clearDestination;
 exports.getDestinationStatus = getDestinationStatus;
@@ -58,6 +59,18 @@ async function loadActive(driverId) {
       LIMIT 1`, [driverId]);
     return rows[0] ?? null;
 }
+/**
+ * Rollout membership for ONE driver (RC4 "rollout for everyone"):
+ *   mode 'all'       → every driver is covered (the admin one-call enable);
+ *   mode 'allowlist' (default, and what a 002 row without the field means)
+ *                    → only destination_rollout_driver_ids.
+ * Every gate in this service goes through here so activation, the status
+ * pause and the sweep's feature_disabled check can never disagree.
+ */
+function inDestinationRollout(cfg, driverId) {
+    return (cfg.destination_rollout_mode === "all" ||
+        cfg.destination_rollout_driver_ids.includes(driverId));
+}
 /** Count + SAST day from ONE query: the daily bucket is computed by the DB. */
 async function usageToday(driverId) {
     const rows = await (0, database_1.query)(`SELECT COUNT(*)::int AS n,
@@ -77,7 +90,7 @@ async function buildStatus(driverId, cfg, active) {
     const { uses, sastDay } = await usageToday(driverId);
     const paused = !!active &&
         (!cfg.destination_matching_enabled ||
-            !cfg.destination_rollout_driver_ids.includes(driverId));
+            !inDestinationRollout(cfg, driverId));
     return {
         active: !!active,
         label: active?.label ?? null,
@@ -139,7 +152,7 @@ async function activateDestinationOnce(driverId, input) {
         // put a "Looking for trips towards X" banner on a driver whose offers are
         // NOT filtered. `disabled` (403) until they are added — same answer as the
         // flag-off case, no new error code for the app to learn.
-        if (!cfg.destination_rollout_driver_ids.includes(driverId)) {
+        if (!inDestinationRollout(cfg, driverId)) {
             return fail("disabled", "Destination mode is not enabled for your account yet");
         }
         const lat = Number(input?.lat);
@@ -323,7 +336,7 @@ function classifyDestinationEnd(row, destCfg, mainCfg) {
     // by an arrival/offline/timeout signal (and a stale row cannot keep a
     // disabled mode alive until the timeout).
     if (!destCfg.destination_matching_enabled ||
-        !destCfg.destination_rollout_driver_ids.includes(row.driver_id)) {
+        !inDestinationRollout(destCfg, row.driver_id)) {
         return "feature_disabled";
     }
     if (row.current_lat != null &&

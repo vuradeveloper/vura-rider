@@ -155,6 +155,7 @@ async function allConfig() {
 exports.DEFAULT_DESTINATION_CONFIG = {
     destination_matching_enabled: false,
     destination_rollout_driver_ids: [],
+    destination_rollout_mode: "allowlist",
     destination_max_activations_per_day: 2,
     destination_reject_radius_km: 1,
     destination_arrival_radius_km: 0.5,
@@ -177,6 +178,9 @@ function coerceDestination(raw) {
             .filter((id) => typeof id === "string")
             .map((id) => id.trim().toLowerCase())
             .filter(Boolean);
+    }
+    if (raw.destination_rollout_mode === "all" || raw.destination_rollout_mode === "allowlist") {
+        cfg.destination_rollout_mode = raw.destination_rollout_mode;
     }
     const nums = [
         "destination_max_activations_per_day",
@@ -219,6 +223,7 @@ async function getDestinationConfig(force = false) {
 exports.DEFAULT_PERFORMANCE_TIER_CONFIG = {
     performance_tier_enabled: false,
     performance_tier_rollout_driver_ids: [],
+    performance_tier_rollout_mode: "allowlist",
     performance_tier_window_days: 90,
     performance_tier_grace_days: 7,
     performance_tier_recalc_hour_sast: 2,
@@ -236,6 +241,9 @@ function coercePerformanceTier(raw) {
             .filter((id) => typeof id === "string")
             .map((id) => id.trim().toLowerCase())
             .filter(Boolean);
+    }
+    if (raw.performance_tier_rollout_mode === "all" || raw.performance_tier_rollout_mode === "allowlist") {
+        cfg.performance_tier_rollout_mode = raw.performance_tier_rollout_mode;
     }
     if (typeof raw.performance_tier_window_days === "number" &&
         Number.isFinite(raw.performance_tier_window_days) &&

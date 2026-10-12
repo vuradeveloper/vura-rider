@@ -4,6 +4,7 @@ exports.FeatureFlagError = exports.FEATURE_KEYS = void 0;
 exports.validateField = validateField;
 exports.readFeatures = readFeatures;
 exports.updateFeature = updateFeature;
+exports.disableAllFeatures = disableAllFeatures;
 exports.enableForAccounts = enableForAccounts;
 // ─────────────────────────────────────────────────────────────────────────────
 // FEATURE FLAGS — admin read/update for the three RC4 module switches.
@@ -13,9 +14,17 @@ exports.enableForAccounts = enableForAccounts;
 // their allowlists only — this service can NEVER touch fares, pricing, wallet
 // or any money column (validated keys only, see SETTABLE).
 //
-//   matching         h3_matching_enabled, h3_rollout_mode, rider allowlist
-//   destination      destination_matching_enabled, driver allowlist
-//   performance_tier performance_tier_enabled, driver allowlist
+//   matching         h3_matching_enabled, h3_rollout_mode (off|allowlist|
+//                    percent|all), rider allowlist
+//   destination      destination_matching_enabled, destination_rollout_mode
+//                    (allowlist|all), driver allowlist
+//   performance_tier performance_tier_enabled, performance_tier_rollout_mode
+//                    (allowlist|all), driver allowlist
+//
+// A missing *_rollout_mode in the DB row means 'allowlist' — the pre-RC4
+// behaviour, so turning destination/tier on FOR EVERYONE is the explicit
+// act of writing 'all' (the one-call enable does it when no driver ids are
+// given).
 //
 // Every write is read-modify-write on the app_config JSONB row (the seeded
 // shape from migrations 001/002/003 is preserved), then invalidateConfigCache()
@@ -48,14 +57,18 @@ const SETTABLE = {
     },
     destination: {
         destination_matching_enabled: "boolean",
+        destination_rollout_mode: "mode",
         destination_rollout_driver_ids: "string[]",
     },
     performance_tier: {
         performance_tier_enabled: "boolean",
+        performance_tier_rollout_mode: "mode",
         performance_tier_rollout_driver_ids: "string[]",
     },
 };
 const H3_MODES = ["off", "allowlist", "percent", "all"];
+/** destination / tier only need these two — no percent bucketing for drivers. */
+const DRIVER_ROLLOUT_MODES = ["allowlist", "all"];
 function isFeatureKey(k) {
     return typeof k === "string" && exports.FEATURE_KEYS.includes(k);
 }
@@ -87,11 +100,15 @@ function validateField(key, field, value) {
             return value;
         case "string[]":
             return normIds(value);
-        case "mode":
-            if (typeof value !== "string" || !H3_MODES.includes(value)) {
-                throw new FeatureFlagError("validation", `${field} must be one of ${H3_MODES.join("|")}`);
+        case "mode": {
+            // matching keeps its four-step ladder; destination/tier only have
+            // allowlist vs all (the enabled boolean is the kill switch).
+            const modes = key === "matching" ? H3_MODES : DRIVER_ROLLOUT_MODES;
+            if (typeof value !== "string" || !modes.includes(value)) {
+                throw new FeatureFlagError("validation", `${field} must be one of ${modes.join("|")}`);
             }
             return value;
+        }
         case "percent": {
             if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
                 throw new FeatureFlagError("validation", `${field} must be a number 0..100`);
@@ -139,6 +156,9 @@ function section(key, row) {
         return {
             exists: true,
             destination_matching_enabled: row.destination_matching_enabled === true,
+            destination_rollout_mode: row.destination_rollout_mode === "all" || row.destination_rollout_mode === "allowlist"
+                ? row.destination_rollout_mode
+                : "allowlist",
             destination_rollout_driver_ids: Array.isArray(row.destination_rollout_driver_ids)
                 ? row.destination_rollout_driver_ids
                 : [],
@@ -147,6 +167,9 @@ function section(key, row) {
     return {
         exists: true,
         performance_tier_enabled: row.performance_tier_enabled === true,
+        performance_tier_rollout_mode: row.performance_tier_rollout_mode === "all" || row.performance_tier_rollout_mode === "allowlist"
+            ? row.performance_tier_rollout_mode
+            : "allowlist",
         performance_tier_rollout_driver_ids: Array.isArray(row.performance_tier_rollout_driver_ids)
             ? row.performance_tier_rollout_driver_ids
             : [],
@@ -259,11 +282,28 @@ async function mergedIds(key, field, extra) {
     return [...new Set([...existing, ...extra])];
 }
 /**
- * One call: turn the three features ON for the given test accounts.
+ * ONE call: turn all three features OFF for everyone — the exact inverse of
+ * enableForAccounts. Restores the seed posture: matching kill switch off +
+ * mode 'off'; destination/tier kill switches off + modes back to 'allowlist'.
+ * Recorded allowlists are left alone: with the switches off they cover
+ * nobody, and keeping them makes re-enabling the same test accounts one call.
+ * Like everything in this service, it can never touch a money column.
+ */
+async function disableAllFeatures(actor) {
+    const flags = {};
+    flags.matching = await writeFeatureValue("matching", { h3_matching_enabled: false, h3_rollout_mode: "off" }, actor, "disable");
+    flags.destination = await writeFeatureValue("destination", { destination_matching_enabled: false, destination_rollout_mode: "allowlist" }, actor, "disable");
+    flags.performance_tier = await writeFeatureValue("performance_tier", { performance_tier_enabled: false, performance_tier_rollout_mode: "allowlist" }, actor, "disable");
+    return { server_build: (0, offerWorker_1.getBuildCommit)(), flags };
+}
+/**
+ * One call: turn the three features ON for the given test accounts — or, with
+ * no account ids at all, FOR EVERYONE:
  * matching  → enabled; rider ids ⇒ rollout 'allowlist' (those riders), no
- *             rider ids ⇒ rollout 'all' (fastest path for one test phone).
- * destination / performance_tier → enabled + driver ids merged into allowlists.
- * Returns the exact JSON that now reads back from GET /features.
+ *             rider ids ⇒ rollout 'all' (H3 for every rider).
+ * destination / performance_tier → enabled; driver ids ⇒ mode 'allowlist'
+ *             with the ids merged in, no driver ids ⇒ mode 'all' (every
+ *             driver). Returns the exact JSON that GET /features reads back.
  */
 async function enableForAccounts(input, actor) {
     const features = Array.isArray(input.features) && input.features.length > 0 ? input.features : exports.FEATURE_KEYS;
@@ -288,16 +328,26 @@ async function enableForAccounts(input, actor) {
         flags.matching = await writeFeatureValue("matching", patch, actor, "enable");
     }
     if (features.includes("destination")) {
-        flags.destination = await writeFeatureValue("destination", {
-            destination_matching_enabled: true,
-            destination_rollout_driver_ids: await mergedIds("destination", "destination_rollout_driver_ids", allDriverIds),
-        }, actor, "enable");
+        const patch = { destination_matching_enabled: true };
+        if (allDriverIds.length > 0) {
+            patch.destination_rollout_mode = "allowlist";
+            patch.destination_rollout_driver_ids = await mergedIds("destination", "destination_rollout_driver_ids", allDriverIds);
+        }
+        else {
+            patch.destination_rollout_mode = "all";
+        }
+        flags.destination = await writeFeatureValue("destination", patch, actor, "enable");
     }
     if (features.includes("performance_tier")) {
-        flags.performance_tier = await writeFeatureValue("performance_tier", {
-            performance_tier_enabled: true,
-            performance_tier_rollout_driver_ids: await mergedIds("performance_tier", "performance_tier_rollout_driver_ids", allDriverIds),
-        }, actor, "enable");
+        const patch = { performance_tier_enabled: true };
+        if (allDriverIds.length > 0) {
+            patch.performance_tier_rollout_mode = "allowlist";
+            patch.performance_tier_rollout_driver_ids = await mergedIds("performance_tier", "performance_tier_rollout_driver_ids", allDriverIds);
+        }
+        else {
+            patch.performance_tier_rollout_mode = "all";
+        }
+        flags.performance_tier = await writeFeatureValue("performance_tier", patch, actor, "enable");
     }
     return {
         server_build: (0, offerWorker_1.getBuildCommit)(),

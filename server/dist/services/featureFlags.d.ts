@@ -21,11 +21,22 @@ export interface EnableInput {
     features?: string[];
 }
 /**
- * One call: turn the three features ON for the given test accounts.
+ * ONE call: turn all three features OFF for everyone — the exact inverse of
+ * enableForAccounts. Restores the seed posture: matching kill switch off +
+ * mode 'off'; destination/tier kill switches off + modes back to 'allowlist'.
+ * Recorded allowlists are left alone: with the switches off they cover
+ * nobody, and keeping them makes re-enabling the same test accounts one call.
+ * Like everything in this service, it can never touch a money column.
+ */
+export declare function disableAllFeatures(actor: string): Promise<Record<string, unknown>>;
+/**
+ * One call: turn the three features ON for the given test accounts — or, with
+ * no account ids at all, FOR EVERYONE:
  * matching  → enabled; rider ids ⇒ rollout 'allowlist' (those riders), no
- *             rider ids ⇒ rollout 'all' (fastest path for one test phone).
- * destination / performance_tier → enabled + driver ids merged into allowlists.
- * Returns the exact JSON that now reads back from GET /features.
+ *             rider ids ⇒ rollout 'all' (H3 for every rider).
+ * destination / performance_tier → enabled; driver ids ⇒ mode 'allowlist'
+ *             with the ids merged in, no driver ids ⇒ mode 'all' (every
+ *             driver). Returns the exact JSON that GET /features reads back.
  */
 export declare function enableForAccounts(input: EnableInput, actor: string): Promise<Record<string, unknown>>;
 //# sourceMappingURL=featureFlags.d.ts.map

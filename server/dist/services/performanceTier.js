@@ -217,7 +217,10 @@ async function computeTierStatus(driverId) {
     if (!cfg.performance_tier_enabled)
         return disabledStatus();
     const wanted = String(driverId).toLowerCase();
-    if (!cfg.performance_tier_rollout_driver_ids.some((id) => id.toLowerCase() === wanted)) {
+    // RC4 rollout-for-everyone: mode 'all' shows the screen to every driver;
+    // 'allowlist' (default when the field is absent) keeps the old behaviour.
+    if (cfg.performance_tier_rollout_mode !== "all" &&
+        !cfg.performance_tier_rollout_driver_ids.some((id) => id.toLowerCase() === wanted)) {
         return disabledStatus();
     }
     let thresholds;

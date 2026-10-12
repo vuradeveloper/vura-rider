@@ -41,6 +41,15 @@ export interface SetDestinationInput {
     lng: unknown;
     label: unknown;
 }
+/**
+ * Rollout membership for ONE driver (RC4 "rollout for everyone"):
+ *   mode 'all'       → every driver is covered (the admin one-call enable);
+ *   mode 'allowlist' (default, and what a 002 row without the field means)
+ *                    → only destination_rollout_driver_ids.
+ * Every gate in this service goes through here so activation, the status
+ * pause and the sweep's feature_disabled check can never disagree.
+ */
+export declare function inDestinationRollout(cfg: Pick<DestinationConfig, "destination_rollout_mode" | "destination_rollout_driver_ids">, driverId: string): boolean;
 export declare function activateDestination(driverId: string, input: SetDestinationInput): Promise<ActivateResult>;
 /** Turn the mode off (fixture L7b: the driver gets a push stating why). Idempotent. */
 export declare function clearDestination(driverId: string): Promise<{

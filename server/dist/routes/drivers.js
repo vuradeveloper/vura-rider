@@ -676,17 +676,24 @@ router.get("/feature-status", auth_1.requireAuth, async (req, res) => {
             }
             catch { /* treated as off */ }
         }
+        // RC4 rollout-for-everyone: `mode` 'all' means every driver is covered —
+        // in_rollout follows the mode, so support sees the true reason. The driver
+        // app's Feature status page renders flag/enabled/mode/radius from here.
+        const destMode = dcfg?.destination_rollout_mode ?? "allowlist";
+        const tierMode = tcfg?.performance_tier_rollout_mode ?? "allowlist";
         res.json({
             user_id: driverId,
             destination: {
                 flag: dcfg?.destination_matching_enabled === true,
                 enabled: destEnabled,
-                in_rollout: !!driverId && (dcfg?.destination_rollout_driver_ids ?? []).includes(driverId),
+                mode: destMode,
+                in_rollout: !!driverId && (destMode === "all" || (dcfg?.destination_rollout_driver_ids ?? []).includes(driverId)),
             },
             tier: {
                 flag: tcfg?.performance_tier_enabled === true,
                 enabled: tierEnabled,
-                in_rollout: !!driverId && (tcfg?.performance_tier_rollout_driver_ids ?? []).includes(driverId),
+                mode: tierMode,
+                in_rollout: !!driverId && (tierMode === "all" || (tcfg?.performance_tier_rollout_driver_ids ?? []).includes(driverId)),
             },
             matching: {
                 flag: cfg?.h3_matching_enabled === true,

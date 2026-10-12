@@ -445,13 +445,17 @@ async function findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePrevi
     let pool = rows;
     const dcfg = await (0, config_1.getDestinationConfig)();
     const allow = new Set(dcfg.destination_rollout_driver_ids);
+    // RC4 rollout-for-everyone: mode 'all' evaluates EVERY driver's destination
+    // (drivers without one pass through untouched, exactly as before);
+    // 'allowlist' (default when the field is absent) is the pre-RC4 behaviour.
+    const destAll = dcfg.destination_rollout_mode === "all";
+    const inRollout = (id) => destAll || allow.has(String(id));
     if (dcfg.destination_matching_enabled &&
-        allow.size > 0 &&
-        rows.some((r) => allow.has(String(r.id)))) {
+        rows.some((r) => inRollout(r.id))) {
         const ride = await (0, database_1.queryOne)(`SELECT destination_lat, destination_lng FROM rides WHERE id = $1`, [rideId]).catch(() => null);
         const dests = await (0, database_1.query)(`SELECT user_id, destination_lat, destination_lng FROM driver_profiles
         WHERE user_id = ANY($1::uuid[])
-          AND destination_lat IS NOT NULL AND destination_lng IS NOT NULL`, [rows.filter((r) => allow.has(String(r.id))).map((r) => r.id)]).catch(() => []);
+          AND destination_lat IS NOT NULL AND destination_lng IS NOT NULL`, [rows.filter((r) => inRollout(r.id)).map((r) => r.id)]).catch(() => []);
         const destBy = new Map(dests.map((d) => [d.user_id, d]));
         const X = ride?.destination_lat != null && ride.destination_lng != null
             ? { lat: Number(ride.destination_lat), lng: Number(ride.destination_lng) }
@@ -467,9 +471,9 @@ async function findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePrevi
         let errors = 0;
         pool = [];
         for (const row of rows) {
-            const dest = allow.has(String(row.id)) ? destBy.get(row.id) : undefined;
+            const dest = inRollout(row.id) ? destBy.get(row.id) : undefined;
             if (!dest) {
-                pool.push(row); // not in the rollout, or allowlisted but NOT in destination mode
+                pool.push(row); // not in the rollout, or covered but NOT in destination mode
                 continue;
             }
             considered += 1;
@@ -495,6 +499,7 @@ async function findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePrevi
             kept: pool.length,
             removed,
             errors,
+            mode: dcfg.destination_rollout_mode,
             allowlist: allow.size,
         });
     }
