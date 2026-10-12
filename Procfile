@@ -1,1 +1,1 @@
-web: cd server && node dist/index.js
+web: cd server && if [ ! -e node_modules/dotenv/package.json ] || [ ! -e node_modules/express/package.json ]; then npm install --omit=dev --ignore-scripts --no-audit --no-fund; fi && node dist/index.js

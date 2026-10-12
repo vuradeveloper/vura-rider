@@ -12,6 +12,9 @@
 // Every ~30s it also demotes drivers who stopped reporting (location/heartbeat), so
 // a force-quit driver cannot keep absorbing offers.
 // ─────────────────────────────────────────────────────────────────────────────
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.evictStaleIndexOnce = evictStaleIndexOnce;
 exports.getBuildCommit = getBuildCommit;
@@ -19,6 +22,8 @@ exports.formatBootLog = formatBootLog;
 exports.startOfferWorker = startOfferWorker;
 exports.stopOfferWorker = stopOfferWorker;
 const child_process_1 = require("child_process");
+const fs_1 = require("fs");
+const path_1 = __importDefault(require("path"));
 const dispatch_1 = require("./dispatch");
 const destinationSession_1 = require("./destinationSession");
 const driverIndex_1 = require("./driverIndex");
@@ -66,15 +71,30 @@ async function evictStaleIndexOnce() {
 /**
  * Short hash of the running build, so a boot log line can be matched to the
  * commit (and therefore the server/dist rebuild) that produced it. Order:
- *   1. BUILD_COMMIT env — the only source that works when the deployed
- *      artifact is a zip without a .git directory (Elastic Beanstalk);
- *   2. `git rev-parse` — dev machines and source checkouts;
- *   3. "unknown" — never invent a hash.
+ *   1. BUILD_COMMIT env — deploy-time override (tooling may pin it).
+ *   2. dist/build-commit.txt — written at BUILD time by
+ *      server/scripts/write-build-commit.mjs (`npm run build`). This is the
+ *      source that works on Elastic Beanstalk: the deployed zip has NO .git
+ *      directory, so git there can only ever answer "unknown" — which is
+ *      exactly the "build unknown" line this file exists to kill.
+ *   3. `git rev-parse` — dev machines and source checkouts without the file.
+ *   4. "unknown" — never invent a hash.
  */
 function getBuildCommit() {
     const fromEnv = process.env.BUILD_COMMIT?.trim();
     if (fromEnv)
         return fromEnv;
+    try {
+        // dist/services/<this file> → dist/build-commit.txt (compiled). Under
+        // tsx/vitest from src the same relative path is src/build-commit.txt,
+        // which is never written, so dev falls through to git.
+        const fromFile = (0, fs_1.readFileSync)(path_1.default.join(__dirname, "..", "build-commit.txt"), "utf8").trim();
+        if (/^[0-9a-f]{4,40}$/i.test(fromFile) || fromFile === "unknown")
+            return fromFile;
+    }
+    catch {
+        // no build-time file — fall through
+    }
     try {
         const fromGit = (0, child_process_1.execFileSync)("git", ["rev-parse", "--short", "HEAD"], {
             encoding: "utf8",

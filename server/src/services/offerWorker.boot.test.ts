@@ -8,6 +8,8 @@
 // build's git hash, so a boot log can be audited without reading source.
 // ─────────────────────────────────────────────────────────────────────────────
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { writeFileSync, rmSync } from "fs";
+import path from "path";
 
 // Same harness mocks as the other dispatch-adjacent suites: no live Postgres,
 // no firebase-admin/sharp loading just to import the module graph.
@@ -60,5 +62,20 @@ describe("build hash", () => {
   it("falls back to git (source checkout) or 'unknown' — never invented", () => {
     delete process.env.BUILD_COMMIT;
     expect(getBuildCommit()).toMatch(/^[0-9a-f]{4,40}$|^unknown$/i);
+  });
+
+  it("reads the build-time commit file that `npm run build` writes (the EB-zip source)", () => {
+    delete process.env.BUILD_COMMIT;
+    // Same relative path getBuildCommit resolves under src (tsx/vitest):
+    // src/services/../build-commit.txt. Simulates what dist/build-commit.txt
+    // is to the compiled build — the ONLY source that exists on Elastic
+    // Beanstalk, where the deployed zip has no .git directory.
+    const file = path.resolve(__dirname, "..", "build-commit.txt");
+    writeFileSync(file, "cafe1234\n", "utf8");
+    try {
+      expect(getBuildCommit()).toBe("cafe1234");
+    } finally {
+      rmSync(file, { force: true });
+    }
   });
 });

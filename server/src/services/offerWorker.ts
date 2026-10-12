@@ -14,6 +14,8 @@
 
 import type { Server as SocketIOServer } from "socket.io";
 import { execFileSync } from "child_process";
+import { readFileSync } from "fs";
+import path from "path";
 import {
   expireOffers,
   reviveWaitingRides,
@@ -73,14 +75,27 @@ export async function evictStaleIndexOnce(): Promise<number> {
 /**
  * Short hash of the running build, so a boot log line can be matched to the
  * commit (and therefore the server/dist rebuild) that produced it. Order:
- *   1. BUILD_COMMIT env — the only source that works when the deployed
- *      artifact is a zip without a .git directory (Elastic Beanstalk);
- *   2. `git rev-parse` — dev machines and source checkouts;
- *   3. "unknown" — never invent a hash.
+ *   1. BUILD_COMMIT env — deploy-time override (tooling may pin it).
+ *   2. dist/build-commit.txt — written at BUILD time by
+ *      server/scripts/write-build-commit.mjs (`npm run build`). This is the
+ *      source that works on Elastic Beanstalk: the deployed zip has NO .git
+ *      directory, so git there can only ever answer "unknown" — which is
+ *      exactly the "build unknown" line this file exists to kill.
+ *   3. `git rev-parse` — dev machines and source checkouts without the file.
+ *   4. "unknown" — never invent a hash.
  */
 export function getBuildCommit(): string {
   const fromEnv = process.env.BUILD_COMMIT?.trim();
   if (fromEnv) return fromEnv;
+  try {
+    // dist/services/<this file> → dist/build-commit.txt (compiled). Under
+    // tsx/vitest from src the same relative path is src/build-commit.txt,
+    // which is never written, so dev falls through to git.
+    const fromFile = readFileSync(path.join(__dirname, "..", "build-commit.txt"), "utf8").trim();
+    if (/^[0-9a-f]{4,40}$/i.test(fromFile) || fromFile === "unknown") return fromFile;
+  } catch {
+    // no build-time file — fall through
+  }
   try {
     const fromGit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
       encoding: "utf8",

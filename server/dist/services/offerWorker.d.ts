@@ -13,10 +13,14 @@ export declare function evictStaleIndexOnce(): Promise<number>;
 /**
  * Short hash of the running build, so a boot log line can be matched to the
  * commit (and therefore the server/dist rebuild) that produced it. Order:
- *   1. BUILD_COMMIT env — the only source that works when the deployed
- *      artifact is a zip without a .git directory (Elastic Beanstalk);
- *   2. `git rev-parse` — dev machines and source checkouts;
- *   3. "unknown" — never invent a hash.
+ *   1. BUILD_COMMIT env — deploy-time override (tooling may pin it).
+ *   2. dist/build-commit.txt — written at BUILD time by
+ *      server/scripts/write-build-commit.mjs (`npm run build`). This is the
+ *      source that works on Elastic Beanstalk: the deployed zip has NO .git
+ *      directory, so git there can only ever answer "unknown" — which is
+ *      exactly the "build unknown" line this file exists to kill.
+ *   3. `git rev-parse` — dev machines and source checkouts without the file.
+ *   4. "unknown" — never invent a hash.
  */
 export declare function getBuildCommit(): string;
 /**

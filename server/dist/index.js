@@ -54,6 +54,7 @@ const rides_1 = __importStar(require("./routes/rides"));
 const payments_1 = __importDefault(require("./routes/payments"));
 const drivers_1 = __importDefault(require("./routes/drivers"));
 const migrateOnBoot_1 = require("./services/migrateOnBoot");
+const featureFlags_1 = require("./services/featureFlags");
 const earnings_1 = __importDefault(require("./routes/earnings"));
 const safety_1 = __importDefault(require("./routes/safety"));
 const search_1 = __importDefault(require("./routes/search"));
@@ -89,12 +90,27 @@ const database_2 = require("./config/database");
 // Trigger reload for ALLOWED_ORIGINS update
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
-// The app sits behind the AWS ALB / nginx which terminate TLS and forward
-// HTTP to this Node server. `trust proxy` makes Express read the forwarded
-// protocol/host headers so `req.protocol`/`req.get("host")` return the public
-// HTTPS values — otherwise generated absolute URLs (e.g. share links) wrongly
-// use "http://..." and time out in browsers (the site only answers on 443).
-app.set("trust proxy", true);
+// Production chain (verified: deploy/ACCOUNT.md — "EB serves HTTP only —
+// Cloudflare terminates TLS for api.ridevura.com", "api proxied"; gotcha 9
+// "behind nginx/Cloudflare"):
+//
+//     client  →  Cloudflare (proxy)  →  EB nginx  →  this Node process
+//
+// TWO trusted hops. The hop count must be exact and is deliberately NOT `true`:
+//   • `true` trusts every entry in X-Forwarded-For, so a client can spoof its
+//     IP by sending the header — express-rate-limit rejects that with
+//     ERR_ERL_PERMISSIVE_TRUST_PROXY (seen in the boot log) and rate limiting
+//     becomes bypassable.
+//   • 1 would resolve every request to Cloudflare's IP — all users would share
+//     ONE rate-limit bucket (429 storms) and logs would show proxy IPs.
+//   • 2 peels Cloudflare + nginx and yields the real client IP, while still
+//     reading the forwarded protocol/host so `req.protocol`/`req.get("host")`
+//     return the public HTTPS values — otherwise generated absolute URLs
+//     (e.g. share links) wrongly use "http://..." and time out in browsers
+//     (the public site only answers on 443).
+// If Cloudflare's proxy is ever turned off for `api` (DNS-only/gray cloud),
+// change THIS NUMBER to 1 — never to `true`.
+app.set("trust proxy", 2);
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081,http://localhost:8082,http://localhost:19006").split(",");
 // ── Middleware ──
@@ -139,17 +155,18 @@ app.use("/api", vehicleImagesAdmin_1.default);
 // here must not stop the API from booting.
 (0, vehicleImages_1.ensureVehicleImageTables)().catch((err) => console.error("[vehicleImages] table ensure failed:", err?.message || err));
 (0, vehicleImages_1.startVehicleImageWorker)();
-// Rate limiting — generous limits so the driver's high-frequency polling (1s
-// while online) and socket polling-transport don't 429 the client. The old
-// 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
-// which caused constant "Too many requests" errors and broke every other API
-// call (stats, earnings, wallet). 6000/15min = 400/min, plenty of headroom.
-// NOTE: the deployed server/.env (and EB env props) once shipped with
-// RATE_LIMIT_MAX_REQUESTS=100 — clamp the floor so a stale/old value can
-// never re-create the 429 storm on a fresh deploy.
+function safeRateLimit(name, options) {
+    try {
+        return (0, express_rate_limit_1.default)(options);
+    }
+    catch (err) {
+        console.error(`[rate-limit] ${name} limiter failed to initialise — continuing WITHOUT it:`, err);
+        return (_req, _res, next) => next();
+    }
+}
 const rateMaxRaw = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "6000", 10);
 const rateMax = Math.max(Number.isFinite(rateMaxRaw) ? rateMaxRaw : 6000, 3000);
-const limiter = (0, express_rate_limit_1.default)({
+const limiter = safeRateLimit("api", {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10),
     max: rateMax,
     standardHeaders: true,
@@ -160,7 +177,7 @@ app.use("/api", limiter);
 // Routing endpoint sits BEFORE the global limiter so route lookups (which
 // are cached and called several times per ride screen) aren't throttled by
 // the strict 100/15min auth-limit. It gets its own lenient limiter instead.
-const routeLimiter = (0, express_rate_limit_1.default)({
+const routeLimiter = safeRateLimit("route", {
     windowMs: 15 * 60 * 1000,
     max: parseInt(process.env.ROUTE_RATE_LIMIT_MAX || "300", 10),
     standardHeaders: true,
@@ -259,6 +276,65 @@ app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
     res.status(500).json({ error: "Internal server error" });
 });
+// ── Startup self-check: ONE line that answers "what is actually live?" ──────
+// build · db · migrations · flags · providers, printed after listen. Probes
+// only: never throws, never blocks boot — an unreadable probe reports itself
+// honestly ("missing"/"unreadable"/"FAIL") instead of lying or crashing.
+async function logSelfCheck(dbConnected) {
+    try {
+        // Migrations recorded by migrate-on-boot (schema_migrations).
+        let migrations = "n/a";
+        try {
+            const row = await (0, database_2.queryOne)("SELECT COUNT(*)::int AS n FROM schema_migrations");
+            migrations = `${row?.n ?? 0}/${migrateOnBoot_1.MIGRATION_ORDER.length} recorded`;
+        }
+        catch {
+            migrations = `0/${migrateOnBoot_1.MIGRATION_ORDER.length} (schema_migrations missing)`;
+        }
+        // The three operator switches, exactly as the admin API reads them.
+        let flags = "unreadable";
+        try {
+            const view = await (0, featureFlags_1.readFeatures)();
+            const sections = (view.flags || {});
+            const word = (key, field) => {
+                const s = sections[key];
+                if (!s || s.exists !== true)
+                    return "missing";
+                return s[field] === true ? "on" : "off";
+            };
+            flags =
+                `matching:${word("matching", "h3_matching_enabled")} ` +
+                    `destination:${word("destination", "destination_matching_enabled")} ` +
+                    `tier:${word("performance_tier", "performance_tier_enabled")}`;
+        }
+        catch {
+            flags = "unreadable (app_config?)";
+        }
+        // Providers the backend leans on. sharp is a canary too: the platform
+        // hooks treat a broken sharp as non-fatal, so it must be reported, not hide.
+        let firebase = "ok";
+        try {
+            (0, firebase_1.getFirebaseApp)();
+        }
+        catch {
+            firebase = "FAIL";
+        }
+        let sharp = "ok";
+        try {
+            require("sharp");
+        }
+        catch {
+            sharp = "FAIL";
+        }
+        const eta = process.env.ROUTE_PROVIDER_URL ? "configured" : "haversine-only";
+        console.log(`[selfcheck] build=${(0, offerWorker_1.getBuildCommit)()} db=${dbConnected ? "ok" : "DOWN"} ` +
+            `migrations=${migrations} flags=${flags} ` +
+            `providers=firebase:${firebase} eta:${eta} sharp:${sharp}`);
+    }
+    catch (err) {
+        console.warn("[selfcheck] skipped:", err?.message || err);
+    }
+}
 // ── Start server ──
 async function start() {
     console.log("╔═══════════════════════════════════════╗");
@@ -681,6 +757,9 @@ async function start() {
         console.warn("[deploy] SINGLE-INSTANCE REQUIRED — socket.io has no shared adapter; " +
             "multi-instance delivery is UNSUPPORTED. Keep Elastic Beanstalk " +
             "min=max=1 and avoid rolling deployments with an additional batch.");
+        // One line for CloudWatch: what commit is live, and the state of the
+        // database, migrations, feature flags and providers (never throws).
+        void logSelfCheck(dbConnected);
     });
 }
 start().catch((err) => {

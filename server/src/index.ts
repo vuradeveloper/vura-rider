@@ -16,7 +16,8 @@ import usersRouter from "./routes/users";
 import ridesRouter, { cleanupStaleRides } from "./routes/rides";
 import paymentsRouter from "./routes/payments";
 import driversRouter from "./routes/drivers";
-import { runMigrationsOnBoot } from "./services/migrateOnBoot";
+import { MIGRATION_ORDER, runMigrationsOnBoot } from "./services/migrateOnBoot";
+import { readFeatures } from "./services/featureFlags";
 import earningsRouter from "./routes/earnings";
 import safetyRouter from "./routes/safety";
 import searchRouter from "./routes/search";
@@ -40,7 +41,7 @@ import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import adminRouter from "./routes/admin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
-import { startOfferWorker } from "./services/offerWorker";
+import { startOfferWorker, getBuildCommit } from "./services/offerWorker";
 import { startPerformanceTierScheduler } from "./services/performanceTier";
 import { logEtaProviderStatus } from "./services/eta";
 import { logProviderSeams } from "./services/providerSeams";
@@ -48,19 +49,34 @@ import { startOsmPlaceSync, syncOsmPlaces, getOsmSyncStatus } from "./services/O
 
 // ── Socket handlers ──
 import { setupSocketHandlers } from "./socket/handlers";
-import { execute } from "./config/database";
+import { execute, queryOne } from "./config/database";
 
 // ── Init Express ──
 // Trigger reload for ALLOWED_ORIGINS update
 const app = express();
 const server = http.createServer(app);
 
-// The app sits behind the AWS ALB / nginx which terminate TLS and forward
-// HTTP to this Node server. `trust proxy` makes Express read the forwarded
-// protocol/host headers so `req.protocol`/`req.get("host")` return the public
-// HTTPS values — otherwise generated absolute URLs (e.g. share links) wrongly
-// use "http://..." and time out in browsers (the site only answers on 443).
-app.set("trust proxy", true);
+// Production chain (verified: deploy/ACCOUNT.md — "EB serves HTTP only —
+// Cloudflare terminates TLS for api.ridevura.com", "api proxied"; gotcha 9
+// "behind nginx/Cloudflare"):
+//
+//     client  →  Cloudflare (proxy)  →  EB nginx  →  this Node process
+//
+// TWO trusted hops. The hop count must be exact and is deliberately NOT `true`:
+//   • `true` trusts every entry in X-Forwarded-For, so a client can spoof its
+//     IP by sending the header — express-rate-limit rejects that with
+//     ERR_ERL_PERMISSIVE_TRUST_PROXY (seen in the boot log) and rate limiting
+//     becomes bypassable.
+//   • 1 would resolve every request to Cloudflare's IP — all users would share
+//     ONE rate-limit bucket (429 storms) and logs would show proxy IPs.
+//   • 2 peels Cloudflare + nginx and yields the real client IP, while still
+//     reading the forwarded protocol/host so `req.protocol`/`req.get("host")`
+//     return the public HTTPS values — otherwise generated absolute URLs
+//     (e.g. share links) wrongly use "http://..." and time out in browsers
+//     (the public site only answers on 443).
+// If Cloudflare's proxy is ever turned off for `api` (DNS-only/gray cloud),
+// change THIS NUMBER to 1 — never to `true`.
+app.set("trust proxy", 2);
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081,http://localhost:8082,http://localhost:19006").split(",");
@@ -128,9 +144,29 @@ startVehicleImageWorker();
 // NOTE: the deployed server/.env (and EB env props) once shipped with
 // RATE_LIMIT_MAX_REQUESTS=100 — clamp the floor so a stale/old value can
 // never re-create the 429 storm on a fresh deploy.
+//
+// A limiter must never be able to take the PROCESS down. express-rate-limit
+// v7 throws a ValidationError at construction when a check fails (that is what
+// logged ERR_ERL_PERMISSIVE_TRUST_PROXY) — at module scope a throw would kill
+// the boot before start() ever runs. Every limiter is therefore built through
+// this guard: on failure it logs loudly and falls back to pass-through
+// middleware (rate limits off is survivable; a dead backend is not). A
+// validation error thrown later, inside a request, is synchronous middleware
+// code, so Express's error handler turns it into a 500 for THAT request —
+// never a process crash. Validation stays ON (no `validate: false`) so real
+// misconfiguration keeps being reported.
+type LimiterOptions = Parameters<typeof rateLimit>[0];
+function safeRateLimit(name: string, options: LimiterOptions): express.RequestHandler {
+  try {
+    return rateLimit(options);
+  } catch (err) {
+    console.error(`[rate-limit] ${name} limiter failed to initialise — continuing WITHOUT it:`, err);
+    return (_req, _res, next) => next();
+  }
+}
 const rateMaxRaw = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "6000", 10);
 const rateMax = Math.max(Number.isFinite(rateMaxRaw) ? rateMaxRaw : 6000, 3000);
-const limiter = rateLimit({
+const limiter = safeRateLimit("api", {
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "900000", 10),
   max: rateMax,
   standardHeaders: true,
@@ -142,7 +178,7 @@ app.use("/api", limiter);
 // Routing endpoint sits BEFORE the global limiter so route lookups (which
 // are cached and called several times per ride screen) aren't throttled by
 // the strict 100/15min auth-limit. It gets its own lenient limiter instead.
-const routeLimiter = rateLimit({
+const routeLimiter = safeRateLimit("route", {
   windowMs: 15 * 60 * 1000,
   max: parseInt(process.env.ROUTE_RATE_LIMIT_MAX || "300", 10),
   standardHeaders: true,
@@ -253,6 +289,62 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "Internal server error" });
 });
+
+// ── Startup self-check: ONE line that answers "what is actually live?" ──────
+// build · db · migrations · flags · providers, printed after listen. Probes
+// only: never throws, never blocks boot — an unreadable probe reports itself
+// honestly ("missing"/"unreadable"/"FAIL") instead of lying or crashing.
+async function logSelfCheck(dbConnected: boolean): Promise<void> {
+  try {
+    // Migrations recorded by migrate-on-boot (schema_migrations).
+    let migrations = "n/a";
+    try {
+      const row = await queryOne<{ n: number }>("SELECT COUNT(*)::int AS n FROM schema_migrations");
+      migrations = `${row?.n ?? 0}/${MIGRATION_ORDER.length} recorded`;
+    } catch {
+      migrations = `0/${MIGRATION_ORDER.length} (schema_migrations missing)`;
+    }
+    // The three operator switches, exactly as the admin API reads them.
+    let flags = "unreadable";
+    try {
+      const view = await readFeatures();
+      const sections = (view.flags || {}) as Record<string, Record<string, unknown> | undefined>;
+      const word = (key: string, field: string): string => {
+        const s = sections[key];
+        if (!s || s.exists !== true) return "missing";
+        return s[field] === true ? "on" : "off";
+      };
+      flags =
+        `matching:${word("matching", "h3_matching_enabled")} ` +
+        `destination:${word("destination", "destination_matching_enabled")} ` +
+        `tier:${word("performance_tier", "performance_tier_enabled")}`;
+    } catch {
+      flags = "unreadable (app_config?)";
+    }
+    // Providers the backend leans on. sharp is a canary too: the platform
+    // hooks treat a broken sharp as non-fatal, so it must be reported, not hide.
+    let firebase = "ok";
+    try {
+      getFirebaseApp();
+    } catch {
+      firebase = "FAIL";
+    }
+    let sharp = "ok";
+    try {
+      require("sharp");
+    } catch {
+      sharp = "FAIL";
+    }
+    const eta = process.env.ROUTE_PROVIDER_URL ? "configured" : "haversine-only";
+    console.log(
+      `[selfcheck] build=${getBuildCommit()} db=${dbConnected ? "ok" : "DOWN"} ` +
+        `migrations=${migrations} flags=${flags} ` +
+        `providers=firebase:${firebase} eta:${eta} sharp:${sharp}`,
+    );
+  } catch (err: any) {
+    console.warn("[selfcheck] skipped:", err?.message || err);
+  }
+}
 
 // ── Start server ──
 async function start() {
@@ -682,6 +774,9 @@ async function start() {
         "multi-instance delivery is UNSUPPORTED. Keep Elastic Beanstalk " +
         "min=max=1 and avoid rolling deployments with an additional batch."
     );
+    // One line for CloudWatch: what commit is live, and the state of the
+    // database, migrations, feature flags and providers (never throws).
+    void logSelfCheck(dbConnected);
   });
 }
 
