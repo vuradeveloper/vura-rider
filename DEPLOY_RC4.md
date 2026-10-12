@@ -72,6 +72,41 @@ src's.
 ## 4. Pull the RC4 branch on the EB environment's source
 
 Console: Elastic Beanstalk → `vura-rider-prod` → the environment's source is
+the `release-candidate-4` branch of `vuradeveloper/vura-rider` (or from your
+machine: `eb use vura-rider-prod && git checkout release-candidate-4 && git pull`).
+
+## 5. Turn migrations ON for ONE boot
+
+Console: EB → `vura-rider-prod` → Configuration → Software → **Environment
+properties** → add `RUN_MIGRATIONS_ON_BOOT` = `true` → Apply.
+CLI: `eb setenv RUN_MIGRATIONS_ON_BOOT=true -e vura-rider-prod`.
+(The env change itself replaces the instance — that boot is the migration boot.)
+
+## 6. Deploy + status + read the ONE summary line
+
+```powershell
+eb deploy -e vura-rider-prod
+eb status        # expect: Ok / Green
+```
+
+Then read the boot summary line (console: EB → Logs → **Last 100 lines**, or
+`eb logs --all | grep "\[migrate\]"`):
+
+```
+[migrate] summary applied=X skipped=Y failed=W
+```
+
+**Expected on this production database (001/001b/002 already applied, 003 new):**
+
+```
+[migrate] applied 003_performance_tier.sql
+[migrate] summary applied=1 skipped=3 failed=0
+```
+
+A fully-migrated DB later reads `applied=0 skipped=4 failed=0`. **Anything
+with `failed>0` → stop and read the `[migrate] FAILED <file>: <exact error>`
+line above it** (the boot continues; the affected feature simply stays OFF).
+
 ## 7. Turn migrations OFF again (immediately)
 
 Console: same Environment properties page → set `RUN_MIGRATIONS_ON_BOOT` =
