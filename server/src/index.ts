@@ -16,6 +16,7 @@ import usersRouter from "./routes/users";
 import ridesRouter, { cleanupStaleRides } from "./routes/rides";
 import paymentsRouter from "./routes/payments";
 import driversRouter from "./routes/drivers";
+import { runMigrationsOnBoot } from "./services/migrateOnBoot";
 import earningsRouter from "./routes/earnings";
 import safetyRouter from "./routes/safety";
 import searchRouter from "./routes/search";
@@ -434,6 +435,17 @@ async function start() {
       console.log("✓ Schema bootstrapped");
     } catch (err) {
       console.warn("⚠ Schema bootstrap skipped:", err);
+    }
+
+    // RC4 — migrate-on-boot (001 → 001b → 002 → 003), gated by
+    // RUN_MIGRATIONS_ON_BOOT (default OFF). runMigrationsOnBoot never throws:
+    // a failure rolls back THAT migration, logs the exact error, and the boot
+    // summary line reports applied / skipped / failed while the server keeps
+    // serving (missing config rows ⇒ every new feature reads as OFF).
+    try {
+      await runMigrationsOnBoot();
+    } catch (err: any) {
+      console.error("[migrate] unexpected boot error (continuing):", err?.message || err);
     }
 
     // One-time migration — runs only at boot, never per request (previously
