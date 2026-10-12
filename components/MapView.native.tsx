@@ -11,9 +11,10 @@ import {
   useRef,
   useState
 } from "react";
-import { View } from "react-native";
+import { Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { getMapHtml } from "@/lib/mapHtml";
+import { MIN_WEBVIEW_CHROME_MAJOR } from "@/lib/webviewCompat";
 
 export function Marker(_props: any) {
   return null;
@@ -89,6 +90,10 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
     const markersRef = useRef<any[]>([]);
     const initialKeyRef = useRef<string>("");
     const [html, setHtml] = useState<string | null>(null);
+    // Old-WebView notice (RC4 Huawei fix): set when the map page's first-script
+    // guard detects a Chrome major below the floor — overlays native guidance
+    // instead of leaving a broken map. See lib/webviewCompat.ts.
+    const [oldWebView, setOldWebView] = useState<string | null>(null);
 
     // Leaflet is bundled inside the APK and inlined here — no unpkg CDN
     // dependency at runtime, so maps start instantly offline.
@@ -218,6 +223,11 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
             // Diagnostics from the map page (leaflet load failures, JS errors)
             console.log("[MapWebView]", data.message);
             break;
+          case "webview-too-old":
+            // The page guard detected an engine below the Chrome/70 floor —
+            // show the native update notice (the page paints its own copy too).
+            setOldWebView(String(data.version || "unknown"));
+            break;
           case "mounted":
             if (initialRegion) {
               initialKeyRef.current = initialKey;
@@ -307,6 +317,37 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(
         ) : (
           <View style={{ flex: 1, backgroundColor: "#f8f9fa" }} />
         )}
+        {oldWebView ? (
+          <View
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "#ffffff",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 32,
+              zIndex: 10,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 20,
+                fontWeight: "700",
+                color: "#1a1a1a",
+                textAlign: "center",
+                marginBottom: 12,
+              }}
+            >
+              Please update Android System WebView
+            </Text>
+            <Text style={{ fontSize: 14, color: "#4a4a4a", textAlign: "center", lineHeight: 20 }}>
+              {`The map needs Android System WebView (or Chrome) version ${MIN_WEBVIEW_CHROME_MAJOR} or newer. This device reports version ${oldWebView}. Update it from the Play Store, Huawei AppGallery or a system update, then reopen Vura.`}
+            </Text>
+          </View>
+        ) : null}
       </View>
     );
   }

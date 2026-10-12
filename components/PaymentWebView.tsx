@@ -319,6 +319,9 @@ export default function PaymentWebView({
             {errorUrl}
           </Text>
         ) : null}
+        <Text style={{ fontSize: 12, color: "#80716b", textAlign: "center", marginBottom: 14, lineHeight: 17 }}>
+          Older phone? Update Android System WebView (or Chrome), then tap Retry.
+        </Text>
         <TouchableOpacity
           onPress={() => {
             setErrorUrl(null);

@@ -2,6 +2,10 @@
 // instantly on cold start — no CDN download wait. The CDN list is only used
 // as a fallback if the bundled copy ever fails to evaluate.
 import { LEAFLET_JS, LEAFLET_CSS } from "./leafletBundle";
+// Old-WebView guard (same Chrome/70 floor as the driver app): the page paints
+// a plain "Please update Android System WebView" screen instead of a broken
+// map when the engine is below the floor — see lib/webviewCompat.ts.
+import { MAP_PAGE_GUARD_JS, UPDATE_SCREEN_FN_JS } from "./webviewCompat";
 
 let cachedHtml: string | null = null;
 
@@ -248,6 +252,14 @@ const LEAFLET_JS_FALLBACKS = [
 
 const LOADER_JS = `
 (function(){
+  // Old WebView (the first-script guard said no): paint the plain update
+  // screen and stop — never boot a map the engine cannot run.
+  if (window.__VURA_WV_OK === false) {
+    var wm = /Chrome\\/(\\d+)\\./.exec(navigator.userAgent || '');
+    var wv = document.getElementById('map');
+    if (wv) { wv.innerHTML = (${UPDATE_SCREEN_FN_JS})(wm ? wm[1] : 'unknown'); }
+    return;
+  }
   var sources = ${JSON.stringify(LEAFLET_JS_FALLBACKS)};
   var idx = 0;
   function report(msg){ try{ if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', message:String(msg)})); } }catch(e){} }
@@ -284,6 +296,9 @@ ${MARKER_STYLES}
 </head>
 <body>
 <div id="map"></div>
+<script>
+${MAP_PAGE_GUARD_JS}
+</script>
 <script>
 ${LEAFLET_JS}
 </script>
