@@ -53,6 +53,7 @@ const users_1 = __importDefault(require("./routes/users"));
 const rides_1 = __importStar(require("./routes/rides"));
 const payments_1 = __importDefault(require("./routes/payments"));
 const drivers_1 = __importDefault(require("./routes/drivers"));
+const migrateOnBoot_1 = require("./services/migrateOnBoot");
 const earnings_1 = __importDefault(require("./routes/earnings"));
 const safety_1 = __importDefault(require("./routes/safety"));
 const search_1 = __importDefault(require("./routes/search"));
@@ -440,6 +441,17 @@ async function start() {
         }
         catch (err) {
             console.warn("⚠ Schema bootstrap skipped:", err);
+        }
+        // RC4 — migrate-on-boot (001 → 001b → 002 → 003), gated by
+        // RUN_MIGRATIONS_ON_BOOT (default OFF). runMigrationsOnBoot never throws:
+        // a failure rolls back THAT migration, logs the exact error, and the boot
+        // summary line reports applied / skipped / failed while the server keeps
+        // serving (missing config rows ⇒ every new feature reads as OFF).
+        try {
+            await (0, migrateOnBoot_1.runMigrationsOnBoot)();
+        }
+        catch (err) {
+            console.error("[migrate] unexpected boot error (continuing):", err?.message || err);
         }
         // One-time migration — runs only at boot, never per request (previously
         // this DDL ran on every /api/users/sync call and slowed down app start).

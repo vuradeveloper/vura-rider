@@ -251,8 +251,24 @@ async function clearDestination(driverId) {
 }
 /** Banner/status for the driver app (DB-persisted — survives reconnects). */
 async function getDestinationStatus(driverId) {
-    const cfg = await (0, config_1.getDestinationConfig)();
-    return buildStatus(driverId, cfg, await loadActive(driverId));
+    try {
+        const cfg = await (0, config_1.getDestinationConfig)();
+        return buildStatus(driverId, cfg, await loadActive(driverId));
+    }
+    catch (err) {
+        // RC4: destination tables not migrated yet ⇒ feature OFF, degraded status —
+        // never throw into a driver request.
+        if (!(0, database_1.isMissingRelation)(err))
+            throw err;
+        console.warn(`[destination] status unreadable (${err?.code}) — feature treated as OFF`);
+        return {
+            enabled: false,
+            active: false,
+            paused: false,
+            uses_today: 0,
+            banner: null,
+        };
+    }
 }
 /**
  * A COMPLETED trip (driver:ride:complete) does two things to the active

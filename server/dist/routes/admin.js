@@ -1,9 +1,13 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const performanceTier_1 = require("../services/performanceTier");
+const adminFeatures_1 = __importDefault(require("./adminFeatures"));
 const router = (0, express_1.Router)();
 function isAdmin(req) {
     const admins = (process.env.ADMIN_EMAILS || "")
@@ -152,5 +156,8 @@ router.post("/performance-tiers/run", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// RC4 — feature flags & allowlists (Item 1/1b). Mounted here so the paths are
+// /api/admin/features with the exact same admin gate as everything above.
+router.use("/", adminFeatures_1.default);
 exports.default = router;
 //# sourceMappingURL=admin.js.map

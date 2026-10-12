@@ -220,7 +220,19 @@ async function computeTierStatus(driverId) {
     if (!cfg.performance_tier_rollout_driver_ids.some((id) => id.toLowerCase() === wanted)) {
         return disabledStatus();
     }
-    const thresholds = await loadThresholds();
+    let thresholds;
+    try {
+        thresholds = await loadThresholds();
+    }
+    catch (err) {
+        // RC4: 003's thresholds table not applied yet ⇒ the feature is simply OFF —
+        // never throw into a driver's status request.
+        if ((0, database_1.isMissingRelation)(err)) {
+            console.warn(`[tier] thresholds unreadable (${err?.code}) — feature treated as OFF`);
+            return disabledStatus();
+        }
+        throw err;
+    }
     const row = await (0, database_1.queryOne)(`SELECT tier, points, rating_avg, accept_percent, cancel_percent,
             rides_completed, offers_received, offers_accepted, offers_timedout,
             driver_cancels, window_start, window_end,

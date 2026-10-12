@@ -1,0 +1,313 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.FeatureFlagError = exports.FEATURE_KEYS = void 0;
+exports.validateField = validateField;
+exports.readFeatures = readFeatures;
+exports.updateFeature = updateFeature;
+exports.enableForAccounts = enableForAccounts;
+// ─────────────────────────────────────────────────────────────────────────────
+// FEATURE FLAGS — admin read/update for the three RC4 module switches.
+//
+// The brief: the operator must switch the new features ON for test accounts
+// "without SQL", with one call, and see the exact current JSON. Three flags +
+// their allowlists only — this service can NEVER touch fares, pricing, wallet
+// or any money column (validated keys only, see SETTABLE).
+//
+//   matching         h3_matching_enabled, h3_rollout_mode, rider allowlist
+//   destination      destination_matching_enabled, driver allowlist
+//   performance_tier performance_tier_enabled, driver allowlist
+//
+// Every write is read-modify-write on the app_config JSONB row (the seeded
+// shape from migrations 001/002/003 is preserved), then invalidateConfigCache()
+// so the change lands within the same second (the cache would otherwise wait
+// up to 10 s). Every write is audited to stdout as one JSON line.
+//
+// Missing table/row ⇒ structured error (`no_row`), NOT a silent upsert: if the
+// migration never ran, the honest answer is "run the migration", because an
+// upserted row would believe 001/002/003 happened.
+// ─────────────────────────────────────────────────────────────────────────────
+const database_1 = require("../config/database");
+const config_1 = require("./config");
+const offerWorker_1 = require("./offerWorker");
+exports.FEATURE_KEYS = ["matching", "destination", "performance_tier"];
+class FeatureFlagError extends Error {
+    code;
+    constructor(code, message) {
+        super(message);
+        this.code = code;
+    }
+}
+exports.FeatureFlagError = FeatureFlagError;
+/** THE allow-list of settable fields. Anything else ⇒ 400 validation error. */
+const SETTABLE = {
+    matching: {
+        h3_matching_enabled: "boolean",
+        h3_rollout_mode: "mode",
+        h3_rollout_rider_ids: "string[]",
+        h3_rollout_percent: "percent",
+    },
+    destination: {
+        destination_matching_enabled: "boolean",
+        destination_rollout_driver_ids: "string[]",
+    },
+    performance_tier: {
+        performance_tier_enabled: "boolean",
+        performance_tier_rollout_driver_ids: "string[]",
+    },
+};
+const H3_MODES = ["off", "allowlist", "percent", "all"];
+function isFeatureKey(k) {
+    return typeof k === "string" && exports.FEATURE_KEYS.includes(k);
+}
+function normId(id) {
+    if (typeof id !== "string")
+        throw new FeatureFlagError("validation", `invalid id: ${JSON.stringify(id)}`);
+    const s = id.trim().toLowerCase();
+    if (!s || s.length > 80)
+        throw new FeatureFlagError("validation", `invalid id: ${JSON.stringify(id)}`);
+    return s;
+}
+function normIds(ids) {
+    if (!Array.isArray(ids))
+        throw new FeatureFlagError("validation", "allowlist must be an array of ids");
+    if (ids.length > 500)
+        throw new FeatureFlagError("validation", "allowlist too long (max 500)");
+    return [...new Set(ids.map((x) => normId(x)))];
+}
+/** Validate one field against SETTABLE; throws FeatureFlagError on anything unexpected. */
+function validateField(key, field, value) {
+    const type = SETTABLE[key]?.[field];
+    if (!type) {
+        throw new FeatureFlagError("validation", `unknown field '${field}' for '${key}' — allowed: ${Object.keys(SETTABLE[key] || {}).join(", ")}`);
+    }
+    switch (type) {
+        case "boolean":
+            if (typeof value !== "boolean")
+                throw new FeatureFlagError("validation", `${field} must be true/false`);
+            return value;
+        case "string[]":
+            return normIds(value);
+        case "mode":
+            if (typeof value !== "string" || !H3_MODES.includes(value)) {
+                throw new FeatureFlagError("validation", `${field} must be one of ${H3_MODES.join("|")}`);
+            }
+            return value;
+        case "percent": {
+            if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+                throw new FeatureFlagError("validation", `${field} must be a number 0..100`);
+            }
+            return Math.floor(value);
+        }
+    }
+}
+/** One structured JSON audit line per write — greppable in CloudWatch. */
+function audit(actor, action, detail) {
+    console.log(JSON.stringify({
+        at: new Date().toISOString(),
+        audit: "features",
+        actor,
+        action,
+        ...detail,
+    }));
+}
+async function readRow(key) {
+    try {
+        const row = await (0, database_1.queryOne)("SELECT value FROM app_config WHERE key = $1", [key]);
+        if (!row)
+            return null;
+        return (row.value && typeof row.value === "object" ? row.value : {});
+    }
+    catch (err) {
+        // app_config missing entirely (001 never ran) — same honest answer as no row.
+        throw new FeatureFlagError("no_row", `app_config is not readable (${err?.message || err}) — run migrations with RUN_MIGRATIONS_ON_BOOT=true`);
+    }
+}
+/** Project the raw JSONB row into the operator-facing section (or explain why absent). */
+function section(key, row) {
+    if (!row)
+        return { exists: false, error: "config row missing — apply the migration" };
+    if (key === "matching") {
+        return {
+            exists: true,
+            h3_matching_enabled: row.h3_matching_enabled === true,
+            h3_rollout_mode: typeof row.h3_rollout_mode === "string" ? row.h3_rollout_mode : "off",
+            h3_rollout_rider_ids: Array.isArray(row.h3_rollout_rider_ids) ? row.h3_rollout_rider_ids : [],
+            h3_rollout_percent: typeof row.h3_rollout_percent === "number" ? row.h3_rollout_percent : 0,
+        };
+    }
+    if (key === "destination") {
+        return {
+            exists: true,
+            destination_matching_enabled: row.destination_matching_enabled === true,
+            destination_rollout_driver_ids: Array.isArray(row.destination_rollout_driver_ids)
+                ? row.destination_rollout_driver_ids
+                : [],
+        };
+    }
+    return {
+        exists: true,
+        performance_tier_enabled: row.performance_tier_enabled === true,
+        performance_tier_rollout_driver_ids: Array.isArray(row.performance_tier_rollout_driver_ids)
+            ? row.performance_tier_rollout_driver_ids
+            : [],
+    };
+}
+/** Last 5 rides' matching paths (Item 1b.4) — path + reason + radius per ride. */
+async function recentMatchingPaths() {
+    try {
+        const rows = await (0, database_1.query)(`SELECT ride_id, detail, created_at FROM (
+         SELECT DISTINCT ON (ride_id) ride_id, detail, created_at, id
+           FROM ride_events
+          WHERE event = 'trace:matching_path'
+          ORDER BY ride_id, id DESC
+       ) t
+       ORDER BY id DESC
+       LIMIT 5`);
+        return rows.map((r) => ({
+            ride_id: r.ride_id,
+            path: r.detail?.path ?? null,
+            reason: r.detail?.reason ?? null,
+            radius_km: r.detail?.radius_km ?? null,
+            at: r.created_at,
+        }));
+    }
+    catch {
+        // ride_events missing (fresh DB) — no paths to show, never an error.
+        return [];
+    }
+}
+/** Full operator view: all three flags/allowlists + last rides + server build. */
+async function readFeatures() {
+    const [m, d, t] = await Promise.all([readRow("matching"), readRow("destination"), readRow("performance_tier")]);
+    return {
+        server_build: (0, offerWorker_1.getBuildCommit)(),
+        flags: {
+            matching: section("matching", m),
+            destination: section("destination", d),
+            performance_tier: section("performance_tier", t),
+        },
+        recent_matching_paths: await recentMatchingPaths(),
+    };
+}
+/** Read-modify-write one app_config row with validated patches; audit + invalidate. */
+async function writeFeatureValue(key, patch, actor, action) {
+    const row = await readRow(key);
+    if (!row)
+        throw new FeatureFlagError("no_row", `app_config row '${key}' missing — run migrations first (RUN_MIGRATIONS_ON_BOOT=true)`);
+    const next = { ...row, ...patch };
+    await (0, database_1.execute)("UPDATE app_config SET value = $2::jsonb WHERE key = $1", [
+        key,
+        JSON.stringify(next),
+    ]);
+    (0, config_1.invalidateConfigCache)();
+    audit(actor, action, { key, patch });
+    return section(key, next);
+}
+/** Validate + apply one flag update. Validated keys only — never a money column. */
+async function updateFeature(key, changes, actor) {
+    if (!isFeatureKey(key)) {
+        throw new FeatureFlagError("validation", `key must be one of ${exports.FEATURE_KEYS.join(", ")}`);
+    }
+    if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+        throw new FeatureFlagError("validation", "changes must be an object like {\"h3_matching_enabled\": true}");
+    }
+    const entries = Object.entries(changes);
+    if (entries.length === 0)
+        throw new FeatureFlagError("validation", "changes is empty");
+    const patch = {};
+    for (const [field, value] of entries)
+        patch[field] = validateField(key, field, value);
+    const updated = await writeFeatureValue(key, patch, actor, "update");
+    return { server_build: (0, offerWorker_1.getBuildCommit)(), flags: { [key]: updated } };
+}
+// ── One-call enable for test accounts (Item 1b.3) ────────────────────────────
+function normEmails(v) {
+    if (v == null)
+        return [];
+    if (!Array.isArray(v))
+        throw new FeatureFlagError("validation", "emails must be an array");
+    return [...new Set(v.map((e) => String(e ?? "").trim().toLowerCase()).filter((e) => e.includes("@") && e.length < 254))];
+}
+function normPhones(v) {
+    if (v == null)
+        return [];
+    if (!Array.isArray(v))
+        throw new FeatureFlagError("validation", "phones must be an array");
+    return [
+        ...new Set(v
+            .map((p) => String(p ?? "").replace(/[^0-9]/g, ""))
+            .filter((p) => p.length >= 7 && p.length <= 15)),
+    ];
+}
+/** Resolve emails/phones to users.id — so the operator never needs raw ids. */
+async function resolveUsers(emails, phones) {
+    if (emails.length === 0 && phones.length === 0)
+        return [];
+    try {
+        return await (0, database_1.query)(`SELECT id, role, lower(email) AS email
+         FROM users
+        WHERE lower(coalesce(email, '')) = ANY($1::text[])
+           OR regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = ANY($2::text[])`, [emails, phones]);
+    }
+    catch (err) {
+        throw new FeatureFlagError("validation", `user lookup failed: ${err?.message || err}`);
+    }
+}
+async function mergedIds(key, field, extra) {
+    const row = await readRow(key);
+    const existing = Array.isArray(row?.[field]) ? row[field].map((x) => String(x).toLowerCase()) : [];
+    return [...new Set([...existing, ...extra])];
+}
+/**
+ * One call: turn the three features ON for the given test accounts.
+ * matching  → enabled; rider ids ⇒ rollout 'allowlist' (those riders), no
+ *             rider ids ⇒ rollout 'all' (fastest path for one test phone).
+ * destination / performance_tier → enabled + driver ids merged into allowlists.
+ * Returns the exact JSON that now reads back from GET /features.
+ */
+async function enableForAccounts(input, actor) {
+    const features = Array.isArray(input.features) && input.features.length > 0 ? input.features : exports.FEATURE_KEYS;
+    for (const f of features) {
+        if (!isFeatureKey(f))
+            throw new FeatureFlagError("validation", `unknown feature '${f}' — allowed: ${exports.FEATURE_KEYS.join(", ")}`);
+    }
+    const dUsers = await resolveUsers(normEmails(input.driverEmails), normPhones(input.driverPhones));
+    const rUsers = await resolveUsers(normEmails(input.riderEmails), normPhones(input.riderPhones));
+    const allDriverIds = [...new Set([...normIds(input.driverIds ?? []), ...dUsers.map((u) => u.id.toLowerCase())])];
+    const allRiderIds = [...new Set([...normIds(input.riderIds ?? []), ...rUsers.map((u) => u.id.toLowerCase())])];
+    const flags = {};
+    if (features.includes("matching")) {
+        const patch = { h3_matching_enabled: true };
+        if (allRiderIds.length > 0) {
+            patch.h3_rollout_mode = "allowlist";
+            patch.h3_rollout_rider_ids = await mergedIds("matching", "h3_rollout_rider_ids", allRiderIds);
+        }
+        else {
+            patch.h3_rollout_mode = "all";
+        }
+        flags.matching = await writeFeatureValue("matching", patch, actor, "enable");
+    }
+    if (features.includes("destination")) {
+        flags.destination = await writeFeatureValue("destination", {
+            destination_matching_enabled: true,
+            destination_rollout_driver_ids: await mergedIds("destination", "destination_rollout_driver_ids", allDriverIds),
+        }, actor, "enable");
+    }
+    if (features.includes("performance_tier")) {
+        flags.performance_tier = await writeFeatureValue("performance_tier", {
+            performance_tier_enabled: true,
+            performance_tier_rollout_driver_ids: await mergedIds("performance_tier", "performance_tier_rollout_driver_ids", allDriverIds),
+        }, actor, "enable");
+    }
+    return {
+        server_build: (0, offerWorker_1.getBuildCommit)(),
+        resolved: {
+            driver_users: dUsers,
+            rider_users: rUsers,
+            driver_ids: allDriverIds,
+            rider_ids: allRiderIds,
+        },
+        flags,
+    };
+}
+//# sourceMappingURL=featureFlags.js.map

@@ -25,5 +25,11 @@ export declare function testConnection(): Promise<boolean>;
  *   });
  */
 export declare function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>;
+/**
+ * Postgres says the relation does not exist (table 42P01 / column 42703) —
+ * the missing-migration signal. New features must read that as "feature OFF",
+ * never as an error into a live ride/driver/location request.
+ */
+export declare function isMissingRelation(err: any): boolean;
 export default getPool;
 //# sourceMappingURL=database.d.ts.map
