@@ -1,6 +1,8 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
-import { query, queryOne, execute } from "../config/database";
+import { query, queryOne, execute, isMissingRelation } from "../config/database";
+import { getConfig, getDestinationConfig, getPerformanceTierConfig } from "../services/config";
+import { getBuildCommit } from "../services/offerWorker";
 import { reviveWaitingRides } from "../services/dispatch";
 import { getDriverIndex } from "../services/driverIndex";
 import { noteIndexUpsertFailure } from "../services/metrics";
@@ -628,6 +630,11 @@ router.post("/destination", requireAuth, async (req: AuthRequest, res: Response)
     if (result.ok) { res.json(result.status); return; }
     res.status(DESTINATION_ERROR_HTTP_STATUS[result.error] ?? 400).json({ error: result.message, code: result.error });
   } catch (err: any) {
+    if (isMissingRelation(err)) {
+      // RC4: destination tables not migrated ⇒ honest "off", never a 500.
+      res.status(403).json({ error: "Destination mode is turned off or not available yet", code: "disabled" });
+      return;
+    }
     console.error("Destination set error:", err);
     res.status(500).json({ error: err.message });
   }
@@ -661,6 +668,54 @@ router.get("/performance-tier", requireAuth, async (req: AuthRequest, res: Respo
     res.json(await computeTierStatus(driverId));
   } catch (err: any) {
     console.error("Performance tier status error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RC4 Item 1b — GET /api/drivers/feature-status: the ONE call the driver home
+// screen makes on load / login / foreground. Answers, for THIS driver:
+//   destination {flag, enabled, in_rollout} · tier {flag, enabled, in_rollout}
+//   matching {flag, mode, radius_km} · user_id (the id the admin enable call
+//   wants) · server_build. Every sub-call is individually caught: a status
+//   screen must never 500 — worst case the feature answers enabled:false and
+//   the app greys the button with the reason.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/feature-status", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const driverId = await resolveDriverId(req.userId!);
+    const [dcfg, tcfg, cfg] = await Promise.all([
+      getDestinationConfig().catch(() => null),
+      getPerformanceTierConfig().catch(() => null),
+      getConfig().catch(() => null),
+    ]);
+    let destEnabled = false;
+    let tierEnabled = false;
+    if (driverId) {
+      try { destEnabled = ((await getDestinationStatus(driverId)) as any).enabled === true; } catch { /* treated as off */ }
+      try { tierEnabled = (await computeTierStatus(driverId)).enabled === true; } catch { /* treated as off */ }
+    }
+    res.json({
+      user_id: driverId,
+      destination: {
+        flag: dcfg?.destination_matching_enabled === true,
+        enabled: destEnabled,
+        in_rollout: !!driverId && (dcfg?.destination_rollout_driver_ids ?? []).includes(driverId),
+      },
+      tier: {
+        flag: tcfg?.performance_tier_enabled === true,
+        enabled: tierEnabled,
+        in_rollout: !!driverId && (tcfg?.performance_tier_rollout_driver_ids ?? []).includes(driverId),
+      },
+      matching: {
+        flag: cfg?.h3_matching_enabled === true,
+        mode: cfg?.h3_rollout_mode ?? "off",
+        radius_km: Array.isArray(cfg?.match_radius_km) && cfg.match_radius_km.length ? cfg.match_radius_km[0] : null,
+      },
+      server_build: getBuildCommit(),
+    });
+  } catch (err: any) {
+    console.error("Feature status error:", err);
     res.status(500).json({ error: err.message });
   }
 });
