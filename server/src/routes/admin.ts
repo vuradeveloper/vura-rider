@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { recalculatePerformanceTiers } from "../services/performanceTier";
+import featuresRouter from "./adminFeatures";
 
 const router = Router();
 
@@ -151,5 +152,9 @@ router.post("/performance-tiers/run", requireAuth, async (req: AuthRequest, res:
     res.status(500).json({ error: err.message });
   }
 });
+
+// RC4 — feature flags & allowlists (Item 1/1b). Mounted here so the paths are
+// /api/admin/features with the exact same admin gate as everything above.
+router.use("/", featuresRouter);
 
 export default router;

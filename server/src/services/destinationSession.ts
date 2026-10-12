@@ -14,7 +14,7 @@
 //   • state lives in the database → survives crash/reconnect
 // Every activation/termination is also written to destination_events (audit).
 // ─────────────────────────────────────────────────────────────────────────────
-import { query, execute } from "../config/database";
+import { query, execute, isMissingRelation } from "../config/database";
 import { getDestinationConfig, DestinationConfig, getConfig } from "./config";
 import { haversineKm } from "../lib/h3";
 import { sendPushToUsers } from "./notify";
@@ -362,8 +362,22 @@ export async function clearDestination(
 
 /** Banner/status for the driver app (DB-persisted — survives reconnects). */
 export async function getDestinationStatus(driverId: string): Promise<DestinationStatus> {
-  const cfg = await getDestinationConfig();
-  return buildStatus(driverId, cfg, await loadActive(driverId));
+  try {
+    const cfg = await getDestinationConfig();
+    return buildStatus(driverId, cfg, await loadActive(driverId));
+  } catch (err: any) {
+    // RC4: destination tables not migrated yet ⇒ feature OFF, degraded status —
+    // never throw into a driver request.
+    if (!isMissingRelation(err)) throw err;
+    console.warn(`[destination] status unreadable (${err?.code}) — feature treated as OFF`);
+    return {
+      enabled: false,
+      active: false,
+      paused: false,
+      uses_today: 0,
+      banner: null,
+    } as unknown as DestinationStatus;
+  }
 }
 
 /**

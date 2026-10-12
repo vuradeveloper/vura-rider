@@ -183,6 +183,10 @@ export function invalidateConfigCache(): void {
   cachedAt = 0;
   destCached = null;
   destCachedAt = 0;
+  // RC4: admin feature-flag updates must take effect immediately for ALL
+  // three configs, not just matching + destination.
+  tierCached = null;
+  tierCachedAt = 0;
 }
 
 /**

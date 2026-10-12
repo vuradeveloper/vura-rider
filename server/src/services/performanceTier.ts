@@ -37,7 +37,7 @@
 //     tie-break lives in breakTierTies(), called only by the H3 path, only
 //     when the flag is on, and it fails OPEN to the old order.
 // ─────────────────────────────────────────────────────────────────────────────
-import { query, queryOne, execute } from "../config/database";
+import { query, queryOne, execute, isMissingRelation } from "../config/database";
 import { getPerformanceTierConfig } from "./config";
 import { sendPushToUsers } from "./notify";
 import { trace } from "./trace";
@@ -283,7 +283,18 @@ export async function computeTierStatus(driverId: string): Promise<TierStatus> {
   if (!cfg.performance_tier_rollout_driver_ids.some((id) => id.toLowerCase() === wanted)) {
     return disabledStatus();
   }
-  const thresholds = await loadThresholds();
+  let thresholds: Awaited<ReturnType<typeof loadThresholds>>;
+  try {
+    thresholds = await loadThresholds();
+  } catch (err: any) {
+    // RC4: 003's thresholds table not applied yet ⇒ the feature is simply OFF —
+    // never throw into a driver's status request.
+    if (isMissingRelation(err)) {
+      console.warn(`[tier] thresholds unreadable (${err?.code}) — feature treated as OFF`);
+      return disabledStatus();
+    }
+    throw err;
+  }
   const row = await queryOne<any>(
     `SELECT tier, points, rating_avg, accept_percent, cancel_percent,
             rides_completed, offers_received, offers_accepted, offers_timedout,

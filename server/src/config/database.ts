@@ -93,4 +93,15 @@ export async function withTransaction<T>(
   }
 }
 
+/**
+ * Postgres says the relation does not exist (table 42P01 / column 42703) —
+ * the missing-migration signal. New features must read that as "feature OFF",
+ * never as an error into a live ride/driver/location request.
+ */
+export function isMissingRelation(err: any): boolean {
+  const code = String(err?.code ?? "");
+  if (code === "42P01" || code === "42703" || code === "42P18") return true;
+  return /does not exist/i.test(String(err?.message || ""));
+}
+
 export default getPool;
