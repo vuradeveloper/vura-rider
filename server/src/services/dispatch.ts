@@ -310,9 +310,11 @@ export async function findCandidates(
   riderId: string | null = null
 ): Promise<Candidate[]> {
   let decision: H3RolloutDecision;
+  let radiusLadder: number[] = [];
   try {
     const cfg = await getConfig();
     decision = decideH3Path(cfg, riderId);
+    radiusLadder = Array.isArray(cfg.match_radius_km) ? [...cfg.match_radius_km] : [];
   } catch (err: any) {
     // Unknown config => legacy. Never fail closed on a config read.
     decision = { useH3: false, reason: "config_error" };
@@ -324,6 +326,10 @@ export async function findCandidates(
   trace(rideId, "matching_path", {
     path: decision.useH3 ? "h3" : "legacy",
     reason: decision.reason,
+    // RC4 Item 1b: the radius the escalation ladder starts at (3 km in the
+    // [3,5,7] config) so an admin can read path + radius off one stage.
+    radius_km: radiusLadder[0] ?? null,
+    radius_ladder: radiusLadder.length ? radiusLadder : null,
   });
   if (!decision.useH3) {
     return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
