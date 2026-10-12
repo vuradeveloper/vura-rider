@@ -105,6 +105,24 @@ async function loadActive(driverId: string): Promise<ActiveSession | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * Rollout membership for ONE driver (RC4 "rollout for everyone"):
+ *   mode 'all'       → every driver is covered (the admin one-call enable);
+ *   mode 'allowlist' (default, and what a 002 row without the field means)
+ *                    → only destination_rollout_driver_ids.
+ * Every gate in this service goes through here so activation, the status
+ * pause and the sweep's feature_disabled check can never disagree.
+ */
+export function inDestinationRollout(
+  cfg: Pick<DestinationConfig, "destination_rollout_mode" | "destination_rollout_driver_ids">,
+  driverId: string
+): boolean {
+  return (
+    cfg.destination_rollout_mode === "all" ||
+    cfg.destination_rollout_driver_ids.includes(driverId)
+  );
+}
+
 /** Count + SAST day from ONE query: the daily bucket is computed by the DB. */
 async function usageToday(driverId: string): Promise<{ uses: number; sastDay: string }> {
   const rows = await query<{ n: string | number; sast_day: string }>(
@@ -143,7 +161,7 @@ async function buildStatus(
   const paused =
     !!active &&
     (!cfg.destination_matching_enabled ||
-      !cfg.destination_rollout_driver_ids.includes(driverId));
+      !inDestinationRollout(cfg, driverId));
   return {
     active: !!active,
     label: active?.label ?? null,
@@ -213,7 +231,7 @@ async function activateDestinationOnce(
     // put a "Looking for trips towards X" banner on a driver whose offers are
     // NOT filtered. `disabled` (403) until they are added — same answer as the
     // flag-off case, no new error code for the app to learn.
-    if (!cfg.destination_rollout_driver_ids.includes(driverId)) {
+    if (!inDestinationRollout(cfg, driverId)) {
       return fail("disabled", "Destination mode is not enabled for your account yet");
     }
     const lat = Number(input?.lat);
@@ -489,7 +507,7 @@ export function classifyDestinationEnd(
   // disabled mode alive until the timeout).
   if (
     !destCfg.destination_matching_enabled ||
-    !destCfg.destination_rollout_driver_ids.includes(row.driver_id)
+    !inDestinationRollout(destCfg, row.driver_id)
   ) {
     return "feature_disabled";
   }

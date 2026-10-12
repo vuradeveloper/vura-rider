@@ -5,7 +5,9 @@
 //                                       last 5 rides' matching paths, build
 //   PUT    /api/admin/features         { key, changes } — validated keys only
 //   POST   /api/admin/features/enable  one-call enable for test accounts by
-//                                       id / email / phone (no SQL needed)
+//                                       id / email / phone — or FOR EVERYONE
+//                                       when no account ids are given
+//   POST   /api/admin/features/disable one-call kill-switch-off for all three
 //
 // Auth: Firebase bearer (requireAuth) + email in ADMIN_EMAILS — the same gate
 // every other route in admin.ts uses. All logic lives in services/featureFlags
@@ -15,6 +17,7 @@ import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import {
   FeatureFlagError,
+  disableAllFeatures,
   enableForAccounts,
   readFeatures,
   updateFeature,
@@ -79,6 +82,17 @@ router.post("/features/enable", requireAuth, async (req: AuthRequest, res: Respo
         actorOf(req),
       ),
     );
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// The exact inverse of enable: one call, all three kill switches off, modes
+// back to the seed posture. This is the OFF switch the deploy runbook uses.
+router.post("/features/disable", requireAuth, async (req: AuthRequest, res: Response) => {
+  if (!isAdmin(req)) { res.status(403).json({ error: "Admin only" }); return; }
+  try {
+    res.json(await disableAllFeatures(actorOf(req)));
   } catch (err) {
     sendError(res, err);
   }

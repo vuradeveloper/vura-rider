@@ -137,6 +137,34 @@ describe("computeTierStatus", () => {
     expect((await computeTierStatus("d1")).enabled).toBe(false);
   });
 
+  it("mode 'all' (RC4 rollout-for-everyone) → enabled for a driver NOT on any allowlist", async () => {
+    patchTierConfig({
+      performance_tier_enabled: true,
+      performance_tier_rollout_mode: "all",
+      performance_tier_rollout_driver_ids: [],
+    });
+    route({ performance_tier_thresholds: [] }); // → code-seed thresholds
+    routeOne({
+      "FROM driver_tiers WHERE driver_id = $1": {
+        tier: "bronze", points: 0, rating_avg: 0, accept_percent: 0, cancel_percent: 0,
+        rides_completed: 0, offers_received: 0, offers_accepted: 0, offers_timedout: 0,
+        driver_cancels: 0, window_start: null, window_end: null,
+        at_risk: false, demote_after: null, last_eval_at: null,
+      },
+    });
+    const s = await computeTierStatus("brand-new-driver");
+    expect(s.enabled).toBe(true);
+    expect(s.tier).toBe("bronze");
+    // DISPLAY ONLY — commission never reaches a payment (money untouched).
+    expect(s.commission_percent).not.toBeNull();
+  });
+
+  it("flag OFF + mode 'all' → still disabled (the kill switch wins)", async () => {
+    patchTierConfig({ performance_tier_enabled: false, performance_tier_rollout_mode: "all" });
+    expect((await computeTierStatus("d1")).enabled).toBe(false);
+    expect(db.queryOne).not.toHaveBeenCalled();
+  });
+
   it("flag on + allowlisted → full payload with display-only commission + next-tier gaps", async () => {
     patchTierConfig({ performance_tier_enabled: true, performance_tier_rollout_driver_ids: ["d1"] });
     route({ "performance_tier_thresholds": [] }); // → code-seed thresholds

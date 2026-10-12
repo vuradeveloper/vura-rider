@@ -67,6 +67,29 @@ describe("activateDestination", () => {
     expect(calls("INSERT INTO destination_sessions")).toHaveLength(0);
   });
 
+  it("mode 'all' (RC4 rollout-for-everyone): a driver NOT on the allowlist activates", async () => {
+    patchDestinationConfig({
+      destination_matching_enabled: true,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [],
+    });
+    route({ "COUNT(*)": usageRow(0), "FROM driver_profiles": [PROFILE_OK] });
+    const r = await activateDestination("d1", { lat: -26.1, lng: 28.1, label: "Sandton" });
+    expect(r).toMatchObject({ ok: true });
+    expect(calls("INSERT INTO destination_sessions")).toHaveLength(1);
+  });
+
+  it("mode 'all' + flag OFF → still refused (the kill switch wins)", async () => {
+    patchDestinationConfig({
+      destination_matching_enabled: false,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [],
+    });
+    const r = await activateDestination("d1", { lat: -26.1, lng: 28.1, label: "Sandton" });
+    expect(r).toMatchObject({ ok: false, error: "disabled" });
+    expect(calls("INSERT INTO destination_sessions")).toHaveLength(0);
+  });
+
   it("rejects invalid coordinates and empty labels", async () => {
     route({ "COUNT(*)": usageRow(0) });
     expect(await activateDestination("d1", { lat: 999, lng: 28.1, label: "X" })).toMatchObject({
@@ -590,6 +613,23 @@ describe("feature_disabled mid-session (paused status + sweep end)", () => {
 
   it("flag on + driver allowlisted → the sweep never emits feature_disabled", async () => {
     route({ "ds.ended_at IS NULL": [sweepRow()] }); // beforeEach allows d1
+    expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(0);
+    expect(calls("UPDATE destination_sessions")).toHaveLength(0);
+  });
+
+  it("mode 'all' + EMPTY allowlist: status is NOT paused and the sweep keeps the session", async () => {
+    patchDestinationConfig({
+      destination_matching_enabled: true,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [],
+    });
+    statusRoute(activeSession());
+    const s = await getDestinationStatus("d1");
+    expect(s.active).toBe(true);
+    expect(s.paused).toBe(false);
+    expect(s.pause_reason).toBeNull();
+
+    route({ "ds.ended_at IS NULL": [sweepRow()] });
     expect(await sweepDestinationSessionsOnce(makeIo().io)).toBe(0);
     expect(calls("UPDATE destination_sessions")).toHaveLength(0);
   });

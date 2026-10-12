@@ -188,20 +188,69 @@ check — `eb deploy -e vura-rider-prod --label rc4-setenv-off` and
 `curl.exe -fsS https://api.ridevura.com/health` — a bare `eb setenv` leaves
 the bundle/hooks state unverified.
 
-## 8. Enable matching + destination + tier for the TEST driver (no SQL)
+## 8. Enable matching + destination + tier (no SQL)
 
-One admin call (auth = your admin Firebase ID token; the caller's email must
-be in `ADMIN_EMAILS`):
+### Get an admin ID token
+
+The API accepts only a **Firebase ID token** whose email is in `ADMIN_EMAILS`
+(the caller's identity comes FROM the token — any other identity gets
+`403 {"error":"Admin only"}`):
+
+```powershell
+# Windows (prompts for password; prints ONLY the token):
+.\deploy\get-admin-token.ps1 -Email you@ridevura.com
+```
+
+```bash
+# Linux / macOS / CloudShell:
+EMAIL=you@ridevura.com ./deploy/get-admin-token.sh
+```
+
+Both scripts need the Firebase **Web API Key** (Firebase console → Project
+settings → General → Web API Key) — they prompt for it unless
+`FIREBASE_WEB_API_KEY` is set. The token is short-lived (~1 h); re-run the
+script if the next call returns 401.
+
+### 8a. Enable for EVERYONE (no account ids) — rollout-for-everyone
+
+Omit EVERY identifier: all three features turn ON and the rollout modes flip
+so every driver/rider is covered — `destination_rollout_mode`,
+`performance_tier_rollout_mode` and `h3_rollout_mode` → `"all"`, id lists stay
+empty (`"all"` means everyone, including accounts created later):
 
 ```powershell
 curl.exe -X POST https://api.ridevura.com/api/admin/features/enable `
   -H "Content-Type: application/json" `
   -H "Authorization: Bearer <ADMIN_FIREBASE_ID_TOKEN>" `
-  -d '{\"driverEmails\":[\"test.driver@example.com\"],\"features\":[\"matching\",\"destination\",\"performance_tier\"]}'
+  -d '{"features":["matching","destination","performance_tier"]}'
 ```
 
-(Identifiers may be combined: `driverIds`, `driverEmails`, `driverPhones`,
-`riderIds`, `riderEmails`, `riderPhones`; `features` omitted = all three.)
+**Expected response (HTTP 200)** — the modes carry the "for everyone" answer:
+
+```json
+{
+  "server_build": "<short-commit-of-RC4>",
+  "flags": {
+    "matching": { "h3_matching_enabled": true, "h3_rollout_mode": "all", "...": "..." },
+    "destination": { "destination_matching_enabled": true, "destination_rollout_mode": "all", "destination_rollout_driver_ids": [], "...": "..." },
+    "performance_tier": { "performance_tier_enabled": true, "performance_tier_rollout_mode": "all", "performance_tier_rollout_driver_ids": [], "...": "..." }
+  }
+}
+```
+
+### 8b. Enable for named accounts only (allowlist pilot)
+
+Identifiers may be combined: `driverIds`, `driverEmails`, `driverPhones`,
+`riderIds`, `riderEmails`, `riderPhones`; `features` omitted = all three.
+Supplying ANY identifier pins destination/tier to `"allowlist"` (it can never
+quietly become `"all"`):
+
+```powershell
+curl.exe -X POST https://api.ridevura.com/api/admin/features/enable `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer <ADMIN_FIREBASE_ID_TOKEN>" `
+  -d '{"driverEmails":["test.driver@example.com"],"features":["matching","destination","performance_tier"]}'
+```
 
 **Expected response (HTTP 200):**
 
@@ -215,25 +264,46 @@ curl.exe -X POST https://api.ridevura.com/api/admin/features/enable `
     "rider_ids": []
   },
   "flags": {
-    "matching": { "h3_matching_enabled": true, "h3_rollout_mode": "all", "...": "..." },
-    "destination": { "destination_matching_enabled": true, "destination_rollout_driver_ids": ["<users.id>"], "...": "..." },
-    "performance_tier": { "performance_tier_enabled": true, "performance_tier_rollout_driver_ids": ["<users.id>"], "...": "..." }
+    "matching": { "h3_matching_enabled": true, "h3_rollout_mode": "allowlist", "...": "..." },
+    "destination": { "destination_matching_enabled": true, "destination_rollout_mode": "allowlist", "destination_rollout_driver_ids": ["<users.id>"], "...": "..." },
+    "performance_tier": { "performance_tier_enabled": true, "performance_tier_rollout_mode": "allowlist", "performance_tier_rollout_driver_ids": ["<users.id>"], "...": "..." }
   }
 }
 ```
+
+### 8c. Kill switch — turn everything OFF in one call
+
+```powershell
+curl.exe -X POST https://api.ridevura.com/api/admin/features/disable `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer <ADMIN_FIREBASE_ID_TOKEN>" `
+  -d '{}'
+```
+
+Turns matching/destination/tier off for EVERYONE (booleans `false`; modes
+return to the seed posture `off` / `allowlist`; recorded id lists are kept but
+cover nobody while the flags are off). Re-enable with §8a/§8b — no SQL either
+way.
 
 Errors: `403 {"error":"Admin only"}` (not in ADMIN_EMAILS) ·
 `409 {"error":"app_config row '…' missing — run migrations first (RUN_MIGRATIONS_ON_BOOT=true)","code":"no_row"}` (do step 5-6 again).
 
 **Verify on the phone:** driver app → Account → **Feature status** →
-Destination **On**, Tier **On**, Matching `all` (or `allowlist`) + radius km.
-Home: both buttons now tappable.
+Features card: Destination **On**, Tier **On**, Matching mode + radius km;
+Rollout card: Destination/Tier `all drivers` (§8a) or `allowlist · on list`
+(§8b). Home: both buttons now tappable.
 
 ## 9. Driver APK
 
-Install `vura-driver-figma-2026-10-12-rc4.apk` (versionCode 4 / versionName
-1.3, signed with the same machine debug key as every previous RC build —
-fingerprint `B8:48:7F:…:02:9D`).
+Install `vura-driver-figma-2026-10-12-rc4-v1.4.apk` (versionCode 5 /
+versionName 1.4 — the Feature status page now also shows the **Rollout** card;
+signed with the same machine debug key as every previous RC build —
+fingerprint `B8:48:7F:…:02:9D`). Verify before installing:
+
+```powershell
+apksigner verify --print-certs <downloaded.apk> | findstr SHA-256
+# MUST print B8:48:7F:…:02:9D — same certificate as every previous driver RC.
+```
 
 ### Rider RC4 APK — build through EAS with the STORED keystore (guidance)
 

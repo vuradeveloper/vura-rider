@@ -223,6 +223,16 @@ export interface DestinationConfig {
   destination_matching_enabled: boolean;
   /** Driver-keyed rollout: only these user ids get the predicate applied. */
   destination_rollout_driver_ids: string[];
+  /**
+   * WHO the feature covers (RC4 "rollout for everyone"):
+   *   'allowlist' (DEFAULT, and what 002 seeded by omitting the field) —
+   *                only destination_rollout_driver_ids;
+   *   'all'       — every driver (the admin one-call enable sets this when no
+   *                 driver ids are supplied).
+   * An absent or invalid value coerces to 'allowlist' — behaviour identical to
+   * the pre-RC4 server. Additive: no migration, no seed change.
+   */
+  destination_rollout_mode: "allowlist" | "all";
   /** Q1: max activations per driver per SAST day. */
   destination_max_activations_per_day: number;
   /** Q1: reject activation inside this radius ("You're already close"). */
@@ -251,6 +261,7 @@ export interface DestinationConfig {
 export const DEFAULT_DESTINATION_CONFIG: DestinationConfig = {
   destination_matching_enabled: false,
   destination_rollout_driver_ids: [],
+  destination_rollout_mode: "allowlist",
   destination_max_activations_per_day: 2,
   destination_reject_radius_km: 1,
   destination_arrival_radius_km: 0.5,
@@ -274,9 +285,12 @@ function coerceDestination(raw: any): DestinationConfig {
       .map((id: string) => id.trim().toLowerCase())
       .filter(Boolean);
   }
+  if (raw.destination_rollout_mode === "all" || raw.destination_rollout_mode === "allowlist") {
+    cfg.destination_rollout_mode = raw.destination_rollout_mode;
+  }
   type NumKey = Exclude<
     keyof DestinationConfig,
-    "destination_matching_enabled" | "destination_rollout_driver_ids"
+    "destination_matching_enabled" | "destination_rollout_driver_ids" | "destination_rollout_mode"
   >;
   const nums: NumKey[] = [
     "destination_max_activations_per_day",
@@ -346,6 +360,16 @@ export interface PerformanceTierConfig {
   performance_tier_enabled: boolean;
   /** Driver-app Tier screen visibility (empty = hidden for everyone). */
   performance_tier_rollout_driver_ids: string[];
+  /**
+   * WHO the feature covers — same machinery as destination_rollout_mode:
+   *   'allowlist' (DEFAULT / the 003 seed's posture by omission) — only
+   *                performance_tier_rollout_driver_ids;
+   *   'all'       — every driver (the admin one-call enable sets this when no
+   *                 driver ids are supplied).
+   * Absent/invalid coerces to 'allowlist' — byte-identical to the pre-RC4
+   * server. Additive: no migration, no seed change.
+   */
+  performance_tier_rollout_mode: "allowlist" | "all";
   /** Rolling metrics window in days (the spec's 90). */
   performance_tier_window_days: number;
   /** Demotion grace: at-risk drivers keep their tier this many days. */
@@ -357,6 +381,7 @@ export interface PerformanceTierConfig {
 export const DEFAULT_PERFORMANCE_TIER_CONFIG: PerformanceTierConfig = {
   performance_tier_enabled: false,
   performance_tier_rollout_driver_ids: [],
+  performance_tier_rollout_mode: "allowlist",
   performance_tier_window_days: 90,
   performance_tier_grace_days: 7,
   performance_tier_recalc_hour_sast: 2,
@@ -374,6 +399,9 @@ function coercePerformanceTier(raw: any): PerformanceTierConfig {
       .filter((id): id is string => typeof id === "string")
       .map((id: string) => id.trim().toLowerCase())
       .filter(Boolean);
+  }
+  if (raw.performance_tier_rollout_mode === "all" || raw.performance_tier_rollout_mode === "allowlist") {
+    cfg.performance_tier_rollout_mode = raw.performance_tier_rollout_mode;
   }
   if (
     typeof raw.performance_tier_window_days === "number" &&

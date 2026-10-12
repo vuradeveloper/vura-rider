@@ -169,3 +169,54 @@ describe("destination-mode filter in findCandidatesH3", () => {
     expect(getCounters().destination_filtered).toBe(0);
   });
 });
+
+// ── RC4 rollout-for-everyone: destination_rollout_mode 'all' ─────────────────
+describe("destination_rollout_mode = 'all'", () => {
+  it("evaluates EVERY driver's destination — no allowlist needed", async () => {
+    patchDestinationConfig({
+      destination_matching_enabled: true,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [],
+    });
+    routeDb({ ride: FITTING_X, dests: [{ user_id: "driver-1", ...DEST_D1 }] });
+
+    const cands = await findCandidates("ride-x", PICKUP.lat, PICKUP.lng, 5, false, 1);
+
+    expect(idsOf(cands).sort()).toEqual(["driver-1", "driver-2"]);
+    expect(traceStage("destination_filter")[0]).toMatchObject({
+      considered: 1,
+      removed: 0,
+      kept: 2,
+      mode: "all",
+    });
+  });
+
+  it("still filters a NON-allowlisted driver whose drop-off doesn't fit", async () => {
+    patchDestinationConfig({
+      destination_matching_enabled: true,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [],
+    });
+    routeDb({ ride: FAR_X, dests: [{ user_id: "driver-2", ...DEST_D1 }] });
+
+    const cands = await findCandidates("ride-x", PICKUP.lat, PICKUP.lng, 5, false, 1);
+
+    expect(idsOf(cands)).toEqual(["driver-1"]); // driver-2 filtered despite empty allowlist
+    expect(getCounters().destination_filtered).toBe(1);
+  });
+
+  it("flag OFF + mode 'all' stays inert (the kill switch wins)", async () => {
+    patchDestinationConfig({
+      destination_matching_enabled: false,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [],
+    });
+    routeDb({ ride: FITTING_X, dests: [{ user_id: "driver-1", ...DEST_D1 }] });
+
+    const cands = await findCandidates("ride-x", PICKUP.lat, PICKUP.lng, 5, false, 1);
+
+    expect(idsOf(cands).sort()).toEqual(["driver-1", "driver-2"]);
+    expect(traceStage("destination_filter")).toHaveLength(0);
+    expect(db.queryOne.mock.calls.some((c) => String(c[0]).includes("FROM rides"))).toBe(false);
+  });
+});

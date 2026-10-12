@@ -62,6 +62,7 @@ export const TEST_CONFIG = {
 export const TEST_DEST_CONFIG = {
   destination_matching_enabled: false,
   destination_rollout_driver_ids: [] as string[],
+  destination_rollout_mode: "allowlist" as "allowlist" | "all",
   destination_max_activations_per_day: 2,
   destination_reject_radius_km: 1,
   destination_arrival_radius_km: 0.5,
@@ -83,6 +84,7 @@ export function patchDestinationConfig(patch: Partial<typeof TEST_DEST_CONFIG>):
 export const TEST_TIER_CONFIG = {
   performance_tier_enabled: false,
   performance_tier_rollout_driver_ids: [] as string[],
+  performance_tier_rollout_mode: "allowlist" as "allowlist" | "all",
   performance_tier_window_days: 90,
   performance_tier_grace_days: 7,
   performance_tier_recalc_hour_sast: 2,

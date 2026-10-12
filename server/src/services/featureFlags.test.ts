@@ -61,6 +61,7 @@ vi.mock("./offerWorker", () => ({ getBuildCommit: () => "abc1234" }));
 
 import {
   FeatureFlagError,
+  disableAllFeatures,
   enableForAccounts,
   readFeatures,
   updateFeature,
@@ -196,5 +197,81 @@ describe("readFeatures", () => {
   it("missing rows report exists:false instead of inventing config", async () => {
     const out = (await readFeatures()) as any;
     expect(out.flags.matching.exists).toBe(false);
+  });
+});
+
+// ── RC4 rollout-for-everyone: destination/tier gained an explicit mode ───────
+describe("rollout modes — destination/tier 'all', matching keeps its ladder", () => {
+  it("accepts allowlist|all for destination/tier; rejects anything else", () => {
+    expect(validateField("destination", "destination_rollout_mode", "all")).toBe("all");
+    expect(validateField("destination", "destination_rollout_mode", "allowlist")).toBe("allowlist");
+    expect(validateField("performance_tier", "performance_tier_rollout_mode", "all")).toBe("all");
+    // drivers have no percent bucketing and no 'off' (the boolean is the kill switch)
+    expect(() => validateField("destination", "destination_rollout_mode", "percent")).toThrow(/allowlist\|all/);
+    expect(() => validateField("destination", "destination_rollout_mode", "off")).toThrow(/allowlist\|all/);
+    expect(() => validateField("performance_tier", "performance_tier_rollout_mode", 1)).toThrow(/allowlist\|all/);
+    // matching's four-step ladder is untouched
+    expect(validateField("matching", "h3_rollout_mode", "percent")).toBe("percent");
+    expect(validateField("matching", "h3_rollout_mode", "off")).toBe("off");
+  });
+
+  it("enable with NO account ids turns all three ON for everyone (modes 'all')", async () => {
+    seed();
+    const out = await enableForAccounts({}, "admin@x");
+    const flags = out.flags as any;
+    expect(flags.matching).toMatchObject({ h3_matching_enabled: true, h3_rollout_mode: "all" });
+    expect(flags.destination).toMatchObject({
+      destination_matching_enabled: true,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [], // no ids given ⇒ nothing to merge
+    });
+    expect(flags.performance_tier).toMatchObject({
+      performance_tier_enabled: true,
+      performance_tier_rollout_mode: "all",
+      performance_tier_rollout_driver_ids: [],
+    });
+  });
+
+  it("enable WITH account ids pins destination/tier to allowlist — never 'all'", async () => {
+    seed();
+    const out = await enableForAccounts({ driverIds: ["D-9"], riderIds: ["R-9"] }, "admin@x");
+    const flags = out.flags as any;
+    expect(flags.destination.destination_rollout_mode).toBe("allowlist");
+    expect(flags.destination.destination_rollout_driver_ids).toEqual(["d-9"]);
+    expect(flags.performance_tier.performance_tier_rollout_mode).toBe("allowlist");
+    expect(flags.matching.h3_rollout_mode).toBe("allowlist");
+  });
+
+  it("a row seeded WITHOUT the mode fields reads back as 'allowlist' (default unchanged)", async () => {
+    seed(); // seed() rows carry no *_rollout_mode key at all — pre-RC4 posture
+    const out = (await readFeatures()) as any;
+    expect(out.flags.destination.destination_rollout_mode).toBe("allowlist");
+    expect(out.flags.performance_tier.performance_tier_rollout_mode).toBe("allowlist");
+    expect(out.flags.matching.h3_rollout_mode).toBe("off"); // matching unchanged
+  });
+
+  it("disableAllFeatures kills all three and restores the seed posture", async () => {
+    seed();
+    await enableForAccounts({ driverIds: ["D-1"], riderIds: ["R-1"] }, "admin@x");
+    invalidate.mockClear();
+
+    const out = await disableAllFeatures("admin@x");
+    const flags = out.flags as any;
+    expect(flags.matching).toMatchObject({ h3_matching_enabled: false, h3_rollout_mode: "off" });
+    expect(flags.destination).toMatchObject({
+      destination_matching_enabled: false,
+      destination_rollout_mode: "allowlist",
+    });
+    expect(flags.performance_tier).toMatchObject({
+      performance_tier_enabled: false,
+      performance_tier_rollout_mode: "allowlist",
+    });
+    // Recorded allowlists survive (they cover nobody while the switch is off)
+    expect(db.app_config.get("destination").destination_rollout_driver_ids).toEqual(["d-1"]);
+    expect(invalidate).toHaveBeenCalledTimes(3); // one per section write
+    const auditLine = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => l.includes('"action":"disable"'));
+    expect(auditLine).toContain('"actor":"admin@x"');
   });
 });
