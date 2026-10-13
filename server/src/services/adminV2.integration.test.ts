@@ -58,6 +58,88 @@ if (enabled) {
   assertScratchDatabase(process.env.DB_HOST, process.env.DB_PORT, process.env.DB_NAME);
 }
 
+/**
+ * Minimal base schema — the scratch container is shared, so the base tables
+ * must exist before migrations 004/005 (which ALTER users/driver_profiles/
+ * driver_documents and FK driver_tiers → users). Same shapes as the rc4
+ * PROD_SCHEMA, only the columns this suite reads.
+ */
+const BASE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  firebase_uid VARCHAR(128) UNIQUE,
+  full_name VARCHAR(255),
+  email VARCHAR(255),
+  phone VARCHAR(50),
+  role VARCHAR(20) DEFAULT 'passenger',
+  profile_photo_url TEXT,
+  id_number VARCHAR(50),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS driver_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
+  license_number VARCHAR(50),
+  vehicle_make VARCHAR(100),
+  vehicle_model VARCHAR(100),
+  vehicle_year INTEGER,
+  vehicle_color VARCHAR(50),
+  body_type VARCHAR(50),
+  license_plate VARCHAR(20),
+  vehicle_category VARCHAR(40),
+  vehicle_tier VARCHAR(20),
+  is_online BOOLEAN DEFAULT FALSE,
+  status VARCHAR(20) DEFAULT 'offline',
+  current_lat DOUBLE PRECISION,
+  current_lng DOUBLE PRECISION,
+  rating_avg NUMERIC(3,2) DEFAULT 0,
+  cancellations_count INT DEFAULT 0,
+  verification_status VARCHAR(20),
+  last_location_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS driver_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id UUID NOT NULL REFERENCES users(id),
+  doc_type VARCHAR(60) NOT NULL,
+  file_name VARCHAR(255),
+  mime_type VARCHAR(120),
+  s3_key TEXT,
+  s3_bucket TEXT,
+  size_bytes BIGINT,
+  status VARCHAR(30) DEFAULT 'pending_review',
+  note TEXT,
+  reviewed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS driver_tiers (
+  driver_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  tier TEXT NOT NULL DEFAULT 'bronze',
+  points INT NOT NULL DEFAULT 0,
+  at_risk BOOLEAN NOT NULL DEFAULT FALSE,
+  demote_after DATE,
+  window_start DATE NOT NULL DEFAULT CURRENT_DATE,
+  window_end DATE NOT NULL DEFAULT CURRENT_DATE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- The scratch container PERSISTS: earlier suites created users/driver_profiles
+-- with OLDER shapes, so CREATE TABLE IF NOT EXISTS is a no-op and the columns
+-- this suite reads must be added additively (same pattern as the rc4 suite).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS id_number VARCHAR(50);
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tier VARCHAR(20);
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS license_number VARCHAR(50);
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_category VARCHAR(40);
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS body_type VARCHAR(50);
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS rating_avg NUMERIC(3,2) DEFAULT 0;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS cancellations_count INT DEFAULT 0;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS last_location_at TIMESTAMPTZ;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+ALTER TABLE driver_documents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+`;
+
 // ── HTTP harness (same pattern as rc4.integration.test.ts) ──────────────────
 let server: HttpServer;
 let base: string;
@@ -92,25 +174,24 @@ async function seedAdmin(email: string, role: string, disabled = false): Promise
 
 describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
   beforeAll(async () => {
-    // Apply migration 004 the way migrate-on-boot does: file, in order.
-    const sql = readFileSync(
-      join(process.cwd(), "migrations", "004_admin_v2.sql"),
-      "utf8"
-    );
-    // Statements only — the file is pure DDL, no functions.
-    const statements = sql
-      .split(/;\s*(?:\r?\n|$)/)
-      .map((s) =>
-        s
-          .split("\n")
-          .filter((l) => !l.trim().startsWith("--"))
-          .join("\n")
-          .trim()
-      )
-      .filter((s) => s.length > 0);
-    for (const stmt of statements) await execute(stmt);
-    // Apply AGAIN — idempotence proof (every object is IF NOT EXISTS).
-    for (const stmt of statements) await execute(stmt);
+    // Base schema first (shared scratch container), then migrations 004 + 005
+    // the way migrate-on-boot does: files, in order, TWICE (idempotence proof).
+    await execute(BASE_SCHEMA);
+    for (const file of ["004_admin_v2.sql", "005_admin_drivers.sql"]) {
+      const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
+      const statements = sql
+        .split(/;\s*(?:\r?\n|$)/)
+        .map((s) =>
+          s
+            .split("\n")
+            .filter((l) => !l.trim().startsWith("--"))
+            .join("\n")
+            .trim()
+        )
+        .filter((s) => s.length > 0);
+      for (const stmt of statements) await execute(stmt);
+      for (const stmt of statements) await execute(stmt);
+    }
 
     const app = express();
     app.use(express.json());
@@ -124,7 +205,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(async () => {
@@ -311,6 +392,194 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       for (const perm of ["drivers.read", "money.read", "admins.manage", "audit.read"] as const) {
         expect(roleHasPermission(role, perm)).toBe(ROLE_PERMISSIONS[role].includes(perm));
       }
+    }
+  });
+
+  // ── Phase 1: drivers ──────────────────────────────────────────────────────
+
+  async function seedDriver(lifecycle = "ACTIVE"): Promise<string> {
+    const u = await queryOne<{ id: string }>(
+      `INSERT INTO users (firebase_uid, full_name, email, phone, role)
+       VALUES ($1, $2, $3, $4, 'driver') RETURNING id`,
+      [`fd-${Math.random().toString(36).slice(2)}`, "Test Driver", `drv-${Math.random().toString(36).slice(2)}@vura.test`, "0821234567"]
+    );
+    await execute(
+      `INSERT INTO driver_profiles (user_id, lifecycle_status, status, is_online)
+       VALUES ($1, $2, 'offline', FALSE)`,
+      [u!.id, lifecycle]
+    );
+    return u!.id;
+  }
+
+  it("driver list masks phones (POPIA) and the profile reveals with audit", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedDriver();
+      const list = await request("GET", "/api/admin/v2/drivers");
+      expect(list.status).toBe(200);
+      const found = list.json.drivers.find((d: any) => d.driver_id === id);
+      expect(found).toBeTruthy();
+      expect(found.phone).toBe("082***4567"); // masked in the LIST
+
+      const prof = await request("GET", `/api/admin/v2/drivers/${id}`);
+      expect(prof.status).toBe(200);
+      expect(prof.json.driver.phone).toBe("0821234567"); // revealed
+      const reveal = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'driver.reveal' ORDER BY id DESC LIMIT 1`
+      );
+      expect(reveal?.entity_id).toBe(id);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("lifecycle: legal transitions pass, illegal ones 409, reasons enforced", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedDriver("UNDER_REVIEW");
+
+      const ok1 = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, {
+        to: "CHANGES_REQUESTED",
+        reason: "Licence scan is blurry",
+      });
+      expect(ok1.status).toBe(200);
+      expect(ok1.json).toEqual({ from: "UNDER_REVIEW", to: "CHANGES_REQUESTED" });
+
+      // To APPROVED needs all required docs — seed them first
+      await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "DOCUMENTS_SUBMITTED" });
+      await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "UNDER_REVIEW" });
+      const required = await query<{ doc_type: string }>(
+        `SELECT doc_type FROM admin_required_docs WHERE active = TRUE`
+      );
+      for (const r of required) {
+        await execute(
+          `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+           VALUES ($1, $2, 'f.pdf', 'application/pdf', 'k', 'b', 'approved')`,
+          [id, r.doc_type]
+        );
+      }
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "APPROVED" })).status).toBe(200);
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "ACTIVE" })).status).toBe(200);
+
+      // Illegal: ACTIVE → DOCUMENTS_SUBMITTED
+      const bad = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "DOCUMENTS_SUBMITTED" });
+      expect(bad.status).toBe(409);
+      expect(bad.json.allowed).toContain("SUSPENDED");
+
+      // SUSPENDED requires a reason
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "SUSPENDED" })).status).toBe(400);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("suspend takes the driver offline, records history/audit, reinstate works, BLOCKED is terminal", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedDriver("ACTIVE");
+      await execute(`UPDATE driver_profiles SET is_online = TRUE, status = 'available' WHERE user_id = $1`, [id]);
+      const susp = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, {
+        to: "SUSPENDED",
+        reason: "Rider complaints pending investigation",
+        ends_at: "2026-11-01T00:00:00Z",
+      });
+      expect(susp.status).toBe(200);
+      const prof = await queryOne<any>(
+        `SELECT is_online, status, suspended_until FROM driver_profiles WHERE user_id = $1`,
+        [id]
+      );
+      expect(prof.is_online).toBe(false);
+      expect(prof.suspended_until).toBeTruthy();
+
+      const hist = await query(
+        `SELECT from_status, to_status FROM driver_status_history WHERE driver_id = $1`,
+        [id]
+      );
+      expect(hist.length).toBe(1);
+      expect(hist[0]).toMatchObject({ from_status: "ACTIVE", to_status: "SUSPENDED" });
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'driver.lifecycle.suspended' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.reason).toContain("Rider complaints");
+
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "ACTIVE" })).status).toBe(200);
+      await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "BLOCKED", reason: "Fraud confirmed" });
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "ACTIVE" })).status).toBe(409);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("APPROVED is refused until every required document is approved", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedDriver("UNDER_REVIEW");
+      const res = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "APPROVED" });
+      expect(res.status).toBe(409);
+      expect(res.json.missing.length).toBeGreaterThan(0);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("onboarding queue oldest-first with waiting seconds; expiring docs list", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedDriver("UNDER_REVIEW");
+      await execute(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status, created_at)
+         VALUES ($1, 'id_document', 'id.pdf', 'application/pdf', 'k', 'b', 'pending_review', NOW() - interval '2 hours')`,
+        [id]
+      );
+      const q = await request("GET", "/api/admin/v2/onboarding");
+      expect(q.status).toBe(200);
+      const row = q.json.queue.find((x: any) => x.driver_id === id);
+      expect(row).toBeTruthy();
+      expect(row.pending_docs).toBe(1);
+      expect(row.waiting_seconds).toBeGreaterThanOrEqual(7000); // ~2h
+      expect(q.json.required.length).toBeGreaterThan(0);
+      expect(q.json.rejectReasons.length).toBeGreaterThan(0);
+
+      await execute(
+        `UPDATE driver_documents SET expires_at = NOW() + interval '10 days' WHERE driver_id = $1`,
+        [id]
+      );
+      const exp = await request("GET", "/api/admin/v2/documents/expiring?days=30");
+      expect(exp.status).toBe(200);
+      const mine = exp.json.documents.find((d: any) => d.driver_id === id);
+      expect(mine).toBeTruthy();
+      expect(mine.phone).toBe("082***4567"); // POPIA masked
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("support_agent is denied drivers.write; operations is allowed", async () => {
+    process.env.ADMIN_EMAILS = "";
+    try {
+      const id = await seedDriver("ACTIVE");
+      await seedAdmin("support@vura.test", "support_agent");
+      authUser.email = "support@vura.test";
+      const denied = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, {
+        to: "SUSPENDED",
+        reason: "not allowed to do this",
+      });
+      expect(denied.status).toBe(403);
+
+      await seedAdmin("ops@vura.test", "operations");
+      authUser.email = "ops@vura.test";
+      const allowed = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, {
+        to: "SUSPENDED",
+        reason: "policy violation",
+      });
+      expect(allowed.status).toBe(200);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
     }
   });
 });

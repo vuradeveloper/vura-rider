@@ -33,6 +33,7 @@ export const MIGRATION_ORDER = [
   "002_destination_mode.sql",
   "003_performance_tier.sql",
   "004_admin_v2.sql",
+  "005_admin_drivers.sql",
 ] as const;
 
 export type MigrationOutcome = "applied" | "skipped" | "failed";

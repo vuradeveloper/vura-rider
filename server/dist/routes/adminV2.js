@@ -18,6 +18,29 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = require("../config/database");
 const adminAuth_1 = require("../services/adminAuth");
+const adminDrivers_1 = require("../services/adminDrivers");
+const push_1 = require("../services/push");
+const format_1 = require("../lib/format");
+/**
+ * Best-effort push notice to the driver when an admin changes their status.
+ * States the reason verbatim (the brief: "push notification to the driver
+ * stating the reason"). Never throws into the route.
+ */
+async function notifyDriverLifecycle(driverId, to, reason) {
+    const label = to === "SUSPENDED"
+        ? "Your account is suspended"
+        : to === "BLOCKED"
+            ? "Your account is blocked"
+            : to === "REJECTED"
+                ? "Your application was not approved"
+                : to === "ACTIVE"
+                    ? "Your account is active"
+                    : `Your status is now ${to.toLowerCase()}`;
+    await (0, push_1.sendPushToUser)(driverId, {
+        title: label,
+        body: reason || "Contact support for details.",
+    });
+}
 const router = (0, express_1.Router)();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function sendError(res, err) {
@@ -215,6 +238,144 @@ router.get("/audit", (0, adminAuth_1.requireAdmin)("audit.read"), async (req, re
         }
         const total = await (0, database_1.queryOne)(`SELECT COUNT(*)::int AS count FROM admin_audit_log ${whereSql}`, params);
         res.json({ entries: rows, total: total?.count ?? rows.length, limit, offset });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Phase 1: drivers ─────────────────────────────────────────────────────────
+// GET /api/admin/v2/drivers — searchable, filterable driver list (POPIA:
+// phone masked in the LIST; the profile endpoint reveals with audit).
+router.get("/drivers", (0, adminAuth_1.requireAdmin)("drivers.read"), async (req, res) => {
+    try {
+        const { rows, total } = await (0, adminDrivers_1.listDrivers)({
+            search: String(req.query.search || ""),
+            status: String(req.query.status || "") || undefined,
+            online: req.query.online === "true" ? true : req.query.online === "false" ? false : undefined,
+            tier: String(req.query.tier || "") || undefined,
+            vehicleType: String(req.query.vehicle_type || "") || undefined,
+            sort: String(req.query.sort || "created"),
+            order: req.query.order === "asc" ? "asc" : "desc",
+            limit: parseInt(String(req.query.limit || "50"), 10),
+            offset: parseInt(String(req.query.offset || "0"), 10),
+        });
+        // POPIA: mask phones in list responses.
+        const masked = rows.map((r) => ({ ...r, phone: (0, format_1.maskPhone)(r.phone) }));
+        res.json({ drivers: masked, total });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/drivers/:id — full profile. Writing phone/id_number
+// into the audit log is deliberate: a reveal is an audited action.
+router.get("/drivers/:id", (0, adminAuth_1.requireAdmin)("drivers.read"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const profile = await (0, adminDrivers_1.getDriverProfile)(String(req.params.id));
+        if (!profile) {
+            res.status(404).json({ error: "Driver not found" });
+            return;
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "driver.reveal",
+            entityType: "driver",
+            entityId: profile.driver_id,
+            newValue: { revealed: ["phone", "id_number"] },
+        });
+        res.json({ driver: profile });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/drivers/:id/lifecycle — move through the state machine.
+// Body: { to, reason?, ends_at? }. Illegal transitions → 409 with the allowed set.
+router.post("/drivers/:id/lifecycle", (0, adminAuth_1.requireAdmin)("drivers.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const driverId = String(req.params.id);
+        const to = req.body?.to;
+        const reason = req.body?.reason ? String(req.body.reason).trim() : null;
+        const endsAt = req.body?.ends_at ? String(req.body.ends_at) : null;
+        if (!(0, adminDrivers_1.isLifecycleStatus)(to)) {
+            res.status(400).json({ error: `to must be one of: ${adminDrivers_1.LIFECYCLE_STATES.join(", ")}` });
+            return;
+        }
+        // Suspend/reject/block require a reason (brief: "reason where required").
+        if (["SUSPENDED", "REJECTED", "BLOCKED"].includes(to) && (!reason || reason.length < 3)) {
+            res.status(400).json({ error: `A reason is required to ${to.toLowerCase()}` });
+            return;
+        }
+        if (to === "APPROVED") {
+            const docs = await (0, adminDrivers_1.allRequiredDocsApproved)(driverId);
+            if (!docs.ok) {
+                res.status(409).json({
+                    error: "Cannot approve until all required documents are approved",
+                    missing: docs.missing,
+                });
+                return;
+            }
+        }
+        if (endsAt && Number.isNaN(Date.parse(endsAt))) {
+            res.status(400).json({ error: "ends_at must be an ISO date" });
+            return;
+        }
+        let result;
+        try {
+            result = await (0, adminDrivers_1.transitionLifecycle)(driverId, to, actor.email, { reason, endsAt });
+        }
+        catch (e) {
+            if (e?.code === "not_found") {
+                res.status(404).json({ error: e.message });
+                return;
+            }
+            if (e?.code === "illegal_transition") {
+                res.status(409).json({ error: e.message, ...e.detail });
+                return;
+            }
+            throw e;
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: `driver.lifecycle.${to.toLowerCase()}`,
+            entityType: "driver",
+            entityId: driverId,
+            oldValue: { lifecycle_status: result.from },
+            newValue: { lifecycle_status: result.to, suspended_until: endsAt },
+            reason,
+        });
+        // Push notice to the driver stating the reason (best-effort, never throws).
+        void notifyDriverLifecycle(driverId, to, reason).catch(() => undefined);
+        res.json(result);
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/onboarding — the review queue, oldest waiting first.
+router.get("/onboarding", (0, adminAuth_1.requireAdmin)("drivers.read"), async (_req, res) => {
+    try {
+        const [queue, lists] = await Promise.all([(0, adminDrivers_1.listOnboardingQueue)(), (0, adminDrivers_1.getReviewLists)()]);
+        res.json({ queue, ...lists });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/documents/expiring — documents expiring within N days.
+router.get("/documents/expiring", (0, adminAuth_1.requireAdmin)("drivers.read"), async (req, res) => {
+    try {
+        const days = parseInt(String(req.query.days || "30"), 10);
+        const rows = await (0, adminDrivers_1.listExpiringDocuments)(days);
+        res.json({ documents: rows.map((r) => ({ ...r, phone: (0, format_1.maskPhone)(r.phone) })) });
     }
     catch (err) {
         sendError(res, err);
