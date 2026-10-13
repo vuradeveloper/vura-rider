@@ -40,6 +40,7 @@ import debugTraceRouter from "./routes/debugTrace";
 import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import adminRouter from "./routes/admin";
+import adminV2Router from "./routes/adminV2";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startOfferWorker, getBuildCommit } from "./services/offerWorker";
 import { startPerformanceTierScheduler } from "./services/performanceTier";
@@ -227,6 +228,10 @@ app.use("/api/tips", tipsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/payouts", payoutsRouter);
 app.use("/api/admin", adminRouter);
+// ADMIN V2 (admin-v2 branch) — roles, admin user management, audit log.
+// Same /api/admin mount, own role gate (services/adminAuth); the legacy
+// routes above keep their ADMIN_EMAILS gate untouched.
+app.use("/api/admin", adminV2Router);
 app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);

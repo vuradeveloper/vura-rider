@@ -77,6 +77,7 @@ const debugTrace_1 = __importDefault(require("./routes/debugTrace"));
 const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmin"));
 const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
+const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const offerWorker_1 = require("./services/offerWorker");
 const performanceTier_1 = require("./services/performanceTier");
@@ -224,6 +225,10 @@ app.use("/api/tips", tips_1.default);
 app.use("/api/notifications", notifications_1.default);
 app.use("/api/payouts", payouts_1.default);
 app.use("/api/admin", admin_1.default);
+// ADMIN V2 (admin-v2 branch) — roles, admin user management, audit log.
+// Same /api/admin mount, own role gate (services/adminAuth); the legacy
+// routes above keep their ADMIN_EMAILS gate untouched.
+app.use("/api/admin", adminV2_1.default);
 app.use("/api/affiliates", affiliates_1.default);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", share_1.default);

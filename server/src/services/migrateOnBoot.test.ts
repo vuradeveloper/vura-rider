@@ -113,33 +113,33 @@ describe("runMigrationsOnBoot", () => {
     expect(logSpy.mock.calls.join("\n")).toContain("default off");
   });
 
-  it("fresh database: applies 001 → 001b → 002 → 003 in order and records each", async () => {
+  it("fresh database: applies 001 → 001b → 002 → 003 → 004 in order and records each", async () => {
     process.env.RUN_MIGRATIONS_ON_BOOT = "true";
     const s = await runMigrationsOnBoot();
     expect(s.failed).toBe(0);
-    expect(s.applied).toBe(4);
+    expect(s.applied).toBe(MIGRATION_ORDER.length);
     expect(s.results.map((r) => r.file)).toEqual([...MIGRATION_ORDER]);
     expect(h.state.inserted).toEqual([...MIGRATION_ORDER]);
     expect(h.state.locked).toBe(true);
     const lines = logSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith("[migrate] summary"));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toBe("[migrate] summary applied=4 skipped=0 failed=0");
+    expect(lines[0]).toBe(`[migrate] summary applied=${MIGRATION_ORDER.length} skipped=0 failed=0`);
   });
 
   it("already-applied migrations are skipped, not re-run", async () => {
     process.env.RUN_MIGRATIONS_ON_BOOT = "true";
     h.state.appliedFiles = [...MIGRATION_ORDER];
     const s = await runMigrationsOnBoot();
-    expect(s).toMatchObject({ applied: 0, skipped: 4, failed: 0 });
+    expect(s).toMatchObject({ applied: 0, skipped: MIGRATION_ORDER.length, failed: 0 });
     expect(h.state.inserted).toHaveLength(0);
   });
 
-  it("001b pre-check finds duplicate pending offers → 001b SKIPPED (unrecorded), 002/003 still apply, no throw", async () => {
+  it("001b pre-check finds duplicate pending offers → 001b SKIPPED (unrecorded), the rest still apply, no throw", async () => {
     process.env.RUN_MIGRATIONS_ON_BOOT = "true";
     h.state.dups = [{ driver_id: "11111111-1111-1111-1111-111111111111", pending_offers: 2 }];
     const s = await runMigrationsOnBoot();
     expect(s.failed).toBe(0);
-    expect(s.applied).toBe(3); // 001, 002, 003
+    expect(s.applied).toBe(MIGRATION_ORDER.length - 1); // everything except 001b
     expect(s.skipped).toBe(1); // 001b
     const b = s.results.find((r) => r.file.startsWith("001b"));
     expect(b?.outcome).toBe("skipped");
@@ -152,14 +152,14 @@ describe("runMigrationsOnBoot", () => {
     process.env.RUN_MIGRATIONS_ON_BOOT = "true";
     h.state.failOn = "destination_sessions"; // inside 002
     const s = await runMigrationsOnBoot();
-    expect(s.applied).toBe(3); // 001, 001b, 003
+    expect(s.applied).toBe(MIGRATION_ORDER.length - 1); // all except the failed 002
     expect(s.failed).toBe(1);
     expect(s.results.find((r) => r.file.startsWith("002"))?.outcome).toBe("failed");
     expect(s.results.find((r) => r.file.startsWith("003"))?.outcome).toBe("applied");
     expect(h.state.rollbackCount).toBeGreaterThanOrEqual(1);
     expect(errSpy.mock.calls.join("\n")).toContain("boom: destination_sessions");
     const lines = logSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith("[migrate] summary"));
-    expect(lines[0]).toBe("[migrate] summary applied=3 skipped=0 failed=1");
+    expect(lines[0]).toBe(`[migrate] summary applied=${MIGRATION_ORDER.length - 1} skipped=0 failed=1`);
   });
 
   it("never throws — connection failure still returns a summary and logs it", async () => {
