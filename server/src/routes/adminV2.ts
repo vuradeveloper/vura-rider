@@ -404,4 +404,119 @@ router.get("/documents/expiring", requireAdmin("drivers.read"), async (req: Auth
   }
 });
 
+// GET /api/admin/v2/vehicles — vehicle register: linked driver, documents,
+// expiry dates, vehicle_tier (existing driver_profiles.vehicle_tier, NOT the
+// performance tier).
+router.get("/vehicles", requireAdmin("drivers.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    const rows = await query<any>(
+      `SELECT u.id AS driver_id, u.full_name,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_year, dp.vehicle_color,
+              dp.body_type, dp.vehicle_category, dp.vehicle_tier, dp.license_plate,
+              dp.lifecycle_status,
+              (SELECT MIN(d.expires_at) FROM driver_documents d
+                WHERE d.driver_id = u.id AND d.doc_type IN ('carscan_report','vehicle_scan','license_disk')
+                  AND d.expires_at IS NOT NULL) AS vehicle_doc_expires,
+              (SELECT COUNT(*) FROM driver_documents d
+                WHERE d.driver_id = u.id AND d.status = 'pending_review')::int AS pending_docs
+         FROM users u
+         JOIN driver_profiles dp ON dp.user_id = u.id
+        WHERE u.role = 'driver'
+          AND (dp.license_plate IS NOT NULL OR dp.vehicle_make IS NOT NULL)
+        ORDER BY dp.vehicle_tier NULLS LAST, u.full_name`
+    );
+    res.json({ vehicles: rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/drivers/:id/tier — performance tier view (metrics,
+// thresholds read-only; editing thresholds is Phase 5).
+router.get("/drivers/:id/tier", requireAdmin("drivers.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const driverId = String(req.params.id);
+    const tier = await queryOne<any>(
+      `SELECT driver_id, tier, points, rating_avg, accept_percent, cancel_percent,
+              rides_completed, offers_received, offers_accepted, offers_timedout,
+              driver_cancels, window_start, window_end, at_risk, demote_after,
+              demote_pending_tier, updated_at
+         FROM driver_tiers WHERE driver_id = $1`,
+      [driverId]
+    );
+    const thresholds = await query<any>(
+      `SELECT tier, display_name, rank, min_points, min_rating, min_accept_percent,
+              max_cancel_percent, commission_percent
+         FROM performance_tier_thresholds ORDER BY rank`
+    );
+    const history = await query<any>(
+      `SELECT old_tier, new_tier, reason, points, created_at
+         FROM driver_tier_history WHERE driver_id = $1
+        ORDER BY created_at DESC LIMIT 20`,
+      [driverId]
+    );
+    res.json({ tier: tier || null, thresholds, history });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/drivers/:id/tier — SUPER-ADMIN tier override with a
+// required reason (audited; history row written; thresholds untouched).
+router.post(
+  "/drivers/:id/tier",
+  requireAdmin("admins.manage"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor || actor.role !== "super_admin") {
+        res.status(403).json({ error: "Super Admin only" });
+        return;
+      }
+      const driverId = String(req.params.id);
+      const to = String(req.body?.tier || "").toLowerCase();
+      const reason = req.body?.reason ? String(req.body.reason).trim() : "";
+      const valid = ["bronze", "silver", "gold", "platinum"];
+      if (!valid.includes(to)) {
+        res.status(400).json({ error: `tier must be one of: ${valid.join(", ")}` });
+        return;
+      }
+      if (reason.length < 3) {
+        res.status(400).json({ error: "A reason is required for a tier override" });
+        return;
+      }
+      const driver = await queryOne<{ id: string }>(`SELECT id FROM users WHERE id = $1`, [driverId]);
+      if (!driver) { res.status(404).json({ error: "Driver not found" }); return; }
+      const before = await queryOne<any>(
+        `SELECT tier FROM driver_tiers WHERE driver_id = $1`,
+        [driverId]
+      );
+      // Upsert + history in one statement each (no transactions needed: an
+      // audit row follows regardless, and the next read is consistent).
+      await execute(
+        `INSERT INTO driver_tiers (driver_id, tier, window_start, window_end)
+         VALUES ($1, $2::text, CURRENT_DATE, CURRENT_DATE)
+         ON CONFLICT (driver_id) DO UPDATE SET tier = EXCLUDED.tier, updated_at = NOW()`,
+        [driverId, to]
+      );
+      await execute(
+        `INSERT INTO driver_tier_history (driver_id, old_tier, new_tier, reason, points)
+         VALUES ($1, $2, $3, $4, COALESCE((SELECT points FROM driver_tiers WHERE driver_id = $1), 0))`,
+        [driverId, before?.tier || "bronze", to, `admin_override: ${reason}`]
+      );
+      await writeAudit(actor, {
+        action: "driver.tier_override",
+        entityType: "driver_tier",
+        entityId: driverId,
+        oldValue: { tier: before?.tier || null },
+        newValue: { tier: to },
+        reason,
+      });
+      res.json({ driver_id: driverId, tier: to, previous: before?.tier || null });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
 export default router;

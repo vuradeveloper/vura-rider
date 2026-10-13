@@ -582,4 +582,73 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       delete process.env.ADMIN_EMAILS;
     }
   });
+
+  it("vehicles list joins driver + vehicle tier + doc expiry", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedDriver();
+      await execute(
+        `UPDATE driver_profiles SET license_plate = 'GP 123-456', vehicle_make = 'Toyota',
+                vehicle_tier = 'go' WHERE user_id = $1`,
+        [id]
+      );
+      const res = await request("GET", "/api/admin/v2/vehicles");
+      expect(res.status).toBe(200);
+      const row = res.json.vehicles.find((v: any) => v.driver_id === id);
+      expect(row).toBeTruthy();
+      expect(row.license_plate).toBe("GP 123-456");
+      expect(row.vehicle_tier).toBe("go"); // vehicle_tier, NOT performance tier
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("tier view reads metrics+thresholds; super-admin override requires reason and audits", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedDriver();
+
+      const view = await request("GET", `/api/admin/v2/drivers/${id}/tier`);
+      expect(view.status).toBe(200);
+      expect(view.json.tier).toBeNull(); // no row yet
+      expect(view.json.thresholds.length).toBe(4); // bronze..platinum
+      expect(view.json.thresholds[0].display_name).toBe("Bronze");
+
+      // Bad tier, missing reason
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/tier`, { tier: "diamond" })).status).toBe(400);
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/tier`, { tier: "gold" })).status).toBe(400);
+
+      // Valid override
+      const ok = await request("POST", `/api/admin/v2/drivers/${id}/tier`, {
+        tier: "gold",
+        reason: "Manual correction after promotion batch failure",
+      });
+      expect(ok.status).toBe(200);
+      expect(ok.json).toMatchObject({ tier: "gold", previous: null });
+
+      // History + audit rows
+      const hist = await query(
+        `SELECT old_tier, new_tier, reason FROM driver_tier_history WHERE driver_id = $1`,
+        [id]
+      );
+      expect(hist).toHaveLength(1);
+      expect(hist[0]).toMatchObject({ old_tier: "bronze", new_tier: "gold" });
+      expect(String(hist[0].reason)).toContain("admin_override");
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'driver.tier_override' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.reason).toContain("Manual correction");
+      expect(audit?.old_value).toMatchObject({ tier: null });
+      expect(audit?.new_value).toMatchObject({ tier: "gold" });
+
+      // operations (non-super) is denied the override even with admins.manage absent
+      await seedAdmin("ops2@vura.test", "operations");
+      authUser.email = "ops2@vura.test";
+      expect((await request("POST", `/api/admin/v2/drivers/${id}/tier`, { tier: "bronze", reason: "x org" })).status).toBe(403);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
 });
