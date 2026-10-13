@@ -20,6 +20,7 @@ const database_1 = require("../config/database");
 const adminAuth_1 = require("../services/adminAuth");
 const adminDrivers_1 = require("../services/adminDrivers");
 const push_1 = require("../services/push");
+const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
 /**
  * Best-effort push notice to the driver when an admin changes their status.
@@ -471,6 +472,132 @@ router.post("/drivers/:id/tier", (0, adminAuth_1.requireAdmin)("admins.manage"),
             reason,
         });
         res.json({ driver_id: driverId, tier: to, previous: before?.tier || null });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Riders (Phase 2) ──────────────────────────────────────────────────────────
+// GET /api/admin/v2/riders — searchable rider list (POPIA: phones masked).
+router.get("/riders", (0, adminAuth_1.requireAdmin)("riders.read"), async (req, res) => {
+    try {
+        const result = await (0, adminRiders_1.listRiders)({
+            search: typeof req.query.search === "string" ? req.query.search : "",
+            status: typeof req.query.status === "string" ? req.query.status : "",
+            limit: req.query.limit ? parseInt(String(req.query.limit), 10) : 50,
+            offset: req.query.offset ? parseInt(String(req.query.offset), 10) : 0,
+        });
+        res.json({ riders: result.rows, total: result.total });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/riders/:id — full profile + stats + notes + history.
+// Phone/id_number returned RAW (support needs them); the LIST stays masked,
+// and this reveal is audited below — same posture as the driver profile.
+router.get("/riders/:id", (0, adminAuth_1.requireAdmin)("riders.read"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const rider = await (0, adminRiders_1.getRider)(String(req.params.id));
+        if (!rider) {
+            res.status(404).json({ error: "Rider not found" });
+            return;
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "rider.reveal",
+            entityType: "rider",
+            entityId: rider.id,
+            newValue: { phone: (0, format_1.maskPhone)(rider.phone) },
+            reason: "Profile opened from the console",
+        });
+        res.json({ rider });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/riders/:id/moderation — suspend/unsuspend/ban/unban.
+// Reason REQUIRED to suspend/ban; history + audit + best-effort push notice.
+router.post("/riders/:id/moderation", (0, adminAuth_1.requireAdmin)("riders.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const riderId = String(req.params.id);
+        const to = String(req.body?.status || "").toLowerCase();
+        if (!(0, adminRiders_1.isRiderStatus)(to)) {
+            res.status(400).json({ error: `status must be one of: ${adminRiders_1.RIDER_STATUSES.join(", ")}` });
+            return;
+        }
+        const reason = req.body?.reason ? String(req.body.reason).trim() : "";
+        const until = req.body?.until ? String(req.body.until) : null;
+        const result = await (0, adminRiders_1.moderateRider)(riderId, to, actor.email, { reason, until });
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "rider.moderation",
+            entityType: "rider",
+            entityId: riderId,
+            oldValue: { status: result.from },
+            newValue: { status: result.to, until },
+            reason: reason || null,
+        });
+        // Best-effort notice — never fails the operator's action.
+        if (result.from !== result.to) {
+            try {
+                await (0, push_1.sendPushToUser)(riderId, {
+                    title: to === "active"
+                        ? "Your account is active"
+                        : to === "suspended"
+                            ? "Your account is suspended"
+                            : "Your account is banned",
+                    body: reason || "Contact support for details.",
+                });
+            }
+            catch { /* push is best-effort */ }
+        }
+        res.json({ rider_id: riderId, ...result });
+    }
+    catch (err) {
+        if (err instanceof adminRiders_1.RiderModerationError) {
+            const status = err.code === "not_found" ? 404 : err.code === "illegal_transition" ? 409 : 400;
+            res.status(status).json({ error: err.message, code: err.code, detail: err.detail });
+            return;
+        }
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/riders/:id/notes — internal support note (audited).
+router.post("/riders/:id/notes", (0, adminAuth_1.requireAdmin)("riders.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const note = String(req.body?.note || "").trim();
+        if (note.length < 3) {
+            res.status(400).json({ error: "A note of at least 3 characters is required" });
+            return;
+        }
+        const rider = await (0, database_1.queryOne)(`SELECT id FROM users WHERE id = $1 AND role = 'passenger'`, [String(req.params.id)]);
+        if (!rider) {
+            res.status(404).json({ error: "Rider not found" });
+            return;
+        }
+        await (0, adminRiders_1.addRiderNote)(rider.id, note, actor.email);
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "rider.note_add",
+            entityType: "rider",
+            entityId: rider.id,
+            newValue: { note },
+        });
+        res.status(201).json({ ok: true });
     }
     catch (err) {
         sendError(res, err);

@@ -12,6 +12,7 @@ const driverIndex_1 = require("../services/driverIndex");
 const metrics_1 = require("../services/metrics");
 const destinationSession_1 = require("../services/destinationSession");
 const performanceTier_1 = require("../services/performanceTier");
+const adminRiders_1 = require("../services/adminRiders");
 const pendingRequest = new WeakMap();
 /** Stamp the rider's tap. Returns the clock so the caller can keep it. */
 function markRequestReceived(socket) {
@@ -235,6 +236,19 @@ function setupSocketHandlers(io) {
                 }
                 if (!dbUserId) {
                     throw new Error("Passenger account not synced with database yet. Try again in a moment.");
+                }
+                // Rider-gate (Phase 2): suspend/ban enforcement — no-op unless
+                // app_config key `rider_gate` is enabled (seed OFF). Same single check
+                // as the REST path; violation answers on the existing ack channel.
+                try {
+                    await (0, adminRiders_1.assertRiderCanBook)(String(dbUserId));
+                }
+                catch (gateErr) {
+                    socket.emit("ride:requested:ack", {
+                        success: false,
+                        reason: gateErr.message || "Account not allowed",
+                    });
+                    return;
                 }
                 // ── Fraud / abuse guard for Pay Later rides ──
                 // Server-authoritative, NEVER trust the client: the rider must have an

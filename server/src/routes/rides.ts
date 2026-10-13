@@ -6,6 +6,7 @@ import { startServerRideSim, stopServerRideSim } from "../services/rideSim";
 import { acceptRide, declineOffer, startDispatch, logRideEvent } from "../services/dispatch";
 import { attachVehicleImages } from "../services/vehicleImages";
 import { trace, startTrace } from "../services/trace";
+import { assertRiderCanBook } from "../services/adminRiders";
 import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
@@ -128,6 +129,17 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     );
     if (!rider) {
       res.status(403).json({ error: "Account not synced yet. Try again in a moment." });
+      return;
+    }
+
+    // Rider-gate (Phase 2): suspend/ban enforcement — no-op unless app_config
+    // key `rider_gate` is enabled (seed OFF), so behaviour is unchanged by
+    // default. Both booking paths (REST here, socket at passenger:ride:request)
+    // run this one check.
+    try {
+      await assertRiderCanBook(rider.id);
+    } catch (gateErr: any) {
+      res.status(gateErr.status || 403).json({ error: gateErr.message || "Account not allowed" });
       return;
     }
 

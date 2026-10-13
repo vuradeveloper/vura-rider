@@ -9,6 +9,7 @@ const rideSim_1 = require("../services/rideSim");
 const dispatch_1 = require("../services/dispatch");
 const vehicleImages_1 = require("../services/vehicleImages");
 const trace_1 = require("../services/trace");
+const adminRiders_1 = require("../services/adminRiders");
 const router = (0, express_1.Router)();
 // GET /api/rides/me/active-state â€” ONE call that rebuilds the app's world.
 //
@@ -111,6 +112,17 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         const rider = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
         if (!rider) {
             res.status(403).json({ error: "Account not synced yet. Try again in a moment." });
+            return;
+        }
+        // Rider-gate (Phase 2): suspend/ban enforcement — no-op unless app_config
+        // key `rider_gate` is enabled (seed OFF), so behaviour is unchanged by
+        // default. Both booking paths (REST here, socket at passenger:ride:request)
+        // run this one check.
+        try {
+            await (0, adminRiders_1.assertRiderCanBook)(rider.id);
+        }
+        catch (gateErr) {
+            res.status(gateErr.status || 403).json({ error: gateErr.message || "Account not allowed" });
             return;
         }
         const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, fare, deviceId, waypoints, stops, } = req.body || {};

@@ -19,6 +19,7 @@ import { getDriverIndex } from "../services/driverIndex";
 import { noteIndexUpsertFailure, bump } from "../services/metrics";
 import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition, noteDestinationTripCompleted } from "../services/destinationSession";
 import { computeTierStatus } from "../services/performanceTier";
+import { assertRiderCanBook } from "../services/adminRiders";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -299,6 +300,19 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         if (!dbUserId) {
           throw new Error("Passenger account not synced with database yet. Try again in a moment.");
+        }
+
+        // Rider-gate (Phase 2): suspend/ban enforcement — no-op unless
+        // app_config key `rider_gate` is enabled (seed OFF). Same single check
+        // as the REST path; violation answers on the existing ack channel.
+        try {
+          await assertRiderCanBook(String(dbUserId));
+        } catch (gateErr: any) {
+          socket.emit("ride:requested:ack", {
+            success: false,
+            reason: gateErr.message || "Account not allowed",
+          });
+          return;
         }
 
         // ── Fraud / abuse guard for Pay Later rides ──

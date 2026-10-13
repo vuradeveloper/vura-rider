@@ -125,6 +125,21 @@ CREATE TABLE IF NOT EXISTS driver_tiers (
   window_end DATE NOT NULL DEFAULT CURRENT_DATE,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Phase 2: rides (rider stats) + app_config (rider_gate flag seed).
+CREATE TABLE IF NOT EXISTS rides (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  passenger_id UUID REFERENCES users(id),
+  driver_id UUID,
+  status VARCHAR(20) DEFAULT 'searching',
+  actual_fare NUMERIC(10,2),
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 -- The scratch container PERSISTS: earlier suites created users/driver_profiles
 -- with OLDER shapes, so CREATE TABLE IF NOT EXISTS is a no-op and the columns
 -- this suite reads must be added additively (same pattern as the rc4 suite).
@@ -177,7 +192,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     // Base schema first (shared scratch container), then migrations 004 + 005
     // the way migrate-on-boot does: files, in order, TWICE (idempotence proof).
     await execute(BASE_SCHEMA);
-    for (const file of ["004_admin_v2.sql", "005_admin_drivers.sql"]) {
+    for (const file of ["004_admin_v2.sql", "005_admin_drivers.sql", "006_admin_riders.sql"]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql
         .split(/;\s*(?:\r?\n|$)/)
@@ -212,6 +227,13 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     // Clean slate between tests (the scratch container persists).
     await execute(`DELETE FROM admin_audit_log`);
     await execute(`DELETE FROM admin_users`);
+    await execute(`DELETE FROM rider_notes`);
+    await execute(`DELETE FROM rider_status_history`);
+    await execute(`DELETE FROM rider_moderation`);
+    await execute(
+      `DELETE FROM rides WHERE passenger_id IN (SELECT id FROM users WHERE email LIKE '%@phase2.test')`
+    );
+    await execute(`DELETE FROM users WHERE email LIKE '%@phase2.test'`);
     authUser.email = null;
   });
 
@@ -651,4 +673,204 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       delete process.env.ADMIN_EMAILS;
     }
   });
+
+  // ── Phase 2: riders ─────────────────────────────────────────────────────────
+
+  async function seedRider(): Promise<string> {
+    const u = await queryOne<{ id: string }>(
+      `INSERT INTO users (firebase_uid, full_name, email, phone, role)
+       VALUES ($1, $2, $3, $4, 'passenger') RETURNING id`,
+      [
+        `fr-${Math.random().toString(36).slice(2)}`,
+        "Test Rider",
+        `rdr-${Math.random().toString(36).slice(2)}@phase2.test`,
+        "082 111 2233",
+      ]
+    );
+    return u!.id;
+  }
+
+  it("rider list masks phones (POPIA); detail reveals raw with a rider.reveal audit row", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedRider();
+
+      const list = await request("GET", "/api/admin/v2/riders");
+      expect(list.status).toBe(200);
+      expect(list.json.total).toBeGreaterThanOrEqual(1);
+      const row = list.json.riders.find((r: any) => r.id === id);
+      expect(row.phone).toBe("082***2233");
+      expect(row.moderation_status).toBe("active");
+
+      const detail = await request("GET", `/api/admin/v2/riders/${id}`);
+      expect(detail.status).toBe(200);
+      expect(detail.json.rider.phone).toBe("082 111 2233"); // raw for support
+      expect(detail.json.rider.stats).toBeTruthy();
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'rider.reveal' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe(id);
+      expect((await request("GET", "/api/admin/v2/riders/00000000-0000-0000-0000-000000000000")).status).toBe(404);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("moderation: reason required, illegal transitions 409, history+audit rows, unban works", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedRider();
+
+      const noReason = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
+        status: "suspended",
+      });
+      expect(noReason.status).toBe(400); // reason required to suspend
+
+      const badStatus = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
+        status: "shadowbanned",
+      });
+      expect(badStatus.status).toBe(400); // unknown status
+
+      const sus = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
+        status: "suspended",
+        reason: "Chargeback abuse reported by finance",
+      });
+      expect(sus.status).toBe(200);
+      expect(sus.json).toMatchObject({ from: "active", to: "suspended" });
+      const hist = await query(`SELECT * FROM rider_status_history WHERE rider_id = $1`, [id]);
+      expect(hist).toHaveLength(1);
+      expect(hist[0]).toMatchObject({ from_status: "active", to_status: "suspended" });
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'rider.moderation' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.old_value).toMatchObject({ status: "active" });
+      expect(audit?.new_value).toMatchObject({ status: "suspended" });
+      expect(audit?.reason).toContain("Chargeback");
+
+      const ban = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
+        status: "banned",
+        reason: "Repeated safety violations",
+      });
+      expect(ban.status).toBe(200);
+      expect(ban.json).toMatchObject({ from: "suspended", to: "banned" });
+
+      // banned → suspended is illegal (only unban is allowed from banned)
+      const illegal = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
+        status: "suspended",
+        reason: "cannot suspend a banned rider",
+      });
+      expect(illegal.status).toBe(409);
+
+      const unban = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
+        status: "active",
+      });
+      expect(unban.status).toBe(200);
+      expect(unban.json).toMatchObject({ from: "banned", to: "active" });
+
+      expect(
+        (await request("POST", "/api/admin/v2/riders/00000000-0000-0000-0000-000000000000/moderation", {
+          status: "suspended",
+          reason: "x",
+        })).status
+      ).toBe(404);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("rider notes: written + audited; support_agent reads but cannot write, finance denied entirely", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedRider();
+
+      expect(
+        (await request("POST", `/api/admin/v2/riders/${id}/notes`, { note: "no" })).status
+      ).toBe(400); // too short
+      const ok = await request("POST", `/api/admin/v2/riders/${id}/notes`, {
+        note: "Called rider about repeated no-shows; warned next is suspension.",
+      });
+      expect(ok.status).toBe(201);
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'rider.note_add' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe(id);
+      const detail = await request("GET", `/api/admin/v2/riders/${id}`);
+      expect(detail.json.rider.notes).toHaveLength(1);
+
+      // support_agent: riders.read yes, riders.write no
+      await seedAdmin("sup@vura.test", "support_agent");
+      authUser.email = "sup@vura.test";
+      expect((await request("GET", "/api/admin/v2/riders")).status).toBe(200);
+      expect(
+        (await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
+          status: "suspended",
+          reason: "not allowed",
+        })).status
+      ).toBe(403);
+      expect(
+        (await request("POST", `/api/admin/v2/riders/${id}/notes`, { note: "not allowed" })).status
+      ).toBe(403);
+
+      // finance: no riders.* at all
+      await seedAdmin("fin@vura.test", "finance");
+      authUser.email = "fin@vura.test";
+      expect((await request("GET", "/api/admin/v2/riders")).status).toBe(403);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("rider_gate: seeded OFF (book allowed); armed → suspended/banned blocked, until honoured", async () => {
+    const { assertRiderCanBook, riderGateEnabled } = await import("./adminRiders");
+    const id = await seedRider();
+
+    // Flag row exists and is OFF after migration 006 (idempotent seed).
+    const row = await queryOne<{ value: any }>(
+      `SELECT value FROM app_config WHERE key = 'rider_gate'`
+    );
+    expect(row?.value?.enabled).toBe(false);
+    await riderGateEnabled(true); // refresh cache from DB
+    await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
+
+    // Arm the gate, suspend the rider → booking blocked.
+    await execute(`UPDATE app_config SET value = '{"enabled": true}'::jsonb WHERE key = 'rider_gate'`);
+    await riderGateEnabled(true);
+    await execute(
+      `INSERT INTO rider_moderation (rider_id, status, reason, actor_email)
+       VALUES ($1, 'suspended', 'test suspension', 'boss@vura.test')`,
+      [id]
+    );
+    await expect(assertRiderCanBook(id)).rejects.toThrow(/suspended/i);
+
+    // Suspension with a FUTURE `until` is still serving → blocked.
+    await execute(
+      `UPDATE rider_moderation SET until = NOW() + INTERVAL '2 days' WHERE rider_id = $1`,
+      [id]
+    );
+    await expect(assertRiderCanBook(id)).rejects.toThrow(/suspended/i);
+
+    // An EXPIRED `until` releases the rider (state latches until reset).
+    await execute(
+      `UPDATE rider_moderation SET until = NOW() - INTERVAL '1 day' WHERE rider_id = $1`,
+      [id]
+    );
+    await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
+
+    // Banned is absolute (until is only informational) → still blocked.
+    await execute(
+      `UPDATE rider_moderation SET status = 'banned', until = NOW() + INTERVAL '9 days' WHERE rider_id = $1`,
+      [id]
+    );
+    await expect(assertRiderCanBook(id)).rejects.toThrow(/banned/i);
+
+    // Disarm → everyone books again (default posture restored).
+    await execute(`UPDATE app_config SET value = '{"enabled": false}'::jsonb WHERE key = 'rider_gate'`);
+    await riderGateEnabled(true);
+    await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
+  });
 });
+
+

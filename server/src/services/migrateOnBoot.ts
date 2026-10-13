@@ -34,6 +34,7 @@ export const MIGRATION_ORDER = [
   "003_performance_tier.sql",
   "004_admin_v2.sql",
   "005_admin_drivers.sql",
+  "006_admin_riders.sql",
 ] as const;
 
 export type MigrationOutcome = "applied" | "skipped" | "failed";

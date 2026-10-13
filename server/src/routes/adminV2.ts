@@ -35,6 +35,15 @@ import {
   transitionLifecycle,
 } from "../services/adminDrivers";
 import { sendPushToUser } from "../services/push";
+import {
+  RIDER_STATUSES,
+  RiderModerationError,
+  addRiderNote,
+  getRider,
+  isRiderStatus,
+  listRiders,
+  moderateRider,
+} from "../services/adminRiders";
 import { maskPhone } from "../lib/format";
 /**
  * Best-effort push notice to the driver when an admin changes their status.
@@ -513,6 +522,130 @@ router.post(
         reason,
       });
       res.json({ driver_id: driverId, tier: to, previous: before?.tier || null });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
+// ── Riders (Phase 2) ──────────────────────────────────────────────────────────
+
+// GET /api/admin/v2/riders — searchable rider list (POPIA: phones masked).
+router.get("/riders", requireAdmin("riders.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await listRiders({
+      search: typeof req.query.search === "string" ? req.query.search : "",
+      status: typeof req.query.status === "string" ? req.query.status : "",
+      limit: req.query.limit ? parseInt(String(req.query.limit), 10) : 50,
+      offset: req.query.offset ? parseInt(String(req.query.offset), 10) : 0,
+    });
+    res.json({ riders: result.rows, total: result.total });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/riders/:id — full profile + stats + notes + history.
+// Phone/id_number returned RAW (support needs them); the LIST stays masked,
+// and this reveal is audited below — same posture as the driver profile.
+router.get("/riders/:id", requireAdmin("riders.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const rider = await getRider(String(req.params.id));
+    if (!rider) { res.status(404).json({ error: "Rider not found" }); return; }
+    await writeAudit(actor, {
+      action: "rider.reveal",
+      entityType: "rider",
+      entityId: rider.id,
+      newValue: { phone: maskPhone(rider.phone) },
+      reason: "Profile opened from the console",
+    });
+    res.json({ rider });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/riders/:id/moderation — suspend/unsuspend/ban/unban.
+// Reason REQUIRED to suspend/ban; history + audit + best-effort push notice.
+router.post(
+  "/riders/:id/moderation",
+  requireAdmin("riders.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      const riderId = String(req.params.id);
+      const to = String(req.body?.status || "").toLowerCase();
+      if (!isRiderStatus(to)) {
+        res.status(400).json({ error: `status must be one of: ${RIDER_STATUSES.join(", ")}` });
+        return;
+      }
+      const reason = req.body?.reason ? String(req.body.reason).trim() : "";
+      const until = req.body?.until ? String(req.body.until) : null;
+      const result = await moderateRider(riderId, to, actor.email, { reason, until });
+      await writeAudit(actor, {
+        action: "rider.moderation",
+        entityType: "rider",
+        entityId: riderId,
+        oldValue: { status: result.from },
+        newValue: { status: result.to, until },
+        reason: reason || null,
+      });
+      // Best-effort notice — never fails the operator's action.
+      if (result.from !== result.to) {
+        try {
+          await sendPushToUser(riderId, {
+            title:
+              to === "active"
+                ? "Your account is active"
+                : to === "suspended"
+                  ? "Your account is suspended"
+                  : "Your account is banned",
+            body: reason || "Contact support for details.",
+          } as any);
+        } catch { /* push is best-effort */ }
+      }
+      res.json({ rider_id: riderId, ...result });
+    } catch (err) {
+      if (err instanceof RiderModerationError) {
+        const status =
+          err.code === "not_found" ? 404 : err.code === "illegal_transition" ? 409 : 400;
+        res.status(status).json({ error: err.message, code: err.code, detail: err.detail });
+        return;
+      }
+      sendError(res, err);
+    }
+  }
+);
+
+// POST /api/admin/v2/riders/:id/notes — internal support note (audited).
+router.post(
+  "/riders/:id/notes",
+  requireAdmin("riders.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      const note = String(req.body?.note || "").trim();
+      if (note.length < 3) {
+        res.status(400).json({ error: "A note of at least 3 characters is required" });
+        return;
+      }
+      const rider = await queryOne<{ id: string }>(
+        `SELECT id FROM users WHERE id = $1 AND role = 'passenger'`,
+        [String(req.params.id)]
+      );
+      if (!rider) { res.status(404).json({ error: "Rider not found" }); return; }
+      await addRiderNote(rider.id, note, actor.email);
+      await writeAudit(actor, {
+        action: "rider.note_add",
+        entityType: "rider",
+        entityId: rider.id,
+        newValue: { note },
+      });
+      res.status(201).json({ ok: true });
     } catch (err) {
       sendError(res, err);
     }
