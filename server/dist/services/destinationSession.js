@@ -205,11 +205,11 @@ async function activateDestinationOnce(driverId, input) {
         await (0, database_1.execute)(`UPDATE driver_profiles
           SET destination_lat = $1, destination_lng = $2, destination_label = $3,
               destination_set_at = NOW(),
-              destination_expires_at = NOW() + make_interval(mins => $4::double precision),
+              destination_expires_at = NOW() + ($4::double precision * interval '1 minute'),
               updated_at = NOW()
         WHERE user_id = $5`, [lat, lng, label, cfg.destination_max_minutes_without_trip, driverId]);
         await (0, database_1.execute)(`INSERT INTO destination_sessions (driver_id, lat, lng, label, destination_expires_at)
-       VALUES ($1, $2, $3, $4, NOW() + make_interval(mins => $5::double precision)) RETURNING id`, [driverId, lat, lng, label, cfg.destination_max_minutes_without_trip]);
+       VALUES ($1, $2, $3, $4, NOW() + ($5::double precision * interval '1 minute')) RETURNING id`, [driverId, lat, lng, label, cfg.destination_max_minutes_without_trip]);
         await logEvent(driverId, "activated", { label, lat, lng, uses_today: uses + 1 });
         (0, metrics_1.bump)("destination_activated");
         // Build the status from what we just wrote (not a re-read): the label must
@@ -298,14 +298,20 @@ async function getDestinationStatus(driverId) {
 async function noteDestinationTripCompleted(driverId, rideId) {
     try {
         const cfg = await (0, config_1.getDestinationConfig)();
-        const updated = await (0, database_1.execute)(`UPDATE destination_sessions
+        const updated = await (0, database_1.execute)(
+        // NOTE: two params, BOTH referenced ($1 driver, $2 minutes). The earlier
+        // version bound rideId as $2 but never referenced it — the extended-query
+        // protocol rejects unreferenced parameters (42P18), so this statement
+        // failed on EVERY call in production and the .catch hid it. rideId is
+        // carried by the logEvent below instead.
+        `UPDATE destination_sessions
           SET trips_completed = trips_completed + 1,
-              destination_expires_at = NOW() + make_interval(mins => $3::double precision)
-        WHERE driver_id = $1 AND ended_at IS NULL`, [driverId, rideId, cfg.destination_max_minutes_without_trip]);
+              destination_expires_at = NOW() + ($2::double precision * interval '1 minute')
+        WHERE driver_id = $1 AND ended_at IS NULL`, [driverId, cfg.destination_max_minutes_without_trip]);
         if (!updated?.rowCount)
             return false;
         await (0, database_1.execute)(`UPDATE driver_profiles
-          SET destination_expires_at = NOW() + make_interval(mins => $2::double precision),
+          SET destination_expires_at = NOW() + ($2::double precision * interval '1 minute'),
               updated_at = NOW()
         WHERE user_id = $1 AND destination_lat IS NOT NULL`, [driverId, cfg.destination_max_minutes_without_trip]).catch(() => undefined);
         await logEvent(driverId, "trip_completed", {

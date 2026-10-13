@@ -364,10 +364,10 @@ describe("breakTierTies", () => {
   it("flag on + strict tie → higher tier wins; pool order breaks equal tiers", async () => {
     patchTierConfig({ performance_tier_enabled: true });
     route({
-      "SELECT user_id, tier FROM driver_tiers": [
-        { user_id: "d1", tier: "bronze" },
-        { user_id: "d2", tier: "gold" },
-        { user_id: "d3", tier: "gold" },
+      "SELECT driver_id, tier FROM driver_tiers": [
+        { driver_id: "d1", tier: "bronze" },
+        { driver_id: "d2", tier: "gold" },
+        { driver_id: "d3", tier: "gold" },
       ],
     });
     const out = await breakTierTies(pairs([5, 5, 5]), "ride-1");
@@ -385,9 +385,9 @@ describe("breakTierTies", () => {
   it("different ETAs dominate: tier only reorders STRICT ties", async () => {
     patchTierConfig({ performance_tier_enabled: true });
     route({
-      "SELECT user_id, tier FROM driver_tiers": [
-        { user_id: "d2", tier: "platinum" },
-        { user_id: "d3", tier: "gold" },
+      "SELECT driver_id, tier FROM driver_tiers": [
+        { driver_id: "d2", tier: "platinum" },
+        { driver_id: "d3", tier: "gold" },
       ],
     });
     // Input PRE-SORTED by eta (as the H3 path passes it): d1 fastest but
@@ -407,7 +407,7 @@ describe("breakTierTies", () => {
 
   it("a driver with NO tier row ranks as the bronze floor", async () => {
     patchTierConfig({ performance_tier_enabled: true });
-    route({ "SELECT user_id, tier FROM driver_tiers": [{ user_id: "d2", tier: "silver" }] });
+    route({ "SELECT driver_id, tier FROM driver_tiers": [{ driver_id: "d2", tier: "silver" }] });
     const out = await breakTierTies(pairs([4, 4]), "ride-1"); // d1 unknown, d2 silver
     expect(out.map((p) => p.row.id)).toEqual(["d2", "d1"]);
   });

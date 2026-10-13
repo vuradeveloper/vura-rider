@@ -701,12 +701,16 @@ export async function breakTierTies<T extends { id: string }>(
     }
     if (!hasTie) return pairs;
 
-    const rows = await query<{ user_id: string; tier: string }>(
-      `SELECT user_id, tier FROM driver_tiers WHERE user_id = ANY($1::uuid[])`,
+    const rows = await query<{ driver_id: string; tier: string }>(
+      // Column is driver_id (003 migration) — an earlier version read
+      // user_id here, which raised 42703 on every tie and silently failed
+      // OPEN (the catch below returned the pool untouched), so the tier
+      // tie-break never actually ran against real Postgres.
+      `SELECT driver_id, tier FROM driver_tiers WHERE driver_id = ANY($1::uuid[])`,
       [[...new Set(pairs.map((p) => p.row.id))]]
     );
     const rankOf = new Map<string, number>(
-      (rows ?? []).map((r) => [r.user_id, TIER_RANK[String(r.tier) as TierName] ?? 1])
+      (rows ?? []).map((r) => [r.driver_id, TIER_RANK[String(r.tier) as TierName] ?? 1])
     );
     // Missing row = never evaluated = bronze floor (rank 1).
     const rank = (id: string) => rankOf.get(id) ?? 1;

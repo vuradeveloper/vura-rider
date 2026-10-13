@@ -438,13 +438,20 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
               -- (0,0) in the Gulf of Guinea and could reorder a no-GPS
               -- driver's list nonsensically, so it is left NULL and ordering
               -- falls back to newest-first -- exactly the old behaviour.
+              -- ALIAS pickup_distance_km, NOT distance_km: the rides table has
+              -- a REAL distance_km column (bootstrap schema), and r.*
+              -- expands it — a second output column with the same name made
+              -- the bare ORDER BY distance_km AMBIGUOUS (Postgres 42702)
+              -- and 500'd this endpoint on every driver poll. The computed
+              -- value is copied back onto distance_km in the response below,
+              -- so the app contract (r.distance_km) is unchanged.
               CASE WHEN $3::boolean AND r.pickup_lat IS NOT NULL AND r.pickup_lng IS NOT NULL
                 THEN (6371 * acos(LEAST(1, GREATEST(-1,
                   cos(radians($2)) * cos(radians(r.pickup_lat)) *
                     cos(radians(r.pickup_lng) - radians($1)) +
                   sin(radians($2)) * sin(radians(r.pickup_lat))
                 ))))
-              END AS distance_km
+              END AS pickup_distance_km
          FROM rides r
          LEFT JOIN users u ON u.id = r.passenger_id
         WHERE ((r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
@@ -464,7 +471,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         -- NULLS LAST: rides we could not measure sort after measured ones, so a
         -- no-GPS driver keeps newest-first ordering among the unmeasurable.
         ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END,
-                 distance_km ASC NULLS LAST,
+                 pickup_distance_km ASC NULLS LAST,
                  r.created_at DESC
         LIMIT 20`, [
             hasCoords ? Number(dp.current_lng) : 0,
@@ -473,7 +480,10 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
             radiusKm,
         ]);
         res.json({
-            rides: (rows || []).map((row) => mapRide(row)),
+            // The app reads distance_km (nearest-ride card, offer sheet): publish
+            // the COMPUTED pickup distance under the historical name, falling back
+            // to the stored fare distance only when this run measured nothing.
+            rides: (rows || []).map((row) => mapRide({ ...row, distance_km: row.pickup_distance_km ?? row.distance_km })),
             // Lets the app and debug distinguish "nothing near you" from "you have no
             // GPS fix, so this list is unfiltered".
             scoped: hasCoords,
@@ -481,7 +491,10 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         });
     }
     catch (err) {
-        console.error("Available rides error:", err);
+        // The driver app polls this every 2s — a failure here is the driver's
+        // whole offer feed going dark, so it must be LOUD in the logs (RC4 prod:
+        // 42702 ambiguity 500'd every poll for ~every online driver).
+        console.error(`[rides] GET /api/rides/available FAILED (driver=${_req.userId ?? "unknown"}):`, err?.code ? `${err.code} ${err.message}` : err);
         res.status(500).json({ error: err.message });
     }
 });

@@ -379,6 +379,10 @@ describe.skipIf(!enabled)("migration 001 + 001b against real Postgres", () => {
 
 describe.skipIf(!enabled)("migration 003 against real Postgres", () => {
   it("seeds four thresholds and the flag-off config row", async () => {
+    // Delete first so this asserts what the SEED writes — the RC4 suite turns
+    // the flag ON (all features enabled), so the row may already be mutated.
+    await execute(`DELETE FROM app_config WHERE key = 'performance_tier'`);
+    await query(tierMigrationSql());
     const th = await query<{ tier: string }>(
       "SELECT tier FROM performance_tier_thresholds ORDER BY rank"
     );

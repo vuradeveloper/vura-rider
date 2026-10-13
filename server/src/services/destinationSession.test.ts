@@ -641,7 +641,7 @@ describe("noteDestinationTripCompleted (reset on each completed trip)", () => {
     expect(await noteDestinationTripCompleted("d1", "ride-1")).toBe(true);
     const bump = calls("trips_completed = trips_completed + 1");
     expect(bump).toHaveLength(1);
-    expect(bump[0][1]).toEqual(["d1", "ride-1", 180]); // idle minutes from config
+    expect(bump[0][1]).toEqual(["d1", 180]); // both params referenced: driver, minutes
     const mirror = calls("UPDATE driver_profiles");
     expect(mirror).toHaveLength(1);
     expect(mirror[0][1]).toEqual(["d1", 180]); // banner/status clock moves too
@@ -652,7 +652,7 @@ describe("noteDestinationTripCompleted (reset on each completed trip)", () => {
   it("honours a custom destination_max_minutes_without_trip", async () => {
     patchDestinationConfig({ destination_max_minutes_without_trip: 45 });
     expect(await noteDestinationTripCompleted("d1", "ride-1")).toBe(true);
-    expect(calls("trips_completed = trips_completed + 1")[0][1]).toEqual(["d1", "ride-1", 45]);
+    expect(calls("trips_completed = trips_completed + 1")[0][1]).toEqual(["d1", 45]);
   });
 
   it("no active session -> nothing happens (a trip does NOT start a session)", async () => {
