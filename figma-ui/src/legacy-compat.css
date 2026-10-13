@@ -1,0 +1,49 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   legacy-compat.css — Chrome/Android-70 fallbacks, inert on capable engines.
+
+   1) FLEX GAP (Chrome 84+): the runtime probe in webviewGuard sets
+      html.no-flex-gap on engines without flex gap; every rule below is scoped
+      to that class, so modern devices keep the untouched Tailwind spacing.
+      Values mirror EXACTLY the gap utilities used in src/ (0.5…5 + gap-[5px]).
+      GRID containers keep their native `gap` (Chrome 66+) — only .flex and
+      .inline-flex rows/cols get margins. `:not(.flex-col)` is a Level-3
+      selector (Chrome 4+), safe on the floor.
+   2) aspect-ratio: currently UNUSED in src/ (verified by scan) — nothing to
+      emulate yet; the class hook `no-aspect-ratio` is reserved by
+      webviewGuard for when a future utility needs it.
+   3) CSS custom properties are native since Chrome 49 — no fallback needed.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* row-gap emulation (default flex direction = row) */
+.no-flex-gap .flex.gap-0\.5:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-0\.5:not(.flex-col) > * + * { margin-left: 0.125rem }
+.no-flex-gap .flex.gap-1:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-1:not(.flex-col) > * + * { margin-left: 0.25rem }
+.no-flex-gap .flex.gap-1\.5:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-1\.5:not(.flex-col) > * + * { margin-left: 0.375rem }
+.no-flex-gap .flex.gap-2:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-2:not(.flex-col) > * + * { margin-left: 0.5rem }
+.no-flex-gap .flex.gap-2\.5:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-2\.5:not(.flex-col) > * + * { margin-left: 0.625rem }
+.no-flex-gap .flex.gap-3:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-3:not(.flex-col) > * + * { margin-left: 0.75rem }
+.no-flex-gap .flex.gap-3\.5:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-3\.5:not(.flex-col) > * + * { margin-left: 0.875rem }
+.no-flex-gap .flex.gap-4:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-4:not(.flex-col) > * + * { margin-left: 1rem }
+.no-flex-gap .flex.gap-5:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-5:not(.flex-col) > * + * { margin-left: 1.25rem }
+.no-flex-gap .flex.gap-\[5px\]:not(.flex-col) > * + *,
+.no-flex-gap .inline-flex.gap-\[5px\]:not(.flex-col) > * + * { margin-left: 5px }
+
+/* column-gap emulation (flex-col) */
+.no-flex-gap .flex-col.gap-0\.5 > * + * { margin-top: 0.125rem }
+.no-flex-gap .flex-col.gap-1 > * + * { margin-top: 0.25rem }
+.no-flex-gap .flex-col.gap-1\.5 > * + * { margin-top: 0.375rem }
+.no-flex-gap .flex-col.gap-2 > * + * { margin-top: 0.5rem }
+.no-flex-gap .flex-col.gap-2\.5 > * + * { margin-top: 0.625rem }
+.no-flex-gap .flex-col.gap-3 > * + * { margin-top: 0.75rem }
+.no-flex-gap .flex-col.gap-3\.5 > * + * { margin-top: 0.875rem }
+.no-flex-gap .flex-col.gap-4 > * + * { margin-top: 1rem }
+.no-flex-gap .flex-col.gap-5 > * + * { margin-top: 1.25rem }
+.no-flex-gap .flex-col.gap-\[5px\] > * + * { margin-top: 5px }

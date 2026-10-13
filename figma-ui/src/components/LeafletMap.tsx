@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
+import { reportLeafletLoadFailure } from '../lib/webviewGuard'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Real map for the Figma UI — OpenStreetMap tiles via Leaflet, the SAME mapping
@@ -31,7 +32,12 @@ function loadLeaflet(): Promise<any> {
     script.src = '/leaflet/leaflet.js'
     script.async = true
     script.onload = () => resolve(window.L)
-    script.onerror = () => reject(new Error('Could not load Leaflet'))
+    script.onerror = () => {
+      // Old-WebView legibility: a failed map script must be a readable
+      // full-screen message (update WebView), never a silent empty box.
+      reject(new Error('Could not load Leaflet'))
+      reportLeafletLoadFailure()
+    }
     document.head.appendChild(script)
   })
   return leafletPromise
