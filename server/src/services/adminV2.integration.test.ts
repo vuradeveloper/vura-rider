@@ -1,18 +1,18 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN V2 (Phase 0) — REAL POSTGRES integration suite.
+﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ADMIN V2 (Phase 0) â€” REAL POSTGRES integration suite.
 //
-// WHY REAL DB (the two production bugs — make_interval 42883, ambiguous
-// column 42702 — were both invisible to mocks):
-//   • migration 004 (admin_users + admin_audit_log) applied TWICE (idempotent),
-//   • every new SQL statement executed for real (insert/upsert/update/select),
-//   • the role → permission matrix enforced per role (each allowed AND denied),
-//   • audit rows written for every action, with old/new values,
-//   • missing-table behaviour: the routes answer 503, never throw.
+// WHY REAL DB (the two production bugs â€” make_interval 42883, ambiguous
+// column 42702 â€” were both invisible to mocks):
+//   â€¢ migration 004 (admin_users + admin_audit_log) applied TWICE (idempotent),
+//   â€¢ every new SQL statement executed for real (insert/upsert/update/select),
+//   â€¢ the role â†’ permission matrix enforced per role (each allowed AND denied),
+//   â€¢ audit rows written for every action, with old/new values,
+//   â€¢ missing-table behaviour: the routes answer 503, never throw.
 //
 // GATING (same as the other suites): skipped unless VURA_TEST_DB_PORT is set,
 // and the guard refuses anything but the scratch container.
 //   $env:VURA_TEST_DB_PORT='55432'; npx vitest run src/services/adminV2.integration.test.ts
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -46,7 +46,7 @@ import {
 import adminV2Router from "../routes/adminV2";
 
 // Point the pool at the scratch container FIRST (the pool reads env lazily on
-// first query), then assert it — same contract as rc4.integration.test.ts.
+// first query), then assert it â€” same contract as rc4.integration.test.ts.
 const enabled = !!process.env.VURA_TEST_DB_PORT;
 process.env.DB_HOST = process.env.DB_HOST || "127.0.0.1";
 process.env.DB_PORT = process.env.VURA_TEST_DB_PORT || "";
@@ -59,9 +59,9 @@ if (enabled) {
 }
 
 /**
- * Minimal base schema — the scratch container is shared, so the base tables
+ * Minimal base schema â€” the scratch container is shared, so the base tables
  * must exist before migrations 004/005 (which ALTER users/driver_profiles/
- * driver_documents and FK driver_tiers → users). Same shapes as the rc4
+ * driver_documents and FK driver_tiers â†’ users). Same shapes as the rc4
  * PROD_SCHEMA, only the columns this suite reads.
  */
 const BASE_SCHEMA = `
@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS app_config (
   value JSONB NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Phase 3: dispatch timeline for trip detail.
+CREATE TABLE IF NOT EXISTS ride_events (
+  id BIGSERIAL PRIMARY KEY,
+  ride_id UUID,
+  driver_id UUID,
+  event VARCHAR(60) NOT NULL,
+  detail JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
 -- The scratch container PERSISTS: earlier suites created users/driver_profiles
 -- with OLDER shapes, so CREATE TABLE IF NOT EXISTS is a no-op and the columns
 -- this suite reads must be added additively (same pattern as the rc4 suite).
@@ -155,7 +164,7 @@ ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMP
 ALTER TABLE driver_documents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 `;
 
-// ── HTTP harness (same pattern as rc4.integration.test.ts) ──────────────────
+// â”€â”€ HTTP harness (same pattern as rc4.integration.test.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let server: HttpServer;
 let base: string;
 
@@ -192,7 +201,12 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     // Base schema first (shared scratch container), then migrations 004 + 005
     // the way migrate-on-boot does: files, in order, TWICE (idempotence proof).
     await execute(BASE_SCHEMA);
-    for (const file of ["004_admin_v2.sql", "005_admin_drivers.sql", "006_admin_riders.sql"]) {
+    for (const file of [
+      "004_admin_v2.sql",
+      "005_admin_drivers.sql",
+      "006_admin_riders.sql",
+      "007_admin_trips.sql",
+    ]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql
         .split(/;\s*(?:\r?\n|$)/)
@@ -234,6 +248,9 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       `DELETE FROM rides WHERE passenger_id IN (SELECT id FROM users WHERE email LIKE '%@phase2.test')`
     );
     await execute(`DELETE FROM users WHERE email LIKE '%@phase2.test'`);
+    await execute(`DELETE FROM support_ticket_messages`);
+    await execute(`DELETE FROM support_tickets`);
+    await execute(`DELETE FROM ride_events`);
     authUser.email = null;
   });
 
@@ -247,7 +264,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
 
   it("role matrix: finance is read-only; every permission is a dotted string", () => {
     for (const [role, perms] of Object.entries(ROLE_PERMISSIONS)) {
-      for (const p of perms) expect(typeof p, `${role} → ${p}`).toBe("string");
+      for (const p of perms) expect(typeof p, `${role} â†’ ${p}`).toBe("string");
       if (role === "finance") {
         expect(perms.some((p) => p.endsWith(".write") || p === "admins.manage")).toBe(false);
       }
@@ -335,7 +352,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(chgAudit.old_value).toMatchObject({ role: "operations", disabled: false });
       expect(chgAudit.new_value).toMatchObject({ role: "support_agent" });
 
-      // Disable → the row no longer resolves.
+      // Disable â†’ the row no longer resolves.
       await request("PATCH", `/api/admin/v2/admins/${inv.json.admin.id}`, { disabled: true });
       authUser.email = "ops@vura.test";
       expect((await request("GET", "/api/admin/v2/me")).status).toBe(403);
@@ -396,7 +413,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     process.env.ADMIN_EMAILS = "always@vura.test";
     try {
       await seedAdmin("always@vura.test", "support_agent", true); // disabled row
-      // Env fallback wins — the table cannot lock out operators.
+      // Env fallback wins â€” the table cannot lock out operators.
       expect(await resolveAdminRole("always@vura.test")).toBe("super_admin");
       await seedAdmin("half@vura.test", "operations", true);
       expect(await resolveAdminRole("half@vura.test")).toBeNull();
@@ -417,7 +434,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     }
   });
 
-  // ── Phase 1: drivers ──────────────────────────────────────────────────────
+  // â”€â”€ Phase 1: drivers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async function seedDriver(lifecycle = "ACTIVE"): Promise<string> {
     const u = await queryOne<{ id: string }>(
@@ -469,7 +486,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(ok1.status).toBe(200);
       expect(ok1.json).toEqual({ from: "UNDER_REVIEW", to: "CHANGES_REQUESTED" });
 
-      // To APPROVED needs all required docs — seed them first
+      // To APPROVED needs all required docs â€” seed them first
       await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "DOCUMENTS_SUBMITTED" });
       await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "UNDER_REVIEW" });
       const required = await query<{ doc_type: string }>(
@@ -485,7 +502,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "APPROVED" })).status).toBe(200);
       expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "ACTIVE" })).status).toBe(200);
 
-      // Illegal: ACTIVE → DOCUMENTS_SUBMITTED
+      // Illegal: ACTIVE â†’ DOCUMENTS_SUBMITTED
       const bad = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "DOCUMENTS_SUBMITTED" });
       expect(bad.status).toBe(409);
       expect(bad.json.allowed).toContain("SUSPENDED");
@@ -674,7 +691,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     }
   });
 
-  // ── Phase 2: riders ─────────────────────────────────────────────────────────
+  // â”€â”€ Phase 2: riders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async function seedRider(): Promise<string> {
     const u = await queryOne<{ id: string }>(
@@ -756,7 +773,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(ban.status).toBe(200);
       expect(ban.json).toMatchObject({ from: "suspended", to: "banned" });
 
-      // banned → suspended is illegal (only unban is allowed from banned)
+      // banned â†’ suspended is illegal (only unban is allowed from banned)
       const illegal = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
         status: "suspended",
         reason: "cannot suspend a banned rider",
@@ -823,7 +840,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     }
   });
 
-  it("rider_gate: seeded OFF (book allowed); armed → suspended/banned blocked, until honoured", async () => {
+  it("rider_gate: seeded OFF (book allowed); armed â†’ suspended/banned blocked, until honoured", async () => {
     const { assertRiderCanBook, riderGateEnabled } = await import("./adminRiders");
     const id = await seedRider();
 
@@ -835,7 +852,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await riderGateEnabled(true); // refresh cache from DB
     await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
 
-    // Arm the gate, suspend the rider → booking blocked.
+    // Arm the gate, suspend the rider â†’ booking blocked.
     await execute(`UPDATE app_config SET value = '{"enabled": true}'::jsonb WHERE key = 'rider_gate'`);
     await riderGateEnabled(true);
     await execute(
@@ -845,7 +862,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     );
     await expect(assertRiderCanBook(id)).rejects.toThrow(/suspended/i);
 
-    // Suspension with a FUTURE `until` is still serving → blocked.
+    // Suspension with a FUTURE `until` is still serving â†’ blocked.
     await execute(
       `UPDATE rider_moderation SET until = NOW() + INTERVAL '2 days' WHERE rider_id = $1`,
       [id]
@@ -859,18 +876,193 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     );
     await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
 
-    // Banned is absolute (until is only informational) → still blocked.
+    // Banned is absolute (until is only informational) â†’ still blocked.
     await execute(
       `UPDATE rider_moderation SET status = 'banned', until = NOW() + INTERVAL '9 days' WHERE rider_id = $1`,
       [id]
     );
     await expect(assertRiderCanBook(id)).rejects.toThrow(/banned/i);
 
-    // Disarm → everyone books again (default posture restored).
+    // Disarm â†’ everyone books again (default posture restored).
     await execute(`UPDATE app_config SET value = '{"enabled": false}'::jsonb WHERE key = 'rider_gate'`);
     await riderGateEnabled(true);
     await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
   });
+
+
+  // â”€â”€ Phase 3: trips + support inbox â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  async function seedTrip(status = "completed"): Promise<string> {
+    const u = await queryOne<{ id: string }>(
+      `INSERT INTO users (firebase_uid, full_name, email, phone, role)
+       VALUES ($1, 'Trip Rider', $2, '0829998877', 'passenger') RETURNING id`,
+      [`ft-${Math.random().toString(36).slice(2)}`, `trip-${Math.random().toString(36).slice(2)}@phase2.test`]
+    );
+    const d = await queryOne<{ id: string }>(
+      `INSERT INTO users (firebase_uid, full_name, email, phone, role)
+       VALUES ($1, 'Trip Driver', $2, '0827776655', 'driver') RETURNING id`,
+      [`ftd-${Math.random().toString(36).slice(2)}`, `tripdrv-${Math.random().toString(36).slice(2)}@phase2.test`]
+    );
+    const r = await queryOne<{ id: string }>(
+      `INSERT INTO rides (passenger_id, driver_id, pickup_address, destination_address,
+                           status, actual_fare, distance_km, completed_at)
+       VALUES ($1, $2, 'Sandton City', 'OR Tambo', $3::varchar, 185.50, 22.4,
+               CASE WHEN $3::varchar = 'completed' THEN NOW() ELSE NULL END)
+       RETURNING id`,
+      [u!.id, d!.id, status]
+    );
+    return r!.id;
+  }
+
+  it("trip list filters + search; detail includes the dispatch timeline; 404 unknown", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const id = await seedTrip("completed");
+      await execute(
+        `INSERT INTO ride_events (ride_id, event, detail) VALUES ($1, 'ride_requested', '{"x":1}'), ($1, 'ride_accepted', NULL)`,
+        [id]
+      );
+
+      const list = await request("GET", "/api/admin/v2/trips?status=completed");
+      expect(list.status).toBe(200);
+      const row = list.json.trips.find((t: any) => t.id === id);
+      expect(row).toBeTruthy();
+      expect(row.rider_name).toBe("Trip Rider");
+      expect(row.actual_fare).toBeTruthy(); // display-only money
+
+      const search = await request("GET", "/api/admin/v2/trips?search=Sandton");
+      expect(search.json.trips.some((t: any) => t.id === id)).toBe(true);
+
+      const detail = await request("GET", `/api/admin/v2/trips/${id}`);
+      expect(detail.status).toBe(200);
+      expect(detail.json.trip.events).toHaveLength(2);
+      expect(detail.json.trip.events[0].event).toBe("ride_requested");
+      expect(detail.json.trip.rider_email).toContain("@phase2.test");
+
+      expect((await request("GET", "/api/admin/v2/trips/00000000-0000-0000-0000-000000000000")).status).toBe(404);
+
+      const stats = await request("GET", "/api/admin/v2/trips/stats");
+      expect(stats.status).toBe(200);
+      expect(stats.json.stats.total).toBeGreaterThanOrEqual(1);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("live snapshot returns online drivers + active rides", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      await seedTrip("in_progress");
+      const live = await request("GET", "/api/admin/v2/trips/live");
+      expect(live.status).toBe(200);
+      expect(Array.isArray(live.json.drivers)).toBe(true);
+      expect(Array.isArray(live.json.rides)).toBe(true);
+      expect(live.json.rides.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+
+
+
+  it("support inbox: create → reply → resolve, all audited; permissions enforced", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+
+      // Validation
+      expect((await request("POST", "/api/admin/v2/tickets", { subject: "ab", body: "cd" })).status).toBe(400);
+      expect(
+        (await request("POST", "/api/admin/v2/tickets", {
+          subject: "Rider cannot log in",
+          body: "Rider called about OTP loop.",
+          priority: "asap",
+        })).status
+      ).toBe(400);
+
+      // Create
+      const created = await request("POST", "/api/admin/v2/tickets", {
+        subject: "Rider cannot log in",
+        body: "Rider called about OTP loop on 082.",
+        priority: "high",
+        rider_name: "Sipho",
+        rider_email: "sipho@example.com",
+      });
+      expect(created.status).toBe(201);
+      const ticket = created.json.ticket;
+      expect(ticket.reference).toMatch(/^VURA-[A-Z2-9]{6}$/);
+      expect(ticket.status).toBe("open");
+      const audit1 = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'ticket.create' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit1?.entity_id).toBe(ticket.id);
+
+      // List + search (subject and rider_email are both search columns)
+      const list = await request("GET", "/api/admin/v2/tickets?search=sipho");
+      expect(list.json.tickets.some((t: any) => t.id === ticket.id)).toBe(true);
+
+      // Reply + internal note
+      expect(
+        (await request("POST", `/api/admin/v2/tickets/${ticket.id}/messages`, { message: "" })).status
+      ).toBe(400);
+      expect(
+        (await request("POST", `/api/admin/v2/tickets/${ticket.id}/messages`, {
+          message: "Asked rider to clear app data and retry.",
+        })).status
+      ).toBe(201);
+      expect(
+        (await request("POST", `/api/admin/v2/tickets/${ticket.id}/messages`, {
+          message: "Internal: third OTP complaint today.",
+          is_internal: true,
+        })).status
+      ).toBe(201);
+
+      // Resolve (audited old→new)
+      const resolved = await request("PATCH", `/api/admin/v2/tickets/${ticket.id}`, {
+        status: "resolved",
+        reason: "Rider advised",
+      });
+      expect(resolved.status).toBe(200);
+      expect(resolved.json.ticket.status).toBe("resolved");
+      expect(resolved.json.ticket.resolved_at).toBeTruthy();
+      const audit2 = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'ticket.update' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit2?.old_value).toMatchObject({ status: "open" });
+      expect(audit2?.new_value).toMatchObject({ status: "resolved" });
+
+      expect(
+        (await request("PATCH", `/api/admin/v2/tickets/${ticket.id}`, { status: "on_fire" })).status
+      ).toBe(400);
+
+      // Detail includes the 3-message thread
+      const detail = await request("GET", `/api/admin/v2/tickets/${ticket.id}`);
+      expect(detail.json.ticket.messages).toHaveLength(3);
+      expect(detail.json.ticket.messages[0].author_email).toBe("boss@vura.test");
+
+      // support_agent: tickets read+write allowed
+      await seedAdmin("sup2@vura.test", "support_agent");
+      authUser.email = "sup2@vura.test";
+      expect((await request("GET", "/api/admin/v2/tickets")).status).toBe(200);
+
+      // onboarding_reviewer: no tickets.* → 403
+      await seedAdmin("onb@vura.test", "onboarding_reviewer");
+      authUser.email = "onb@vura.test";
+      expect((await request("GET", "/api/admin/v2/tickets")).status).toBe(403);
+      expect(
+        (await request("POST", "/api/admin/v2/tickets", { subject: "nope", body: "nope" })).status
+      ).toBe(403);
+
+      // finance: no trips.* → 403
+      await seedAdmin("fin3@vura.test", "finance");
+      authUser.email = "fin3@vura.test";
+      expect((await request("GET", "/api/admin/v2/trips")).status).toBe(403);
+      expect((await request("GET", "/api/admin/v2/trips/live")).status).toBe(403);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
 });
-
-

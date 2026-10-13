@@ -20,6 +20,7 @@ const database_1 = require("../config/database");
 const adminAuth_1 = require("../services/adminAuth");
 const adminDrivers_1 = require("../services/adminDrivers");
 const push_1 = require("../services/push");
+const adminTrips_1 = require("../services/adminTrips");
 const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
 /**
@@ -596,6 +597,201 @@ router.post("/riders/:id/notes", (0, adminAuth_1.requireAdmin)("riders.write"), 
             entityType: "rider",
             entityId: rider.id,
             newValue: { note },
+        });
+        res.status(201).json({ ok: true });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Trips & live map (Phase 3) ────────────────────────────────────────────────
+// GET /api/admin/v2/trips — searchable/filterable trip list (read-only).
+router.get("/trips", (0, adminAuth_1.requireAdmin)("trips.read"), async (req, res) => {
+    try {
+        const result = await (0, adminTrips_1.listTrips)({
+            status: typeof req.query.status === "string" ? req.query.status : "",
+            search: typeof req.query.search === "string" ? req.query.search : "",
+            from: typeof req.query.from === "string" ? req.query.from : "",
+            to: typeof req.query.to === "string" ? req.query.to : "",
+            limit: req.query.limit ? parseInt(String(req.query.limit), 10) : 50,
+            offset: req.query.offset ? parseInt(String(req.query.offset), 10) : 0,
+        });
+        res.json({ trips: result.rows, total: result.total });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/trips/stats — dashboard tile (7-day window, configurable).
+router.get("/trips/stats", (0, adminAuth_1.requireAdmin)("trips.read"), async (req, res) => {
+    try {
+        const days = req.query.days ? parseInt(String(req.query.days), 10) : 7;
+        res.json({ stats: await (0, adminTrips_1.getTripStats)(days) });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/trips/live — live-map snapshot: online drivers + active rides.
+router.get("/trips/live", (0, adminAuth_1.requireAdmin)("trips.read"), async (_req, res) => {
+    try {
+        res.json(await (0, adminTrips_1.getLiveSnapshot)());
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/trips/:id — one trip + its dispatch timeline. Read-only:
+// there is deliberately no refund/adjust action (brief: no money changes).
+router.get("/trips/:id", (0, adminAuth_1.requireAdmin)("trips.read"), async (req, res) => {
+    try {
+        const trip = await (0, adminTrips_1.getTrip)(String(req.params.id));
+        if (!trip) {
+            res.status(404).json({ error: "Trip not found" });
+            return;
+        }
+        res.json({ trip });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Support inbox (Phase 3) ───────────────────────────────────────────────────
+// GET /api/admin/v2/tickets — open/pending first, then newest.
+router.get("/tickets", (0, adminAuth_1.requireAdmin)("tickets.read"), async (req, res) => {
+    try {
+        const result = await (0, adminTrips_1.listTickets)({
+            status: typeof req.query.status === "string" ? req.query.status : "",
+            priority: typeof req.query.priority === "string" ? req.query.priority : "",
+            search: typeof req.query.search === "string" ? req.query.search : "",
+            limit: req.query.limit ? parseInt(String(req.query.limit), 10) : 50,
+            offset: req.query.offset ? parseInt(String(req.query.offset), 10) : 0,
+        });
+        res.json({ tickets: result.rows, total: result.total });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/tickets/:id — the ticket + full thread.
+router.get("/tickets/:id", (0, adminAuth_1.requireAdmin)("tickets.read"), async (req, res) => {
+    try {
+        const ticket = await (0, adminTrips_1.getTicket)(String(req.params.id));
+        if (!ticket) {
+            res.status(404).json({ error: "Ticket not found" });
+            return;
+        }
+        res.json({ ticket });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/tickets — open a ticket on a rider's behalf (walk-up,
+// call, email). The body becomes message #1 from the acting admin.
+router.post("/tickets", (0, adminAuth_1.requireAdmin)("tickets.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const subject = String(req.body?.subject || "").trim();
+        const body = String(req.body?.body || "").trim();
+        if (subject.length < 3 || body.length < 3) {
+            res.status(400).json({ error: "subject and body are required (min 3 chars)" });
+            return;
+        }
+        const priority = String(req.body?.priority || "normal");
+        if (!["low", "normal", "high", "urgent"].includes(priority)) {
+            res.status(400).json({ error: "priority must be low|normal|high|urgent" });
+            return;
+        }
+        const ticket = await (0, adminTrips_1.createTicket)({
+            subject, body, priority,
+            rider_id: req.body?.rider_id || null,
+            driver_id: req.body?.driver_id || null,
+            rider_name: req.body?.rider_name || null,
+            rider_email: req.body?.rider_email || null,
+            rider_phone: req.body?.rider_phone || null,
+            ride_id: req.body?.ride_id || null,
+        }, actor.email);
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "ticket.create",
+            entityType: "support_ticket",
+            entityId: ticket.id,
+            newValue: { reference: ticket.reference, subject, priority },
+        });
+        res.status(201).json({ ticket });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// PATCH /api/admin/v2/tickets/:id — status/priority/assignee.
+router.patch("/tickets/:id", (0, adminAuth_1.requireAdmin)("tickets.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const id = String(req.params.id);
+        const before = await (0, adminTrips_1.getTicket)(id);
+        if (!before) {
+            res.status(404).json({ error: "Ticket not found" });
+            return;
+        }
+        const { status, priority, assignee_email } = req.body || {};
+        if (status && !["open", "pending", "resolved", "closed"].includes(status)) {
+            res.status(400).json({ error: "status must be open|pending|resolved|closed" });
+            return;
+        }
+        if (priority && !["low", "normal", "high", "urgent"].includes(priority)) {
+            res.status(400).json({ error: "priority must be low|normal|high|urgent" });
+            return;
+        }
+        const ticket = await (0, adminTrips_1.updateTicket)(id, { status, priority, assignee_email });
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "ticket.update",
+            entityType: "support_ticket",
+            entityId: id,
+            oldValue: { status: before.status, priority: before.priority, assignee: before.assignee_email },
+            newValue: { status: ticket?.status, priority: ticket?.priority, assignee: ticket?.assignee_email },
+            reason: req.body?.reason ? String(req.body.reason) : null,
+        });
+        res.json({ ticket });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/tickets/:id/messages — reply or internal note.
+router.post("/tickets/:id/messages", (0, adminAuth_1.requireAdmin)("tickets.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const id = String(req.params.id);
+        const ticket = await (0, adminTrips_1.getTicket)(id);
+        if (!ticket) {
+            res.status(404).json({ error: "Ticket not found" });
+            return;
+        }
+        const message = String(req.body?.message || "").trim();
+        if (message.length < 1) {
+            res.status(400).json({ error: "message is required" });
+            return;
+        }
+        const isInternal = req.body?.is_internal === true;
+        await (0, adminTrips_1.addTicketMessage)(id, actor.email, message, isInternal);
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: isInternal ? "ticket.note" : "ticket.reply",
+            entityType: "support_ticket",
+            entityId: id,
+            newValue: { message },
         });
         res.status(201).json({ ok: true });
     }
