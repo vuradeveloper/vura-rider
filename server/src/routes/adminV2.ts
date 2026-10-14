@@ -79,6 +79,7 @@ import {
   generateImages,
   listImages,
   listVehicleRequests,
+  purgeCarDb,
   rejectImage,
   refetchImage,
   resolveVehicleRequest,
@@ -1219,6 +1220,17 @@ router.post("/car-db/generate", requireAdmin("catalogue.write"), async (req: Aut
     res.json(out);
   } catch (err) {
     sendCarDbError(res, err);
+  }
+});
+
+// POST /api/admin/v2/car-db/purge — clear the whole library (refresh flow).
+router.post("/car-db/purge", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    res.json(await purgeCarDb(actor));
+  } catch (err) {
+    sendError(res, err);
   }
 });
 

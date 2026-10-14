@@ -51,6 +51,15 @@ export declare function refetchImage(id: string, actor: AdminActor): Promise<any
 export declare function rejectImage(id: string, actor: AdminActor): Promise<any>;
 export declare function listImages(status?: string): Promise<any[]>;
 /**
+ * Clear the whole image library (console "Clear Car DB") — used right before a
+ * curated re-import of the white masters + v11 colours. Audited; returns how
+ * many rows were removed. Driver/rider apps fall back to silhouettes until the
+ * re-import lands, so run it only as part of a refresh.
+ */
+export declare function purgeCarDb(actor: AdminActor): Promise<{
+    removed: number;
+}>;
+/**
  * Generate this car's missing colours from the WHITE original:
  *   • source = the uploaded file when given, else the car's existing approved
  *     WHITE row from the Car DB (zero upload needed),

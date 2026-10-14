@@ -42,6 +42,7 @@ exports.approveImage = approveImage;
 exports.refetchImage = refetchImage;
 exports.rejectImage = rejectImage;
 exports.listImages = listImages;
+exports.purgeCarDb = purgeCarDb;
 exports.generateImages = generateImages;
 exports.catalogue = catalogue;
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,7 +201,33 @@ async function rejectImage(id, actor) {
     return r;
 }
 async function listImages(status) {
-    return (0, vehicleImages_1.listVehicleImages)(status);
+    const rows = await (0, vehicleImages_1.listVehicleImages)(status);
+    // The apps pull photos via the PUBLIC bucket route /api/vehicle-images/<file>
+    // (never the raw S3 URL) — the console uses the exact same source.
+    return (rows || []).map((r) => ({
+        ...r,
+        display_url: r.storage_key
+            ? `/api/vehicle-images/${String(r.storage_key).split("/").pop()}`
+            : null,
+    }));
+}
+/**
+ * Clear the whole image library (console "Clear Car DB") — used right before a
+ * curated re-import of the white masters + v11 colours. Audited; returns how
+ * many rows were removed. Driver/rider apps fall back to silhouettes until the
+ * re-import lands, so run it only as part of a refresh.
+ */
+async function purgeCarDb(actor) {
+    const before = await (0, database_1.queryOne)(`SELECT COUNT(*)::int AS n FROM vehicle_images`);
+    await (0, database_1.execute)(`DELETE FROM vehicle_images`);
+    const removed = before?.n ?? 0;
+    await (0, adminAuth_1.writeAudit)(actor, {
+        action: "car_db.purge",
+        entityType: "vehicle_images",
+        oldValue: { rows: removed },
+        newValue: { rows: 0 },
+    });
+    return { removed };
 }
 // (recolourFromWhite + RECOLOUR_PALETTE live in services/vehicleImages — one
 // engine shared by this console path and the automatic backfill worker.)

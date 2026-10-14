@@ -1150,6 +1150,20 @@ router.post("/car-db/generate", (0, adminAuth_1.requireAdmin)("catalogue.write")
         sendCarDbError(res, err);
     }
 });
+// POST /api/admin/v2/car-db/purge — clear the whole library (refresh flow).
+router.post("/car-db/purge", (0, adminAuth_1.requireAdmin)("catalogue.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        res.json(await (0, adminVehicleDb_1.purgeCarDb)(actor));
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
 // POST /api/admin/v2/car-db/search — queue ONE CarsXE search (worker + approve).
 router.post("/car-db/search", (0, adminAuth_1.requireAdmin)("catalogue.write"), async (req, res) => {
     try {
