@@ -66,6 +66,12 @@ import {
 } from "../services/adminMessaging";
 import { FeatureFlagError } from "../services/featureFlags";
 import {
+  getMoneyOverview,
+  listDriverEarnings,
+  listPayments,
+  listPayouts,
+} from "../services/adminMoney";
+import {
   getSystemStatus,
   listRejectReasons,
   listRequiredDocs,
@@ -1085,6 +1091,46 @@ router.patch(
 router.get("/status", requireAdmin("features.read"), async (_req: AuthRequest, res: Response) => {
   try {
     res.json({ status: await getSystemStatus() });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// ── Money (Phase 6) — STRICTLY READ-ONLY. No money actions exist here. ──────
+
+// GET /api/admin/v2/money/overview — fares/payments/payouts/earnings totals.
+router.get("/money/overview", requireAdmin("money.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    res.json({ overview: await getMoneyOverview() });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/money/payments — recent payments (rider phone masked).
+router.get("/money/payments", requireAdmin("money.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 50;
+    res.json({ payments: await listPayments(limit) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/money/payouts — recent driver payouts (account masked).
+router.get("/money/payouts", requireAdmin("money.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 50;
+    res.json({ payouts: await listPayouts(limit) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/money/earnings — per-driver ledger totals.
+router.get("/money/earnings", requireAdmin("money.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    res.json({ earnings: await listDriverEarnings() });
   } catch (err) {
     sendError(res, err);
   }

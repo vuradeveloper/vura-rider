@@ -149,6 +149,51 @@ CREATE TABLE IF NOT EXISTS ride_events (
   detail JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+-- Phase 6: money tables (created lazily in prod by payments/payouts/index).
+CREATE TABLE IF NOT EXISTS payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  ride_id UUID REFERENCES rides(id),
+  reference VARCHAR(100),
+  amount NUMERIC(10,2),
+  currency VARCHAR(3) DEFAULT 'ZAR',
+  status VARCHAR(20),
+  provider VARCHAR(20),
+  raw_response JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS payouts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id UUID NOT NULL REFERENCES users(id),
+  bank_code VARCHAR(20),
+  account_number VARCHAR(30),
+  bank_name VARCHAR(100),
+  recipient_code VARCHAR(100),
+  amount NUMERIC(10,2),
+  reference VARCHAR(100),
+  transfer_code VARCHAR(100),
+  status VARCHAR(20),
+  message TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS driver_earnings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id UUID NOT NULL REFERENCES users(id),
+  ride_id UUID,
+  gross_amount NUMERIC(10,2) DEFAULT 0,
+  fee NUMERIC(10,2) DEFAULT 0,
+  request_fee NUMERIC(10,2) DEFAULT 0,
+  net_amount NUMERIC(10,2) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS driver_earnings_paid (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  earning_id UUID NOT NULL REFERENCES driver_earnings(id),
+  payout_id UUID REFERENCES payouts(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(earning_id)
+);
 -- The scratch container PERSISTS: earlier suites created users/driver_profiles
 -- with OLDER shapes, so CREATE TABLE IF NOT EXISTS is a no-op and the columns
 -- this suite reads must be added additively (same pattern as the rc4 suite).
@@ -245,6 +290,11 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await execute(`DELETE FROM rider_notes`);
     await execute(`DELETE FROM rider_status_history`);
     await execute(`DELETE FROM rider_moderation`);
+    // Money tables FK → users/rides: delete them BEFORE users/rides below.
+    await execute(`DELETE FROM driver_earnings_paid`);
+    await execute(`DELETE FROM driver_earnings`);
+    await execute(`DELETE FROM payments`);
+    await execute(`DELETE FROM payouts`);
     await execute(
       `DELETE FROM rides WHERE passenger_id IN (SELECT id FROM users WHERE email LIKE '%@phase2.test')`
     );
@@ -1326,6 +1376,93 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       delete process.env.ADMIN_EMAILS;
     }
   });
+
+  it("money: read-only overview/payments/payouts/earnings, masked + gated", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+
+      // Seed money rows the way prod would have them.
+      const rider = await queryOne<{ id: string }>(
+        `INSERT INTO users (email, phone, full_name, role) VALUES ('cash@phase2.test', '+27821234567', 'Cash Rider', 'passenger') RETURNING id`
+      );
+      const driver = await queryOne<{ id: string }>(
+        `INSERT INTO users (email, phone, full_name, role) VALUES ('paid@phase2.test', '+27827654321', 'Paid Driver', 'driver') RETURNING id`
+      );
+      const ride = await queryOne<{ id: string }>(
+        `INSERT INTO rides (passenger_id, status, actual_fare) VALUES ($1, 'completed', 89.50) RETURNING id`,
+        [rider!.id]
+      );
+      await execute(
+        `INSERT INTO payments (user_id, ride_id, reference, amount, status, provider) VALUES
+           ($1, $2, 'PAY-OK', 89.50, 'success', 'paystack'),
+           ($1, $2, 'PAY-FAIL', 89.50, 'failed', 'paystack')`,
+        [rider!.id, ride!.id]
+      );
+      await execute(
+        `INSERT INTO payouts (driver_id, amount, reference, status, bank_name, account_number)
+         VALUES ($1, 500, 'PO-1', 'success', 'FNB', '62123456789')`,
+        [driver!.id]
+      );
+      await execute(
+        `INSERT INTO driver_earnings (driver_id, ride_id, gross_amount, fee, request_fee, net_amount)
+         VALUES ($1, $2, 89.50, 10, 2, 77.50)`,
+        [driver!.id, ride!.id]
+      );
+
+      // Overview aggregates real rows, states its currency + read-only stance.
+      const ov = await request("GET", "/api/admin/v2/money/overview");
+      expect(ov.status).toBe(200);
+      const o = ov.json.overview;
+      expect(o.currency).toBe("ZAR");
+      expect(o.rides_completed).toBe(1);
+      expect(Number(o.gross_fare_zar)).toBeCloseTo(89.5, 2);
+      expect(o.payments_success).toBe(1);
+      expect(o.payments_failed).toBe(1);
+      expect(o.payouts_paid).toBe(1);
+      expect(Number(o.earnings_net_zar)).toBeCloseTo(77.5, 2);
+      expect(o.note).toMatch(/read-only/i);
+
+      // Payments mask the rider phone (POPIA) — last 7 visible, prefix kept.
+      const pay = await request("GET", "/api/admin/v2/money/payments");
+      expect(pay.status).toBe(200);
+      const p = pay.json.payments.find((x: any) => x.reference === "PAY-OK");
+      expect(p.status).toBe("success");
+      expect(p.rider_name).toBe("Cash Rider");
+      expect(p.rider_phone_masked).not.toContain("821234567");
+      expect(p.rider_phone_masked).toMatch(/\*\*\*/);
+
+      // Payouts mask the bank account to the last 4 digits.
+      const po = await request("GET", "/api/admin/v2/money/payouts");
+      expect(po.status).toBe(200);
+      const po1 = po.json.payouts[0];
+      expect(po1.account_masked).toBe("****6789");
+      expect(po1.account_masked).not.toContain("621234");
+
+      // Earnings ledger per driver.
+      const er = await request("GET", "/api/admin/v2/money/earnings");
+      expect(er.status).toBe(200);
+      const e = er.json.earnings.find((x: any) => x.driver_name === "Paid Driver");
+      expect(Number(e.net)).toBeCloseTo(77.5, 2);
+      expect(Number(e.gross)).toBeCloseTo(89.5, 2);
+
+      // Permission: finance may read money; support_agent (no money.read) 403.
+      await seedAdmin("fin9@vura.test", "finance");
+      authUser.email = "fin9@vura.test";
+      expect((await request("GET", "/api/admin/v2/money/overview")).status).toBe(200);
+
+      await seedAdmin("sup9@vura.test", "support_agent");
+      authUser.email = "sup9@vura.test";
+      for (const path of ["overview", "payments", "payouts", "earnings"]) {
+        expect((await request("GET", `/api/admin/v2/money/${path}`)).status).toBe(403);
+      }
+      // There are NO money action endpoints — the router has no POST/PATCH
+      // under /money; this test exercises only GETs by design.
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
 });
+
 
 
