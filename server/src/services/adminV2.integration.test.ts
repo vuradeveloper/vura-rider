@@ -169,7 +169,7 @@ let server: HttpServer;
 let base: string;
 
 async function request(
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "PUT",
   path: string,
   body?: unknown
 ): Promise<{ status: number; json: any }> {
@@ -253,6 +253,9 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await execute(`DELETE FROM support_tickets`);
     await execute(`DELETE FROM ride_events`);
     await execute(`DELETE FROM admin_campaigns`);
+    // schema_migrations may not exist in the scratch container (it is created
+    // by migrateOnBoot, which this suite does not run) — best-effort cleanup.
+    await execute(`DELETE FROM schema_migrations`).catch(() => undefined);
     authUser.email = null;
   });
 
@@ -1170,4 +1173,159 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       delete process.env.ADMIN_EMAILS;
     }
   });
+
+  it("features: flat flag read + permission gate + audited write", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+
+      // Seed the RC4 config row (production gets it from migration 001; the
+      // scratch suite only applies 004+).
+      await execute(
+        `INSERT INTO app_config (key, value) VALUES ($1, $2::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [
+          "matching",
+          JSON.stringify({
+            h3_matching_enabled: false,
+            h3_rollout_mode: "off",
+            h3_rollout_rider_ids: [],
+            h3_rollout_percent: 0,
+          }),
+        ]
+      );
+
+      const read = await request("GET", "/api/admin/v2/features");
+      expect(read.status).toBe(200);
+      expect(read.json.flags.matching.exists).toBe(true);
+      expect(read.json.flags.destination).toBeTruthy();
+      expect(read.json.flags.performance_tier).toBeTruthy();
+      // rider_gate seeded by migration 006 — default OFF.
+      expect(read.json.flags.rider_gate.enabled).toBe(false);
+
+      // Validation: unknown key → 400, unknown field → 400, empty → 400.
+      expect(
+        (await request("PUT", "/api/admin/v2/features/rider_gate", { changes: { x: 1 } })).status
+      ).toBe(400);
+      expect(
+        (await request("PUT", "/api/admin/v2/features/matching", { changes: { nope: 1 } })).status
+      ).toBe(400);
+      expect(
+        (await request("PUT", "/api/admin/v2/features/matching", { changes: {} })).status
+      ).toBe(400);
+
+      // Write: flip matching on with audit old→new.
+      const write = await request("PUT", "/api/admin/v2/features/matching", {
+        changes: { h3_matching_enabled: true },
+      });
+      expect(write.status).toBe(200);
+      expect(write.json.flags.matching.h3_matching_enabled).toBe(true);
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'feature.update' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe("matching");
+      expect(audit?.old_value).toMatchObject({ h3_matching_enabled: false });
+      expect(audit?.new_value).toMatchObject({ h3_matching_enabled: true });
+
+      // Permission: operations may READ, only super_admin may WRITE.
+      await seedAdmin("ops6@vura.test", "operations");
+      authUser.email = "ops6@vura.test";
+      expect((await request("GET", "/api/admin/v2/features")).status).toBe(200);
+      expect(
+        (await request("PUT", "/api/admin/v2/features/matching", {
+          changes: { h3_matching_enabled: false },
+        })).status
+      ).toBe(403);
+
+      // finance: no features.read at all.
+      await seedAdmin("fin6@vura.test", "finance");
+      authUser.email = "fin6@vura.test";
+      expect((await request("GET", "/api/admin/v2/features")).status).toBe(403);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("settings: required docs + reject reasons read, audited edit, gated", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+
+      const read = await request("GET", "/api/admin/v2/settings");
+      expect(read.status).toBe(200);
+      expect(read.json.required_docs.map((d: any) => d.doc_type)).toContain("prdp");
+      expect(read.json.reject_reasons.map((r: any) => r.code)).toContain("blurry");
+
+      // Unknown rows → 404, known row → audited update.
+      expect(
+        (await request("PATCH", "/api/admin/v2/settings/required-docs/ghost", { active: false }))
+          .status
+      ).toBe(404);
+      expect(
+        (await request("PATCH", "/api/admin/v2/settings/reject-reasons/ghost", { active: false }))
+          .status
+      ).toBe(404);
+
+      const upd = await request("PATCH", "/api/admin/v2/settings/required-docs/prdp", {
+        label: "PRDP Police Clear",
+        active: false,
+      });
+      expect(upd.status).toBe(200);
+      expect(upd.json.doc.label).toBe("PRDP Police Clear");
+      expect(upd.json.doc.active).toBe(false);
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'settings.required_doc_update'
+          ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe("prdp");
+      expect(audit?.old_value).toMatchObject({ active: true });
+
+      // Permission: operations has settings.read but NOT settings.write.
+      await seedAdmin("ops7@vura.test", "operations");
+      authUser.email = "ops7@vura.test";
+      expect((await request("GET", "/api/admin/v2/settings")).status).toBe(200);
+      expect(
+        (await request("PATCH", "/api/admin/v2/settings/reject-reasons/blurry", { active: false }))
+          .status
+      ).toBe(403);
+
+      // support_agent has neither.
+      await seedAdmin("sup7@vura.test", "support_agent");
+      authUser.email = "sup7@vura.test";
+      expect((await request("GET", "/api/admin/v2/settings")).status).toBe(403);
+
+      // Restore the seeded defaults (scratch DB persists across suites).
+      await execute(
+        `UPDATE admin_required_docs SET active = TRUE, label = 'PRDP' WHERE doc_type = 'prdp'`
+      );
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("status: db ok, migrations list, counts — features.read gated", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      // boss resolves via the ADMIN_EMAILS env fallback (no admin_users row);
+      // beforeEach wipes the table — seed one so the count is non-zero.
+      await seedAdmin("boss@vura.test", "super_admin");
+      const res = await request("GET", "/api/admin/v2/status");
+      expect(res.status).toBe(200);
+      expect(res.json.status.db_ok).toBe(true);
+      expect(Array.isArray(res.json.status.migrations_applied)).toBe(true);
+      expect(res.json.status.flags.rider_gate).toBeTruthy();
+      const c = res.json.status.counts;
+      expect(c.admins).toBeGreaterThanOrEqual(1);
+      expect(c.riders).toBeGreaterThanOrEqual(0);
+
+      await seedAdmin("fin8@vura.test", "finance");
+      authUser.email = "fin8@vura.test";
+      expect((await request("GET", "/api/admin/v2/status")).status).toBe(403);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
 });
+
+

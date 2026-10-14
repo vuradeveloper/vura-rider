@@ -64,6 +64,16 @@ import {
   listCampaigns,
   sendCampaign,
 } from "../services/adminMessaging";
+import { FeatureFlagError } from "../services/featureFlags";
+import {
+  getSystemStatus,
+  listRejectReasons,
+  listRequiredDocs,
+  readAllFlags,
+  setRejectReason,
+  setRequiredDoc,
+  writeFlag,
+} from "../services/adminSettings";
 /**
  * Best-effort push notice to the driver when an admin changes their status.
  * States the reason verbatim (the brief: "push notification to the driver
@@ -956,6 +966,131 @@ router.post(
   }
 );
 
+// ── Features / settings / status (Phase 5) ───────────────────────────────────
+
+// GET /api/admin/v2/features — every flag (RC4 three + rider_gate). READ-ONLY
+// view for operations + super_admin.
+router.get("/features", requireAdmin("features.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    res.json({ flags: await readAllFlags() });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// PUT /api/admin/v2/features/:key — update ONE RC4 flag (validated keys/fields
+// inside featureFlags). rider_gate is intentionally not writable here.
+router.put("/features/:key", requireAdmin("features.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const key = String(req.params.key);
+    const changes = req.body?.changes ?? req.body ?? {};
+    try {
+      const flags = await writeFlag(key, changes, actor);
+      res.json({ flags });
+    } catch (err: any) {
+      if (/Unknown feature key/.test(String(err?.message))) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      if (err instanceof FeatureFlagError) {
+        res.status(err.code === "no_row" ? 409 : 400).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/settings — the editable onboarding lists.
+router.get("/settings", requireAdmin("settings.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    res.json({
+      required_docs: await listRequiredDocs(),
+      reject_reasons: await listRejectReasons(),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// PATCH /api/admin/v2/settings/required-docs/:docType — label/active/order.
+router.patch(
+  "/settings/required-docs/:docType",
+  requireAdmin("settings.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      try {
+        const doc = await setRequiredDoc(
+          String(req.params.docType),
+          {
+            label: req.body?.label,
+            active: req.body?.active,
+            sort_order: req.body?.sort_order,
+          },
+          actor
+        );
+        res.json({ doc });
+      } catch (err: any) {
+        if (/Unknown doc_type/.test(String(err?.message))) {
+          res.status(404).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
+// PATCH /api/admin/v2/settings/reject-reasons/:code — label/active/order.
+router.patch(
+  "/settings/reject-reasons/:code",
+  requireAdmin("settings.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      try {
+        const reason = await setRejectReason(
+          String(req.params.code),
+          {
+            label: req.body?.label,
+            active: req.body?.active,
+            sort_order: req.body?.sort_order,
+          },
+          actor
+        );
+        res.json({ reason });
+      } catch (err: any) {
+        if (/Unknown code/.test(String(err?.message))) {
+          res.status(404).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
+// GET /api/admin/v2/status — DB, migrations, flags, fleet counts (read-only).
+router.get("/status", requireAdmin("features.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    res.json({ status: await getSystemStatus() });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 export default router;
+
 
 
