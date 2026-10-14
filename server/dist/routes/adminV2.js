@@ -376,6 +376,22 @@ router.post("/drivers/:id/lifecycle", (0, adminAuth_1.requireAdmin)("drivers.wri
         sendError(res, err);
     }
 });
+// GET /api/admin/v2/onboarding/count — sidebar badge: drivers waiting + docs pending.
+router.get("/onboarding/count", (0, adminAuth_1.requireAdmin)("drivers.read"), async (_req, res) => {
+    try {
+        const row = await (0, database_1.queryOne)(`SELECT COUNT(DISTINCT d.driver_id)::int AS drivers, COUNT(*)::int AS docs
+         FROM driver_documents d
+         JOIN users u ON u.id = d.driver_id
+         LEFT JOIN driver_profiles dp ON dp.user_id = u.id
+        WHERE d.status = 'pending_review'
+          AND u.role = 'driver'
+          AND (dp.lifecycle_status IS NULL OR dp.lifecycle_status NOT IN ('ACTIVE', 'BLOCKED', 'REJECTED'))`);
+        res.json({ drivers: row?.drivers || 0, docs: row?.docs || 0 });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
 // GET /api/admin/v2/onboarding — the review queue, oldest waiting first.
 router.get("/onboarding", (0, adminAuth_1.requireAdmin)("drivers.read"), async (_req, res) => {
     try {

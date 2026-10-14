@@ -4,6 +4,7 @@ exports.currentOcr = currentOcr;
 exports.sanitizeOcrText = sanitizeOcrText;
 exports.driverNoteFor = driverNoteFor;
 exports.rateLimited = rateLimited;
+exports.globalCapReached = globalCapReached;
 exports.verifyDocument = verifyDocument;
 exports.recheckDriver = recheckDriver;
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,6 +122,17 @@ async function rateLimited(driverId, docType) {
       WHERE driver_id = $1`, [driverId, docType]);
     return Number(row?.today || 0) >= maxDriver || Number(row?.typeday || 0) >= maxType;
 }
+/**
+ * Global hard spend cap: automatic reads per calendar day across ALL drivers
+ * (env DOC_READS_PER_DAY, default 100; 0 disables automatic reads entirely).
+ * Works regardless of the per-driver limits — the cost ceiling is absolute.
+ */
+async function globalCapReached() {
+    const v = process.env.DOC_READS_PER_DAY;
+    const cap = v !== undefined && v !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 100;
+    const row = await (0, database_1.queryOne)(`SELECT COUNT(*)::int AS n FROM driver_documents WHERE verified_at >= NOW()::date`);
+    return Number(row?.n || 0) >= cap;
+}
 async function writeVerdict(doc, v) {
     // Staff always makes the final call on a pass; only a hard reject moves the
     // row (driver sees status + note and re-uploads through the existing flow).
@@ -166,6 +178,12 @@ async function verifyDocument(docId, ocrOverride) {
         // Never OCR the same file row twice (re-uploads create NEW rows anyway).
         if (doc.verified_at)
             return null;
+        // Global daily spend cap across ALL drivers — absolute ceiling, checked
+        // before any per-driver logic or provider call.
+        if (await globalCapReached()) {
+            console.log("[docVerification]", { docId, docType: doc.doc_type, verdict: "skipped_daily_cap" });
+            return { status: "skipped_daily_cap", reasons: [] };
+        }
         // OCR budget: per driver + per document type per calendar day. Over the
         // limit the document simply STAYS pending for staff — no model call, and
         // never a rejection. (Return value carries the clear reason.)

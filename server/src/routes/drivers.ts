@@ -288,6 +288,31 @@ router.post("/online", requireAuth, async (req: AuthRequest, res: Response) => {
         AND status IN ('accepted','driver_arrived','in_progress') LIMIT 1`,
       [dbUser.id]
     ).catch(() => null);
+
+    // Server-side verification gate (2026-10-15): a driver who is not yet
+    // ACTIVE must have EVERY required document approved before going online.
+    // ACTIVE drivers are grandfathered (they passed the earlier staff flow),
+    // and a rejected driver is never locked out — re-upload always works.
+    if (online) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { allRequiredDocsApproved } = require("../services/adminDrivers");
+      const prof = await queryOne<{ lifecycle_status: string | null }>(
+        `SELECT lifecycle_status FROM driver_profiles WHERE user_id = $1`,
+        [dbUser.id]
+      ).catch(() => null);
+      if ((prof?.lifecycle_status || null) !== "ACTIVE") {
+        const docs = await allRequiredDocsApproved(dbUser.id).catch(() => ({ ok: false, missing: [] as string[] }));
+        if (!docs.ok) {
+          res.status(403).json({
+            error: docs.missing.length
+              ? `Your documents are not all approved yet (${docs.missing.length} outstanding). Upload or fix them, then try again.`
+              : "Your documents are not approved yet. Upload them, then try again.",
+          });
+          return;
+        }
+      }
+    }
+
     const status = online ? (onTrip ? "on_trip" : "available") : "offline";
 
     const row = await queryOne<any>(

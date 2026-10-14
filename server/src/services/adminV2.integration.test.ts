@@ -1772,9 +1772,23 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(row3.auto_status).toBeNull(); // untouched — no OCR ran
       expect(row3.verified_at).toBeNull();
       expect(row3.status).toBe("pending_review");
+
+      // Global daily cap across ALL drivers: reached → skip, stay pending.
+      process.env.DOC_READS_PER_DAY = "0";
+      const doc4 = await queryOne<{ id: string }>(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+         VALUES ($1, 'id_document', 'id2.jpg', 'image/jpeg', 'vehicle-images/auto-test-id2', 'b', 'pending_review')
+         RETURNING id`,
+        [driver]
+      );
+      const v4 = await verifyDocument(doc4!.id, async () => ({ text: "LICENCE DISC", confidence: 90 }));
+      expect(v4?.status).toBe("skipped_daily_cap");
+      const row4 = await queryOne<any>(`SELECT auto_status FROM driver_documents WHERE id = $1`, [doc4!.id]);
+      expect(row4.auto_status).toBeNull();
     } finally {
       delete process.env.ADMIN_EMAILS;
       delete process.env.OCR_MAX_PER_DRIVER_DAY;
+      delete process.env.DOC_READS_PER_DAY;
     }
   });
 

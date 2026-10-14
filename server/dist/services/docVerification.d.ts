@@ -21,6 +21,12 @@ export declare function sanitizeOcrText(raw: string): string;
 export declare function driverNoteFor(status: string, reasons: string[]): string;
 /** OCR budget: per driver and per document type, per calendar day. */
 export declare function rateLimited(driverId: string, docType: string): Promise<boolean>;
+/**
+ * Global hard spend cap: automatic reads per calendar day across ALL drivers
+ * (env DOC_READS_PER_DAY, default 100; 0 disables automatic reads entirely).
+ * Works regardless of the per-driver limits — the cost ceiling is absolute.
+ */
+export declare function globalCapReached(): Promise<boolean>;
 type Verdict = {
     status: string;
     reasons: string[];
