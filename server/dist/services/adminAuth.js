@@ -41,6 +41,8 @@ exports.ADMIN_PERMISSIONS = [
     "money.read",
     "admins.manage",
     "audit.read",
+    "catalogue.read",
+    "catalogue.write",
 ];
 /**
  * The role → permission matrix. Finance is READ-ONLY on money (Phase 6 adds
@@ -55,6 +57,7 @@ exports.ROLE_PERMISSIONS = {
         "documents.read",
         "documents.review",
         "audit.read",
+        "catalogue.read",
     ],
     support_agent: [
         "dashboard.read",
@@ -76,6 +79,8 @@ exports.ROLE_PERMISSIONS = {
         "messaging.send",
         "features.read",
         "settings.read",
+        "catalogue.read",
+        "catalogue.write",
     ],
     finance: ["dashboard.read", "money.read"],
 };

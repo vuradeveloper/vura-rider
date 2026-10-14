@@ -4,7 +4,7 @@ export declare const ADMIN_ROLES: readonly ["super_admin", "onboarding_reviewer"
 export type AdminRole = (typeof ADMIN_ROLES)[number];
 export declare function isAdminRole(v: unknown): v is AdminRole;
 /** The permission strings routes gate on. Keep in sync with the admin app. */
-export declare const ADMIN_PERMISSIONS: readonly ["dashboard.read", "drivers.read", "drivers.write", "documents.read", "documents.review", "riders.read", "riders.write", "trips.read", "tickets.read", "tickets.write", "messaging.send", "features.read", "features.write", "settings.read", "settings.write", "money.read", "admins.manage", "audit.read"];
+export declare const ADMIN_PERMISSIONS: readonly ["dashboard.read", "drivers.read", "drivers.write", "documents.read", "documents.review", "riders.read", "riders.write", "trips.read", "tickets.read", "tickets.write", "messaging.send", "features.read", "features.write", "settings.read", "settings.write", "money.read", "admins.manage", "audit.read", "catalogue.read", "catalogue.write"];
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
 /**
  * The role → permission matrix. Finance is READ-ONLY on money (Phase 6 adds

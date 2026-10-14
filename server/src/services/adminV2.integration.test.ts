@@ -43,7 +43,22 @@ import {
   resolveAdminRole,
   writeAudit,
 } from "./adminAuth";
+import { recordVehicleRequestMiss, vehicleImageCacheKey } from "./vehicleImages";
 import adminV2Router from "../routes/adminV2";
+
+// S3 is not reachable from the scratch harness — mock it so the seed/upload
+// paths (processVehicleImage → sharp runs FOR REAL, only the bucket is faked)
+// can be exercised end-to-end without AWS.
+vi.mock("../lib/s3", () => ({
+  DOCUMENT_TYPES: ["id_document", "drivers_license", "prdp", "criminal_record", "carscan_report"],
+  isDocumentType: () => true,
+  getObjectFromS3: vi.fn(async () => Buffer.from("fake")),
+  documentKey: vi.fn(() => "fake-key"),
+  uploadToS3: vi.fn(async () => ({ Location: "https://fake.s3.local/fake-key" })),
+  getPresignedViewUrl: vi.fn(async () => "https://fake.s3.local/signed"),
+  deleteFromS3: vi.fn(async () => undefined),
+  s3: { send: vi.fn(async () => ({})) },
+}));
 
 // Point the pool at the scratch container FIRST (the pool reads env lazily on
 // first query), then assert it â€” same contract as rc4.integration.test.ts.
@@ -194,6 +209,39 @@ CREATE TABLE IF NOT EXISTS driver_earnings_paid (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(earning_id)
 );
+-- Phase 7: vehicle image cache (mirrors ensureVehicleImageTables DDL).
+CREATE TABLE IF NOT EXISTS vehicle_images (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cache_key VARCHAR(160) NOT NULL UNIQUE,
+  make VARCHAR(60),
+  model VARCHAR(80),
+  year INTEGER,
+  colour VARCHAR(40),
+  image_url TEXT,
+  storage_key TEXT,
+  source_url TEXT,
+  context_link TEXT,
+  licence_note TEXT,
+  width INTEGER,
+  height INTEGER,
+  status VARCHAR(16) NOT NULL DEFAULT 'pending',
+  candidates JSONB NOT NULL DEFAULT '[]'::jsonb,
+  api_calls_used INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at TIMESTAMPTZ,
+  last_error TEXT,
+  year_range VARCHAR(24),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  approved_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS carsxe_usage_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cache_key VARCHAR(160),
+  called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  result_count INTEGER,
+  http_status INTEGER,
+  note TEXT
+);
 -- The scratch container PERSISTS: earlier suites created users/driver_profiles
 -- with OLDER shapes, so CREATE TABLE IF NOT EXISTS is a no-op and the columns
 -- this suite reads must be added additively (same pattern as the rc4 suite).
@@ -252,6 +300,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       "006_admin_riders.sql",
       "007_admin_trips.sql",
       "008_admin_messaging.sql",
+      "009_admin_vehicle_requests.sql",
     ]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql
@@ -291,6 +340,9 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await execute(`DELETE FROM rider_status_history`);
     await execute(`DELETE FROM rider_moderation`);
     // Money tables FK → users/rides: delete them BEFORE users/rides below.
+    await execute(`DELETE FROM admin_vehicle_requests`);
+    await execute(`DELETE FROM vehicle_images`);
+    await execute(`DELETE FROM carsxe_usage_log`);
     await execute(`DELETE FROM driver_earnings_paid`);
     await execute(`DELETE FROM driver_earnings`);
     await execute(`DELETE FROM payments`);
@@ -1459,6 +1511,128 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       // There are NO money action endpoints — the router has no POST/PATCH
       // under /money; this test exercises only GETs by design.
     } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("car db: miss recorded once + alerted once; listed; manual resolve audited", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const driver = await queryOne<{ id: string }>(
+        `INSERT INTO users (email, full_name, role) VALUES ('cardb1@phase2.test', 'Car DB Driver', 'driver') RETURNING id`
+      );
+      const v = { make: "Toyota", model: "Etios", year: 2017, colour: "blue" };
+      const key = vehicleImageCacheKey(v);
+
+      // The exact hook noteDriverVehicle runs on a Car-DB miss — twice.
+      await recordVehicleRequestMiss(driver!.id, v, key);
+      await recordVehicleRequestMiss(driver!.id, v, key);
+      const rows = await query<any>(
+        `SELECT * FROM admin_vehicle_requests WHERE driver_id = $1`,
+        [driver!.id]
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe("open");
+      expect(rows[0].driver_notified_at).toBeTruthy(); // alerted EXACTLY once
+
+      const list = await request("GET", "/api/admin/v2/vehicle-requests");
+      expect(list.status).toBe(200);
+      const item = list.json.requests.find((r: any) => r.id === rows[0].id);
+      expect(item.driver_name).toBe("Car DB Driver");
+
+      const cat = await request("GET", "/api/admin/v2/car-db/catalogue");
+      expect(cat.status).toBe(200);
+      expect(cat.json.makes.length).toBeGreaterThan(0);
+
+      // Manual close → audited old→new.
+      const resolved = await request("POST", `/api/admin/v2/vehicle-requests/${rows[0].id}/resolve`, {
+        reason: "Driver corrected the model spelling",
+      });
+      expect(resolved.status).toBe(200);
+      expect(resolved.json.request.status).toBe("resolved");
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'vehicle_request.resolve' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe(rows[0].id);
+
+      // Permissions: support has neither catalogue perm; operations has both.
+      await seedAdmin("supC@vura.test", "support_agent");
+      authUser.email = "supC@vura.test";
+      expect((await request("GET", "/api/admin/v2/vehicle-requests")).status).toBe(403);
+      expect((await request("GET", "/api/admin/v2/car-db/catalogue")).status).toBe(403);
+      await seedAdmin("opsC@vura.test", "operations");
+      authUser.email = "opsC@vura.test";
+      expect((await request("GET", "/api/admin/v2/vehicle-requests")).status).toBe(200);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("car db: approve releases open requests (auto-pull); upload validates; generate needs key", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    const prevKey = process.env.GEMINI_API_KEY;
+    try {
+      authUser.email = "boss@vura.test";
+      const driver = await queryOne<{ id: string }>(
+        `INSERT INTO users (email, full_name, role) VALUES ('cardb2@phase2.test', 'Picanto Owner', 'driver') RETURNING id`
+      );
+      const v = { make: "Kia", model: "Picanto", year: 2018, colour: "white" };
+      const key = vehicleImageCacheKey(v);
+      await recordVehicleRequestMiss(driver!.id, v, key);
+
+      // A pending image row (as the worker would leave it) + approve via console.
+      const img = await queryOne<{ id: string }>(
+        `INSERT INTO vehicle_images (cache_key, make, model, year, colour, status, candidates)
+         VALUES ($1, 'kia', 'picanto', 2018, 'white', 'pending',
+                 $2::jsonb) RETURNING id`,
+        [key, JSON.stringify([{ url: "https://x/1.jpg", storageKey: "vehicle-images/x-1", width: 900, height: 560 }])]
+      );
+      const approved = await request("POST", `/api/admin/v2/car-db/images/${img!.id}/approve`, {
+        candidateIndex: 0,
+      });
+      expect(approved.status).toBe(200);
+      expect(approved.json.resolvedRequests).toBe(1); // THE AUTO-PULL
+      const req1 = await queryOne<any>(
+        `SELECT * FROM admin_vehicle_requests WHERE driver_id = $1`,
+        [driver!.id]
+      );
+      expect(req1?.status).toBe("resolved");
+      expect(req1?.image_id).toBe(img!.id);
+
+      // Upload validation → 400 without the trio.
+      const bad = await request("POST", "/api/admin/v2/car-db/image", { make: "BMW" });
+      expect(bad.status).toBe(400);
+
+      // Generate without GEMINI_API_KEY → honest 503, never a fake success.
+      delete process.env.GEMINI_API_KEY;
+      const gen = await request("POST", "/api/admin/v2/car-db/generate", {
+        make: "BMW",
+        model: "320i",
+      });
+      expect(gen.status).toBe(503);
+      expect(gen.json.error).toMatch(/GEMINI_API_KEY/);
+
+      // Search queues the row (DB-only claim; worker is not running here).
+      const search = await request("POST", "/api/admin/v2/car-db/search", {
+        make: "BMW",
+        model: "3 Series",
+        year: 2020,
+        colour: "black",
+      });
+      expect(search.status).toBe(200);
+      const queued = await queryOne<any>(
+        `SELECT status FROM vehicle_images WHERE cache_key = $1`,
+        [vehicleImageCacheKey({ make: "BMW", model: "3 Series", year: 2020, colour: "black" })]
+      );
+      expect(queued).toBeTruthy();
+
+      // finance: catalogue.read is NOT in the finance matrix.
+      await seedAdmin("finC@vura.test", "finance");
+      authUser.email = "finC@vura.test";
+      expect((await request("GET", "/api/admin/v2/car-db/images")).status).toBe(403);
+    } finally {
+      if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
       delete process.env.ADMIN_EMAILS;
     }
   });

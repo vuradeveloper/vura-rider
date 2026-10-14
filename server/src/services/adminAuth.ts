@@ -56,6 +56,8 @@ export const ADMIN_PERMISSIONS = [
   "money.read",
   "admins.manage",
   "audit.read",
+  "catalogue.read",
+  "catalogue.write",
 ] as const;
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
 
@@ -72,6 +74,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, readonly AdminPermission[]> = {
     "documents.read",
     "documents.review",
     "audit.read",
+    "catalogue.read",
   ],
   support_agent: [
     "dashboard.read",
@@ -93,6 +96,8 @@ export const ROLE_PERMISSIONS: Record<AdminRole, readonly AdminPermission[]> = {
     "messaging.send",
     "features.read",
     "settings.read",
+    "catalogue.read",
+    "catalogue.write",
   ],
   finance: ["dashboard.read", "money.read"],
 };

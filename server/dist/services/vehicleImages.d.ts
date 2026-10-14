@@ -28,6 +28,8 @@ export interface VehicleLike {
     vehicle_model?: string | null;
     vehicle_year?: number | string | null;
     vehicle_color?: string | null;
+    /** Admin-v2: when present, a Car-DB miss queues a console request + alerts the driver. */
+    driverId?: string | null;
 }
 /**
  * The "generation" bucket of a model year. 2017, 2018, 2019 and 2020 all land in
@@ -261,6 +263,7 @@ export declare function approveVehicleImage(id: string, candidateIndex?: number)
     id: string;
     candidateIndex: number;
     imageUrl: any;
+    resolvedRequests: number;
 } | null>;
 /**
  * Re-runs the (single) CarsXE call for a row that already exists, so a car approved
@@ -348,5 +351,19 @@ export declare function attachVehicleImages<R = any>(rows: R | R[] | null): Prom
  * deleted: flipping VEHICLE_IMAGES_SOURCE=carsxe restores it exactly.
  */
 export declare function vehicleImageSource(): "cardb" | "carsxe";
+/** Idempotent — same DDL as migration 009_admin_vehicle_requests. */
+export declare function ensureVehicleRequestTable(): Promise<void>;
+/**
+ * Queue a Car-DB miss for the console and alert the driver EXACTLY ONCE per
+ * open request (driver_notified_at gates the push). Never throws — it rides
+ * the fire-and-forget profile-save hook and the background worker.
+ */
+export declare function recordVehicleRequestMiss(driverId: string | null | undefined, v: VehicleLike, cacheKey: string): Promise<void>;
+/**
+ * THE AUTO-PULL: an image for cache_key just became approved — resolve every
+ * open request for it and push each driver "photo ready". The driver does
+ * nothing; the next app load shows the image. Returns how many resolved.
+ */
+export declare function resolveVehicleRequests(cacheKey: string, imageId: string): Promise<number>;
 export declare function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage>;
 //# sourceMappingURL=vehicleImages.d.ts.map

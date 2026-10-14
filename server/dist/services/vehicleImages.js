@@ -66,6 +66,9 @@ exports.importSeedImage = importSeedImage;
 exports.resolveVehicleImageCached = resolveVehicleImageCached;
 exports.attachVehicleImages = attachVehicleImages;
 exports.vehicleImageSource = vehicleImageSource;
+exports.ensureVehicleRequestTable = ensureVehicleRequestTable;
+exports.recordVehicleRequestMiss = recordVehicleRequestMiss;
+exports.resolveVehicleRequests = resolveVehicleRequests;
 exports.noteDriverVehicle = noteDriverVehicle;
 // ─────────────────────────────────────────────────────────────────────────────
 // vehicleImages.ts — the vehicle PHOTO cache (CarsXE-backed, but the API key
@@ -88,6 +91,7 @@ exports.noteDriverVehicle = noteDriverVehicle;
 // ─────────────────────────────────────────────────────────────────────────────
 const database_1 = require("../config/database");
 const s3_1 = require("../lib/s3");
+const notify_1 = require("./notify");
 const crypto_1 = require("crypto");
 exports.CANVAS = { w: 900, h: 560 };
 exports.MAX_BYTES = 80 * 1024;
@@ -904,6 +908,8 @@ async function runCarsxeFetch(cacheKey, options) {
         for (const c of stored.slice(1))
             if (c.storageKey)
                 await (0, s3_1.deleteFromS3)(c.storageKey).catch(() => { });
+        // Admin-v2: the auto-approve IS an approval — release any open requests.
+        await resolveVehicleRequests(String(row.cache_key || ""), String(row.id));
         console.log(`[vehicleImages] ${cacheKey}: auto-approved the top pick ` +
             `(white border ${Math.round((best.borderWhite ?? 0) * 100)}%, studio bonus ${best.studioBonus ?? 0})`);
     }
@@ -978,7 +984,9 @@ async function approveVehicleImage(id, candidateIndex = 0) {
         if (i !== candidateIndex && c?.storageKey)
             await (0, s3_1.deleteFromS3)(c.storageKey).catch(() => { });
     }
-    return { id, candidateIndex, imageUrl: chosen?.url || row.image_url };
+    // Admin-v2: an approval releases every open console request for this key.
+    const resolvedRequests = await resolveVehicleRequests(String(row.cache_key || ""), String(id));
+    return { id, candidateIndex, imageUrl: chosen?.url || row.image_url, resolvedRequests };
 }
 /**
  * Re-runs the (single) CarsXE call for a row that already exists, so a car approved
@@ -1080,6 +1088,11 @@ async function importSeedImage(input) {
     if (!already) {
         await logCarsxeCall(cacheKey, (input.candidates || []).length + 1, 200, "imported from dashboard search");
     }
+    // Admin-v2: an approved seed IS an approval — release matching console
+    // requests and push the drivers "photo ready" (auto-pull).
+    if (row?.status === "approved") {
+        await resolveVehicleRequests(String(row.cache_key || cacheKey), String(row.id));
+    }
     return { row, candidate, budget: await carsxeUsage() };
 }
 // ── cached resolver for the POLLED endpoints ─────────────────────────────────
@@ -1151,10 +1164,97 @@ function vehicleImageSource() {
         ? "carsxe"
         : "cardb";
 }
+// ── Admin-v2 request queue (migration 009; created here too for first-boot) ──
+/** Idempotent — same DDL as migration 009_admin_vehicle_requests. */
+async function ensureVehicleRequestTable() {
+    await (0, database_1.execute)(`
+    CREATE TABLE IF NOT EXISTS admin_vehicle_requests (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      driver_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      cache_key VARCHAR(160) NOT NULL,
+      make VARCHAR(60),
+      model VARCHAR(80),
+      year INTEGER,
+      colour VARCHAR(40),
+      status VARCHAR(20) NOT NULL DEFAULT 'open',
+      image_id UUID,
+      driver_notified_at TIMESTAMPTZ,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (cache_key, driver_id)
+    )`);
+}
+/**
+ * Queue a Car-DB miss for the console and alert the driver EXACTLY ONCE per
+ * open request (driver_notified_at gates the push). Never throws — it rides
+ * the fire-and-forget profile-save hook and the background worker.
+ */
+async function recordVehicleRequestMiss(driverId, v, cacheKey) {
+    if (!driverId)
+        return;
+    await ensureVehicleRequestTable();
+    const make = String(v.make ?? v.vehicle_make ?? "").slice(0, 60);
+    const model = String(v.model ?? v.vehicle_model ?? "").slice(0, 80);
+    const year = Number(v.year ?? v.vehicle_year) || null;
+    const colour = String(v.colour ?? v.vehicle_color ?? "").slice(0, 40);
+    await (0, database_1.execute)(`INSERT INTO admin_vehicle_requests (driver_id, cache_key, make, model, year, colour)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (cache_key, driver_id)
+     DO UPDATE SET status = 'open', resolved_at = NULL, updated_at = NOW()`, [driverId, cacheKey, make, model, year, colour]);
+    const claimed = await (0, database_1.queryOne)(`UPDATE admin_vehicle_requests
+        SET driver_notified_at = COALESCE(driver_notified_at, NOW()), updated_at = NOW()
+      WHERE driver_id = $1 AND cache_key = $2 AND driver_notified_at IS NULL
+      RETURNING id`, [driverId, cacheKey]);
+    if (claimed) {
+        const label = [make, model, year].filter(Boolean).join(" ");
+        await (0, notify_1.sendPushToUsers)([driverId], {
+            type: "vehicle_image",
+            title: "No photo for your car",
+            body: `We have no photo for "${label || cacheKey}". Check your vehicle details are correct — if they are, our team will add the photo and it will appear automatically.`,
+            highPriority: true,
+        }).catch(() => null);
+    }
+}
+/**
+ * THE AUTO-PULL: an image for cache_key just became approved — resolve every
+ * open request for it and push each driver "photo ready". The driver does
+ * nothing; the next app load shows the image. Returns how many resolved.
+ */
+async function resolveVehicleRequests(cacheKey, imageId) {
+    try {
+        await ensureVehicleRequestTable();
+        const key = String(cacheKey || "").trim().toLowerCase();
+        if (!key)
+            return 0;
+        const open = await (0, database_1.query)(`UPDATE admin_vehicle_requests
+          SET status = 'resolved', image_id = $2, resolved_at = NOW(), updated_at = NOW()
+        WHERE cache_key = $1 AND status = 'open'
+        RETURNING driver_id, make, model, year`, [key, imageId]);
+        for (const r of open) {
+            const label = [r.make, r.model, r.year].filter(Boolean).join(" ");
+            await (0, notify_1.sendPushToUsers)([r.driver_id], {
+                type: "vehicle_image",
+                title: "Your car photo is ready",
+                body: `A photo for "${label || key}" is now live — it will show on trips automatically. Nothing else to do.`,
+                highPriority: true,
+            }).catch(() => null);
+        }
+        return open.length;
+    }
+    catch (err) {
+        // Queue bookkeeping must never break an approval.
+        console.error("[vehicleImages] resolveVehicleRequests failed:", err?.message || err);
+        return 0;
+    }
+}
 async function noteDriverVehicle(v) {
     const resolved = await resolveVehicleImage(v);
     if (resolved.url)
         return resolved;
+    // Admin-v2: queue the gap for the console + alert the driver ONCE
+    // (both when the worker will search and when the Car DB simply lacks it).
+    await recordVehicleRequestMiss(v.driverId, v, resolved.cacheKey).catch((err) => console.error("[vehicleImages] request record failed:", err?.message || err));
     if (vehicleImageSource() === "carsxe") {
         await claimVehicleImageFetch(v).catch((err) => console.error("[vehicleImages] claim failed:", err?.message || err));
         return resolved;

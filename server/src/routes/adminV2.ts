@@ -72,6 +72,27 @@ import {
   listPayouts,
 } from "../services/adminMoney";
 import {
+  addCarDbImage,
+  approveImage,
+  catalogue as carCatalogue,
+  generateImages,
+  listImages,
+  listVehicleRequests,
+  rejectImage,
+  refetchImage,
+  resolveVehicleRequest,
+  searchCarsXe,
+} from "../services/adminVehicleDb";
+
+/** sendError, but respects err.status (503 missing key, 429 quota, 502 provider). */
+function sendCarDbError(res: Response, err: any) {
+  if (err?.status && Number.isInteger(err.status)) {
+    res.status(err.status).json({ error: err.message });
+    return;
+  }
+  sendError(res, err);
+}
+import {
   getSystemStatus,
   listRejectReasons,
   listRequiredDocs,
@@ -1091,6 +1112,157 @@ router.patch(
 router.get("/status", requireAdmin("features.read"), async (_req: AuthRequest, res: Response) => {
   try {
     res.json({ status: await getSystemStatus() });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// ── Car DB + vehicle photo requests (Phase 7) ────────────────────────────────
+
+// GET /api/admin/v2/vehicle-requests?status=open — console request queue.
+router.get("/vehicle-requests", requireAdmin("catalogue.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : "open";
+    res.json({ requests: await listVehicleRequests(status) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/vehicle-requests/:id/resolve — manual close (audited).
+router.post("/vehicle-requests/:id/resolve", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const request = await resolveVehicleRequest(String(req.params.id), actor, req.body?.reason);
+    if (!request) { res.status(404).json({ error: "Request not found" }); return; }
+    res.json({ request });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/car-db/catalogue — static makes/models for the pickers.
+router.get("/car-db/catalogue", requireAdmin("catalogue.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    res.json(carCatalogue());
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/car-db/images?status= — the image rows (queue/review).
+router.get("/car-db/images", requireAdmin("catalogue.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    res.json({ images: await listImages(status) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/car-db/image — upload one photo (white serves every colour
+// via the resolver's white fallback); approved immediately → auto-pull.
+router.post("/car-db/image", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const { make, model, imageBase64 } = req.body || {};
+    if (!make || !model || !imageBase64) {
+      res.status(400).json({ error: "make, model and imageBase64 are required" });
+      return;
+    }
+    const out = await addCarDbImage(
+      {
+        make: String(make),
+        model: String(model),
+        year: req.body?.year ?? null,
+        yearRange: req.body?.yearRange ?? null,
+        colour: req.body?.colour ?? null,
+        imageBase64: String(imageBase64),
+        sourceNote: req.body?.sourceNote ?? null,
+      },
+      actor
+    );
+    res.status(201).json(out);
+  } catch (err) {
+    sendCarDbError(res, err);
+  }
+});
+
+// POST /api/admin/v2/car-db/generate — Gemini, ALL chosen colours, no CarsXE.
+router.post("/car-db/generate", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const { make, model } = req.body || {};
+    if (!make || !model) {
+      res.status(400).json({ error: "make and model are required" });
+      return;
+    }
+    const out = await generateImages(
+      {
+        make: String(make),
+        model: String(model),
+        year: req.body?.year ?? null,
+        yearRange: req.body?.yearRange ?? null,
+        colours: Array.isArray(req.body?.colours) ? req.body.colours : undefined,
+      },
+      actor
+    );
+    res.json(out);
+  } catch (err) {
+    sendCarDbError(res, err);
+  }
+});
+
+// POST /api/admin/v2/car-db/search — queue ONE CarsXE search (worker + approve).
+router.post("/car-db/search", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const { make, model } = req.body || {};
+    if (!make || !model) { res.status(400).json({ error: "make and model are required" }); return; }
+    res.json(
+      await searchCarsXe(
+        { make: String(make), model: String(model), year: req.body?.year ?? null, colour: req.body?.colour ?? null },
+        actor
+      )
+    );
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/car-db/images/:id/approve|refetch|reject — review actions.
+router.post("/car-db/images/:id/approve", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const idx = Number.isFinite(Number(req.body?.candidateIndex)) ? Number(req.body.candidateIndex) : 0;
+    const out = await approveImage(String(req.params.id), idx, actor);
+    res.json(out);
+  } catch (err: any) {
+    if (/not found/.test(String(err?.message))) { res.status(404).json({ error: err.message }); return; }
+    sendError(res, err);
+  }
+});
+
+router.post("/car-db/images/:id/refetch", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    res.json({ result: await refetchImage(String(req.params.id), actor) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post("/car-db/images/:id/reject", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    res.json({ result: await rejectImage(String(req.params.id), actor) });
   } catch (err) {
     sendError(res, err);
   }

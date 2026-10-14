@@ -220,11 +220,14 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
         // yet, noteDriverVehicle() WINS a one-row claim (unique cache_key), which is
         // what guarantees a single CarsXE call even if two drivers save the same car
         // in the same second. Fire-and-forget: saving a car must never wait on it.
+        // driverId (admin-v2): a miss now also queues a console request + alerts the
+        // driver once; approval anywhere auto-resolves it ("photo ready" push).
         (0, vehicleImages_2.noteDriverVehicle)({
             make: vehicle_make ?? profile?.vehicle_make,
             model: vehicle_model ?? profile?.vehicle_model,
             year: vehicle_year ?? profile?.vehicle_year,
             colour: colour ?? profile?.vehicle_color,
+            driverId: user.id,
         }).catch((err) => console.error("[vehicleImages] hook failed:", err?.message || err));
         res.json(profile);
     }
