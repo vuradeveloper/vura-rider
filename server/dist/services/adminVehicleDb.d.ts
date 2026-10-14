@@ -50,11 +50,15 @@ export declare function approveImage(id: string, candidateIndex: number, actor: 
 export declare function refetchImage(id: string, actor: AdminActor): Promise<any>;
 export declare function rejectImage(id: string, actor: AdminActor): Promise<any>;
 export declare function listImages(status?: string): Promise<any[]>;
+/** Palette colours a white original can become (white itself is the source). */
+export declare const RECOLOUR_PALETTE: string[];
 /**
- * Generate this car in EVERY palette colour (default: the requested colour
- * only) — one Gemini call per colour, then the standard key-out/900x560/WebP
- * pipeline, approved straight away so requests auto-resolve. CarsXE is never
- * touched. Costs ~$0.04 per colour.
+ * Generate this car's missing colours from the WHITE original:
+ *   • source = the uploaded file when given, else the car's existing approved
+ *     WHITE row from the Car DB (zero upload needed),
+ *   • one recolour per requested palette colour (default: every missing one),
+ *   • each variant goes through the standard pipeline → approved → matching
+ *     requests auto-resolve and drivers are pushed "photo ready".
  */
 export declare function generateImages(input: {
     make: string;
@@ -64,9 +68,11 @@ export declare function generateImages(input: {
     colours?: string[];
     bodyType?: string | null;
     categories?: string[] | null;
+    imageBase64?: string | null;
 }, actor: AdminActor): Promise<{
     generated: any[];
     failed: any[];
+    source: "upload" | "car-db";
 }>;
 /** Static catalogue (makes/models/body/years) for the console's pickers. */
 export declare function catalogue(): {

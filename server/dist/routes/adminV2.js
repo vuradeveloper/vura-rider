@@ -1142,6 +1142,7 @@ router.post("/car-db/generate", (0, adminAuth_1.requireAdmin)("catalogue.write")
             colours: Array.isArray(req.body?.colours) ? req.body.colours : undefined,
             bodyType: req.body?.bodyType ?? null,
             categories: Array.isArray(req.body?.categories) ? req.body.categories : null,
+            imageBase64: req.body?.imageBase64 ?? null,
         }, actor);
         res.json(out);
     }

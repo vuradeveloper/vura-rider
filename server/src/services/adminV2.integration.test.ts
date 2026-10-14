@@ -1606,14 +1606,13 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       const bad = await request("POST", "/api/admin/v2/car-db/image", { make: "BMW" });
       expect(bad.status).toBe(400);
 
-      // Generate without GEMINI_API_KEY → honest 503, never a fake success.
-      delete process.env.GEMINI_API_KEY;
+      // Generate with no white source (no upload, no approved white row) → honest 400.
       const gen = await request("POST", "/api/admin/v2/car-db/generate", {
         make: "BMW",
         model: "320i",
       });
-      expect(gen.status).toBe(503);
-      expect(gen.json.error).toMatch(/GEMINI_API_KEY/);
+      expect(gen.status).toBe(400);
+      expect(gen.json.error).toMatch(/white original/);
 
       // Search queues the row (DB-only claim; worker is not running here).
       const search = await request("POST", "/api/admin/v2/car-db/search", {

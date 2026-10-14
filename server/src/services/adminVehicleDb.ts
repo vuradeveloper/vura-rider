@@ -216,64 +216,56 @@ export async function listImages(status?: string): Promise<any[]> {
   return listVehicleImages(status);
 }
 
-// ── Generate all colours WITHOUT CarsXE (the proven generate-vehicle-images.js
-//    prompt, ported to the server). Needs GEMINI_API_KEY in the environment.
+// ── Generate other colours FROM THE WHITE ORIGINAL — see RECOLOUR_PALETTE.
 
-/** The exact style contract from scripts/generate-vehicle-images.js (white studio reference). */
-const GEN_STYLE =
-  "Photorealistic cut-out studio shot on a pure white seamless background. Camera at roughly " +
-  "wheel-arch height, front three-quarter view from the driver's side with the nose pointing left. " +
-  "The whole car is inside the frame, centred, with a small even margin around it. Soft, even, " +
-  "large-source studio lighting, a gentle highlight along the bonnet and roof, realistic paint and " +
-  "glass reflections, dark tinted windows, correctly round wheels with visible rims, headlights and " +
-  "grille clearly modelled, and a subtle soft contact shadow under the tyres. No road, no scenery, " +
-  "no props, no people, no text, no logos, no watermark.";
+// ── Generate other colours FROM THE WHITE ORIGINAL (no Gemini, no CarsXE).
+//    The proven Car DB approach, in-process: a white studio cut-out is tinted
+//    per palette colour (sharp .tint keeps shading/luminance) and masked back
+//    onto the white background so only the CAR takes the colour.
 
-const GEN_TEMPLATE =
-  "A high-resolution studio photograph of a {colour} {year} {make} {model}, front three-quarter view " +
-  "from the driver's side, car facing left, centred, full car visible, plain pure white background, " +
-  "soft studio lighting, realistic proportions, accurate {make} {model} body shape, no text, no people, " +
-  "no other objects. " + GEN_STYLE;
+/** Palette colours a white original can become (white itself is the source). */
+export const RECOLOUR_PALETTE = [
+  "silver", "grey", "black", "blue", "red", "green",
+  "orange", "brown", "gold", "yellow", "beige",
+];
 
-async function geminiImage(prompt: string): Promise<Buffer> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) {
-    const e: any = new Error(
-      "GEMINI_API_KEY is not set on the server — add it in EB → Configuration → Software → Environment properties (generation is disabled without it)."
-    );
-    e.status = 503;
-    throw e;
-  }
-  const model = process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseModalities: ["IMAGE"] },
-      }),
-    }
-  );
-  if (!res.ok) {
-    const body = (await res.text()).slice(0, 300);
-    const e: any = new Error(`Gemini ${res.status}: ${body}`);
-    e.status = res.status === 429 ? 429 : 502;
-    throw e;
-  }
-  const json: any = await res.json();
-  const parts = json?.candidates?.[0]?.content?.parts || [];
-  const inline = parts.find((p: any) => p?.inlineData?.data);
-  if (!inline) throw Object.assign(new Error("Gemini returned no image part"), { status: 502 });
-  return Buffer.from(inline.inlineData.data, "base64");
+const HEX_BY_COLOUR: Record<string, string> = {
+  white: "#F5F5F5", black: "#1C1C1E", silver: "#C0C4C8", grey: "#7A7F85",
+  red: "#C62828", blue: "#1E4FA3", green: "#2E7D32", brown: "#6D4C41",
+  gold: "#C9A227", orange: "#EF6C00", yellow: "#F9C80E", beige: "#D9C7A3",
+};
+
+/**
+ * One recolour: tint the whole frame with the target hue (white body takes the
+ * full colour, shading preserved), build a car mask from the ORIGINAL (anything
+ * clearly non-white), cut the tinted frame with that mask, flatten back onto
+ * pure white. The background never tints.
+ */
+async function recolourFromWhite(raw: Buffer, colour: string): Promise<Buffer> {
+  const sharp = (await import("sharp")).default;
+  const hex = HEX_BY_COLOUR[colour] || HEX_BY_COLOUR.silver;
+  const meta = await sharp(raw).metadata();
+  const w = meta.width || 900;
+  const h = meta.height || 560;
+  // Car mask from the ORIGINAL: white bg → transparent, car → opaque.
+  const mask = await sharp(raw).greyscale().threshold(232).negate().blur(0.7).ensureAlpha().toBuffer();
+  // Tint preserves luminance: white body takes the colour, dark glass stays dark.
+  const tinted = await sharp(raw).tint(hex).ensureAlpha().toBuffer();
+  const cut = await sharp(tinted).composite([{ input: mask, blend: "dest-in" }]).toBuffer();
+  return sharp({ create: { width: w, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } })
+    .composite([{ input: cut }])
+    .flatten()
+    .png()
+    .toBuffer();
 }
 
 /**
- * Generate this car in EVERY palette colour (default: the requested colour
- * only) — one Gemini call per colour, then the standard key-out/900x560/WebP
- * pipeline, approved straight away so requests auto-resolve. CarsXE is never
- * touched. Costs ~$0.04 per colour.
+ * Generate this car's missing colours from the WHITE original:
+ *   • source = the uploaded file when given, else the car's existing approved
+ *     WHITE row from the Car DB (zero upload needed),
+ *   • one recolour per requested palette colour (default: every missing one),
+ *   • each variant goes through the standard pipeline → approved → matching
+ *     requests auto-resolve and drivers are pushed "photo ready".
  */
 export async function generateImages(
   input: {
@@ -284,22 +276,60 @@ export async function generateImages(
     colours?: string[];
     bodyType?: string | null;
     categories?: string[] | null;
+    imageBase64?: string | null;
   },
   actor: AdminActor
-): Promise<{ generated: any[]; failed: any[] }> {
-  const palette = (input.colours && input.colours.length ? input.colours : ["white"])
+): Promise<{ generated: any[]; failed: any[]; source: "upload" | "car-db" }> {
+  // Source: the uploaded white original, else the car's approved WHITE row.
+  const baseKey = vehicleImageCacheKey({
+    make: input.make,
+    model: input.model,
+    year: input.year ?? input.yearRange ?? null,
+    colour: "white",
+  });
+  let raw: Buffer | null = null;
+  let source: "upload" | "car-db" = "upload";
+  if (input.imageBase64) {
+    const b64 = input.imageBase64.includes(",") ? input.imageBase64.split(",")[1] : input.imageBase64;
+    raw = Buffer.from(b64, "base64");
+  } else {
+    const whiteRow = await queryOne<any>(
+      `SELECT storage_key FROM vehicle_images
+        WHERE cache_key = $1 AND status = 'approved' AND storage_key IS NOT NULL
+        LIMIT 1`,
+      [baseKey]
+    );
+    if (whiteRow?.storage_key) {
+      const { getObjectFromS3 } = await import("../lib/s3");
+      raw = await getObjectFromS3(whiteRow.storage_key);
+      source = "car-db";
+    }
+  }
+  if (!raw || !raw.length) {
+    const e: any = new Error(
+      "No white original found: upload the white photo here first (it becomes the generate source), or add the white row to the Car DB."
+    );
+    e.status = 400;
+    throw e;
+  }
+
+  // Default = every palette colour the car does NOT have approved yet.
+  const baseNoColour = baseKey.slice(0, baseKey.lastIndexOf("|"));
+  const existing = await query<{ colour: string | null }>(
+    `SELECT colour FROM vehicle_images
+      WHERE cache_key LIKE $1 AND status = 'approved'`,
+    [`${baseNoColour}|%`]
+  );
+  const have = new Set(existing.map((r) => String(r.colour || "").toLowerCase()));
+  const palette = (input.colours && input.colours.length ? input.colours : RECOLOUR_PALETTE)
     .map((c) => String(c).trim().toLowerCase())
-    .filter(Boolean)
+    .filter((c) => c && c !== "white" && !have.has(c))
     .slice(0, 12);
   const generated: any[] = [];
   const failed: any[] = [];
   for (const colour of palette) {
     try {
-      const prompt = GEN_TEMPLATE.replaceAll("{colour}", colour)
-        .replaceAll("{year}", String(input.year ?? ""))
-        .replaceAll("{make}", input.make)
-        .replaceAll("{model}", input.model);
-      const raw = await geminiImage(prompt);
+      const out = await recolourFromWhite(raw, colour);
       const seed = await importSeedImage({
         // Resolver key format (make|model|year_range|colour) — auto-pull matches on it.
         cacheKey: vehicleImageCacheKey({
@@ -313,8 +343,8 @@ export async function generateImages(
         year: input.year ?? null,
         yearRange: input.yearRange ?? null,
         colour,
-        licenceNote: `Gemini ${process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image"} via admin ${actor.email}`,
-        webpBase64: raw.toString("base64"),
+        licenceNote: `Recoloured from the white original by admin ${actor.email}`,
+        webpBase64: out.toString("base64"),
         processRaw: true,
         approve: true,
       });
@@ -330,20 +360,19 @@ export async function generateImages(
       }
     } catch (err: any) {
       failed.push({ colour, error: err?.message || String(err) });
-      if (err?.status === 429) break; // quota — stop burning the remaining colours
     }
   }
   await writeAudit(actor, {
     action: "car_db.generate",
     entityType: "vehicle_images",
-    newValue: { make: input.make, model: input.model, year: input.year, palette, generated: generated.length, failed },
+    newValue: { make: input.make, model: input.model, year: input.year, source, generated: generated.length, failed },
   });
   if (!generated.length && failed.length) {
     const e: any = new Error(failed[0].error);
-    e.status = failed[0].error?.includes("GEMINI_API_KEY") ? 503 : 502;
+    e.status = 400;
     throw e;
   }
-  return { generated, failed };
+  return { generated, failed, source };
 }
 
 /** Static catalogue (makes/models/body/years) for the console's pickers. */
