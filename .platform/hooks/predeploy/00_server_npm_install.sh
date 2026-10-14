@@ -1,21 +1,19 @@
 #!/bin/bash
-# AL2023 Elastic Beanstalk predeploy hook - install the server's production deps for
-# THIS platform. During predeploy the new release sits at /var/app/staging (it is
-# copied to /var/app/current at deploy), so installing here makes node_modules land
-# with the live app.
+# AL2023 Elastic Beanstalk predeploy hook - install the server's production deps
+# for THIS platform. During predeploy the new release sits at /var/app/staging
+# (it is copied to /var/app/current at deploy), so installing here makes
+# node_modules land with the live app.
 #
-# Why the @img wipe before installing: server/node_modules is built on the
-# developer's machine and shipped inside the deploy zip (.ebignore re-includes it so
-# a fresh instance boots without a 100MB npm install). A Windows checkout therefore
-# carries @img/sharp-win32-x64, and npm can decide that already satisfies the
-# optional @img/* dependency instead of fetching the linux-x64 binary. Removing it
-# forces the correct native build - which is what keeps sharp from throwing "Could
-# not load the sharp module using the linux-x64 runtime". That failure was silent:
-# CarsXE still returned 9 images with HTTP 200 and every car quietly kept its icon.
-#
-# Only the newest release is touched. If staging exists we install there; otherwise
-# we fall back to /var/app/current, exactly as before. Never both - a failed deploy
-# must not leave the still-live release with mismatched dependencies.
+# WHY THE CANARY EXECUTES EXPRESS (the 2026-10-14 outage): server/node_modules is
+# built on the developer's machine and shipped inside the deploy zip (.ebignore
+# re-includes it so a fresh instance boots without a 100MB npm install). File
+# presence checks CANNOT see a partially-extracted or foreign tree - production
+# crash-looped with "Cannot find module 'depd'" (body-parser's transitive dep)
+# while the dotenv/sharp files were all present. require('express') executes the
+# whole chain express -> body-parser -> depd, so it fails exactly when the app
+# would fail. A tree that fails the canary is WIPED and rebuilt with npm ci,
+# which deletes node_modules itself and installs exactly package-lock.json -
+# partial trees cannot survive it.
 set -e
 exec > >(tee -a /var/log/vura_server_deps.log) 2>&1
 
@@ -26,11 +24,34 @@ elif [ -d /var/app/current/server ] && [ -f /var/app/current/server/package.json
   APP_DIR=/var/app/current/server
 fi
 
-if [ -n "$APP_DIR" ]; then
-  cd "$APP_DIR"
+if [ -z "$APP_DIR" ]; then
+  echo "VURA: [predeploy] WARN server folder not found - deps NOT installed here"
+  exit 0
+fi
+cd "$APP_DIR"
+
+deps_broken() {
+  # Executable canaries: the exact import chain the boot process needs, plus
+  # sharp (NATIVE: a Windows checkout ships @img/sharp-win32-x64 which cannot
+  # load on linux-x64 - vehicle photos silently degrade without this check).
+  [ ! -d node_modules ] && return 0
+  node -e "require('express'); require('dotenv/config'); require('pg')" >/dev/null 2>&1 || return 0
+  node -e "require('sharp')" >/dev/null 2>&1 || return 0
+  return 1
+}
+
+if deps_broken; then
+  echo "VURA: [predeploy] deps broken for this platform - clean reinstall (npm ci)"
+  # Clear a foreign-platform sharp build first, then npm ci for a deterministic
+  # tree: exact lockfile versions, no leftovers, no partial extractions.
   rm -rf node_modules/@img node_modules/sharp
-  npm install --omit=dev --ignore-scripts --no-audit --no-fund
+  npm ci --omit=dev --ignore-scripts --no-audit --no-fund
   echo "VURA: [predeploy] deps installed OK in $APP_DIR"
 else
-  echo "VURA: [predeploy] WARN server folder not found - deps NOT installed here"
+  echo "VURA: [predeploy] deps verified (express+dotenv+pg+sharp load) - skipping install"
 fi
+
+# Hard verify - anything still missing here would 502 the deploy the moment the
+# web service starts, so fail the deploy loudly instead.
+node -e "require('express'); require('dotenv/config'); require('pg')"
+echo "VURA: [predeploy] verified express+dotenv+pg load"

@@ -1,1 +1,1 @@
-web: cd server && if [ ! -e node_modules/dotenv/package.json ] || [ ! -e node_modules/express/package.json ]; then npm install --omit=dev --ignore-scripts --no-audit --no-fund; fi && node dist/index.js
+web: cd server && node -e "require('express'); require('dotenv/config'); require('pg')" >/dev/null 2>&1 || (rm -rf node_modules/@img node_modules/sharp && npm ci --omit=dev --ignore-scripts --no-audit --no-fund); node dist/index.js

@@ -1,17 +1,20 @@
 #!/bin/bash
-# EB CONFIGURATION-deployment hook — runs on `eb setenv` and friends.
+# EB CONFIGURATION-deployment hook - runs on `eb setenv` / console config saves.
 #
-# WHY THIS EXISTS (the production incident): a configuration update REPLACES
-# /var/app/current from the last deployed source bundle WITHOUT running
-# .platform/hooks/predeploy|postdeploy (aws/elastic-beanstalk-roadmap#88), so
-# the node_modules those hooks installed can vanish and the app dies at once
-# with "Cannot find module 'dotenv/config'" until somebody redeploys.
-# This hook re-checks the LIVE app dir and installs only when needed, BEFORE
-# the services restart with the new environment.
+# WHY THIS EXISTS: a configuration update REPLACES /var/app/current from the last
+# deployed source bundle WITHOUT running .platform/hooks/predeploy|postdeploy
+# (aws/elastic-beanstalk-roadmap#88), so the node_modules those hooks installed
+# can vanish and the app dies at once. This hook re-checks the LIVE app dir and
+# repairs it BEFORE the services restart with the new environment.
+#
+# The canary EXECUTES require('express') (2026-10-14 outage): file-presence
+# checks passed while the shipped tree was missing 'depd' and the API crash-
+# looped with MODULE_NOT_FOUND. Executing the import chain is the only honest
+# test; a failing tree is wiped and rebuilt with npm ci (exact lockfile).
 #
 # Failure semantics are deliberate: if deps are broken and cannot be repaired,
 # exit 1 ABORTS the configuration update, so the environment keeps its OLD env
-# vars and the currently-running app stays up — a visibly failed `eb setenv`
+# vars and the currently-running app stays up - a visibly failed config update
 # beats a silent 502.
 set -e
 exec > >(tee -a /var/log/vura_server_deps.log) 2>&1
@@ -22,32 +25,28 @@ if [ ! -d /var/app/current/server ]; then
 fi
 cd /var/app/current/server
 
-# Same two canaries as .platform/hooks/postdeploy/00_server_npm_install.sh:
-# dotenv (pure-JS: node_modules never arrived) + sharp (NATIVE: a config deploy
-# re-extracts the ZIP's Windows-built node_modules, so the linux-x64 binary is
-# gone until it is reinstalled — otherwise vehicle photos silently degrade).
 deps_broken() {
-  [ ! -e node_modules/dotenv ] && return 0
-  [ ! -e node_modules/sharp ] && return 0
+  [ ! -d node_modules ] && return 0
+  node -e "require('express'); require('dotenv/config'); require('pg')" >/dev/null 2>&1 || return 0
   node -e "require('sharp')" >/dev/null 2>&1 || return 0
   return 1
 }
 
 if deps_broken; then
-  echo "VURA: [confighooks] deps missing or sharp cannot load - installing for this platform"
+  echo "VURA: [confighooks] deps broken for this platform - clean reinstall (npm ci)"
   rm -rf node_modules/@img node_modules/sharp
-  npm install --omit=dev --ignore-scripts --no-audit --no-fund
+  npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 else
-  echo "VURA: [confighooks] deps present and sharp loads - skipping install"
+  echo "VURA: [confighooks] deps verified (express+dotenv+pg+sharp load) - skipping install"
 fi
 
-if [ ! -e node_modules/dotenv ]; then
-  echo "VURA: [confighooks] ERROR dotenv still missing after install"
-  exit 1
-fi
+# Hard verify the boot canary - else the app dies with MODULE_NOT_FOUND.
+node -e "require('express'); require('dotenv/config'); require('pg')"
+echo "VURA: [confighooks] verified express+dotenv+pg load"
 
+# sharp is deliberately NOT fatal (vehicle images degrade, the API works).
 if node -e "require('sharp')" >/dev/null 2>&1; then
-  echo "VURA: [confighooks] verified dotenv + sharp OK"
+  echo "VURA: [confighooks] sharp OK"
 else
   echo "VURA: [confighooks] WARNING sharp cannot load - vehicle images will degrade"
 fi
