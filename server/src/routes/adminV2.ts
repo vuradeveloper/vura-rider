@@ -81,9 +81,7 @@ import {
   listVehicleRequests,
   purgeCarDb,
   rejectImage,
-  refetchImage,
   resolveVehicleRequest,
-  searchCarsXe,
 } from "../services/adminVehicleDb";
 
 /** sendError, but respects err.status (503 missing key, 429 quota, 502 provider). */
@@ -1194,7 +1192,7 @@ router.post("/car-db/image", requireAdmin("catalogue.write"), async (req: AuthRe
   }
 });
 
-// POST /api/admin/v2/car-db/generate — Gemini, ALL chosen colours, no CarsXE.
+// POST /api/admin/v2/car-db/generate — v12 recolor from the white original, any colours.
 router.post("/car-db/generate", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
   try {
     const actor = await resolveAdminActor(req);
@@ -1234,25 +1232,6 @@ router.post("/car-db/purge", requireAdmin("catalogue.write"), async (req: AuthRe
   }
 });
 
-// POST /api/admin/v2/car-db/search — queue ONE CarsXE search (worker + approve).
-router.post("/car-db/search", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
-  try {
-    const actor = await resolveAdminActor(req);
-    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
-    const { make, model } = req.body || {};
-    if (!make || !model) { res.status(400).json({ error: "make and model are required" }); return; }
-    res.json(
-      await searchCarsXe(
-        { make: String(make), model: String(model), year: req.body?.year ?? null, colour: req.body?.colour ?? null },
-        actor
-      )
-    );
-  } catch (err) {
-    sendError(res, err);
-  }
-});
-
-// POST /api/admin/v2/car-db/images/:id/approve|refetch|reject — review actions.
 router.post("/car-db/images/:id/approve", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
   try {
     const actor = await resolveAdminActor(req);
@@ -1262,16 +1241,6 @@ router.post("/car-db/images/:id/approve", requireAdmin("catalogue.write"), async
     res.json(out);
   } catch (err: any) {
     if (/not found/.test(String(err?.message))) { res.status(404).json({ error: err.message }); return; }
-    sendError(res, err);
-  }
-});
-
-router.post("/car-db/images/:id/refetch", requireAdmin("catalogue.write"), async (req: AuthRequest, res: Response) => {
-  try {
-    const actor = await resolveAdminActor(req);
-    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
-    res.json({ result: await refetchImage(String(req.params.id), actor) });
-  } catch (err) {
     sendError(res, err);
   }
 });

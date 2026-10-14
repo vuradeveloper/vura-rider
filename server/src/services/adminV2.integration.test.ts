@@ -1619,19 +1619,14 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(gen.status).toBe(400);
       expect(gen.json.error).toMatch(/white original/);
 
-      // Search queues the row (DB-only claim; worker is not running here).
+      // CarXE search route REMOVED by request — the platform is Car DB + v12 only.
       const search = await request("POST", "/api/admin/v2/car-db/search", {
         make: "BMW",
         model: "3 Series",
         year: 2020,
         colour: "black",
       });
-      expect(search.status).toBe(200);
-      const queued = await queryOne<any>(
-        `SELECT status FROM vehicle_images WHERE cache_key = $1`,
-        [vehicleImageCacheKey({ make: "BMW", model: "3 Series", year: 2020, colour: "black" })]
-      );
-      expect(queued).toBeTruthy();
+      expect(search.status).toBe(404);
 
       // finance: catalogue.read is NOT in the finance matrix.
       await seedAdmin("finC@vura.test", "finance");
