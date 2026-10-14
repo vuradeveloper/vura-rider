@@ -231,7 +231,10 @@ app.use("/api/admin", adminRouter);
 // ADMIN V2 (admin-v2 branch) — roles, admin user management, audit log.
 // Same /api/admin mount, own role gate (services/adminAuth); the legacy
 // routes above keep their ADMIN_EMAILS gate untouched.
-app.use("/api/admin", adminV2Router);
+// Same console API the Vura-Admin app and the integration tests both call at
+// /api/admin/v2/* (the test harness mounts this router there; production used
+// to mount at /api/admin which 404'd every console call - fixed 2026-10-14).
+app.use("/api/admin/v2", adminV2Router);
 app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);
