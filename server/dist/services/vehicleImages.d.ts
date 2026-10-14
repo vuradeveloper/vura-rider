@@ -266,7 +266,7 @@ export declare function runCarsxeFetch(cacheKey: string, options?: {
 }): Promise<void>;
 export declare function startVehicleImageWorker(intervalMs?: number): NodeJS.Timeout;
 export declare function stopVehicleImageWorker(): void;
-export declare function listVehicleImages(status?: string): Promise<any[]>;
+export declare function listVehicleImages(status?: string, limit?: number): Promise<any[]>;
 /** Approves the row, optionally promoting a different candidate than the auto-pick. */
 export declare function approveVehicleImage(id: string, candidateIndex?: number): Promise<{
     id: string;

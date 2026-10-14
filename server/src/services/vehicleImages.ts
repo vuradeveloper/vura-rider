@@ -1187,11 +1187,14 @@ export function stopVehicleImageWorker(): void {
 
 // ── admin operations (the review page) ───────────────────────────────────────
 
-export async function listVehicleImages(status?: string): Promise<any[]> {
+export async function listVehicleImages(status?: string, limit = 5000): Promise<any[]> {
   await ensureVehicleImageTables();
+  // Console Images tab: with 191 cars x many colours the old hard LIMIT 200 hid
+  // almost the whole library. Cap at 10k rows (a few MB of JSON) either way.
+  const capped = Math.min(Math.max(Number(limit) || 5000, 1), 10_000);
   return status
-    ? query<any>(`SELECT * FROM vehicle_images WHERE status = $1 ORDER BY created_at DESC`, [status])
-    : query<any>(`SELECT * FROM vehicle_images ORDER BY created_at DESC LIMIT 200`);
+    ? query<any>(`SELECT * FROM vehicle_images WHERE status = $1 ORDER BY created_at DESC LIMIT $2`, [status, capped])
+    : query<any>(`SELECT * FROM vehicle_images ORDER BY created_at DESC LIMIT $1`, [capped]);
 }
 
 /** Approves the row, optionally promoting a different candidate than the auto-pick. */

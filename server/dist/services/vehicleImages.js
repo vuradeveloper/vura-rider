@@ -1061,11 +1061,14 @@ function stopVehicleImageWorker() {
     worker = null;
 }
 // ── admin operations (the review page) ───────────────────────────────────────
-async function listVehicleImages(status) {
+async function listVehicleImages(status, limit = 5000) {
     await ensureVehicleImageTables();
+    // Console Images tab: with 191 cars x many colours the old hard LIMIT 200 hid
+    // almost the whole library. Cap at 10k rows (a few MB of JSON) either way.
+    const capped = Math.min(Math.max(Number(limit) || 5000, 1), 10_000);
     return status
-        ? (0, database_1.query)(`SELECT * FROM vehicle_images WHERE status = $1 ORDER BY created_at DESC`, [status])
-        : (0, database_1.query)(`SELECT * FROM vehicle_images ORDER BY created_at DESC LIMIT 200`);
+        ? (0, database_1.query)(`SELECT * FROM vehicle_images WHERE status = $1 ORDER BY created_at DESC LIMIT $2`, [status, capped])
+        : (0, database_1.query)(`SELECT * FROM vehicle_images ORDER BY created_at DESC LIMIT $1`, [capped]);
 }
 /** Approves the row, optionally promoting a different candidate than the auto-pick. */
 async function approveVehicleImage(id, candidateIndex = 0) {
