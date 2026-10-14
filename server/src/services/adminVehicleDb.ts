@@ -21,6 +21,7 @@ import {
   rejectVehicleImage,
   RECOLOUR_PALETTE,
   recolourFromWhite,
+  pythonRecolour,
 } from "./vehicleImages";
 import type { AdminActor } from "./adminAuth";
 import { writeAudit } from "./adminAuth";
@@ -291,7 +292,7 @@ export async function generateImages(
   const failed: any[] = [];
   for (const colour of palette) {
     try {
-      const out = await recolourFromWhite(raw, colour);
+      const out = (await pythonRecolour(raw, colour)) ?? (await recolourFromWhite(raw, colour));
       const seed = await importSeedImage({
         // Resolver key format (make|model|year_range|colour) — auto-pull matches on it.
         cacheKey: vehicleImageCacheKey({

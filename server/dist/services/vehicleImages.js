@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RECOLOUR_PALETTE = exports.fileNameFor = exports.storageKeyFor = exports.MAX_BYTES = exports.CANVAS = void 0;
+exports.pythonRecolour = pythonRecolour;
 exports.generationRange = generationRange;
 exports.vehicleImageCacheKey = vehicleImageCacheKey;
 exports.ensureVehicleImageTables = ensureVehicleImageTables;
@@ -95,6 +96,52 @@ const database_1 = require("../config/database");
 const s3_1 = require("../lib/s3");
 const notify_1 = require("./notify");
 const crypto_1 = require("crypto");
+const child_process_1 = require("child_process");
+const util_1 = require("util");
+const promises_1 = require("fs/promises");
+const fs_1 = require("fs");
+const os_1 = require("os");
+const path = __importStar(require("path"));
+const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
+/**
+ * Run the team's proven recolor_car_v11.py (bundled at server/scripts) on the
+ * given source bytes. Returns null — never throws — when python or its deps
+ * are unavailable, so callers fall back to the sharp engine. Opt out with
+ * RECOLOUR_PYTHON=off (the test suite sets that; production leaves it on).
+ */
+async function pythonRecolour(raw, colour) {
+    if (process.env.RECOLOUR_PYTHON === "off")
+        return null;
+    let dir = "";
+    try {
+        const script = process.env.RECOLOUR_SCRIPT ||
+            path.join(__dirname, "..", "..", "scripts", "recolor_car_v11.py");
+        if (!(0, fs_1.existsSync)(script))
+            return null;
+        dir = await (0, promises_1.mkdtemp)(path.join((0, os_1.tmpdir)(), "vura-recolour-"));
+        const inPath = path.join(dir, "in.png"); // PIL sniffs content, extension is irrelevant
+        const outPath = path.join(dir, "out.png");
+        await (0, promises_1.writeFile)(inPath, raw);
+        const py = process.env.PYTHON_BIN || "python3";
+        try {
+            await execFileAsync(py, [script, inPath, colour, outPath], { timeout: 45_000, windowsHide: true });
+        }
+        catch {
+            await execFileAsync("python", [script, inPath, colour, outPath], { timeout: 45_000, windowsHide: true });
+        }
+        if (!(0, fs_1.existsSync)(outPath))
+            return null;
+        const out = await (0, promises_1.readFile)(outPath);
+        return out.length ? out : null;
+    }
+    catch {
+        return null; // missing deps / model download / crash → caller uses sharp
+    }
+    finally {
+        if (dir)
+            await (0, promises_1.rm)(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+}
 exports.CANVAS = { w: 900, h: 560 };
 exports.MAX_BYTES = 80 * 1024;
 const CARSXE_URL = "https://api.carsxe.com/images";
@@ -1363,7 +1410,8 @@ async function autoFillMissingColours(limit = 3) {
                 continue;
             const colour = missing[0]; // one variant per car per tick keeps it gentle
             try {
-                const out = await recolourFromWhite(raw, colour);
+                // Preferred: the team's proven recolor_car_v11.py; fallback: sharp engine.
+                const out = (await pythonRecolour(raw, colour)) ?? (await recolourFromWhite(raw, colour));
                 await importSeedImage({
                     cacheKey: `${car.base}|${colour}`,
                     make: car.make,

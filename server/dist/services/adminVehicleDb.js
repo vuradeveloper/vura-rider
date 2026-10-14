@@ -254,7 +254,7 @@ async function generateImages(input, actor) {
     const failed = [];
     for (const colour of palette) {
         try {
-            const out = await (0, vehicleImages_1.recolourFromWhite)(raw, colour);
+            const out = (await (0, vehicleImages_1.pythonRecolour)(raw, colour)) ?? (await (0, vehicleImages_1.recolourFromWhite)(raw, colour));
             const seed = await (0, vehicleImages_1.importSeedImage)({
                 // Resolver key format (make|model|year_range|colour) — auto-pull matches on it.
                 cacheKey: (0, vehicleImages_2.vehicleImageCacheKey)({

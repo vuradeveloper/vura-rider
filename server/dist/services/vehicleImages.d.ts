@@ -1,3 +1,10 @@
+/**
+ * Run the team's proven recolor_car_v11.py (bundled at server/scripts) on the
+ * given source bytes. Returns null — never throws — when python or its deps
+ * are unavailable, so callers fall back to the sharp engine. Opt out with
+ * RECOLOUR_PYTHON=off (the test suite sets that; production leaves it on).
+ */
+export declare function pythonRecolour(raw: Buffer, colour: string): Promise<Buffer | null>;
 export declare const CANVAS: {
     w: number;
     h: number;

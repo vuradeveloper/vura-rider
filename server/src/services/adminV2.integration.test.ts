@@ -70,6 +70,10 @@ process.env.DB_NAME = process.env.VURA_TEST_DB_NAME || SCRATCH_DB.name;
 process.env.DB_USER = process.env.VURA_TEST_DB_USER || "vura_admin";
 process.env.DB_PASSWORD = process.env.VURA_TEST_DB_PASSWORD || "vura2thinkdifferent";
 process.env.DB_SSL = "false";
+// The recolour ENGINE in tests is sharp-only: spawning the bundled python
+// script (which may download ML models on first run) would blow the 5s test
+// timeout. Production leaves RECOLOUR_PYTHON unset → python preferred.
+process.env.RECOLOUR_PYTHON = "off";
 if (enabled) {
   assertScratchDatabase(process.env.DB_HOST, process.env.DB_PORT, process.env.DB_NAME);
 }

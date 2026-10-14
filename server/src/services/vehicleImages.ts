@@ -21,6 +21,48 @@ import { query, queryOne, execute } from "../config/database";
 import { uploadToS3, deleteFromS3 } from "../lib/s3";
 import { sendPushToUsers } from "./notify";
 import { createHash } from "crypto";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { writeFile, readFile, mkdtemp, rm } from "fs/promises";
+import { existsSync } from "fs";
+import { tmpdir } from "os";
+import * as path from "path";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Run the team's proven recolor_car_v11.py (bundled at server/scripts) on the
+ * given source bytes. Returns null — never throws — when python or its deps
+ * are unavailable, so callers fall back to the sharp engine. Opt out with
+ * RECOLOUR_PYTHON=off (the test suite sets that; production leaves it on).
+ */
+export async function pythonRecolour(raw: Buffer, colour: string): Promise<Buffer | null> {
+  if (process.env.RECOLOUR_PYTHON === "off") return null;
+  let dir = "";
+  try {
+    const script =
+      process.env.RECOLOUR_SCRIPT ||
+      path.join(__dirname, "..", "..", "scripts", "recolor_car_v11.py");
+    if (!existsSync(script)) return null;
+    dir = await mkdtemp(path.join(tmpdir(), "vura-recolour-"));
+    const inPath = path.join(dir, "in.png"); // PIL sniffs content, extension is irrelevant
+    const outPath = path.join(dir, "out.png");
+    await writeFile(inPath, raw);
+    const py = process.env.PYTHON_BIN || "python3";
+    try {
+      await execFileAsync(py, [script, inPath, colour, outPath], { timeout: 45_000, windowsHide: true });
+    } catch {
+      await execFileAsync("python", [script, inPath, colour, outPath], { timeout: 45_000, windowsHide: true });
+    }
+    if (!existsSync(outPath)) return null;
+    const out = await readFile(outPath);
+    return out.length ? out : null;
+  } catch {
+    return null; // missing deps / model download / crash → caller uses sharp
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
 
 export const CANVAS = { w: 900, h: 560 };
 export const MAX_BYTES = 80 * 1024;
@@ -1574,7 +1616,8 @@ export async function autoFillMissingColours(limit = 3): Promise<number> {
 
       const colour = missing[0]; // one variant per car per tick keeps it gentle
       try {
-        const out = await recolourFromWhite(raw, colour);
+        // Preferred: the team's proven recolor_car_v11.py; fallback: sharp engine.
+        const out = (await pythonRecolour(raw, colour)) ?? (await recolourFromWhite(raw, colour));
         await importSeedImage({
           cacheKey: `${car.base}|${colour}`,
           make: car.make,
