@@ -24,6 +24,9 @@ const adminTrips_1 = require("../services/adminTrips");
 const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
 const adminMessaging_1 = require("../services/adminMessaging");
+const featureFlags_1 = require("../services/featureFlags");
+const adminMoney_1 = require("../services/adminMoney");
+const adminSettings_1 = require("../services/adminSettings");
 /**
  * Best-effort push notice to the driver when an admin changes their status.
  * States the reason verbatim (the brief: "push notification to the driver
@@ -904,6 +907,164 @@ router.post("/campaigns/:id/send", (0, adminAuth_1.requireAdmin)("messaging.send
             },
         });
         res.json({ campaign });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Features / settings / status (Phase 5) ───────────────────────────────────
+// GET /api/admin/v2/features — every flag (RC4 three + rider_gate). READ-ONLY
+// view for operations + super_admin.
+router.get("/features", (0, adminAuth_1.requireAdmin)("features.read"), async (_req, res) => {
+    try {
+        res.json({ flags: await (0, adminSettings_1.readAllFlags)() });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// PUT /api/admin/v2/features/:key — update ONE RC4 flag (validated keys/fields
+// inside featureFlags). rider_gate is intentionally not writable here.
+router.put("/features/:key", (0, adminAuth_1.requireAdmin)("features.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const key = String(req.params.key);
+        const changes = req.body?.changes ?? req.body ?? {};
+        try {
+            const flags = await (0, adminSettings_1.writeFlag)(key, changes, actor);
+            res.json({ flags });
+        }
+        catch (err) {
+            if (/Unknown feature key/.test(String(err?.message))) {
+                res.status(400).json({ error: err.message });
+                return;
+            }
+            if (err instanceof featureFlags_1.FeatureFlagError) {
+                res.status(err.code === "no_row" ? 409 : 400).json({ error: err.message, code: err.code });
+                return;
+            }
+            throw err;
+        }
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/settings — the editable onboarding lists.
+router.get("/settings", (0, adminAuth_1.requireAdmin)("settings.read"), async (_req, res) => {
+    try {
+        res.json({
+            required_docs: await (0, adminSettings_1.listRequiredDocs)(),
+            reject_reasons: await (0, adminSettings_1.listRejectReasons)(),
+        });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// PATCH /api/admin/v2/settings/required-docs/:docType — label/active/order.
+router.patch("/settings/required-docs/:docType", (0, adminAuth_1.requireAdmin)("settings.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        try {
+            const doc = await (0, adminSettings_1.setRequiredDoc)(String(req.params.docType), {
+                label: req.body?.label,
+                active: req.body?.active,
+                sort_order: req.body?.sort_order,
+            }, actor);
+            res.json({ doc });
+        }
+        catch (err) {
+            if (/Unknown doc_type/.test(String(err?.message))) {
+                res.status(404).json({ error: err.message });
+                return;
+            }
+            throw err;
+        }
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// PATCH /api/admin/v2/settings/reject-reasons/:code — label/active/order.
+router.patch("/settings/reject-reasons/:code", (0, adminAuth_1.requireAdmin)("settings.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        try {
+            const reason = await (0, adminSettings_1.setRejectReason)(String(req.params.code), {
+                label: req.body?.label,
+                active: req.body?.active,
+                sort_order: req.body?.sort_order,
+            }, actor);
+            res.json({ reason });
+        }
+        catch (err) {
+            if (/Unknown code/.test(String(err?.message))) {
+                res.status(404).json({ error: err.message });
+                return;
+            }
+            throw err;
+        }
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/status — DB, migrations, flags, fleet counts (read-only).
+router.get("/status", (0, adminAuth_1.requireAdmin)("features.read"), async (_req, res) => {
+    try {
+        res.json({ status: await (0, adminSettings_1.getSystemStatus)() });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Money (Phase 6) — STRICTLY READ-ONLY. No money actions exist here. ──────
+// GET /api/admin/v2/money/overview — fares/payments/payouts/earnings totals.
+router.get("/money/overview", (0, adminAuth_1.requireAdmin)("money.read"), async (_req, res) => {
+    try {
+        res.json({ overview: await (0, adminMoney_1.getMoneyOverview)() });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/money/payments — recent payments (rider phone masked).
+router.get("/money/payments", (0, adminAuth_1.requireAdmin)("money.read"), async (req, res) => {
+    try {
+        const limit = Number(req.query.limit) || 50;
+        res.json({ payments: await (0, adminMoney_1.listPayments)(limit) });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/money/payouts — recent driver payouts (account masked).
+router.get("/money/payouts", (0, adminAuth_1.requireAdmin)("money.read"), async (req, res) => {
+    try {
+        const limit = Number(req.query.limit) || 50;
+        res.json({ payouts: await (0, adminMoney_1.listPayouts)(limit) });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/money/earnings — per-driver ledger totals.
+router.get("/money/earnings", (0, adminAuth_1.requireAdmin)("money.read"), async (_req, res) => {
+    try {
+        res.json({ earnings: await (0, adminMoney_1.listDriverEarnings)() });
     }
     catch (err) {
         sendError(res, err);
