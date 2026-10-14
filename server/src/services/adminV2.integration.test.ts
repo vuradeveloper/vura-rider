@@ -729,6 +729,17 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(row).toBeTruthy();
       expect(row.pending_docs).toBe(1);
       expect(row.waiting_seconds).toBeGreaterThanOrEqual(7000); // ~2h
+      // Outside-status ingredients for the drivers list badge.
+      expect(row.required_total).toBeGreaterThan(0);
+      expect(row.required_approved).toBe(0); // only a pending doc so far
+      await execute(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+         VALUES ($1, 'drivers_license', 'lic.pdf', 'application/pdf', 'k2', 'b', 'approved')`,
+        [id]
+      );
+      const q2 = await request("GET", "/api/admin/v2/onboarding");
+      const row2 = q2.json.queue.find((x: any) => x.driver_id === id);
+      expect(row2.required_approved).toBe(1); // approved + required + unexpired
       expect(q.json.required.length).toBeGreaterThan(0);
       expect(q.json.rejectReasons.length).toBeGreaterThan(0);
 

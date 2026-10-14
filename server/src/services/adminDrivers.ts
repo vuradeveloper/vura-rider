@@ -238,6 +238,15 @@ export async function listOnboardingQueue(limit = 100): Promise<any[]> {
             COUNT(d.id) FILTER (WHERE d.status = 'pending_review')::int AS pending_docs,
             COUNT(d.id) FILTER (WHERE d.status = 'approved')::int AS approved_docs,
             COUNT(d.id) FILTER (WHERE d.status = 'rejected')::int AS rejected_docs,
+            -- Ingredients for the OUTSIDE status badge on the drivers list:
+            -- how many required docs exist, and how many are truly verified
+            -- (approved, required, not expired).
+            (SELECT COUNT(*)::int FROM admin_required_docs WHERE active = TRUE) AS required_total,
+            COUNT(DISTINCT d.doc_type) FILTER (
+              WHERE d.status = 'approved'
+                AND d.doc_type IN (SELECT doc_type FROM admin_required_docs WHERE active = TRUE)
+                AND (d.expires_at IS NULL OR d.expires_at > NOW())
+            )::int AS required_approved,
             MIN(d.created_at) FILTER (WHERE d.status = 'pending_review') AS waiting_since,
             EXTRACT(EPOCH FROM (NOW() - MIN(d.created_at) FILTER (WHERE d.status = 'pending_review')))::int AS waiting_seconds
        FROM users u
