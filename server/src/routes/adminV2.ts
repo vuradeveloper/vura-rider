@@ -1182,6 +1182,8 @@ router.post("/car-db/image", requireAdmin("catalogue.write"), async (req: AuthRe
         colour: req.body?.colour ?? null,
         imageBase64: String(imageBase64),
         sourceNote: req.body?.sourceNote ?? null,
+        bodyType: req.body?.bodyType ?? null,
+        categories: Array.isArray(req.body?.categories) ? req.body.categories : null,
       },
       actor
     );
@@ -1208,6 +1210,8 @@ router.post("/car-db/generate", requireAdmin("catalogue.write"), async (req: Aut
         year: req.body?.year ?? null,
         yearRange: req.body?.yearRange ?? null,
         colours: Array.isArray(req.body?.colours) ? req.body.colours : undefined,
+        bodyType: req.body?.bodyType ?? null,
+        categories: Array.isArray(req.body?.categories) ? req.body.categories : null,
       },
       actor
     );

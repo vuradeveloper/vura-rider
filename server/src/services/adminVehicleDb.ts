@@ -112,6 +112,8 @@ export async function addCarDbImage(
     colour?: string | null;
     imageBase64: string;
     sourceNote?: string | null;
+    bodyType?: string | null;
+    categories?: string[] | null;
   },
   actor: AdminActor
 ): Promise<{ image: any; resolvedRequests: number }> {
@@ -136,6 +138,17 @@ export async function addCarDbImage(
   });
   const imageId = String(seed?.row?.id ?? "");
   const cacheKey = String(seed?.row?.cache_key ?? "").toLowerCase();
+  // Admin placement: body shape + booking category ride with the row and win
+  // the static guess in catalogueForApi.
+  if (imageId && (input.bodyType || (input.categories && input.categories.length))) {
+    await execute(
+      `UPDATE vehicle_images
+          SET body_type = COALESCE($2, body_type),
+              categories = COALESCE($3::text[], categories)
+        WHERE id = $1`,
+      [imageId, input.bodyType ?? null, input.categories?.length ? input.categories : null]
+    );
+  }
   const resolved = cacheKey && imageId ? await resolveRequestsForCacheKey(cacheKey, imageId) : 0;
   await writeAudit(actor, {
     action: "car_db.image_add",
@@ -269,6 +282,8 @@ export async function generateImages(
     year?: number | null;
     yearRange?: string | null;
     colours?: string[];
+    bodyType?: string | null;
+    categories?: string[] | null;
   },
   actor: AdminActor
 ): Promise<{ generated: any[]; failed: any[] }> {
@@ -304,6 +319,15 @@ export async function generateImages(
         approve: true,
       });
       generated.push({ colour, imageId: seed?.row?.id, cacheKey: seed?.row?.cache_key });
+      if (seed?.row?.id && (input.bodyType || (input.categories && input.categories.length))) {
+        await execute(
+          `UPDATE vehicle_images
+              SET body_type = COALESCE($2, body_type),
+                  categories = COALESCE($3::text[], categories)
+            WHERE id = $1`,
+          [String(seed.row.id), input.bodyType ?? null, input.categories?.length ? input.categories : null]
+        );
+      }
     } catch (err: any) {
       failed.push({ colour, error: err?.message || String(err) });
       if (err?.status === 429) break; // quota — stop burning the remaining colours

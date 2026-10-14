@@ -27,6 +27,8 @@ export declare function addCarDbImage(input: {
     colour?: string | null;
     imageBase64: string;
     sourceNote?: string | null;
+    bodyType?: string | null;
+    categories?: string[] | null;
 }, actor: AdminActor): Promise<{
     image: any;
     resolvedRequests: number;
@@ -60,6 +62,8 @@ export declare function generateImages(input: {
     year?: number | null;
     yearRange?: string | null;
     colours?: string[];
+    bodyType?: string | null;
+    categories?: string[] | null;
 }, actor: AdminActor): Promise<{
     generated: any[];
     failed: any[];

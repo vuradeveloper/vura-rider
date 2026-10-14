@@ -164,6 +164,8 @@ export interface CataloguePair {
     make: string;
     model: string;
     yearRange: string | null;
+    bodyType?: string | null;
+    categories?: string[] | null;
 }
 export declare function approvedVehicleCatalogue(): Promise<CataloguePair[]>;
 /**

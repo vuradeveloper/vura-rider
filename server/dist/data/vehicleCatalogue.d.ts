@@ -59,6 +59,8 @@ export declare function vehicleNeedsConfirming(v: {
 export declare function catalogueForApi(pairs?: {
     make: string;
     model: string;
+    body_type?: string | null;
+    category?: string | null;
 }[] | null): {
     body_types: {
         id: BodyType;

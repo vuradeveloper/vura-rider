@@ -184,6 +184,10 @@ async function ensureVehicleImageTables() {
     // `year` alone cannot express "Present", and the old 4-year bucket GUESSED a
     // range instead of reading one, which is why nothing could match the DB.
     await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS year_range VARCHAR(24)`);
+    // Admin-assigned placement (console upload/generate): which body shape and
+    // which booking category (economy/comfort/xl) this car belongs to.
+    await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS body_type VARCHAR(40)`);
+    await (0, database_1.execute)(`ALTER TABLE vehicle_images ADD COLUMN IF NOT EXISTS categories TEXT[]`);
     await (0, database_1.execute)(`
     CREATE TABLE IF NOT EXISTS carsxe_usage_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -412,15 +416,33 @@ async function resolveVehicleImage(v) {
 }
 async function approvedVehicleCatalogue() {
     await ensureVehicleImageTables();
-    const rows = await (0, database_1.query)(`SELECT make, model, MAX(year_range) AS year_range
+    // ANY approved colour qualifies a make|model (2026-10-14: the white-only
+    // filter hid every car whose import only carried yellow/silver rows — they
+    // existed in the DB but never reached the driver-app picker). White still
+    // wins the year_range when several rows disagree, then the newest row.
+    const rows = await (0, database_1.query)(`SELECT make, model, year_range, body_type, categories
        FROM vehicle_images
-      WHERE status = 'approved' AND image_url IS NOT NULL AND LOWER(colour) = $1
+      WHERE status = 'approved' AND image_url IS NOT NULL
         AND make IS NOT NULL AND model IS NOT NULL
-      GROUP BY make, model
-      ORDER BY make, model`, [WHITE]);
-    return rows
-        .map((r) => ({ make: String(r.make), model: String(r.model), yearRange: r.year_range }))
-        .filter((r) => r.make && r.model);
+      ORDER BY make, model,
+               CASE WHEN LOWER(colour) = 'white' THEN 0 ELSE 1 END,
+               created_at DESC`);
+    const seen = new Set();
+    const out = [];
+    for (const r of rows) {
+        const key = `${r.make}|${r.model}`;
+        if (seen.has(key))
+            continue; // first row wins (white-preferred order above)
+        seen.add(key);
+        out.push({
+            make: String(r.make),
+            model: String(r.model),
+            yearRange: r.year_range,
+            bodyType: r.body_type,
+            categories: r.categories,
+        });
+    }
+    return out;
 }
 /**
  * Returns true ONLY for the caller that won a fetch for this key. Two drivers saving

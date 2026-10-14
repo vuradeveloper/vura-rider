@@ -1112,6 +1112,8 @@ router.post("/car-db/image", (0, adminAuth_1.requireAdmin)("catalogue.write"), a
             colour: req.body?.colour ?? null,
             imageBase64: String(imageBase64),
             sourceNote: req.body?.sourceNote ?? null,
+            bodyType: req.body?.bodyType ?? null,
+            categories: Array.isArray(req.body?.categories) ? req.body.categories : null,
         }, actor);
         res.status(201).json(out);
     }
@@ -1138,6 +1140,8 @@ router.post("/car-db/generate", (0, adminAuth_1.requireAdmin)("catalogue.write")
             year: req.body?.year ?? null,
             yearRange: req.body?.yearRange ?? null,
             colours: Array.isArray(req.body?.colours) ? req.body.colours : undefined,
+            bodyType: req.body?.bodyType ?? null,
+            categories: Array.isArray(req.body?.categories) ? req.body.categories : null,
         }, actor);
         res.json(out);
     }

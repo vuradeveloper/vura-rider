@@ -490,11 +490,13 @@ function catalogueForApi(pairs) {
         const list = byMake.get(p.make);
         if (list.some((e) => norm(e.model) === norm(label)))
             return;
-        const body = resolveBodyType(p.make, p.model);
+        // Admin-assigned body/category (console upload/generate) beats the static
+        // guess, so a new car lands in the CORRECT category on the first try.
+        const body = p.body_type || resolveBodyType(p.make, p.model);
         list.push({
             model: label,
             body_type: body,
-            category: resolveCategory(p.make, p.model, body),
+            category: p.category || resolveCategory(p.make, p.model, body),
             order: i,
         });
     });

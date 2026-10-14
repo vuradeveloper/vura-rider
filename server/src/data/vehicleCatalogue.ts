@@ -456,7 +456,7 @@ export function vehicleNeedsConfirming(
  * back to the token on save, so the app needs no change and the model still matches.
  */
 export function catalogueForApi(
-  pairs?: { make: string; model: string }[] | null
+  pairs?: { make: string; model: string; body_type?: string | null; category?: string | null }[] | null
 ) {
   const base = {
     body_types: BODY_TYPES,
@@ -492,11 +492,13 @@ export function catalogueForApi(
     if (!byMake.has(p.make)) byMake.set(p.make, []);
     const list = byMake.get(p.make)!;
     if (list.some((e) => norm(e.model) === norm(label))) return;
-    const body = resolveBodyType(p.make, p.model);
+    // Admin-assigned body/category (console upload/generate) beats the static
+    // guess, so a new car lands in the CORRECT category on the first try.
+    const body = (p.body_type as BodyType) || resolveBodyType(p.make, p.model);
     list.push({
       model: label,
       body_type: body,
-      category: resolveCategory(p.make, p.model, body),
+      category: (p.category as VehicleCategory) || resolveCategory(p.make, p.model, body),
       order: i,
     });
   });

@@ -106,6 +106,14 @@ async function addCarDbImage(input, actor) {
     });
     const imageId = String(seed?.row?.id ?? "");
     const cacheKey = String(seed?.row?.cache_key ?? "").toLowerCase();
+    // Admin placement: body shape + booking category ride with the row and win
+    // the static guess in catalogueForApi.
+    if (imageId && (input.bodyType || (input.categories && input.categories.length))) {
+        await (0, database_1.execute)(`UPDATE vehicle_images
+          SET body_type = COALESCE($2, body_type),
+              categories = COALESCE($3::text[], categories)
+        WHERE id = $1`, [imageId, input.bodyType ?? null, input.categories?.length ? input.categories : null]);
+    }
     const resolved = cacheKey && imageId ? await (0, exports.resolveRequestsForCacheKey)(cacheKey, imageId) : 0;
     await (0, adminAuth_1.writeAudit)(actor, {
         action: "car_db.image_add",
@@ -243,6 +251,12 @@ async function generateImages(input, actor) {
                 approve: true,
             });
             generated.push({ colour, imageId: seed?.row?.id, cacheKey: seed?.row?.cache_key });
+            if (seed?.row?.id && (input.bodyType || (input.categories && input.categories.length))) {
+                await (0, database_1.execute)(`UPDATE vehicle_images
+              SET body_type = COALESCE($2, body_type),
+                  categories = COALESCE($3::text[], categories)
+            WHERE id = $1`, [String(seed.row.id), input.bodyType ?? null, input.categories?.length ? input.categories : null]);
+            }
         }
         catch (err) {
             failed.push({ colour, error: err?.message || String(err) });
