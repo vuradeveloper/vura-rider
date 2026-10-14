@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.fileNameFor = exports.storageKeyFor = exports.MAX_BYTES = exports.CANVAS = void 0;
+exports.RECOLOUR_PALETTE = exports.fileNameFor = exports.storageKeyFor = exports.MAX_BYTES = exports.CANVAS = void 0;
 exports.generationRange = generationRange;
 exports.vehicleImageCacheKey = vehicleImageCacheKey;
 exports.ensureVehicleImageTables = ensureVehicleImageTables;
@@ -69,6 +69,8 @@ exports.vehicleImageSource = vehicleImageSource;
 exports.ensureVehicleRequestTable = ensureVehicleRequestTable;
 exports.recordVehicleRequestMiss = recordVehicleRequestMiss;
 exports.resolveVehicleRequests = resolveVehicleRequests;
+exports.recolourFromWhite = recolourFromWhite;
+exports.autoFillMissingColours = autoFillMissingColours;
 exports.noteDriverVehicle = noteDriverVehicle;
 // ─────────────────────────────────────────────────────────────────────────────
 // vehicleImages.ts — the vehicle PHOTO cache (CarsXE-backed, but the API key
@@ -947,6 +949,15 @@ function startVehicleImageWorker(intervalMs = 30_000) {
     worker = setInterval(async () => {
         try {
             await ensureVehicleImageTables();
+            // Auto-backfill: create missing palette colours from each car's light
+            // (white/silver) original — 4 per tick until the catalogue is complete.
+            // Set CAR_DB_AUTOFILL=false to stop it (default ON — this is how the
+            // yellow/silver-only import grows into the full palette).
+            if (process.env.CAR_DB_AUTOFILL !== "false") {
+                const made = await autoFillMissingColours(4);
+                if (made > 0)
+                    console.log(`[vehicleImages] auto-fill created ${made} colour variant(s)`);
+            }
             // A row can be left at 'fetching' if the process restarted mid-fetch (that is
             // what the atomic claim above sets). Reclaim anything untouched for 5 minutes so
             // a crash can never strand a car on the SVG icon for ever.
@@ -1267,6 +1278,114 @@ async function resolveVehicleRequests(cacheKey, imageId) {
     catch (err) {
         // Queue bookkeeping must never break an approval.
         console.error("[vehicleImages] resolveVehicleRequests failed:", err?.message || err);
+        return 0;
+    }
+}
+// ── Auto-fill: recolour every car's MISSING colours from its lightest photo.
+//    The 03-Oct Car DB import only carried yellow+silver rows; this backfills
+//    the rest of the palette automatically (white preferred as source, then
+//    silver — both are light studio shots the mask/tint recolour handles).
+exports.RECOLOUR_PALETTE = [
+    "silver", "grey", "black", "blue", "red", "green",
+    "orange", "brown", "gold", "yellow", "beige",
+];
+const HEX_BY_COLOUR = {
+    white: "#F5F5F5", black: "#1C1C1E", silver: "#C0C4C8", grey: "#7A7F85",
+    red: "#C62828", blue: "#1E4FA3", green: "#2E7D32", brown: "#6D4C41",
+    gold: "#C9A227", orange: "#EF6C00", yellow: "#F9C80E", beige: "#D9C7A3",
+};
+/** Tint + mask recolour of a light studio cut-out (white or silver source). */
+async function recolourFromWhite(raw, colour) {
+    const sharp = (await Promise.resolve().then(() => __importStar(require("sharp")))).default;
+    const hex = HEX_BY_COLOUR[colour] || HEX_BY_COLOUR.silver;
+    const meta = await sharp(raw).metadata();
+    const w = meta.width || 900;
+    const h = meta.height || 560;
+    // Car mask from the ORIGINAL: light bg → transparent, car → opaque.
+    const mask = await sharp(raw).greyscale().threshold(232).negate().blur(0.7).ensureAlpha().toBuffer();
+    const tinted = await sharp(raw).tint(hex).ensureAlpha().toBuffer();
+    const cut = await sharp(tinted).composite([{ input: mask, blend: "dest-in" }]).toBuffer();
+    return sharp({ create: { width: w, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } })
+        .composite([{ input: cut }])
+        .flatten()
+        .png()
+        .toBuffer();
+}
+/**
+ * Produce up to `limit` MISSING colour variants across the catalogue, oldest
+ * gap first. Source per car = its approved WHITE row, else its approved
+ * SILVER row (the light-studio originals). Each variant goes through the
+ * standard pipeline and lands approved → requests auto-resolve.
+ * Returns how many variants were created. Never throws.
+ */
+async function autoFillMissingColours(limit = 3) {
+    try {
+        await ensureVehicleImageTables();
+        // One row per make|model|year_range: its best source + which colours exist.
+        const cars = await (0, database_1.query)(`SELECT base, MAX(make) AS make, MAX(model) AS model, MAX(year) AS year,
+              MAX(year_range) AS year_range,
+              (ARRAY_AGG(source_key ORDER BY colour_rank))[1] AS source_key,
+              ARRAY_AGG(colour) AS colours
+         FROM (
+           SELECT regexp_replace(cache_key, '\\|[^|]*$', '') AS base,
+                  make, model, year, year_range, storage_key AS source_key,
+                  colour,
+                  CASE WHEN LOWER(colour) = 'white' THEN 0
+                       WHEN LOWER(colour) = 'silver' THEN 1 ELSE 2 END AS colour_rank
+             FROM vehicle_images
+            WHERE status = 'approved' AND image_url IS NOT NULL
+              AND storage_key IS NOT NULL
+              AND LOWER(colour) IN ('white', 'silver')
+         ) t
+        GROUP BY base
+        ORDER BY base`);
+        let made = 0;
+        for (const car of cars) {
+            if (made >= limit)
+                break;
+            const have = new Set((car.colours || []).map((c) => String(c).toLowerCase()));
+            // Which of this car's colours exist ACROSS all its rows (any source)?
+            const allRows = await (0, database_1.query)(`SELECT colour FROM vehicle_images WHERE cache_key LIKE $1 AND status = 'approved'`, [`${car.base}|%`]);
+            for (const r of allRows)
+                have.add(String(r.colour || "").toLowerCase());
+            const missing = exports.RECOLOUR_PALETTE.filter((c) => !have.has(c));
+            if (!missing.length)
+                continue;
+            const { getObjectFromS3 } = await Promise.resolve().then(() => __importStar(require("../lib/s3")));
+            let raw = null;
+            try {
+                raw = await getObjectFromS3(car.source_key);
+            }
+            catch {
+                continue;
+            }
+            if (!raw?.length)
+                continue;
+            const colour = missing[0]; // one variant per car per tick keeps it gentle
+            try {
+                const out = await recolourFromWhite(raw, colour);
+                await importSeedImage({
+                    cacheKey: `${car.base}|${colour}`,
+                    make: car.make,
+                    model: car.model,
+                    year: car.year,
+                    yearRange: car.year_range,
+                    colour,
+                    licenceNote: "Auto-recoloured from the car's light studio original",
+                    webpBase64: out.toString("base64"),
+                    processRaw: true,
+                    approve: true,
+                });
+                made++;
+            }
+            catch (err) {
+                console.error(`[vehicleImages] autofill ${car.base}|${colour} failed:`, err?.message || err);
+            }
+        }
+        return made;
+    }
+    catch (err) {
+        console.error("[vehicleImages] autoFillMissingColours failed:", err?.message || err);
         return 0;
     }
 }

@@ -50,8 +50,6 @@ export declare function approveImage(id: string, candidateIndex: number, actor: 
 export declare function refetchImage(id: string, actor: AdminActor): Promise<any>;
 export declare function rejectImage(id: string, actor: AdminActor): Promise<any>;
 export declare function listImages(status?: string): Promise<any[]>;
-/** Palette colours a white original can become (white itself is the source). */
-export declare const RECOLOUR_PALETTE: string[];
 /**
  * Generate this car's missing colours from the WHITE original:
  *   • source = the uploaded file when given, else the car's existing approved

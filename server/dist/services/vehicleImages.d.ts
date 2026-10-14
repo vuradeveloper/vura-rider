@@ -367,5 +367,16 @@ export declare function recordVehicleRequestMiss(driverId: string | null | undef
  * nothing; the next app load shows the image. Returns how many resolved.
  */
 export declare function resolveVehicleRequests(cacheKey: string, imageId: string): Promise<number>;
+export declare const RECOLOUR_PALETTE: string[];
+/** Tint + mask recolour of a light studio cut-out (white or silver source). */
+export declare function recolourFromWhite(raw: Buffer, colour: string): Promise<Buffer>;
+/**
+ * Produce up to `limit` MISSING colour variants across the catalogue, oldest
+ * gap first. Source per car = its approved WHITE row, else its approved
+ * SILVER row (the light-studio originals). Each variant goes through the
+ * standard pipeline and lands approved → requests auto-resolve.
+ * Returns how many variants were created. Never throws.
+ */
+export declare function autoFillMissingColours(limit?: number): Promise<number>;
 export declare function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage>;
 //# sourceMappingURL=vehicleImages.d.ts.map

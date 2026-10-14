@@ -43,7 +43,8 @@ import {
   resolveAdminRole,
   writeAudit,
 } from "./adminAuth";
-import { recordVehicleRequestMiss, vehicleImageCacheKey } from "./vehicleImages";
+import { recordVehicleRequestMiss, vehicleImageCacheKey, autoFillMissingColours } from "./vehicleImages";
+import { getObjectFromS3 } from "../lib/s3";
 import adminV2Router from "../routes/adminV2";
 
 // S3 is not reachable from the scratch harness — mock it so the seed/upload
@@ -1680,6 +1681,59 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       await seedAdmin("sup8@vura.test", "support_agent");
       authUser.email = "sup8@vura.test";
       expect((await request("POST", `/api/admin/v2/documents/${pending!.id}/reject`, { note: "blurry" })).status).toBe(403);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("car db: auto-fill recolours a missing colour from the car's light original", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      // A real white studio-ish PNG stands in for the S3 object.
+      const sharp = (await import("sharp")).default;
+      const whitePng = await sharp({
+        create: { width: 60, height: 40, channels: 3, background: { r: 255, g: 255, b: 255 } },
+      })
+        .composite([
+          {
+            input: await sharp({
+              create: { width: 30, height: 20, channels: 3, background: { r: 230, g: 230, b: 235 } },
+            })
+              .png()
+              .toBuffer(),
+            top: 10,
+            left: 15,
+          },
+        ])
+        .png()
+        .toBuffer();
+      (getObjectFromS3 as any).mockResolvedValueOnce(whitePng);
+
+      // Car exists in SILVER only (the 03-Oct import state) — red is missing.
+      const key = vehicleImageCacheKey({ make: "Ford", model: "Figo", year: 2019, colour: "silver" });
+      await execute(
+        `INSERT INTO vehicle_images (cache_key, make, model, year, colour, image_url, storage_key, status)
+         VALUES ($1, 'ford', 'figo', 2019, 'silver', 'https://x/s.webp', 'vehicle-images/figo-silver', 'approved')`,
+        [key]
+      );
+
+      const made = await autoFillMissingColours(50);
+      expect(made).toBeGreaterThanOrEqual(1);
+      const first = await queryOne<any>(
+        `SELECT status FROM vehicle_images WHERE cache_key = $1`,
+        [vehicleImageCacheKey({ make: "Ford", model: "Figo", year: 2019, colour: "grey" })]
+      );
+      expect(first?.status).toBe("approved"); // backfilled + auto-approved
+
+      // Second run must not duplicate what it just made.
+      (getObjectFromS3 as any).mockResolvedValueOnce(whitePng);
+      await autoFillMissingColours(50);
+      const again = await query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM vehicle_images WHERE cache_key = $1`,
+        [vehicleImageCacheKey({ make: "Ford", model: "Figo", year: 2019, colour: "grey" })]
+      );
+      expect(again[0].n).toBe(1);
     } finally {
       delete process.env.ADMIN_EMAILS;
     }

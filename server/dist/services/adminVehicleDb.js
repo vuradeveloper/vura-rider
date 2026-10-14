@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RECOLOUR_PALETTE = exports.resolveRequestsForCacheKey = exports.recordCarDbMiss = exports.ensureRequestTable = void 0;
+exports.resolveRequestsForCacheKey = exports.recordCarDbMiss = exports.ensureRequestTable = void 0;
 exports.listVehicleRequests = listVehicleRequests;
 exports.resolveVehicleRequest = resolveVehicleRequest;
 exports.addCarDbImage = addCarDbImage;
@@ -202,44 +202,8 @@ async function rejectImage(id, actor) {
 async function listImages(status) {
     return (0, vehicleImages_1.listVehicleImages)(status);
 }
-// ── Generate other colours FROM THE WHITE ORIGINAL — see RECOLOUR_PALETTE.
-// ── Generate other colours FROM THE WHITE ORIGINAL (no Gemini, no CarsXE).
-//    The proven Car DB approach, in-process: a white studio cut-out is tinted
-//    per palette colour (sharp .tint keeps shading/luminance) and masked back
-//    onto the white background so only the CAR takes the colour.
-/** Palette colours a white original can become (white itself is the source). */
-exports.RECOLOUR_PALETTE = [
-    "silver", "grey", "black", "blue", "red", "green",
-    "orange", "brown", "gold", "yellow", "beige",
-];
-const HEX_BY_COLOUR = {
-    white: "#F5F5F5", black: "#1C1C1E", silver: "#C0C4C8", grey: "#7A7F85",
-    red: "#C62828", blue: "#1E4FA3", green: "#2E7D32", brown: "#6D4C41",
-    gold: "#C9A227", orange: "#EF6C00", yellow: "#F9C80E", beige: "#D9C7A3",
-};
-/**
- * One recolour: tint the whole frame with the target hue (white body takes the
- * full colour, shading preserved), build a car mask from the ORIGINAL (anything
- * clearly non-white), cut the tinted frame with that mask, flatten back onto
- * pure white. The background never tints.
- */
-async function recolourFromWhite(raw, colour) {
-    const sharp = (await Promise.resolve().then(() => __importStar(require("sharp")))).default;
-    const hex = HEX_BY_COLOUR[colour] || HEX_BY_COLOUR.silver;
-    const meta = await sharp(raw).metadata();
-    const w = meta.width || 900;
-    const h = meta.height || 560;
-    // Car mask from the ORIGINAL: white bg → transparent, car → opaque.
-    const mask = await sharp(raw).greyscale().threshold(232).negate().blur(0.7).ensureAlpha().toBuffer();
-    // Tint preserves luminance: white body takes the colour, dark glass stays dark.
-    const tinted = await sharp(raw).tint(hex).ensureAlpha().toBuffer();
-    const cut = await sharp(tinted).composite([{ input: mask, blend: "dest-in" }]).toBuffer();
-    return sharp({ create: { width: w, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } })
-        .composite([{ input: cut }])
-        .flatten()
-        .png()
-        .toBuffer();
-}
+// (recolourFromWhite + RECOLOUR_PALETTE live in services/vehicleImages — one
+// engine shared by this console path and the automatic backfill worker.)
 /**
  * Generate this car's missing colours from the WHITE original:
  *   • source = the uploaded file when given, else the car's existing approved
@@ -282,7 +246,7 @@ async function generateImages(input, actor) {
     const existing = await (0, database_1.query)(`SELECT colour FROM vehicle_images
       WHERE cache_key LIKE $1 AND status = 'approved'`, [`${baseNoColour}|%`]);
     const have = new Set(existing.map((r) => String(r.colour || "").toLowerCase()));
-    const palette = (input.colours && input.colours.length ? input.colours : exports.RECOLOUR_PALETTE)
+    const palette = (input.colours && input.colours.length ? input.colours : vehicleImages_1.RECOLOUR_PALETTE)
         .map((c) => String(c).trim().toLowerCase())
         .filter((c) => c && c !== "white" && !have.has(c))
         .slice(0, 12);
@@ -290,7 +254,7 @@ async function generateImages(input, actor) {
     const failed = [];
     for (const colour of palette) {
         try {
-            const out = await recolourFromWhite(raw, colour);
+            const out = await (0, vehicleImages_1.recolourFromWhite)(raw, colour);
             const seed = await (0, vehicleImages_1.importSeedImage)({
                 // Resolver key format (make|model|year_range|colour) — auto-pull matches on it.
                 cacheKey: (0, vehicleImages_2.vehicleImageCacheKey)({
