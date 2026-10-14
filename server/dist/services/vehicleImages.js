@@ -114,9 +114,15 @@ async function pythonRecolour(raw, colour) {
         return null;
     let dir = "";
     try {
+        // v12 is the current engine; v11 stays as the bundled fallback. Both share
+        // the same CLI (input colour [output]). RECOLOUR_SCRIPT overrides both.
         const script = process.env.RECOLOUR_SCRIPT ||
-            path.join(__dirname, "..", "..", "scripts", "recolor_car_v11.py");
-        if (!(0, fs_1.existsSync)(script))
+            [
+                path.join(__dirname, "..", "..", "scripts", "recolor_car_v12.py"),
+                path.join(__dirname, "..", "..", "scripts", "recolor_car_v11.py"),
+            ].find((p) => (0, fs_1.existsSync)(p)) ||
+            "";
+        if (!script)
             return null;
         dir = await (0, promises_1.mkdtemp)(path.join((0, os_1.tmpdir)(), "vura-recolour-"));
         const inPath = path.join(dir, "in.png"); // PIL sniffs content, extension is irrelevant

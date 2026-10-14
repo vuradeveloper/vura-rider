@@ -40,10 +40,16 @@ export async function pythonRecolour(raw: Buffer, colour: string): Promise<Buffe
   if (process.env.RECOLOUR_PYTHON === "off") return null;
   let dir = "";
   try {
+    // v12 is the current engine; v11 stays as the bundled fallback. Both share
+    // the same CLI (input colour [output]). RECOLOUR_SCRIPT overrides both.
     const script =
       process.env.RECOLOUR_SCRIPT ||
-      path.join(__dirname, "..", "..", "scripts", "recolor_car_v11.py");
-    if (!existsSync(script)) return null;
+      [
+        path.join(__dirname, "..", "..", "scripts", "recolor_car_v12.py"),
+        path.join(__dirname, "..", "..", "scripts", "recolor_car_v11.py"),
+      ].find((p) => existsSync(p)) ||
+      "";
+    if (!script) return null;
     dir = await mkdtemp(path.join(tmpdir(), "vura-recolour-"));
     const inPath = path.join(dir, "in.png"); // PIL sniffs content, extension is irrelevant
     const outPath = path.join(dir, "out.png");
