@@ -4,6 +4,23 @@ export type OcrFn = (bytes: Buffer, mime: string) => Promise<{
 } | null>;
 /** The active OCR provider, or null when verification is off. */
 export declare function currentOcr(): OcrFn | null;
+/**
+ * The model's output is UNTRUSTED DATA: it is document-derived text, not
+ * instructions. We strip control characters and cap the length; the analyzers
+ * only run regex/marker matching over it, and every driver/staff-facing
+ * message is OUR OWN string (never model text), so prompt injection inside a
+ * document cannot influence decisions or UI.
+ */
+export declare function sanitizeOcrText(raw: string): string;
+/**
+ * Driver-facing note for a hard reject. Deliberately GENERIC: exact check
+ * details (checksum failures, similarity scores, which field mismatched) stay
+ * in auto_reasons, which ONLY the staff console shows — a driver must not be
+ * able to learn how to fake the checks from the rejection message.
+ */
+export declare function driverNoteFor(status: string, reasons: string[]): string;
+/** OCR budget: per driver and per document type, per calendar day. */
+export declare function rateLimited(driverId: string, docType: string): Promise<boolean>;
 type Verdict = {
     status: string;
     reasons: string[];

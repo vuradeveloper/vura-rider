@@ -1738,7 +1738,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(row.auto_status).toBe("approved");
       expect(row.status).toBe("pending_review"); // …but staff still clicks Approve
 
-      // Unreadable file → rejected + driver-facing note (existing re-upload flow).
+      // Unparseable / unreadable file → goes to STAFF, never auto-rejected.
       const doc2 = await queryOne<{ id: string }>(
         `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
          VALUES ($1, 'drivers_license', 'lic.jpg', 'image/jpeg', 'vehicle-images/auto-test-lic', 'b', 'pending_review')
@@ -1746,16 +1746,35 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
         [driver]
       );
       const v2 = await verifyDocument(doc2!.id, async () => ({ text: "nope", confidence: 5 }));
-      expect(v2?.status).toBe("rejected");
+      expect(v2?.status).toBe("needs_review");
       const row2 = await queryOne<any>(
         `SELECT status, note, auto_status FROM driver_documents WHERE id = $1`,
         [doc2!.id]
       );
-      expect(row2.status).toBe("rejected");
-      expect(row2.auto_status).toBe("rejected");
-      expect(row2.note).toMatch(/read any text/i);
+      expect(row2.status).toBe("pending_review"); // stays pending for staff
+      expect(row2.auto_status).toBe("needs_review");
+      expect(row2.note).toBeNull(); // no driver-facing note for a non-reject
+
+      // OCR budget: over the per-driver daily limit → no call, stays pending.
+      process.env.OCR_MAX_PER_DRIVER_DAY = "2"; // doc + doc2 already used today's two
+      const doc3 = await queryOne<{ id: string }>(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+         VALUES ($1, 'license_disk', 'disc.jpg', 'image/jpeg', 'vehicle-images/auto-test-disc', 'b', 'pending_review')
+         RETURNING id`,
+        [driver]
+      );
+      const v3 = await verifyDocument(doc3!.id, async () => ({ text: "LICENCE DISC VIN ABC123", confidence: 90 }));
+      expect(v3?.status).toBe("skipped_rate_limit");
+      const row3 = await queryOne<any>(
+        `SELECT status, auto_status, verified_at FROM driver_documents WHERE id = $1`,
+        [doc3!.id]
+      );
+      expect(row3.auto_status).toBeNull(); // untouched — no OCR ran
+      expect(row3.verified_at).toBeNull();
+      expect(row3.status).toBe("pending_review");
     } finally {
       delete process.env.ADMIN_EMAILS;
+      delete process.env.OCR_MAX_PER_DRIVER_DAY;
     }
   });
 

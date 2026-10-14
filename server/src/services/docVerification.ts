@@ -33,12 +33,15 @@ function geminiOcr(): OcrFn | null {
   const key = process.env.GEMINI_API_KEY || "";
   if (!key) return null;
   const model = process.env.GEMINI_OCR_MODEL || "gemini-2.5-flash";
+  // Hard timeout: a hung request can never wedge the upload worker.
+  const timeoutMs = Math.min(Number(process.env.OCR_TIMEOUT_MS) || 30_000, 60_000);
   return async (bytes, mime) => {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           contents: [
             {
@@ -56,10 +59,10 @@ function geminiOcr(): OcrFn | null {
         }),
       }
     );
-    if (!res.ok) throw new Error(`Gemini OCR HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Gemini OCR HTTP ${res.status}`); // status ONLY — never the body
     const json: any = await res.json();
-    const text = (json?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("\n");
-    return { text, confidence: 80 };
+    const raw = (json?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("\n");
+    return { text: sanitizeOcrText(raw), confidence: 80 };
   };
 }
 
@@ -68,6 +71,59 @@ export function currentOcr(): OcrFn | null {
   const mode = (process.env.DOC_VERIFY || "off").trim().toLowerCase();
   if (mode === "gemini") return geminiOcr();
   return null; // off — and "textract" is intentionally not wired yet
+}
+
+const MAX_OCR_CHARS = 20_000;
+
+/**
+ * The model's output is UNTRUSTED DATA: it is document-derived text, not
+ * instructions. We strip control characters and cap the length; the analyzers
+ * only run regex/marker matching over it, and every driver/staff-facing
+ * message is OUR OWN string (never model text), so prompt injection inside a
+ * document cannot influence decisions or UI.
+ */
+export function sanitizeOcrText(raw: string): string {
+  return String(raw || "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "") // control chars; keeps \n \t
+    .slice(0, MAX_OCR_CHARS);
+}
+
+/**
+ * Driver-facing note for a hard reject. Deliberately GENERIC: exact check
+ * details (checksum failures, similarity scores, which field mismatched) stay
+ * in auto_reasons, which ONLY the staff console shows — a driver must not be
+ * able to learn how to fake the checks from the rejection message.
+ */
+export function driverNoteFor(status: string, reasons: string[]): string {
+  if (status !== "rejected") return "";
+  const joined = reasons.join(" ");
+  if (/expired/i.test(joined)) return "This document has expired. Upload a valid, unexpired copy.";
+  if (/doesn't look like|correct document/i.test(joined))
+    return "This doesn't look like the right document type. Upload the correct document.";
+  if (/couldn't read|valid ID number|any text/i.test(joined))
+    return "We couldn't read this document. Retake it in good light, uncropped, with no glare.";
+  if (/doesn't match/i.test(joined))
+    return "The details on this document don't match your other documents. Check you uploaded the right files.";
+  return "This document didn't pass our automatic checks. Re-upload it, or contact support if you believe this is a mistake.";
+}
+
+const envNum = (v: string | undefined, d: number) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : d;
+};
+
+/** OCR budget: per driver and per document type, per calendar day. */
+export async function rateLimited(driverId: string, docType: string): Promise<boolean> {
+  const maxDriver = envNum(process.env.OCR_MAX_PER_DRIVER_DAY, 10);
+  const maxType = envNum(process.env.OCR_MAX_PER_TYPE_DAY, 3);
+  const row = await queryOne<any>(
+    `SELECT COUNT(*) FILTER (WHERE verified_at >= NOW()::date) AS today,
+            COUNT(*) FILTER (WHERE doc_type = $2 AND verified_at >= NOW()::date) AS typeday
+       FROM driver_documents
+      WHERE driver_id = $1`,
+    [driverId, docType]
+  );
+  return Number(row?.today || 0) >= maxDriver || Number(row?.typeday || 0) >= maxType;
 }
 
 type Verdict = { status: string; reasons: string[] };
@@ -96,7 +152,7 @@ async function writeVerdict(
       JSON.stringify(v.extracted),
       v.confidence,
       reject,
-      reject ? v.reasons[0] || "Rejected by automatic checks." : null,
+      reject ? driverNoteFor(v.autoStatus, v.reasons) : null,
     ]
   );
   return { status: v.autoStatus, reasons: v.reasons };
@@ -115,7 +171,7 @@ export async function verifyDocument(docId: string, ocrOverride?: OcrFn): Promis
   if (!ocr) return null; // verification off → zero behaviour change
   try {
     const doc = await queryOne<any>(
-      `SELECT d.id, d.driver_id, d.doc_type, d.mime_type, d.s3_key, u.full_name
+      `SELECT d.id, d.driver_id, d.doc_type, d.mime_type, d.s3_key, d.verified_at, u.full_name
          FROM driver_documents d
          JOIN users u ON u.id = d.driver_id
         WHERE d.id = $1`,
@@ -123,12 +179,51 @@ export async function verifyDocument(docId: string, ocrOverride?: OcrFn): Promis
     );
     if (!doc || !doc.s3_key) return null;
 
+    // Never OCR the same file row twice (re-uploads create NEW rows anyway).
+    if (doc.verified_at) return null;
+
+    // OCR budget: per driver + per document type per calendar day. Over the
+    // limit the document simply STAYS pending for staff — no model call, and
+    // never a rejection. (Return value carries the clear reason.)
+    if (await rateLimited(doc.driver_id, doc.doc_type)) {
+      console.log("[docVerification]", { docId, docType: doc.doc_type, verdict: "skipped_rate_limit" });
+      return { status: "skipped_rate_limit", reasons: [] };
+    }
+
     const bytes = await getObjectFromS3(doc.s3_key);
-    const out = await ocr(bytes, doc.mime_type || "application/octet-stream");
-    if (!out || out.text.replace(/\s/g, "").length < 40) {
+    // Size cap: oversized files are never sent to the model. (Page count for
+    // PDFs is bounded by this cap; a true page count would need a PDF parser.)
+    const maxBytes = envNum(process.env.MAX_OCR_MB, 4) * 1024 * 1024;
+    if (bytes.length > maxBytes) {
       return writeVerdict(doc, {
-        autoStatus: "rejected",
-        reasons: ["We couldn't read any text in this file. Upload a clear, well-lit copy."],
+        autoStatus: "needs_review",
+        reasons: ["This file is too large for automatic checks. Staff will review it."],
+        extracted: { sizeBytes: bytes.length },
+        confidence: null,
+      });
+    }
+
+    let out: { text: string; confidence: number } | null = null;
+    try {
+      out = await ocr(bytes, doc.mime_type || "application/octet-stream");
+    } catch (err: any) {
+      // Provider error / timeout / unparseable response: the document STAYS
+      // pending for staff — it is NEVER rejected, and the upload (already
+      // finished) is unaffected. Log fields only, never document content.
+      console.log("[docVerification]", {
+        docId,
+        docType: doc.doc_type,
+        verdict: "ocr_failed",
+        error: String(err?.message || err).slice(0, 120),
+      });
+      return null;
+    }
+    if (!out || out.text.replace(/\s/g, "").length < 40) {
+      // Nothing readable — "can't check", NOT a hard reject (per policy: only
+      // clear reasons — wrong type / expired — may reject).
+      return writeVerdict(doc, {
+        autoStatus: "needs_review",
+        reasons: ["We couldn't check this document automatically. Staff will review it."],
         extracted: {},
         confidence: out ? out.confidence ?? null : null,
       });
@@ -141,14 +236,21 @@ export async function verifyDocument(docId: string, ocrOverride?: OcrFn): Promis
       extracted: result.extracted || {},
       confidence: out.confidence ?? null,
     });
+    // Log discipline: document id, type and verdict ONLY — never OCR text,
+    // extracted fields or reason details.
+    console.log("[docVerification]", { docId, docType: doc.doc_type, verdict: verdict.status });
 
     await recheckDriver(doc.driver_id).catch((e: any) =>
       console.error("[docVerification] cross-check failed:", e?.message || e)
     );
     return verdict;
   } catch (err: any) {
-    console.error("[docVerification] verify failed for", docId, err?.message || err);
-    return null; // NEVER break the upload flow
+    // Outer catch: anything unexpected leaves the document exactly as before.
+    console.error("[docVerification] verify failed:", {
+      docId,
+      error: String(err?.message || err).slice(0, 120),
+    });
+    return null;
   }
 }
 
@@ -196,7 +298,7 @@ export async function recheckDriver(driverId: string): Promise<void> {
         JSON.stringify(fin.reasons),
         JSON.stringify(list),
         reject,
-        reject ? fin.reasons[0] || "Rejected by automatic checks." : null,
+        reject ? driverNoteFor(fin.status, fin.reasons) : null,
       ]
     );
   }

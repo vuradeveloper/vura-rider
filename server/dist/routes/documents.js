@@ -136,7 +136,17 @@ router.get("/mine", roleGuard(["driver", "admin", "passenger"]), async (req, res
          FROM driver_documents WHERE driver_id = $1
         ORDER BY created_at DESC
         LIMIT 50`, [dbUser.id]);
-        res.json({ documents: rows.map((d) => ({ ...d })) });
+        res.json({
+            // Driver-facing endpoint: keep the verdict STATE, redact the staff-only
+            // detail (reasons / extracted fields / confidence never leave the admin
+            // surface — POPIA data minimisation).
+            documents: rows.map((d) => ({
+                ...d,
+                auto_reasons: null,
+                extracted: null,
+                ocr_confidence: null,
+            })),
+        });
     }
     catch (err) {
         res.status(500).json({ error: err?.message || "Failed to list documents" });

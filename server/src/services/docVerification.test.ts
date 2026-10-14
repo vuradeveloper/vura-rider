@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { driverNoteFor, sanitizeOcrText } from "./docVerification";
 
 // Pure logic from the ridevura-verification port (server/verification — plain
 // CJS at the same relative depth as docVerification.ts). No DB, no network.
@@ -79,5 +80,20 @@ describe("doc verification (ridevura-verification port)", () => {
     expect(issues.drivers_license).toHaveLength(1);
     expect(issues.drivers_license[0].status).toBe("rejected");
     expect(issues.drivers_license[0].msg).toMatch(/doesn't match/i);
+  });
+
+  it("driver notes are generic — check internals never leak to drivers", () => {
+    const checksumNote = driverNoteFor("rejected", ["The check digit doesn't match."]);
+    expect(checksumNote).not.toMatch(/check digit/i); // staff-only detail stays in auto_reasons
+    expect(checksumNote.length).toBeGreaterThan(10);
+    expect(driverNoteFor("rejected", ["This license expired on 2020-01-01."])).toMatch(/expired/i);
+    expect(driverNoteFor("rejected", ["This doesn't look like a Driver's License."])).toMatch(/right document type/i);
+    expect(driverNoteFor("needs_review", ["x"])).toBe(""); // only rejects get a driver note
+    expect(driverNoteFor("approved", [])).toBe("");
+  });
+
+  it("OCR output is treated as untrusted data (stripped + capped)", () => {
+    expect(sanitizeOcrText("AB\u0000C\u0007D\nE")).toBe("ABCD\nE");
+    expect(sanitizeOcrText("x".repeat(30_000)).length).toBe(20_000);
   });
 });
