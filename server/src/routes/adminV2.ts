@@ -56,6 +56,14 @@ import {
   moderateRider,
 } from "../services/adminRiders";
 import { maskPhone } from "../lib/format";
+import {
+  CAMPAIGN_AUDIENCES,
+  createCampaign,
+  getCampaign,
+  isCampaignAudience,
+  listCampaigns,
+  sendCampaign,
+} from "../services/adminMessaging";
 /**
  * Best-effort push notice to the driver when an admin changes their status.
  * States the reason verbatim (the brief: "push notification to the driver
@@ -846,5 +854,108 @@ router.post(
   }
 );
 
+// ── Messaging campaigns (Phase 4) ─────────────────────────────────────────────
+
+// GET /api/admin/v2/campaigns — newest first.
+router.get("/campaigns", requireAdmin("messaging.send"), async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 100) : 100;
+    res.json({ campaigns: await listCampaigns(limit) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/admin/v2/campaigns/:id — one campaign + delivery breakdown.
+router.get("/campaigns/:id", requireAdmin("messaging.send"), async (req: AuthRequest, res: Response) => {
+  try {
+    const campaign = await getCampaign(String(req.params.id));
+    if (!campaign) { res.status(404).json({ error: "Campaign not found" }); return; }
+    res.json({ campaign });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/campaigns — compose a draft (NOT sent yet).
+router.post("/campaigns", requireAdmin("messaging.send"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const name = String(req.body?.name || "").trim();
+    const title = String(req.body?.title || "").trim();
+    const body = String(req.body?.body || "").trim();
+    const audience = String(req.body?.audience || "riders");
+    if (name.length < 3 || title.length < 1 || body.length < 1) {
+      res.status(400).json({ error: "name, title and body are required" });
+      return;
+    }
+    if (title.length > 200) {
+      res.status(400).json({ error: "title must be 200 chars or fewer" });
+      return;
+    }
+    if (!isCampaignAudience(audience)) {
+      res.status(400).json({ error: `audience must be one of: ${CAMPAIGN_AUDIENCES.join(", ")}` });
+      return;
+    }
+    const campaign = await createCampaign({ name, title, body, audience }, actor.email);
+    await writeAudit(actor, {
+      action: "campaign.create",
+      entityType: "admin_campaign",
+      entityId: campaign!.id,
+      newValue: { name, title, audience },
+    });
+    res.status(201).json({ campaign });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/campaigns/:id/send — fire a draft ONCE. The status flip
+// in sendCampaign is the lock; a second click answers 409 with the sent row.
+// Fan-out is awaited in batches — this route is intentionally synchronous so
+// the operator sees the real delivered/failed counters when it returns.
+router.post(
+  "/campaigns/:id/send",
+  requireAdmin("messaging.send"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      const id = String(req.params.id);
+      const existing = await getCampaign(id);
+      if (!existing) { res.status(404).json({ error: "Campaign not found" }); return; }
+      if (existing.status !== "draft") {
+        res.status(409).json({ error: `Campaign already ${existing.status}`, campaign: existing });
+        return;
+      }
+      const campaign = await sendCampaign(id, actor.email);
+      if (!campaign) {
+        // Someone else won the race between our read and the claim.
+        const now = await getCampaign(id);
+        res.status(409).json({ error: "Campaign already sent", campaign: now });
+        return;
+      }
+      await writeAudit(actor, {
+        action: "campaign.send",
+        entityType: "admin_campaign",
+        entityId: id,
+        oldValue: { status: "draft" },
+        newValue: {
+          status: campaign.status,
+          audience: campaign.audience,
+          recipients: campaign.recipient_count,
+          sent: campaign.sent_count,
+          failed: campaign.failed_count,
+        },
+      });
+      res.json({ campaign });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
 export default router;
+
 

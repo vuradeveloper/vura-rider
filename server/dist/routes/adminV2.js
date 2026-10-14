@@ -23,6 +23,7 @@ const push_1 = require("../services/push");
 const adminTrips_1 = require("../services/adminTrips");
 const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
+const adminMessaging_1 = require("../services/adminMessaging");
 /**
  * Best-effort push notice to the driver when an admin changes their status.
  * States the reason verbatim (the brief: "push notification to the driver
@@ -794,6 +795,115 @@ router.post("/tickets/:id/messages", (0, adminAuth_1.requireAdmin)("tickets.writ
             newValue: { message },
         });
         res.status(201).json({ ok: true });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Messaging campaigns (Phase 4) ─────────────────────────────────────────────
+// GET /api/admin/v2/campaigns — newest first.
+router.get("/campaigns", (0, adminAuth_1.requireAdmin)("messaging.send"), async (req, res) => {
+    try {
+        const limit = req.query.limit ? parseInt(String(req.query.limit), 100) : 100;
+        res.json({ campaigns: await (0, adminMessaging_1.listCampaigns)(limit) });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/campaigns/:id — one campaign + delivery breakdown.
+router.get("/campaigns/:id", (0, adminAuth_1.requireAdmin)("messaging.send"), async (req, res) => {
+    try {
+        const campaign = await (0, adminMessaging_1.getCampaign)(String(req.params.id));
+        if (!campaign) {
+            res.status(404).json({ error: "Campaign not found" });
+            return;
+        }
+        res.json({ campaign });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/campaigns — compose a draft (NOT sent yet).
+router.post("/campaigns", (0, adminAuth_1.requireAdmin)("messaging.send"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const name = String(req.body?.name || "").trim();
+        const title = String(req.body?.title || "").trim();
+        const body = String(req.body?.body || "").trim();
+        const audience = String(req.body?.audience || "riders");
+        if (name.length < 3 || title.length < 1 || body.length < 1) {
+            res.status(400).json({ error: "name, title and body are required" });
+            return;
+        }
+        if (title.length > 200) {
+            res.status(400).json({ error: "title must be 200 chars or fewer" });
+            return;
+        }
+        if (!(0, adminMessaging_1.isCampaignAudience)(audience)) {
+            res.status(400).json({ error: `audience must be one of: ${adminMessaging_1.CAMPAIGN_AUDIENCES.join(", ")}` });
+            return;
+        }
+        const campaign = await (0, adminMessaging_1.createCampaign)({ name, title, body, audience }, actor.email);
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "campaign.create",
+            entityType: "admin_campaign",
+            entityId: campaign.id,
+            newValue: { name, title, audience },
+        });
+        res.status(201).json({ campaign });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/campaigns/:id/send — fire a draft ONCE. The status flip
+// in sendCampaign is the lock; a second click answers 409 with the sent row.
+// Fan-out is awaited in batches — this route is intentionally synchronous so
+// the operator sees the real delivered/failed counters when it returns.
+router.post("/campaigns/:id/send", (0, adminAuth_1.requireAdmin)("messaging.send"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const id = String(req.params.id);
+        const existing = await (0, adminMessaging_1.getCampaign)(id);
+        if (!existing) {
+            res.status(404).json({ error: "Campaign not found" });
+            return;
+        }
+        if (existing.status !== "draft") {
+            res.status(409).json({ error: `Campaign already ${existing.status}`, campaign: existing });
+            return;
+        }
+        const campaign = await (0, adminMessaging_1.sendCampaign)(id, actor.email);
+        if (!campaign) {
+            // Someone else won the race between our read and the claim.
+            const now = await (0, adminMessaging_1.getCampaign)(id);
+            res.status(409).json({ error: "Campaign already sent", campaign: now });
+            return;
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "campaign.send",
+            entityType: "admin_campaign",
+            entityId: id,
+            oldValue: { status: "draft" },
+            newValue: {
+                status: campaign.status,
+                audience: campaign.audience,
+                recipients: campaign.recipient_count,
+                sent: campaign.sent_count,
+                failed: campaign.failed_count,
+            },
+        });
+        res.json({ campaign });
     }
     catch (err) {
         sendError(res, err);

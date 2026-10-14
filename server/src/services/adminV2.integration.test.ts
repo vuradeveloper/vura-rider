@@ -206,6 +206,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       "005_admin_drivers.sql",
       "006_admin_riders.sql",
       "007_admin_trips.sql",
+      "008_admin_messaging.sql",
     ]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql
@@ -251,6 +252,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await execute(`DELETE FROM support_ticket_messages`);
     await execute(`DELETE FROM support_tickets`);
     await execute(`DELETE FROM ride_events`);
+    await execute(`DELETE FROM admin_campaigns`);
     authUser.email = null;
   });
 
@@ -1061,6 +1063,109 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       authUser.email = "fin3@vura.test";
       expect((await request("GET", "/api/admin/v2/trips")).status).toBe(403);
       expect((await request("GET", "/api/admin/v2/trips/live")).status).toBe(403);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  // ── Phase 4: messaging campaigns ────────────────────────────────────────────
+
+  it("campaigns: compose validated + audited; send once only; audience counts", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      await seedRider();
+      await seedRider();
+
+      // Validation
+      expect(
+        (await request("POST", "/api/admin/v2/campaigns", { name: "ab", title: "t", body: "b" })).status
+      ).toBe(400);
+      expect(
+        (await request("POST", "/api/admin/v2/campaigns", {
+          name: "Winter promo",
+          title: "Save 20%",
+          body: "Use code WINTER",
+          audience: "aliens",
+        })).status
+      ).toBe(400);
+
+      // Compose a draft
+      const created = await request("POST", "/api/admin/v2/campaigns", {
+        name: "Winter promo",
+        title: "Save 20% this winter",
+        body: "Use code WINTER at checkout.",
+        audience: "riders",
+      });
+      expect(created.status).toBe(201);
+      const c = created.json.campaign;
+      expect(c.status).toBe("draft");
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'campaign.create' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe(c.id);
+
+      // Send: no push tokens exist in the scratch DB → recipient_count = riders,
+      // delivered counts depend on the (absent) token table — the send COMPLETES.
+      const sent = await request("POST", `/api/admin/v2/campaigns/${c.id}/send`);
+      expect(sent.status).toBe(200);
+      expect(sent.json.campaign.status).toBe("sent");
+      expect(sent.json.campaign.recipient_count).toBeGreaterThanOrEqual(2);
+      expect(sent.json.campaign.sent_by).toBe("boss@vura.test");
+      const sendAudit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'campaign.send' ORDER BY id DESC LIMIT 1`
+      );
+      expect(sendAudit?.old_value).toMatchObject({ status: "draft" });
+      expect(sendAudit?.new_value).toMatchObject({ status: "sent" });
+
+      // Second send → 409 (the claim UPDATE only fires on draft)
+      expect((await request("POST", `/api/admin/v2/campaigns/${c.id}/send`)).status).toBe(409);
+
+      // Detail carries the delivery breakdown
+      const detail = await request("GET", `/api/admin/v2/campaigns/${c.id}`);
+      expect(detail.status).toBe(200);
+      expect(detail.json.campaign.delivery).toBeTruthy();
+
+      // List shows it
+      const list = await request("GET", "/api/admin/v2/campaigns");
+      expect(list.json.campaigns.some((x: any) => x.id === c.id)).toBe(true);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("campaigns: operations+super_admin may send; support/finance/onboarding denied", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const c = (
+        await request("POST", "/api/admin/v2/campaigns", {
+          name: "Perm check",
+          title: "Perm check",
+          body: "Perm check body.",
+          audience: "drivers",
+        })
+      ).json.campaign;
+
+      // support_agent: no messaging.send
+      await seedAdmin("sup4@vura.test", "support_agent");
+      authUser.email = "sup4@vura.test";
+      expect((await request("GET", "/api/admin/v2/campaigns")).status).toBe(403);
+      expect((await request("POST", "/api/admin/v2/campaigns", { name: "x", title: "y", body: "z" })).status).toBe(403);
+      expect((await request("POST", `/api/admin/v2/campaigns/${c.id}/send`)).status).toBe(403);
+
+      // finance: no messaging.send
+      await seedAdmin("fin4@vura.test", "finance");
+      authUser.email = "fin4@vura.test";
+      expect((await request("GET", "/api/admin/v2/campaigns")).status).toBe(403);
+
+      // operations: messaging.send present → allowed
+      await seedAdmin("ops5@vura.test", "operations");
+      authUser.email = "ops5@vura.test";
+      expect((await request("GET", "/api/admin/v2/campaigns")).status).toBe(200);
+      const sent = await request("POST", `/api/admin/v2/campaigns/${c.id}/send`);
+      expect(sent.status).toBe(200);
+      expect(sent.json.campaign.sent_by).toBe("ops5@vura.test");
     } finally {
       delete process.env.ADMIN_EMAILS;
     }

@@ -70,13 +70,14 @@ async function logNotification(
   body: string,
   deliveryStatus: "sent" | "partial" | "skipped" | "error",
   error: string | null,
-  provider: string
+  provider: string,
+  campaignId: string | null = null
 ): Promise<void> {
   try {
     await execute(
-      `INSERT INTO notifications_log (user_id, type, ride_id, title, body, sent_at, delivery_status, error, provider)
-       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8)`,
-      [userId, type, rideId, title, body, deliveryStatus, error, provider]
+      `INSERT INTO notifications_log (user_id, type, ride_id, title, body, sent_at, delivery_status, error, provider, campaign_id)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8, $9)`,
+      [userId, type, rideId, title, body, deliveryStatus, error, provider, campaignId]
     );
   } catch (err: any) {
     console.warn("[notify] notifications_log write failed:", err?.message);
@@ -225,7 +226,9 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
       msg.body,
       sent > 0 ? (error ? "partial" : "sent") : "skipped",
       error,
-      provider
+      provider,
+      // Admin-v2 campaigns tag their fan-out rows (008); everyone else sends null.
+      (msg.data as any)?.campaign_id ?? null
     ).catch(() => undefined);
     await logPushSend(
       ids[0],
@@ -246,7 +249,8 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
       msg.body,
       "error",
       error,
-      "unknown"
+      "unknown",
+      (msg.data as any)?.campaign_id ?? null
     ).catch(() => undefined);
   }
 

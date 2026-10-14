@@ -38,10 +38,10 @@ const DEAD_TOKEN_CODES = new Set([
     "messaging/invalid-argument",
     "messaging/mismatched-credential",
 ]);
-async function logNotification(userId, type, rideId, title, body, deliveryStatus, error, provider) {
+async function logNotification(userId, type, rideId, title, body, deliveryStatus, error, provider, campaignId = null) {
     try {
-        await (0, database_1.execute)(`INSERT INTO notifications_log (user_id, type, ride_id, title, body, sent_at, delivery_status, error, provider)
-       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8)`, [userId, type, rideId, title, body, deliveryStatus, error, provider]);
+        await (0, database_1.execute)(`INSERT INTO notifications_log (user_id, type, ride_id, title, body, sent_at, delivery_status, error, provider, campaign_id)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8, $9)`, [userId, type, rideId, title, body, deliveryStatus, error, provider, campaignId]);
     }
     catch (err) {
         console.warn("[notify] notifications_log write failed:", err?.message);
@@ -164,7 +164,9 @@ async function sendPushToUsers(userIds, msg) {
         const provider = fcmForFirst ? "fcm" : expoForFirst ? "expo" : "none";
         // Logging must never flip a proven answer (or a proven zero) into unknown,
         // so both sinks are fire-and-forget here.
-        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, sent > 0 ? (error ? "partial" : "sent") : "skipped", error, provider).catch(() => undefined);
+        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, sent > 0 ? (error ? "partial" : "sent") : "skipped", error, provider, 
+        // Admin-v2 campaigns tag their fan-out rows (008); everyone else sends null.
+        msg.data?.campaign_id ?? null).catch(() => undefined);
         await logPushSend(ids[0], msg.rideId ?? "", sent > 0 ? "sent" : "none", error ?? `${sent} device(s)`).catch(() => undefined);
     }
     catch (err) {
@@ -172,7 +174,7 @@ async function sendPushToUsers(userIds, msg) {
         unknown = true;
         error = err?.message || String(err);
         console.warn("[notify] push failed:", error);
-        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, "error", error, "unknown").catch(() => undefined);
+        await logNotification(ids[0], String(msg.type), msg.rideId ?? null, msg.title, msg.body, "error", error, "unknown", msg.data?.campaign_id ?? null).catch(() => undefined);
     }
     if (sent > 0)
         return sent;
