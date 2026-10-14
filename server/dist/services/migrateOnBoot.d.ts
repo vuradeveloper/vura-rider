@@ -1,4 +1,4 @@
-export declare const MIGRATION_ORDER: readonly ["001_h3_driver_index.sql", "001b_offer_unique_index.sql", "002_destination_mode.sql", "003_performance_tier.sql", "004_admin_v2.sql", "005_admin_drivers.sql", "006_admin_riders.sql", "007_admin_trips.sql", "008_admin_messaging.sql", "009_admin_vehicle_requests.sql"];
+export declare const MIGRATION_ORDER: readonly ["001_h3_driver_index.sql", "001b_offer_unique_index.sql", "002_destination_mode.sql", "003_performance_tier.sql", "004_admin_v2.sql", "005_admin_drivers.sql", "006_admin_riders.sql", "007_admin_trips.sql", "008_admin_messaging.sql", "009_admin_vehicle_requests.sql", "010_doc_verification.sql"];
 export type MigrationOutcome = "applied" | "skipped" | "failed";
 export interface MigrationResult {
     file: string;

@@ -45,6 +45,7 @@ exports.MIGRATION_ORDER = [
     "007_admin_trips.sql",
     "008_admin_messaging.sql",
     "009_admin_vehicle_requests.sql",
+    "010_doc_verification.sql",
 ];
 /** Arbitrary app-wide advisory key — one constant so all boots serialise. */
 const ADVISORY_KEY = 726401001;

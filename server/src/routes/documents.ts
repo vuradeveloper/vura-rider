@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { query } from "../config/database";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { reviewDocument } from "../services/adminDocReview";
+import { verifyDocument } from "../services/docVerification";
 import {
   isDocumentType,
   documentKey,
@@ -125,6 +126,13 @@ router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, 
     );
 
     const doc = rows[0];
+
+    // Automatic checks (ridevura-verification port) — fire-and-forget, opt-in
+    // via DOC_VERIFY=gemini. NEVER blocks or fails the upload itself.
+    void verifyDocument(doc!.id).catch((e) =>
+      console.error("[documents] auto-verify failed:", e?.message || e)
+    );
+
     res.status(201).json({
       document: {
         ...doc,
@@ -168,7 +176,8 @@ router.get("/mine", roleGuard(["driver", "admin", "passenger"]), async (req, res
     const dbUser: DbUser = (req as any).dbUser;
     const rows = await query<DocRow>(
       `SELECT id, driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket,
-              size_bytes, status, note, reviewed_at, created_at
+              size_bytes, status, note, reviewed_at, created_at,
+              auto_status, auto_reasons, extracted, ocr_confidence, verified_at
          FROM driver_documents WHERE driver_id = $1
         ORDER BY created_at DESC
         LIMIT 50`,
@@ -186,6 +195,7 @@ router.get("/", roleGuard(["admin"]), async (req, res) => {
     const rows = await query<DocRow>(
       `SELECT d.id, d.driver_id, d.doc_type, d.file_name, d.mime_type, d.s3_key,
               d.s3_bucket, d.size_bytes, d.status, d.note, d.reviewed_at, d.created_at,
+              d.auto_status, d.auto_reasons, d.extracted, d.ocr_confidence, d.verified_at,
               u.full_name AS driver_name, u.email AS driver_email
          FROM driver_documents d
          JOIN users u ON u.id = d.driver_id

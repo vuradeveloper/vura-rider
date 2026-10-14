@@ -44,6 +44,7 @@ import {
   writeAudit,
 } from "./adminAuth";
 import { recordVehicleRequestMiss, vehicleImageCacheKey, autoFillMissingColours } from "./vehicleImages";
+import { verifyDocument } from "./docVerification";
 import { getObjectFromS3 } from "../lib/s3";
 import adminV2Router from "../routes/adminV2";
 
@@ -340,6 +341,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       "007_admin_trips.sql",
       "008_admin_messaging.sql",
       "009_admin_vehicle_requests.sql",
+      "010_doc_verification.sql",
     ]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql
@@ -1687,6 +1689,72 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect((await request("GET", "/api/admin/v2/car-db/images")).status).toBe(403);
     } finally {
       if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("documents: auto-verification writes verdicts; staff still has the final click", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const driver = await seedDriver("UNDER_REVIEW");
+      // Align the account name with the canned document text so the free
+      // name-match check doesn't (correctly) downgrade the pass.
+      await execute(`UPDATE users SET full_name = 'Tester' WHERE id = $1`, [driver]);
+      // A genuinely valid SA ID (correct Luhn check digit), built inline.
+      const base = "900101580000";
+      let goodId = "";
+      for (let d = 0; d <= 9 && !goodId; d++) {
+        const cand = base + String(d);
+        let sum = 0;
+        for (let i = 0; i < cand.length; i++) {
+          let x = Number(cand[cand.length - 1 - i]);
+          if (i % 2 === 1) {
+            x *= 2;
+            if (x > 9) x -= 9;
+          }
+          sum += x;
+        }
+        if (sum % 10 === 0) goodId = cand;
+      }
+      expect(goodId).toBeTruthy();
+
+      const doc = await queryOne<{ id: string }>(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+         VALUES ($1, 'id_document', 'id.jpg', 'image/jpeg', 'vehicle-images/auto-test-id', 'b', 'pending_review')
+         RETURNING id`,
+        [driver]
+      );
+      (getObjectFromS3 as any).mockResolvedValue(Buffer.from("fake-image"));
+      const v = await verifyDocument(doc!.id, async () => ({
+        text: `REPUBLIC OF SOUTH AFRICA\nIDENTITY NUMBER ${goodId}\nSURNAME TESTER`,
+        confidence: 90,
+      }));
+      expect(v?.status).toBe("approved"); // automatic pass…
+      const row = await queryOne<any>(
+        `SELECT status, auto_status FROM driver_documents WHERE id = $1`,
+        [doc!.id]
+      );
+      expect(row.auto_status).toBe("approved");
+      expect(row.status).toBe("pending_review"); // …but staff still clicks Approve
+
+      // Unreadable file → rejected + driver-facing note (existing re-upload flow).
+      const doc2 = await queryOne<{ id: string }>(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+         VALUES ($1, 'drivers_license', 'lic.jpg', 'image/jpeg', 'vehicle-images/auto-test-lic', 'b', 'pending_review')
+         RETURNING id`,
+        [driver]
+      );
+      const v2 = await verifyDocument(doc2!.id, async () => ({ text: "nope", confidence: 5 }));
+      expect(v2?.status).toBe("rejected");
+      const row2 = await queryOne<any>(
+        `SELECT status, note, auto_status FROM driver_documents WHERE id = $1`,
+        [doc2!.id]
+      );
+      expect(row2.status).toBe("rejected");
+      expect(row2.auto_status).toBe("rejected");
+      expect(row2.note).toMatch(/read any text/i);
+    } finally {
       delete process.env.ADMIN_EMAILS;
     }
   });

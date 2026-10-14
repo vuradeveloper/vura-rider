@@ -5,6 +5,7 @@ const node_crypto_1 = require("node:crypto");
 const database_1 = require("../config/database");
 const auth_1 = require("../middleware/auth");
 const adminDocReview_1 = require("../services/adminDocReview");
+const docVerification_1 = require("../services/docVerification");
 const s3_1 = require("../lib/s3");
 // Driver document storage — S3 + Postgres metadata.
 //   POST   /api/documents/upload     driver uploads a document
@@ -89,6 +90,9 @@ router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, 
             typeof note === "string" && note ? note : null,
         ]);
         const doc = rows[0];
+        // Automatic checks (ridevura-verification port) — fire-and-forget, opt-in
+        // via DOC_VERIFY=gemini. NEVER blocks or fails the upload itself.
+        void (0, docVerification_1.verifyDocument)(doc.id).catch((e) => console.error("[documents] auto-verify failed:", e?.message || e));
         res.status(201).json({
             document: {
                 ...doc,
@@ -127,7 +131,8 @@ router.get("/mine", roleGuard(["driver", "admin", "passenger"]), async (req, res
     try {
         const dbUser = req.dbUser;
         const rows = await (0, database_1.query)(`SELECT id, driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket,
-              size_bytes, status, note, reviewed_at, created_at
+              size_bytes, status, note, reviewed_at, created_at,
+              auto_status, auto_reasons, extracted, ocr_confidence, verified_at
          FROM driver_documents WHERE driver_id = $1
         ORDER BY created_at DESC
         LIMIT 50`, [dbUser.id]);
@@ -142,6 +147,7 @@ router.get("/", roleGuard(["admin"]), async (req, res) => {
     try {
         const rows = await (0, database_1.query)(`SELECT d.id, d.driver_id, d.doc_type, d.file_name, d.mime_type, d.s3_key,
               d.s3_bucket, d.size_bytes, d.status, d.note, d.reviewed_at, d.created_at,
+              d.auto_status, d.auto_reasons, d.extracted, d.ocr_confidence, d.verified_at,
               u.full_name AS driver_name, u.email AS driver_email
          FROM driver_documents d
          JOIN users u ON u.id = d.driver_id
