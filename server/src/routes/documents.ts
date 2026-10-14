@@ -2,6 +2,7 @@ import { Router, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { query } from "../config/database";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { reviewDocument } from "../services/adminDocReview";
 import {
   isDocumentType,
   documentKey,
@@ -216,7 +217,9 @@ router.get("/:id/url", roleGuard(["driver", "admin", "passenger"]), async (req, 
   }
 });
 
-// PATCH /api/documents/:id/status — admin approves/rejects a document
+// PATCH /api/documents/:id/status — admin approves/rejects a document.
+// Phase 8: goes through reviewDocument so the ALL-documents-complete push
+// fires when the last required document is approved.
 router.patch("/:id/status", roleGuard(["admin"]), async (req, res) => {
   try {
     const { status, note } = req.body || {};
@@ -224,18 +227,18 @@ router.patch("/:id/status", roleGuard(["admin"]), async (req, res) => {
       res.status(400).json({ error: "status must be one of: pending_review, approved, rejected" });
       return;
     }
-    const rows = await query<DocRow>(
-      `UPDATE driver_documents
-          SET status = $2, note = COALESCE($3, note), reviewed_at = NOW()
-        WHERE id = $1
-        RETURNING id, driver_id, doc_type, file_name, mime_type, status, note, reviewed_at, created_at`,
-      [req.params.id, String(status), typeof note === "string" && note ? note : null]
+    const dbUser: DbUser = (req as any).dbUser;
+    const out = await reviewDocument(
+      String(req.params.id),
+      String(status) as any,
+      typeof note === "string" && note ? note : null,
+      dbUser?.id || "admin"
     );
-    if (!rows[0]) {
+    if (!out) {
       res.status(404).json({ error: "Document not found" });
       return;
     }
-    res.json({ document: rows[0] });
+    res.json({ document: out.document, allApproved: out.allApproved });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || "Failed to update document" });
   }

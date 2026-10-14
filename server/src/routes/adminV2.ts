@@ -65,6 +65,7 @@ import {
   sendCampaign,
 } from "../services/adminMessaging";
 import { FeatureFlagError } from "../services/featureFlags";
+import { reviewDocument } from "../services/adminDocReview";
 import {
   getMoneyOverview,
   listDriverEarnings,
@@ -1263,6 +1264,53 @@ router.post("/car-db/images/:id/reject", requireAdmin("catalogue.write"), async 
     const actor = await resolveAdminActor(req);
     if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
     res.json({ result: await rejectImage(String(req.params.id), actor) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// ── Document verification (Phase 8) — per-doc approve/reject with the
+//    ALL-documents-complete push (service: adminDocReview). ──────────────────
+
+// POST /api/admin/v2/documents/:id/approve — verify ONE document.
+router.post("/documents/:id/approve", requireAdmin("documents.review"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const out = await reviewDocument(String(req.params.id), "approved", req.body?.note ?? null, actor.email);
+    if (!out) { res.status(404).json({ error: "Document not found" }); return; }
+    await writeAudit(actor, {
+      action: "document.approve",
+      entityType: "driver_documents",
+      entityId: String(req.params.id),
+      newValue: { status: "approved", allApproved: out.allApproved },
+    });
+    res.json(out);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/documents/:id/reject — reject ONE document (driver is
+// pushed to re-upload).
+router.post("/documents/:id/reject", requireAdmin("documents.review"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const out = await reviewDocument(
+      String(req.params.id),
+      "rejected",
+      req.body?.note ?? req.body?.reason ?? null,
+      actor.email
+    );
+    if (!out) { res.status(404).json({ error: "Document not found" }); return; }
+    await writeAudit(actor, {
+      action: "document.reject",
+      entityType: "driver_documents",
+      entityId: String(req.params.id),
+      newValue: { status: "rejected", note: req.body?.note ?? req.body?.reason ?? null },
+    });
+    res.json(out);
   } catch (err) {
     sendError(res, err);
   }

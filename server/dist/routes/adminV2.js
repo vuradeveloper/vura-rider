@@ -25,6 +25,7 @@ const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
 const adminMessaging_1 = require("../services/adminMessaging");
 const featureFlags_1 = require("../services/featureFlags");
+const adminDocReview_1 = require("../services/adminDocReview");
 const adminMoney_1 = require("../services/adminMoney");
 const adminVehicleDb_1 = require("../services/adminVehicleDb");
 /** sendError, but respects err.status (503 missing key, 429 quota, 502 provider). */
@@ -1204,6 +1205,59 @@ router.post("/car-db/images/:id/reject", (0, adminAuth_1.requireAdmin)("catalogu
             return;
         }
         res.json({ result: await (0, adminVehicleDb_1.rejectImage)(String(req.params.id), actor) });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Document verification (Phase 8) — per-doc approve/reject with the
+//    ALL-documents-complete push (service: adminDocReview). ──────────────────
+// POST /api/admin/v2/documents/:id/approve — verify ONE document.
+router.post("/documents/:id/approve", (0, adminAuth_1.requireAdmin)("documents.review"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const out = await (0, adminDocReview_1.reviewDocument)(String(req.params.id), "approved", req.body?.note ?? null, actor.email);
+        if (!out) {
+            res.status(404).json({ error: "Document not found" });
+            return;
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "document.approve",
+            entityType: "driver_documents",
+            entityId: String(req.params.id),
+            newValue: { status: "approved", allApproved: out.allApproved },
+        });
+        res.json(out);
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/documents/:id/reject — reject ONE document (driver is
+// pushed to re-upload).
+router.post("/documents/:id/reject", (0, adminAuth_1.requireAdmin)("documents.review"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const out = await (0, adminDocReview_1.reviewDocument)(String(req.params.id), "rejected", req.body?.note ?? req.body?.reason ?? null, actor.email);
+        if (!out) {
+            res.status(404).json({ error: "Document not found" });
+            return;
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "document.reject",
+            entityType: "driver_documents",
+            entityId: String(req.params.id),
+            newValue: { status: "rejected", note: req.body?.note ?? req.body?.reason ?? null },
+        });
+        res.json(out);
     }
     catch (err) {
         sendError(res, err);

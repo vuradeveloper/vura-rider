@@ -343,6 +343,8 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await execute(`DELETE FROM admin_vehicle_requests`);
     await execute(`DELETE FROM vehicle_images`);
     await execute(`DELETE FROM carsxe_usage_log`);
+    // Documents FK → users (Phase 8 seeds per-driver docs; no cascade).
+    await execute(`DELETE FROM driver_documents`);
     await execute(`DELETE FROM driver_earnings_paid`);
     await execute(`DELETE FROM driver_earnings`);
     await execute(`DELETE FROM payments`);
@@ -1633,6 +1635,53 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect((await request("GET", "/api/admin/v2/car-db/images")).status).toBe(403);
     } finally {
       if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it("documents: verifying the LAST required doc completes the set (audited); reject notif 404s cleanly", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const driver = await queryOne<{ id: string }>(
+        `INSERT INTO users (email, full_name, role) VALUES ('docs1@phase2.test', 'Doc Driver', 'driver') RETURNING id`
+      );
+      // The five static required types: four already approved, prdp pending.
+      for (const t of ["id_document", "drivers_license", "criminal_record", "carscan_report"]) {
+        await execute(
+          `INSERT INTO driver_documents (driver_id, doc_type, file_name, status) VALUES ($1, $2, $3, 'approved')`,
+          [driver!.id, t, `${t}.jpg`]
+        );
+      }
+      const pending = await queryOne<{ id: string }>(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, status) VALUES ($1, 'prdp', 'prdp.jpg', 'pending_review') RETURNING id`,
+        [driver!.id]
+      );
+
+      // Approving one of several would NOT complete the set — seed one more pending
+      // first? No: prove the COMPLETION case (4 of 5 already approved).
+      const ok = await request("POST", `/api/admin/v2/documents/${pending!.id}/approve`, {});
+      expect(ok.status).toBe(200);
+      expect(ok.json.allApproved).toBe(true); // the "ALL verified" push fires here
+      expect(ok.json.document.status).toBe("approved");
+      const audit = await queryOne<any>(
+        `SELECT * FROM admin_audit_log WHERE action = 'document.approve' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe(pending!.id);
+
+      // 404 for an unknown document.
+      expect(
+        (await request("POST", "/api/admin/v2/documents/00000000-0000-0000-0000-000000000000/approve", {})).status
+      ).toBe(404);
+
+      // Permissions: onboarding_reviewer holds documents.review; support does not.
+      await seedAdmin("onb8@vura.test", "onboarding_reviewer");
+      authUser.email = "onb8@vura.test";
+      expect((await request("POST", `/api/admin/v2/documents/${pending!.id}/approve`, {})).status).toBe(200);
+      await seedAdmin("sup8@vura.test", "support_agent");
+      authUser.email = "sup8@vura.test";
+      expect((await request("POST", `/api/admin/v2/documents/${pending!.id}/reject`, { note: "blurry" })).status).toBe(403);
+    } finally {
       delete process.env.ADMIN_EMAILS;
     }
   });

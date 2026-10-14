@@ -504,7 +504,7 @@ function buildOnboardingSteps(user: any, profile: any, docs: any[], face: any): 
       key: `doc:${type}`,
       label: DOC_TYPE_LABEL[type] ?? type,
       done: approved.has(type),
-      detail: approved.has(type) ? "Approved" : submitted.has(type) ? "Awaiting review" : "Not uploaded yet",
+      detail: approved.has(type) ? "Approved" : submitted.has(type) ? "Verification will be done in 30 minutes" : "Not uploaded yet",
     });
   }
 
