@@ -1002,11 +1002,10 @@ function startVehicleImageWorker(intervalMs = 30_000) {
     worker = setInterval(async () => {
         try {
             await ensureVehicleImageTables();
-            // Auto-backfill: create missing palette colours from each car's light
-            // (white/silver) original — 4 per tick until the catalogue is complete.
-            // Set CAR_DB_AUTOFILL=false to stop it (default ON — this is how the
-            // yellow/silver-only import grows into the full palette).
-            if (process.env.CAR_DB_AUTOFILL !== "false") {
+            // Auto-backfill is OPT-IN (CAR_DB_AUTOFILL=true): the sharp fallback
+            // quality is not v12-grade, so we never bulk-generate with it silently.
+            // Enable only when the host can run the bundled v12 (python + deps).
+            if (process.env.CAR_DB_AUTOFILL === "true") {
                 const made = await autoFillMissingColours(4);
                 if (made > 0)
                     console.log(`[vehicleImages] auto-fill created ${made} colour variant(s)`);
