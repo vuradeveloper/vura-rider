@@ -161,7 +161,7 @@ export default function VehicleLinkScreen({ onBack }: { onBack: () => void }) {
         return next
       })
       await refreshDocs()
-      setToast(`${DOC_LABELS[type]} uploaded — pending review`)
+      setToast(`${DOC_LABELS[type]} uploaded — verification will be done in 30 minutes`)
     } catch (e: any) {
       setError(e?.message || `Could not upload ${DOC_LABELS[type]}`)
     } finally {
@@ -188,8 +188,8 @@ export default function VehicleLinkScreen({ onBack }: { onBack: () => void }) {
     await refreshDocs()
     setBusy(false)
     setToast(done === 1
-      ? '1 document uploaded — pending review'
-      : `${done} documents uploaded — pending review`)
+      ? '1 document uploaded — verification will be done in 30 minutes'
+      : `${done} documents uploaded — verification will be done in 30 minutes`)
   }
 
   /** Saves the car to the server (PATCH /api/drivers/profile) AND this device,
@@ -342,7 +342,7 @@ export default function VehicleLinkScreen({ onBack }: { onBack: () => void }) {
               : 'Link car'}
         </button>
         <p className="text-[11px] text-[#ADADAD] text-center -mt-2">
-          Documents are reviewed by our team — you'll be notified once approved.
+          Documents are verified by our team within 30 minutes — you'll be notified once ALL are approved.
         </p>
       </div>
     </div>
@@ -393,7 +393,7 @@ function DocSlot({
                 : 'bg-[#FEF7E0] text-[#B06000]')
           }
         >
-          {existing.status === 'approved' ? '✓ Verified' : existing.status.replace(/_/g, ' ')}
+          {existing.status === 'approved' ? '✓ Verified' : existing.status === 'pending_review' ? 'Verification will be done in 30 minutes' : existing.status.replace(/_/g, ' ')}
         </span>
       )}
 
