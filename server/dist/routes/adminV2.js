@@ -1150,6 +1150,29 @@ router.post("/car-db/generate", (0, adminAuth_1.requireAdmin)("catalogue.write")
         sendCarDbError(res, err);
     }
 });
+// POST /api/admin/v2/car-db/generate-all — Generate Car ALL: every car's every
+// missing colour via .py v12, in the background (responds immediately).
+router.post("/car-db/generate-all", (0, adminAuth_1.requireAdmin)("catalogue.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const out = (0, adminVehicleDb_1.generateAllCarColours)();
+        if (out.started) {
+            await (0, adminAuth_1.writeAudit)(actor, {
+                action: "car_db.generate_all",
+                entityType: "vehicle_images",
+                newValue: { started: true, engine: "v12-python" },
+            });
+        }
+        res.json(out);
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
 // POST /api/admin/v2/car-db/purge — clear the whole library (refresh flow).
 router.post("/car-db/purge", (0, adminAuth_1.requireAdmin)("catalogue.write"), async (req, res) => {
     try {

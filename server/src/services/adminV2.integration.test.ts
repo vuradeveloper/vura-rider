@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+-- Self-heal: live snapshot selects lifecycle_status.
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(30);
 CREATE TABLE IF NOT EXISTS driver_documents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   driver_id UUID NOT NULL REFERENCES users(id),
@@ -145,16 +147,44 @@ CREATE TABLE IF NOT EXISTS driver_tiers (
   window_end DATE NOT NULL DEFAULT CURRENT_DATE,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Self-heal to the full 003 shape (routes select rating_avg, accept_percent…).
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS rating_avg NUMERIC(4,2) NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS accept_percent NUMERIC(5,2) NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS cancel_percent NUMERIC(5,2) NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS rides_completed INT NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS offers_received INT NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS offers_accepted INT NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS offers_timedout INT NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS driver_cancels INT NOT NULL DEFAULT 0;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS demote_pending_tier TEXT;
+ALTER TABLE driver_tiers ADD COLUMN IF NOT EXISTS last_eval_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 -- Phase 2: rides (rider stats) + app_config (rider_gate flag seed).
 CREATE TABLE IF NOT EXISTS rides (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   passenger_id UUID REFERENCES users(id),
   driver_id UUID,
   status VARCHAR(20) DEFAULT 'searching',
+  pickup_address TEXT,
+  destination_address TEXT,
+  distance_km NUMERIC(8,2),
   actual_fare NUMERIC(10,2),
   completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+-- Self-heal: containers created with an OLDER stand-in shape get the columns
+-- seedTrip and the trip routes rely on (IF NOT EXISTS → idempotent).
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS pickup_address TEXT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS destination_address TEXT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS distance_km NUMERIC(8,2);
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS pickup_lat DOUBLE PRECISION;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS pickup_lng DOUBLE PRECISION;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS destination_lat DOUBLE PRECISION;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS destination_lng DOUBLE PRECISION;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS duration_mins INT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS estimated_fare NUMERIC(10,2);
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS payment_method VARCHAR(30);
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(20);
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
 CREATE TABLE IF NOT EXISTS app_config (
   key TEXT PRIMARY KEY,
   value JSONB NOT NULL,
@@ -296,10 +326,14 @@ async function seedAdmin(email: string, role: string, disabled = false): Promise
 
 describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
   beforeAll(async () => {
-    // Base schema first (shared scratch container), then migrations 004 + 005
-    // the way migrate-on-boot does: files, in order, TWICE (idempotence proof).
+    // Base schema first (shared scratch container), then the migrations the way
+    // migrate-on-boot does: files in order, TWICE (idempotence proof). 003 must
+    // be here too — on a FRESH scratch container (recreated docker) the tier
+    // tables (performance_tier_thresholds, driver_tier_history) come only from
+    // it, and the tier/trips/snapshot suites 503 without them.
     await execute(BASE_SCHEMA);
     for (const file of [
+      "003_performance_tier.sql",
       "004_admin_v2.sql",
       "005_admin_drivers.sql",
       "006_admin_riders.sql",
@@ -1628,6 +1662,14 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       });
       expect(search.status).toBe(404);
 
+      // Generate Car All: background v12-only run, one at a time. With
+      // RECOLOUR_PYTHON=off the background run aborts instantly, writing nothing.
+      const ga = await request("POST", "/api/admin/v2/car-db/generate-all", {});
+      expect(ga.status).toBe(200);
+      expect(ga.json.running).toBe(true);
+      const gaAgain = await request("POST", "/api/admin/v2/car-db/generate-all", {});
+      expect(gaAgain.json.running).toBe(true); // one run at a time
+
       // finance: catalogue.read is NOT in the finance matrix.
       await seedAdmin("finC@vura.test", "finance");
       authUser.email = "finC@vura.test";
@@ -1718,21 +1760,23 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       );
 
       const made = await autoFillMissingColours(50);
-      expect(made).toBeGreaterThanOrEqual(1);
+      // STRICT v12-only: RECOLOUR_PYTHON=off → no python → write NOTHING
+      // (sharp fallback banned; non-v12 colours were rejected by the user).
+      expect(made).toBe(0);
       const first = await queryOne<any>(
         `SELECT status FROM vehicle_images WHERE cache_key = $1`,
         [vehicleImageCacheKey({ make: "Ford", model: "Figo", year: 2019, colour: "grey" })]
       );
-      expect(first?.status).toBe("approved"); // backfilled + auto-approved
+      expect(first).toBeFalsy(); // nothing written by a non-v12 engine
 
-      // Second run must not duplicate what it just made.
+      // A second run still writes nothing (and can't duplicate anything).
       (getObjectFromS3 as any).mockResolvedValueOnce(whitePng);
       await autoFillMissingColours(50);
       const again = await query<{ n: number }>(
         `SELECT COUNT(*)::int AS n FROM vehicle_images WHERE cache_key = $1`,
         [vehicleImageCacheKey({ make: "Ford", model: "Figo", year: 2019, colour: "grey" })]
       );
-      expect(again[0].n).toBe(1);
+      expect(again[0].n).toBe(0);
     } finally {
       delete process.env.ADMIN_EMAILS;
     }

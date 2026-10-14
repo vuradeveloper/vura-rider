@@ -20,7 +20,7 @@ import {
   refetchVehicleImage,
   rejectVehicleImage,
   RECOLOUR_PALETTE,
-  recolourFromWhite,
+  autoFillMissingColours,
   pythonRecolour,
 } from "./vehicleImages";
 import type { AdminActor } from "./adminAuth";
@@ -319,7 +319,12 @@ export async function generateImages(
   const failed: any[] = [];
   for (const colour of palette) {
     try {
-      const out = (await pythonRecolour(raw, colour)) ?? (await recolourFromWhite(raw, colour));
+      // STRICTLY the .py v12 engine — never the sharp fallback.
+      const out = await pythonRecolour(raw, colour);
+      if (!out) {
+        failed.push({ colour, error: "v12 python engine unavailable on this server" });
+        break;
+      }
       const seed = await importSeedImage({
         // Resolver key format (make|model|year_range|colour) — auto-pull matches on it.
         cacheKey: vehicleImageCacheKey({
@@ -363,6 +368,26 @@ export async function generateImages(
     throw e;
   }
   return { generated, failed, source };
+}
+
+// ── Generate Car All: every car × every missing colour, .py v12 ONLY,
+//    background so the HTTP call returns instantly. One run at a time.
+let generateAllRunning = false;
+
+export function generateAllCarColours(): { started: boolean; running: boolean } {
+  if (generateAllRunning) return { started: false, running: true };
+  generateAllRunning = true;
+  void (async () => {
+    try {
+      const made = await autoFillMissingColours(100_000, true);
+      console.log(`[carDb] generate-all finished: ${made} colour(s) created via v12`);
+    } catch (err: any) {
+      console.error("[carDb] generate-all failed:", err?.message || err);
+    } finally {
+      generateAllRunning = false;
+    }
+  })();
+  return { started: true, running: true };
 }
 
 /** Static catalogue (makes/models/body/years) for the console's pickers. */

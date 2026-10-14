@@ -17,6 +17,20 @@
 set -e
 exec > >(tee -a /var/log/vura_server_deps.log) 2>&1
 
+# v12 recolor engine (python) — created ONCE, then untouched forever.
+# Failure is never fatal to the deploy: the console falls back to a clear
+# "v12 unavailable" message instead of generating non-v12 colours.
+VENV=/opt/vura-recolour
+if [ ! -x "$VENV/bin/python" ]; then
+  echo "VURA: [hooks] installing v12 recolor python venv (one-time, first deploy)"
+  python3 -m venv "$VENV" >/dev/null 2>&1 || true
+fi
+if [ -x "$VENV/bin/python" ]; then
+  "$VENV/bin/pip" install --quiet --disable-pip-version-check \
+    pillow numpy rembg onnxruntime scipy scikit-image opencv-python-headless \
+    >/dev/null 2>&1 || true
+fi
+
 APP_DIR=""
 if [ -d /var/app/staging/server ] && [ -f /var/app/staging/server/package.json ]; then
   APP_DIR=/var/app/staging/server

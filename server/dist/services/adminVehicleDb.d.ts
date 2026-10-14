@@ -81,6 +81,10 @@ export declare function generateImages(input: {
     failed: any[];
     source: "upload" | "car-db";
 }>;
+export declare function generateAllCarColours(): {
+    started: boolean;
+    running: boolean;
+};
 /** Static catalogue (makes/models/body/years) for the console's pickers. */
 export declare function catalogue(): {
     makes: Array<{

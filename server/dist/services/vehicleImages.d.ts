@@ -384,6 +384,6 @@ export declare function recolourFromWhite(raw: Buffer, colour: string): Promise<
  * standard pipeline and lands approved → requests auto-resolve.
  * Returns how many variants were created. Never throws.
  */
-export declare function autoFillMissingColours(limit?: number): Promise<number>;
+export declare function autoFillMissingColours(limit?: number, allColours?: boolean): Promise<number>;
 export declare function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage>;
 //# sourceMappingURL=vehicleImages.d.ts.map

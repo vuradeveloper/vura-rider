@@ -44,6 +44,7 @@ exports.rejectImage = rejectImage;
 exports.listImages = listImages;
 exports.purgeCarDb = purgeCarDb;
 exports.generateImages = generateImages;
+exports.generateAllCarColours = generateAllCarColours;
 exports.catalogue = catalogue;
 // ─────────────────────────────────────────────────────────────────────────────
 // adminVehicleDb — ADMIN V2 Phase 7: Car DB console + vehicle photo requests.
@@ -281,7 +282,12 @@ async function generateImages(input, actor) {
     const failed = [];
     for (const colour of palette) {
         try {
-            const out = (await (0, vehicleImages_1.pythonRecolour)(raw, colour)) ?? (await (0, vehicleImages_1.recolourFromWhite)(raw, colour));
+            // STRICTLY the .py v12 engine — never the sharp fallback.
+            const out = await (0, vehicleImages_1.pythonRecolour)(raw, colour);
+            if (!out) {
+                failed.push({ colour, error: "v12 python engine unavailable on this server" });
+                break;
+            }
             const seed = await (0, vehicleImages_1.importSeedImage)({
                 // Resolver key format (make|model|year_range|colour) — auto-pull matches on it.
                 cacheKey: (0, vehicleImages_2.vehicleImageCacheKey)({
@@ -323,6 +329,27 @@ async function generateImages(input, actor) {
         throw e;
     }
     return { generated, failed, source };
+}
+// ── Generate Car All: every car × every missing colour, .py v12 ONLY,
+//    background so the HTTP call returns instantly. One run at a time.
+let generateAllRunning = false;
+function generateAllCarColours() {
+    if (generateAllRunning)
+        return { started: false, running: true };
+    generateAllRunning = true;
+    void (async () => {
+        try {
+            const made = await (0, vehicleImages_1.autoFillMissingColours)(100_000, true);
+            console.log(`[carDb] generate-all finished: ${made} colour(s) created via v12`);
+        }
+        catch (err) {
+            console.error("[carDb] generate-all failed:", err?.message || err);
+        }
+        finally {
+            generateAllRunning = false;
+        }
+    })();
+    return { started: true, running: true };
 }
 /** Static catalogue (makes/models/body/years) for the console's pickers. */
 function catalogue() {

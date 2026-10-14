@@ -54,12 +54,28 @@ export async function pythonRecolour(raw: Buffer, colour: string): Promise<Buffe
     const inPath = path.join(dir, "in.png"); // PIL sniffs content, extension is irrelevant
     const outPath = path.join(dir, "out.png");
     await writeFile(inPath, raw);
-    const py = process.env.PYTHON_BIN || "python3";
-    try {
-      await execFileAsync(py, [script, inPath, colour, outPath], { timeout: 45_000, windowsHide: true });
-    } catch {
-      await execFileAsync("python", [script, inPath, colour, outPath], { timeout: 45_000, windowsHide: true });
+    // Interpreter order: explicit env → the EB venv (installed by the predeploy
+    // hook) → system python3 → python (Windows dev boxes).
+    const venv = "/opt/vura-recolour/bin/python";
+    const candidates = process.env.PYTHON_BIN
+      ? [process.env.PYTHON_BIN, "python"]
+      : existsSync(venv)
+        ? [venv, "python3", "python"]
+        : ["python3", "python"];
+    let ran = false;
+    for (const interp of candidates) {
+      if (ran) break;
+      try {
+        await execFileAsync(interp, [script, inPath, colour, outPath], {
+          timeout: 45_000,
+          windowsHide: true,
+        });
+        ran = true;
+      } catch {
+        /* try the next interpreter */
+      }
     }
+    if (!ran) return null;
     if (!existsSync(outPath)) return null;
     const out = await readFile(outPath);
     return out.length ? out : null;
@@ -1566,7 +1582,7 @@ export async function recolourFromWhite(raw: Buffer, colour: string): Promise<Bu
  * standard pipeline and lands approved → requests auto-resolve.
  * Returns how many variants were created. Never throws.
  */
-export async function autoFillMissingColours(limit = 3): Promise<number> {
+export async function autoFillMissingColours(limit = 3, allColours = false): Promise<number> {
   try {
     await ensureVehicleImageTables();
     // One row per make|model|year_range: its best source + which colours exist.
@@ -1598,8 +1614,9 @@ export async function autoFillMissingColours(limit = 3): Promise<number> {
         ORDER BY base`
     );
     let made = 0;
+    let engineDown = false; // v12 python unavailable → abort, never fall back
     for (const car of cars) {
-      if (made >= limit) break;
+      if (made >= limit || engineDown) break;
       const have = new Set((car.colours || []).map((c) => String(c).toLowerCase()));
       // Which of this car's colours exist ACROSS all its rows (any source)?
       const allRows = await query<{ colour: string }>(
@@ -1619,25 +1636,36 @@ export async function autoFillMissingColours(limit = 3): Promise<number> {
       }
       if (!raw?.length) continue;
 
-      const colour = missing[0]; // one variant per car per tick keeps it gentle
-      try {
-        // Preferred: the team's proven recolor_car_v11.py; fallback: sharp engine.
-        const out = (await pythonRecolour(raw, colour)) ?? (await recolourFromWhite(raw, colour));
-        await importSeedImage({
-          cacheKey: `${car.base}|${colour}`,
-          make: car.make,
-          model: car.model,
-          year: car.year,
-          yearRange: car.year_range,
-          colour,
-          licenceNote: "Auto-recoloured from the car's light studio original",
-          webpBase64: out.toString("base64"),
-          processRaw: true,
-          approve: true,
-        });
-        made++;
-      } catch (err: any) {
-        console.error(`[vehicleImages] autofill ${car.base}|${colour} failed:`, err?.message || err);
+      const wanted = allColours ? missing : missing.slice(0, 1); // 1 per car per tick unless full run
+      for (const colour of wanted) {
+        if (made >= limit) break;
+        try {
+          // STRICTLY the team's .py v12 engine — never the sharp fallback
+          // (the user rejected non-v12 colours; quality must stay uniform).
+          const out = await pythonRecolour(raw, colour);
+          if (!out) {
+            engineDown = true;
+            console.warn(
+              "[vehicleImages] v12 python engine unavailable on this server — skipping auto-colour (install server/scripts python deps or run the offline batch)"
+            );
+            break;
+          }
+          await importSeedImage({
+            cacheKey: `${car.base}|${colour}`,
+            make: car.make,
+            model: car.model,
+            year: car.year,
+            yearRange: car.year_range,
+            colour,
+            licenceNote: "v12 recolor from the car's light studio original",
+            webpBase64: out.toString("base64"),
+            processRaw: true,
+            approve: true,
+          });
+          made++;
+        } catch (err: any) {
+          console.error(`[vehicleImages] autofill ${car.base}|${colour} failed:`, err?.message || err);
+        }
       }
     }
     return made;
