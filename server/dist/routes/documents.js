@@ -166,7 +166,10 @@ router.get("/:id/url", roleGuard(["driver", "admin", "passenger"]), async (req, 
             res.status(403).json({ error: "Insufficient permissions" });
             return;
         }
-        res.json({ viewUrl: await (0, s3_1.getPresignedViewUrl)(doc.s3_key) });
+        const viewUrl = await (0, s3_1.getPresignedViewUrl)(doc.s3_key);
+        // BOTH keys on purpose: the console reads `viewUrl` (legacy builds read
+        // `.url` only and sat on "Loading document…" forever when it was missing).
+        res.json({ url: viewUrl, viewUrl });
     }
     catch (err) {
         res.status(500).json({ error: err?.message || "Failed to build view URL" });
