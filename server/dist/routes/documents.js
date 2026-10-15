@@ -130,12 +130,27 @@ router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, 
 router.get("/mine", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
     try {
         const dbUser = req.dbUser;
-        const rows = await (0, database_1.query)(`SELECT id, driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket,
-              size_bytes, status, note, reviewed_at, created_at,
-              auto_status, auto_reasons, extracted, ocr_confidence, verified_at
-         FROM driver_documents WHERE driver_id = $1
-        ORDER BY created_at DESC
-        LIMIT 50`, [dbUser.id]);
+        // Graceful degradation while migration 010 is pending on a database
+        // (RUN_MIGRATIONS_ON_BOOT defaults OFF): if the auto_* columns don't
+        // exist yet, fall back to the original columns so uploads/lists still work.
+        let rows;
+        try {
+            rows = await (0, database_1.query)(`SELECT id, driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket,
+                size_bytes, status, note, reviewed_at, created_at,
+                auto_status, auto_reasons, extracted, ocr_confidence, verified_at
+           FROM driver_documents WHERE driver_id = $1
+          ORDER BY created_at DESC
+          LIMIT 50`, [dbUser.id]);
+        }
+        catch (err) {
+            if (!/auto_status/.test(String(err?.message || err)))
+                throw err;
+            rows = await (0, database_1.query)(`SELECT id, driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket,
+                size_bytes, status, note, reviewed_at, created_at
+           FROM driver_documents WHERE driver_id = $1
+          ORDER BY created_at DESC
+          LIMIT 50`, [dbUser.id]);
+        }
         res.json({
             // Driver-facing endpoint: keep the verdict STATE, redact the staff-only
             // detail (reasons / extracted fields / confidence never leave the admin
@@ -155,14 +170,29 @@ router.get("/mine", roleGuard(["driver", "admin", "passenger"]), async (req, res
 // GET /api/documents — admin lists ALL drivers' documents
 router.get("/", roleGuard(["admin"]), async (req, res) => {
     try {
-        const rows = await (0, database_1.query)(`SELECT d.id, d.driver_id, d.doc_type, d.file_name, d.mime_type, d.s3_key,
-              d.s3_bucket, d.size_bytes, d.status, d.note, d.reviewed_at, d.created_at,
-              d.auto_status, d.auto_reasons, d.extracted, d.ocr_confidence, d.verified_at,
-              u.full_name AS driver_name, u.email AS driver_email
-         FROM driver_documents d
-         JOIN users u ON u.id = d.driver_id
-        ORDER BY d.created_at DESC
-        LIMIT 200`);
+        // Same graceful fallback as /mine for databases pending migration 010.
+        let rows;
+        try {
+            rows = await (0, database_1.query)(`SELECT d.id, d.driver_id, d.doc_type, d.file_name, d.mime_type, d.s3_key,
+                d.s3_bucket, d.size_bytes, d.status, d.note, d.reviewed_at, d.created_at,
+                d.auto_status, d.auto_reasons, d.extracted, d.ocr_confidence, d.verified_at,
+                u.full_name AS driver_name, u.email AS driver_email
+           FROM driver_documents d
+           JOIN users u ON u.id = d.driver_id
+          ORDER BY d.created_at DESC
+          LIMIT 200`);
+        }
+        catch (err) {
+            if (!/auto_status/.test(String(err?.message || err)))
+                throw err;
+            rows = await (0, database_1.query)(`SELECT d.id, d.driver_id, d.doc_type, d.file_name, d.mime_type, d.s3_key,
+                d.s3_bucket, d.size_bytes, d.status, d.note, d.reviewed_at, d.created_at,
+                u.full_name AS driver_name, u.email AS driver_email
+           FROM driver_documents d
+           JOIN users u ON u.id = d.driver_id
+          ORDER BY d.created_at DESC
+          LIMIT 200`);
+        }
         res.json({ documents: rows });
     }
     catch (err) {
