@@ -3,7 +3,7 @@ import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { settleFirstRide } from "../services/AffiliateService";
 import { startServerRideSim, stopServerRideSim } from "../services/rideSim";
-import { acceptRide, declineOffer, startDispatch, logRideEvent } from "../services/dispatch";
+import { acceptRide, declineOffer, startDispatch, logRideEvent, cancelPendingOffers } from "../services/dispatch";
 import { attachVehicleImages } from "../services/vehicleImages";
 import { trace, startTrace } from "../services/trace";
 import { assertRiderCanBook } from "../services/adminRiders";
@@ -820,6 +820,11 @@ router.post("/scheduled/:id/cancel", requireAuth, async (req: AuthRequest, res: 
     const io = (global as any).__vuraIo as
       | { to: (room: string) => { emit: (ev: string, ...args: any[]) => void } }
       | undefined;
+    // REAL-TIME (2026-10-15): withdraw any offer still sitting on a driver's
+    // phone — expire the rows AND emit ride:offer:cancelled to each offered
+    // driver's room, the same event the socket cancel sends. Without this a
+    // driver could still see/accept the ride for up to 15s after the cancel.
+    await cancelPendingOffers(io as any, String(req.params.id), "rider_cancelled");
     io?.to(`ride:${req.params.id}`).emit("ride:cancelled", { reason: "Ride cancelled by user", cancellation_fee: fee });
     io?.to("drivers").emit("ride:cancelled", { rideId: req.params.id, reason: "Ride cancelled by user" });
 

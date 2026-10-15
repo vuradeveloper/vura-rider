@@ -658,8 +658,18 @@ async function offerToNextDriver(io, rideId, round, opts) {
     // Candidates skipped for being unreachable (socket down + push delivered 0).
     let undeliverable = 0;
     for (const candidate of candidates) {
-        const res = await (0, database_1.queryOne)(`INSERT INTO ride_offers (ride_id, driver_id, status, expires_at, round)
-       VALUES ($1, $2, 'pending', NOW() + make_interval(secs => $3::double precision), $4)
+        const res = await (0, database_1.queryOne)(
+        // REAL-TIME CANCEL GUARD (2026-10-15): re-check the ride's status AT
+        // INSERT TIME. If the rider cancelled after loadRide(), this SELECT yields
+        // no row — no offer is ever created for a cancelled ride, so drivers can
+        // never receive a new request after the cancel.
+        `INSERT INTO ride_offers (ride_id, driver_id, status, expires_at, round)
+       SELECT $1, $2, 'pending', NOW() + make_interval(secs => $3::double precision), $4
+        WHERE EXISTS (
+              SELECT 1 FROM rides r
+               WHERE r.id = $1
+                 AND r.status IN ('searching', 'scheduled', 'no_drivers')
+        )
        ON CONFLICT (ride_id, driver_id) DO NOTHING
        RETURNING id, expires_at`, [rideId, candidate.id, exports.OFFER_TTL_SECONDS, nextRound]).catch((err) => {
             // "offer_conflict" (the ON CONFLICT DO NOTHING path) is a normal, expected

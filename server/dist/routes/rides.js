@@ -716,6 +716,11 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
         // Tell the rider + driver + any online driver instantly so the ride
         // disappears everywhere (same broadcast the socket cancel does).
         const io = global.__vuraIo;
+        // REAL-TIME (2026-10-15): withdraw any offer still sitting on a driver's
+        // phone — expire the rows AND emit ride:offer:cancelled to each offered
+        // driver's room, the same event the socket cancel sends. Without this a
+        // driver could still see/accept the ride for up to 15s after the cancel.
+        await (0, dispatch_1.cancelPendingOffers)(io, String(req.params.id), "rider_cancelled");
         io?.to(`ride:${req.params.id}`).emit("ride:cancelled", { reason: "Ride cancelled by user", cancellation_fee: fee });
         io?.to("drivers").emit("ride:cancelled", { rideId: req.params.id, reason: "Ride cancelled by user" });
         res.json({ success: true, cancellation_fee: fee });
