@@ -838,14 +838,11 @@ async function markNoDrivers(io, rideId) {
     const ride = await loadRide(rideId);
     emitRide(io, rideId, "ride:no:drivers", { rideId, reason: "No drivers available nearby." }, ride?.passenger_fb);
     await logRideEvent(rideId, null, "no_drivers", {});
-    if (ride) {
-        void (0, notify_1.sendPushToUsers)([ride.passenger_id], {
-            type: "no_drivers",
-            title: "No drivers available",
-            body: "We could not find a driver nearby. Please try again in a moment.",
-            rideId,
-        }).catch(() => 0);
-    }
+    // PUSH REMOVED (2026-10-15, by request): this fired once per park cycle, and
+    // the worker's revive loop re-parks a still-unmatched ride — riders got the
+    // "We could not find a driver nearby" notification dozens of times. The
+    // in-app `ride:no:drivers` socket event above still lands instantly, so the
+    // rider's screen shows the no-drivers state; only the repeat push is gone.
 }
 /** Entry point when a rider books (socket handler calls this after INSERT). */
 async function startDispatch(io, rideId) {

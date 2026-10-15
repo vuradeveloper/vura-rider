@@ -142,15 +142,16 @@ describe("5. no drivers -> the rider is told", () => {
     expect(rideEvents("no_drivers").length).toBeGreaterThan(0);
   });
 
-  it("pushes 'no drivers available' to the rider", async () => {
-    const { io } = makeIo();
+  it("does NOT push 'no drivers' to the rider — socket event only (2026-10-15)", async () => {
+    const { io, emitted } = makeIo();
     db.query.mockResolvedValueOnce([]);
     await offerToNextDriver(io, "ride-1");
 
-    await vi.waitFor(() => expect(notify.sendPushToUsers).toHaveBeenCalled());
-    const [ids, msg] = notify.sendPushToUsers.mock.calls[0] as any[];
-    expect(ids).toEqual(["rider-1"]);
-    expect(msg.type).toBe("no_drivers");
+    // The in-app event still lands…
+    await vi.waitFor(() => expect(emitted.some((e) => e.event === "ride:no:drivers")).toBe(true));
+    // …but the push is removed: the revive loop re-parked the ride and the
+    // rider received the same notification dozens of times.
+    expect(notify.sendPushToUsers).not.toHaveBeenCalled();
   });
 
   it("stops after MAX_OFFER_ROUNDS instead of churning forever", async () => {
