@@ -24,6 +24,7 @@ import type { Server as SocketIOServer } from "socket.io";
 import { query, queryOne, execute, withTransaction } from "../config/database";
 import { sendPushToUsers } from "./notify";
 import { attachVehicleImages } from "./vehicleImages";
+import { resolveDriverPhotoUrl } from "./driverPhoto";
 import { trace, startTrace } from "./trace";
 import { destinationFit, FitThresholds } from "./destinationFit";
 import { getDestinationConfig } from "./config";
@@ -1233,6 +1234,11 @@ export async function emitRideAccepted(
   // follow-up GET /api/rides/me/active.
   await attachVehicleImages(driver);
 
+  // The DRIVER'S photo next to the car: users.profile_photo_url, else the
+  // driver's newest profile_photo/face_scan document (presigned + cached so
+  // the rider's 3s active-ride poll never hammers S3).
+  const photoUrl = await resolveDriverPhotoUrl(driverId, driver?.profile_photo_url || null);
+
   // STAMP the car onto the ride at accept time: trip history must keep showing the
   // car that did THAT trip even after the driver changes cars. Best-effort â€” a
   // failure here must never block an accept that already succeeded.
@@ -1257,7 +1263,7 @@ export async function emitRideAccepted(
     id: rideId,
     version,
     driver_name: driver?.full_name || "Driver",
-    driver_photo_url: driver?.profile_photo_url || null,
+    driver_photo_url: photoUrl,
     vehicle_color: driver?.vehicle_color,
     vehicle_make: driver?.vehicle_make,
     vehicle_model: driver?.vehicle_model,
@@ -1272,7 +1278,7 @@ export async function emitRideAccepted(
     driver: {
       name: driver?.full_name || "Driver",
       phone: driver?.phone || null,
-      photo_url: driver?.profile_photo_url || null,
+      photo_url: photoUrl,
       rating: driver?.rating_avg ?? 0,
       plate: driver?.license_plate || null,
       vehicle_image_url: driver?.vehicle_image_url || null,

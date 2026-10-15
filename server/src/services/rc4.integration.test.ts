@@ -239,6 +239,17 @@ ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS verification_status VARCHAR
 -- like a production DB that applied 002 before that commit — add it additively.
 ALTER TABLE destination_sessions ADD COLUMN IF NOT EXISTS destination_expires_at TIMESTAMPTZ;
 ALTER TABLE destination_sessions ADD COLUMN IF NOT EXISTS trips_completed INT NOT NULL DEFAULT 0;
+-- Same story for the Module 1 dispatch columns: if another suite (adminV2)
+-- created the shared rides table first, these are missing and every offer/
+-- expire/revive/no_drivers statement fails. Additive only, no-op when present.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS route_data JSONB;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS device_id TEXT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS offer_round INT DEFAULT 0;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS version INT DEFAULT 0;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION;
 `;
 
 function migrationSql(file: string): string {

@@ -66,8 +66,6 @@ export default function DriverVehicleCard({
   const desc = [colour, make, model].filter(Boolean).join(' ') || 'Vehicle details pending'
   const spec = resolveVehicleImage(vehicle)
   const photo = !photoFailed && driver?.photo_url ? String(driver.photo_url) : ''
-  const initials =
-    fullName.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase() || 'D'
 
   const headline =
     stage === 'accepted' ? `${first} accepted your ride`
@@ -93,7 +91,13 @@ export default function DriverVehicleCard({
               onError={() => setPhotoFailed(true)}
             />
           ) : (
-            <span className="text-[15px] font-bold text-white">{initials}</span>
+            /* No photo (brand-new account or failed load): a neutral driver
+               silhouette — NEVER initials. The server sends
+               ride.driver_photo_url from users.profile_photo_url, falling back
+               to the driver's profile_photo / face_scan document. */
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="rgba(255,255,255,0.85)" aria-hidden="true">
+              <path d="M12 12c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm0 2c-3.34 0-10 1.67-10 5v2h20v-2c0-3.33-6.66-5-10-5z" />
+            </svg>
           )}
         </div>
 

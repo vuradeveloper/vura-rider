@@ -126,6 +126,19 @@ router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, 
         res.status(500).json({ error: err?.message || "Upload failed" });
     }
 });
+// GET /api/documents/status — the DRIVER APP's documents gate.
+// Returns { approved, missing, required } for the admin-required list, so a
+// brand-new driver opens on the documents/vehicle screen only while a fully
+// approved driver goes straight to driver home. The rider side never calls it.
+router.get("/status", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
+    try {
+        const dbUser = req.dbUser;
+        res.json(await (0, adminDocReview_1.requiredDocsStatus)(dbUser.id));
+    }
+    catch (err) {
+        res.status(500).json({ error: err?.message || "Status lookup failed" });
+    }
+});
 // GET /api/documents/mine — the driver's own documents, newest first
 router.get("/mine", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
     try {

@@ -45,6 +45,7 @@ import {
 } from "./adminAuth";
 import { recordVehicleRequestMiss, vehicleImageCacheKey, autoFillMissingColours } from "./vehicleImages";
 import { verifyDocument } from "./docVerification";
+import { requiredDocsStatus } from "./adminDocReview";
 import { getObjectFromS3 } from "../lib/s3";
 import adminV2Router from "../routes/adminV2";
 
@@ -186,6 +187,11 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS estimated_fare NUMERIC(10,2);
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS payment_method VARCHAR(30);
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(20);
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+-- Rider stops (waypoints): dispatch's loadRide selects r.waypoints, so a
+-- stand-in rides table created before this column existed would fail EVERY
+-- dispatch suite with "column r.waypoints does not exist". Same idempotent
+-- ALTER the server runs at boot (routes/rides.ts ensureRouteColumn).
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB;
 CREATE TABLE IF NOT EXISTS app_config (
   key TEXT PRIMARY KEY,
   value JSONB NOT NULL,
@@ -357,6 +363,23 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
         .filter((s) => s.length > 0);
       for (const stmt of statements) await execute(stmt);
       for (const stmt of statements) await execute(stmt);
+    }
+
+    // SHARED-SCRATCH SELF-HEAL: the container persists across suites, so the
+    // table shape is whatever the FIRST creator made and CREATE IF NOT EXISTS
+    // no-ops afterwards. If THIS suite minted rides/driver_profiles (fresh
+    // container, adminV2 runs first alphabetically), the dispatch + rc4 suites
+    // would fail on their Module 1-3 columns — add them additively here, and
+    // they do the same for our columns in their own beforeAll.
+    for (const stmt of [
+      `ALTER TABLE rides ADD COLUMN IF NOT EXISTS offer_round INT DEFAULT 0`,
+      `ALTER TABLE rides ADD COLUMN IF NOT EXISTS version INT DEFAULT 0`,
+      `ALTER TABLE rides ADD COLUMN IF NOT EXISTS device_id TEXT`,
+      `ALTER TABLE rides ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ`,
+      `ALTER TABLE rides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
+      `ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION`,
+    ]) {
+      await execute(stmt);
     }
 
     const app = express();
@@ -663,6 +686,37 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     } finally {
       delete process.env.ADMIN_EMAILS;
     }
+  });
+
+  it("driver-app gate: requiredDocsStatus goes false → true as documents get approved", async () => {
+    const id = await seedDriver();
+    // Brand-new driver: nothing approved → gated, and the missing list IS the
+    // admin-required list (migration 005 seed / settings fallback).
+    const fresh = await requiredDocsStatus(id);
+    expect(fresh.approved).toBe(false);
+    expect(fresh.required.length).toBeGreaterThan(0);
+    expect(fresh.missing).toEqual(fresh.required);
+
+    // One approved document removes exactly that type from the missing list.
+    await execute(
+      `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+       VALUES ($1, $2, 'id.jpg', 'image/jpeg', 'k-gate1', 'b', 'approved')`,
+      [id, fresh.required[0]]
+    );
+    const partial = await requiredDocsStatus(id);
+    expect(partial.approved).toBe(false);
+    expect(partial.missing.length).toBe(fresh.required.length - 1);
+    expect(partial.missing).not.toContain(fresh.required[0]);
+
+    // Everything approved → the driver app opens to driver home.
+    for (const t of partial.missing) {
+      await execute(
+        `INSERT INTO driver_documents (driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, status)
+         VALUES ($1, $2, 'f.pdf', 'application/pdf', 'k-gate2', 'b', 'approved')`,
+        [id, t]
+      );
+    }
+    expect((await requiredDocsStatus(id)).approved).toBe(true);
   });
 
   it("suspend takes the driver offline, records history/audit, reinstate works, BLOCKED is terminal", async () => {

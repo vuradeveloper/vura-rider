@@ -1815,6 +1815,16 @@ export const getMyDocuments = () =>
   apiFetch<{ documents: DocRow[] }>("/api/documents/mine");
 
 /**
+ * GET /api/documents/status — the driver app's documents gate:
+ * { approved, missing, required } for the admin-required list. While
+ * `approved` is false the driver only ever sees the documents/vehicle screen.
+ */
+export const getDocsStatus = () =>
+  apiFetch<{ approved: boolean; missing: string[]; required: string[] }>(
+    "/api/documents/status"
+  );
+
+/**
  * Uploads a document — identical call to the native app's uploadDocumentToS3().
  */
 export function uploadDocument(

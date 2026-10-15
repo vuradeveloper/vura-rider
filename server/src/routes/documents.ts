@@ -2,7 +2,7 @@ import { Router, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { query } from "../config/database";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { reviewDocument } from "../services/adminDocReview";
+import { requiredDocsStatus, reviewDocument } from "../services/adminDocReview";
 import { verifyDocument } from "../services/docVerification";
 import {
   isDocumentType,
@@ -167,6 +167,19 @@ router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, 
     }
   } catch (err: any) {
     res.status(500).json({ error: err?.message || "Upload failed" });
+  }
+});
+
+// GET /api/documents/status — the DRIVER APP's documents gate.
+// Returns { approved, missing, required } for the admin-required list, so a
+// brand-new driver opens on the documents/vehicle screen only while a fully
+// approved driver goes straight to driver home. The rider side never calls it.
+router.get("/status", roleGuard(["driver", "admin", "passenger"]), async (req, res) => {
+  try {
+    const dbUser: DbUser = (req as any).dbUser;
+    res.json(await requiredDocsStatus(dbUser.id));
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Status lookup failed" });
   }
 });
 

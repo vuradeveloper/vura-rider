@@ -39,6 +39,7 @@ import {
   getDriverStats,
   getEarnings,
   getMyDocuments,
+  getDocsStatus,
   getMyLocation,
   getMyProfile,
   getNotifications,
@@ -1674,17 +1675,16 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 /**
  * The driver's photo, straight from the DB.
  *
- * `photo` is ride.driver_photo_url, which the server fills from
- * users.profile_photo_url — the column the driver app writes when the driver
- * completes their face scan (POST /api/users/photo). It used to be an initials
- * circle only, so the rider never saw who was actually driving; the initials
- * remain purely as the fallback for a brand-new account with no photo yet.
+ * `photo` is ride.driver_photo_url. The server fills it from
+ * users.profile_photo_url (written by POST /api/users/photo), falling back to
+ * the driver's newest profile_photo / face_scan DOCUMENT so a photo uploaded
+ * through the documents flow still reaches the rider. When no photo exists —
+ * or the image fails to load — the rider sees a neutral driver silhouette,
+ * never an initials circle.
  */
 function DriverAvatar({ name, photo, size = 44 }: { name: string; photo?: string | null; size?: number }) {
   const [broken, setBroken] = useState(false)
   const fullName = String(name || 'Driver')
-  const initials =
-    fullName.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase() || 'D'
   const url = !broken && photo ? String(photo) : ''
   return (
     <div
@@ -1694,7 +1694,9 @@ function DriverAvatar({ name, photo, size = 44 }: { name: string; photo?: string
       {url ? (
         <img src={url} alt={fullName} className="w-full h-full object-cover" onError={() => setBroken(true)} />
       ) : (
-        <span className="text-[15px] font-bold text-white">{initials}</span>
+        <svg viewBox="0 0 24 24" className="w-3/5 h-3/5" fill="rgba(255,255,255,0.85)" aria-hidden="true">
+          <path d="M12 12c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm0 2c-3.34 0-10 1.67-10 5v2h20v-2c0-3.33-6.66-5-10-5z" />
+        </svg>
       )}
     </div>
   )
@@ -3424,6 +3426,57 @@ export default function App() {
   // Live ride request pushed over the socket, handed to the RideRequest screen.
   const [req, setReq] = useState<RideRequestData | null>(null)
 
+  // ── Documents gate — DRIVER MODE ONLY; the rider branch never reads this. ──
+  // A new driver whose required documents are not all APPROVED yet must see
+  // ONLY the documents/vehicle screen (no home, trips, earnings or nav); once
+  // every required document is approved the app opens to driver home like
+  // normal. null = still checking (or check failed → retry UI), false = gated.
+  const [docsApproved, setDocsApproved] = useState<boolean | null>(null)
+  const [docsCheckFailed, setDocsCheckFailed] = useState(false)
+
+  async function checkDocsGate(): Promise<boolean | null> {
+    try {
+      const s = await getDocsStatus()
+      const ok = !!s?.approved
+      setDocsApproved(ok)
+      setDocsCheckFailed(false)
+      return ok
+    } catch {
+      // Never guess offline: show a retry card. The server still enforces the
+      // real go-online gate on its side, so this is UX-only.
+      setDocsCheckFailed(true)
+      return null
+    }
+  }
+
+  // Ask on every entry into driver mode; rider mode resets to "not applicable".
+  useEffect(() => {
+    if (!authed || mode !== 'driver') {
+      setDocsApproved(null)
+      setDocsCheckFailed(false)
+      return
+    }
+    void checkDocsGate()
+  }, [authed, mode])
+
+  // While gated, re-check every 15s and on foreground so staff approval
+  // unlocks the app onto driver home without reinstalling or force-closing.
+  useEffect(() => {
+    if (mode !== 'driver' || docsApproved !== false) return
+    const check = () => {
+      void checkDocsGate().then((ok) => {
+        if (ok) { setDScreen('driverHome'); setDNav('driverHome') }
+      })
+    }
+    const t = setInterval(check, 15000)
+    const onVisible = () => { if (document.visibilityState === 'visible') check() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [mode, docsApproved])
+
   function switchMode(m: AppMode) { setMode(m) }
   function riderGo(s: RiderScreen) { setRNav(s); setRScreen(s) }
   function driverGo(s: DriverScreen) { setDNav(s); setDScreen(s) }
@@ -3525,6 +3578,29 @@ export default function App() {
         </>)}
 
         {mode === 'driver' && (<>
+          {/* ── Documents gate (driver mode ONLY — the rider branch above never
+              reads docsApproved): pending approval => the documents/vehicle
+              screen is the ENTIRE app; checking => spinner; offline => retry. */}
+          {docsApproved === null && docsCheckFailed && (
+            <div className="h-screen flex flex-col items-center justify-center bg-white gap-3 px-8 text-center">
+              <p className="text-[14px] font-semibold text-[#1A1A1A]">Couldn't check your documents</p>
+              <p className="text-[13px] text-[#ADADAD]">Check your connection and try again.</p>
+              <button
+                onClick={() => { setDocsCheckFailed(false); void checkDocsGate() }}
+                className="mt-2 bg-[#EA4335] text-white text-[14px] font-bold px-6 py-3 rounded-2xl active:bg-[#C5221F]"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {docsApproved === null && !docsCheckFailed && (
+            <div className="h-screen flex flex-col items-center justify-center bg-white gap-3">
+              <div className="w-9 h-9 rounded-full border-[3px] border-[#F0F0F0] border-t-[#EA4335] animate-spin" />
+              <p className="text-[13px] text-[#ADADAD]">Checking your documents…</p>
+            </div>
+          )}
+          {docsApproved === false && <VehicleLinkScreen gated onBack={() => {}} />}
+          {docsApproved === true && <>
           {dScreen === 'driverHome' && <DriverHome onRequest={(r: RideRequestData) => { setReq(r); setDScreen('request') }} mode={mode} onMode={switchMode} />}
           {dScreen === 'request' && (
             <RideRequest
@@ -3579,6 +3655,7 @@ export default function App() {
           {dScreen === 'report' && <ReportIssue onBack={() => setDScreen('settings')} rideId={req?.id} />}
           {dScreen === 'wallet' && <WalletScreen onBack={() => setDScreen('driverAccount')} />}
           {driverNav && <DriverNav active={dNav} go={driverGo} />}
+          </>}
         </>)}
       </>)}
     </div>

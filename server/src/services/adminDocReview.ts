@@ -31,6 +31,29 @@ async function requiredTypes(): Promise<string[]> {
   return REQUIRED_DOC_TYPES;
 }
 
+/**
+ * Which required documents a driver is still missing — the DRIVER APP's gate.
+ *
+ * A brand-new driver whose list is not fully approved opens on the documents &
+ * vehicle screen ONLY; a fully approved driver goes straight to driver home.
+ * Same source as allRequiredApproved: the active admin_required_docs settings,
+ * with REQUIRED_DOC_TYPES as the pre-005 fallback (requiredTypes()).
+ */
+export async function requiredDocsStatus(driverId: string): Promise<{
+  approved: boolean;
+  missing: string[];
+  required: string[];
+}> {
+  const required = await requiredTypes();
+  const approved = await query<{ doc_type: string }>(
+    `SELECT DISTINCT doc_type FROM driver_documents WHERE driver_id = $1 AND status = 'approved'`,
+    [driverId]
+  );
+  const have = new Set(approved.map((r) => r.doc_type));
+  const missing = required.filter((t) => !have.has(t));
+  return { approved: missing.length === 0, missing, required };
+}
+
 /** True when the driver has EVERY active required document approved. */
 export async function allRequiredApproved(driverId: string): Promise<boolean> {
   const types = await requiredTypes();

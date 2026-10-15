@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.REQUIRED_DOC_TYPES = void 0;
+exports.requiredDocsStatus = requiredDocsStatus;
 exports.allRequiredApproved = allRequiredApproved;
 exports.reviewDocument = reviewDocument;
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,6 +33,21 @@ async function requiredTypes() {
         /* settings table missing (pre-005) — static list it is */
     }
     return exports.REQUIRED_DOC_TYPES;
+}
+/**
+ * Which required documents a driver is still missing — the DRIVER APP's gate.
+ *
+ * A brand-new driver whose list is not fully approved opens on the documents &
+ * vehicle screen ONLY; a fully approved driver goes straight to driver home.
+ * Same source as allRequiredApproved: the active admin_required_docs settings,
+ * with REQUIRED_DOC_TYPES as the pre-005 fallback (requiredTypes()).
+ */
+async function requiredDocsStatus(driverId) {
+    const required = await requiredTypes();
+    const approved = await (0, database_1.query)(`SELECT DISTINCT doc_type FROM driver_documents WHERE driver_id = $1 AND status = 'approved'`, [driverId]);
+    const have = new Set(approved.map((r) => r.doc_type));
+    const missing = required.filter((t) => !have.has(t));
+    return { approved: missing.length === 0, missing, required };
 }
 /** True when the driver has EVERY active required document approved. */
 async function allRequiredApproved(driverId) {

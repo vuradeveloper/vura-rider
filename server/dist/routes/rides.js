@@ -8,6 +8,7 @@ const AffiliateService_1 = require("../services/AffiliateService");
 const rideSim_1 = require("../services/rideSim");
 const dispatch_1 = require("../services/dispatch");
 const vehicleImages_1 = require("../services/vehicleImages");
+const driverPhoto_1 = require("../services/driverPhoto");
 const trace_1 = require("../services/trace");
 const adminRiders_1 = require("../services/adminRiders");
 const router = (0, express_1.Router)();
@@ -53,6 +54,11 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
           AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
         ORDER BY r.created_at DESC
         LIMIT 1`, [user.id]).catch(() => null);
+        // The rider's photo next to the car: users.profile_photo_url, else the
+        // driver's newest profile_photo/face_scan document (presigned + cached —
+        // this endpoint is polled every 3s and must never hit S3 per call).
+        if (ride)
+            ride.driver_photo_url = await (0, driverPhoto_1.resolveDriverPhotoUrl)(ride.driver_id, ride.driver_photo_url);
         // The rider must see the ACTUAL car. attachVehicleImages resolves the approved
         // photo for this driver's make|model|generation and hands the app OUR OWN
         // stored URL (GET /api/vehicle-images/â€¦), never a third-party link. The lookup
@@ -335,6 +341,8 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
        ORDER BY r.created_at DESC LIMIT 1`, [user.id, user.id]);
         // Same single source of truth as /me/active-state: the rider's live trip card
         // is fed by THIS endpoint, so the approved photo must be attached here too.
+        if (ride)
+            ride.driver_photo_url = await (0, driverPhoto_1.resolveDriverPhotoUrl)(ride.driver_id, ride.driver_photo_url);
         await (0, vehicleImages_1.attachVehicleImages)(ride);
         res.json({ ride: mapRide(ride) });
     }

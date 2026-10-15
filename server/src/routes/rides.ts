@@ -5,6 +5,7 @@ import { settleFirstRide } from "../services/AffiliateService";
 import { startServerRideSim, stopServerRideSim } from "../services/rideSim";
 import { acceptRide, declineOffer, startDispatch, logRideEvent, cancelPendingOffers } from "../services/dispatch";
 import { attachVehicleImages } from "../services/vehicleImages";
+import { resolveDriverPhotoUrl } from "../services/driverPhoto";
 import { trace, startTrace } from "../services/trace";
 import { assertRiderCanBook } from "../services/adminRiders";
 import type { Server as SocketIOServer } from "socket.io";
@@ -64,6 +65,11 @@ router.get("/me/active-state", requireAuth, async (req: AuthRequest, res: Respon
         LIMIT 1`,
       [user.id]
     ).catch(() => null);
+
+    // The rider's photo next to the car: users.profile_photo_url, else the
+    // driver's newest profile_photo/face_scan document (presigned + cached —
+    // this endpoint is polled every 3s and must never hit S3 per call).
+    if (ride) ride.driver_photo_url = await resolveDriverPhotoUrl(ride.driver_id, ride.driver_photo_url);
 
     // The rider must see the ACTUAL car. attachVehicleImages resolves the approved
     // photo for this driver's make|model|generation and hands the app OUR OWN
@@ -387,6 +393,7 @@ router.get("/me/active", requireAuth, async (req: AuthRequest, res: Response) =>
 
     // Same single source of truth as /me/active-state: the rider's live trip card
     // is fed by THIS endpoint, so the approved photo must be attached here too.
+    if (ride) ride.driver_photo_url = await resolveDriverPhotoUrl(ride.driver_id, ride.driver_photo_url);
     await attachVehicleImages(ride);
     res.json({ ride: mapRide(ride) });
   } catch (err: any) {

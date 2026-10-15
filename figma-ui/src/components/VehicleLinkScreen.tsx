@@ -65,7 +65,7 @@ function readAsDataUrl(file: File): Promise<string> {
   })
 }
 
-export default function VehicleLinkScreen({ onBack }: { onBack: () => void }) {
+export default function VehicleLinkScreen({ onBack, gated = false }: { onBack: () => void; gated?: boolean }) {
   const [vehicle, setVehicle] = useState<LinkedVehicle>(EMPTY)
   const [docs, setDocs] = useState<DocRow[]>([])
   // Locally picked files, keyed by document type, waiting to be uploaded.
@@ -243,9 +243,11 @@ export default function VehicleLinkScreen({ onBack }: { onBack: () => void }) {
     <div className="h-full overflow-y-auto bg-white pb-32">
       {/* Header */}
       <div className="sticky top-0 z-20 bg-white flex items-center gap-3 px-4 py-3 border-b border-[#F0F0F0]">
-        <button onClick={onBack} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center shrink-0 active:bg-[#F7F7F7]">
-          {IC.back()}
-        </button>
+        {!gated && (
+          <button onClick={onBack} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center shrink-0 active:bg-[#F7F7F7]">
+            {IC.back()}
+          </button>
+        )}
         <div className="flex-1">
           <h2 className="text-[16px] font-bold text-[#1A1A1A]">Link your car</h2>
           <p className="text-[11px] text-[#ADADAD]">Add your vehicle and upload your documents</p>
@@ -258,6 +260,16 @@ export default function VehicleLinkScreen({ onBack }: { onBack: () => void }) {
         )}
         {error && (
           <div className="rounded-xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-3 text-[12px] font-semibold text-[#C5221F]">{error}</div>
+        )}
+        {/* Gated view (documents not all approved yet): explain why this is the
+            ONLY screen — the rest of the app unlocks automatically the moment
+            staff approve the last required document. */}
+        {gated && (
+          <div className="rounded-xl bg-[#FFF7E6] border border-[#F5E0C2] px-4 py-3 text-[12px] leading-relaxed text-[#7A5B12] font-semibold">
+            Your documents are under review — this is the only screen available right now.
+            Link your car and upload (or re-upload) everything below; the whole app
+            unlocks as soon as all required documents are approved.
+          </div>
         )}
 
         {/* ── CarScan report: fills the form from the driver's own report ── */}

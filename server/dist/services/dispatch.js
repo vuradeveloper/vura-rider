@@ -46,6 +46,7 @@ exports.releaseDriver = releaseDriver;
 const database_1 = require("../config/database");
 const notify_1 = require("./notify");
 const vehicleImages_1 = require("./vehicleImages");
+const driverPhoto_1 = require("./driverPhoto");
 const trace_1 = require("./trace");
 const destinationFit_1 = require("./destinationFit");
 const config_1 = require("./config");
@@ -975,6 +976,10 @@ async function emitRideAccepted(io, rideId, driverId, version) {
     // instant this event lands, so it must be on the payload, not only on the
     // follow-up GET /api/rides/me/active.
     await (0, vehicleImages_1.attachVehicleImages)(driver);
+    // The DRIVER'S photo next to the car: users.profile_photo_url, else the
+    // driver's newest profile_photo/face_scan document (presigned + cached so
+    // the rider's 3s active-ride poll never hammers S3).
+    const photoUrl = await (0, driverPhoto_1.resolveDriverPhotoUrl)(driverId, driver?.profile_photo_url || null);
     // STAMP the car onto the ride at accept time: trip history must keep showing the
     // car that did THAT trip even after the driver changes cars. Best-effort â€” a
     // failure here must never block an accept that already succeeded.
@@ -995,7 +1000,7 @@ async function emitRideAccepted(io, rideId, driverId, version) {
         id: rideId,
         version,
         driver_name: driver?.full_name || "Driver",
-        driver_photo_url: driver?.profile_photo_url || null,
+        driver_photo_url: photoUrl,
         vehicle_color: driver?.vehicle_color,
         vehicle_make: driver?.vehicle_make,
         vehicle_model: driver?.vehicle_model,
@@ -1010,7 +1015,7 @@ async function emitRideAccepted(io, rideId, driverId, version) {
         driver: {
             name: driver?.full_name || "Driver",
             phone: driver?.phone || null,
-            photo_url: driver?.profile_photo_url || null,
+            photo_url: photoUrl,
             rating: driver?.rating_avg ?? 0,
             plate: driver?.license_plate || null,
             vehicle_image_url: driver?.vehicle_image_url || null,

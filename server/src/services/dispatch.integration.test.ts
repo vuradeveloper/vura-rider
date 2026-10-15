@@ -204,6 +204,21 @@ beforeAll(async () => {
   );
 
   await execute(CORE_SCHEMA);
+  // SELF-HEAL: the shared scratch container keeps whichever shape the FIRST
+  // suite created — CREATE TABLE IF NOT EXISTS is then a no-op, so a rides or
+  // driver_profiles table minted by another suite (e.g. adminV2's minimal
+  // BASE_SCHEMA) would starve the statements under test (`column … does not
+  // exist`). Add every Module 1-3 column additively — exactly how production
+  // got them (the server runs the same idempotent ALTERs at boot).
+  await execute(`
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB;
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS offer_round INT DEFAULT 0;
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS version INT DEFAULT 0;
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS device_id TEXT;
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ;
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION
+  `);
   // Real migration, applied TWICE to prove idempotency on live Postgres
   // (TEST_MIGRATION.md step 1) — SQL the mocked tests cannot validate.
   await query(migrationSql());
