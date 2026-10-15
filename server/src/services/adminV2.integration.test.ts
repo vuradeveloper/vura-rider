@@ -342,6 +342,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       "008_admin_messaging.sql",
       "009_admin_vehicle_requests.sql",
       "010_doc_verification.sql",
+      "011_doc_type_check.sql",
     ]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql

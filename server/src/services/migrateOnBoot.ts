@@ -39,6 +39,7 @@ export const MIGRATION_ORDER = [
   "008_admin_messaging.sql",
   "009_admin_vehicle_requests.sql",
   "010_doc_verification.sql",
+  "011_doc_type_check.sql",
 ] as const;
 
 export type MigrationOutcome = "applied" | "skipped" | "failed";

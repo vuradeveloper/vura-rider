@@ -570,9 +570,14 @@ async function findCandidatesH3(
     let errors = 0;
     pool = [];
     for (const row of rows) {
-      const dest = inRollout(row.id) ? destBy.get(row.id) : undefined;
+      // ANY active destination session hard-filters this driver (2026-10-15):
+      // the rollout gates only whether a driver can START a session — once a
+      // session exists, a driver in destination mode must NEVER be offered a
+      // ride that doesn't head their way (the previous rollout re-check here
+      // let session drivers take anyone when they fell outside the bucket).
+      const dest = destBy.get(row.id);
       if (!dest) {
-        pool.push(row); // not in the rollout, or covered but NOT in destination mode
+        pool.push(row); // not in destination mode
         continue;
       }
       considered += 1;
