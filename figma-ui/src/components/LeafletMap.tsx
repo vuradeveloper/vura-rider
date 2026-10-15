@@ -48,12 +48,14 @@ export type LatLng = { lat: number; lng: number }
 const JOBURG: LatLng = { lat: -26.2041, lng: 28.0473 }
 
 /**
- * The OLD apps' map styling — copied verbatim from their lib/mapHtml.ts, which
- * is byte-identical between the driver and rider apps. Using the same rules on
- * both means the driver and rider maps look the same.
+ * Map styling — the WARM "illustrative" look from the reference design: cream
+ * base, beige-tinted streets and the white/red car pin. Applied to every map in
+ * the APK (driver + rider) so they stay identical, the way the old apps shared
+ * one rule. Tiles keep their localStorage cache — the tint is pure CSS, so no
+ * tile is ever re-downloaded for a style change.
  *
- *   .leaflet-container{background:#f8f9fa}
- *   .tile-grayscale{filter:grayscale(1) contrast(1.08) brightness(1.02)}
+ *   .leaflet-container{background:#F3ECE2}
+ *   .tile-grayscale{filter:sepia(0.5) saturate(1.35) hue-rotate(-14deg) …}
  *   tile URL: https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png  (subdomains abc)
  */
 const MAP_STYLE_ID = 'vura-map-style'
@@ -62,10 +64,36 @@ function ensureMapStyle() {
   const style = document.createElement('style')
   style.id = MAP_STYLE_ID
   style.textContent = [
-    '.leaflet-container{background:#f8f9fa}',
-    '.tile-grayscale{filter:grayscale(1) contrast(1.08) brightness(1.02)}',
+    '.leaflet-container{background:#F3ECE2}',
+    '.tile-grayscale{filter:sepia(0.5) saturate(1.35) hue-rotate(-14deg) brightness(1.05) contrast(0.94)}',
+    '.vura-car-pin-wrap{background:transparent!important;border:0!important}',
+    '.vura-car-pin{width:46px;height:46px;border-radius:50%;background:#fff;border:2px solid rgba(234,67,53,0.55);box-shadow:0 3px 10px rgba(0,0,0,0.22);display:flex;align-items:center;justify-content:center}',
   ].join('\n')
   document.head.appendChild(style)
+}
+
+/**
+ * The driver's pin, exactly as the reference map draws it: a top-view car in a
+ * white circle with a soft red ring. Replaces the old red dot on EVERY map in
+ * the app (follow-position, explicit markers and the locate button all route
+ * through it), so rider and driver stay consistent.
+ */
+function carPinIcon(L: any) {
+  return L.divIcon({
+    className: 'vura-car-pin-wrap',
+    iconSize: [46, 46],
+    iconAnchor: [23, 23],
+    html: `<div class="vura-car-pin"><svg viewBox="0 0 40 40" width="26" height="26" aria-hidden="true">
+      <rect x="10" y="4" width="20" height="32" rx="8.5" fill="#262626"/>
+      <path d="M13 11.5 C17 8.8 23 8.8 27 11.5 L25.6 16.6 C23 15.2 17 15.2 14.4 16.6 Z" fill="#D8E2EC"/>
+      <path d="M14.4 23.4 C17 24.8 23 24.8 25.6 23.4 L27 28.5 C23 31.2 17 31.2 13 28.5 Z" fill="#D8E2EC"/>
+      <rect x="13.4" y="19.4" width="13.2" height="1.8" rx="0.9" fill="#0F0F0F"/>
+      <circle cx="13.2" cy="6.6" r="1.4" fill="#EAF3FF"/>
+      <circle cx="26.8" cy="6.6" r="1.4" fill="#EAF3FF"/>
+      <circle cx="13.2" cy="33.4" r="1.4" fill="#E4574C"/>
+      <circle cx="26.8" cy="33.4" r="1.4" fill="#E4574C"/>
+    </svg></div>`,
+  })
 }
 
 /**
@@ -261,14 +289,8 @@ export default function LeafletMap({
         markerRef.current.setLatLng([lat, lng])
         return
       }
-      // A red dot matching the design's accent.
-      markerRef.current = L.circleMarker([lat, lng], {
-        radius: 8,
-        color: '#FFFFFF',
-        weight: 3,
-        fillColor: '#EA4335',
-        fillOpacity: 1,
-      }).addTo(map)
+      // The reference design's car pin: white circle, red ring, top-view car.
+      markerRef.current = L.marker([lat, lng], { icon: carPinIcon(L), keyboard: false, zIndexOffset: 400 }).addTo(map)
     }
 
     function drawAccuracy(L: any, map: any, lat: number, lng: number, accuracy: number) {
@@ -368,13 +390,7 @@ export default function LeafletMap({
       markerRef.current.setLatLng([lat, lng])
       return
     }
-    markerRef.current = L.circleMarker([lat, lng], {
-      radius: 8,
-      color: '#FFFFFF',
-      weight: 3,
-      fillColor: '#EA4335',
-      fillOpacity: 1,
-    }).addTo(map)
+    markerRef.current = L.marker([lat, lng], { icon: carPinIcon(L), keyboard: false, zIndexOffset: 400 }).addTo(map)
   }
 }
 
@@ -387,7 +403,7 @@ function MapBtn({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="w-9 h-9 rounded-xl bg-white border border-[#EBEBEB] shadow-sm flex items-center justify-center text-[18px] font-bold text-[#1A1A1A] active:bg-[#F5F5F5]"
+      className="w-10 h-10 rounded-2xl bg-white border border-[#EBEBEB] shadow-[0_2px_8px_rgba(0,0,0,0.10)] flex items-center justify-center text-[19px] font-bold text-[#1A1A1A] active:bg-[#F5F5F5]"
     >
       {children}
     </button>

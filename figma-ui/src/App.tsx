@@ -241,6 +241,12 @@ const IC = {
   airport: (c = '#9E9E9E') => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><path d="M17.8 19.2L16 11l3.5-3.5A3 3 0 009 6.5l-3.5 3.5-8.2-1.8a.8.8 0 00-.8 1.3l4.4 4.4-2.3 2.3a.5.5 0 000 .7l1.4 1.4a.5.5 0 00.7 0l2.3-2.3 4.4 4.4a.8.8 0 001.3-.8z" /></svg>,
   work: (c = '#9E9E9E') => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16" /></svg>,
   place: (c = '#9E9E9E') => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" /><circle cx="12" cy="10" r="3" /></svg>,
+  // — Reference-design set (driver home + rails) —
+  send: (c = '#6B6B6B') => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2.5L11 13" /><path d="M21.5 2.5l-6.8 19-3.7-8.5L2.5 9.3z" /></svg>,
+  power: (c = '#fff') => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2.2" strokeLinecap="round"><path d="M12 3.5v8" /><path d="M17.8 6.8a8.5 8.5 0 11-11.6 0" /></svg>,
+  arrowRight: (c = '#fff') => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h15" /><path d="M13 6l6 6-6 6" /></svg>,
+  arrowNE: (c = '#9E9E9E') => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7" /><path d="M8 7h9v9" /></svg>,
+  arrowSW: (c = '#6B6B6B') => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7L7 17" /><path d="M12 17H7v-5" /></svg>,
 }
 
 // ????????? Map ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
@@ -287,7 +293,7 @@ async function openExternal(url: string) {
 const PANEL_RISE = 20
 
 function MapCanvas({
-  dark = false, marker, zoom = 16, follow = true, controls = false, controlsBottom = 12, route,
+  dark = false, marker, zoom = 16, follow = true, controls = false, controlsBottom = 12, route, overlay,
 }: {
   dark?: boolean
   /**
@@ -304,6 +310,13 @@ function MapCanvas({
   follow?: boolean
   controls?: boolean
   controlsBottom?: number
+  /**
+   * Decorative layer rendered BETWEEN the tiles and the car pin: Leaflet's panes
+   * (tile 200 → marker 600) live in THIS wrapper's stacking context, so an
+   * absolutely-positioned child at z-450 paints over the map imagery but under
+   * the pin — exactly where the reference design's demand "heat" blobs sit.
+   */
+  overlay?: ReactNode
 }) {
   // Real OpenStreetMap tiles via Leaflet ??? the same mapping stack the React
   // Native driver app uses (it renders Leaflet inside a WebView), so both apps
@@ -327,6 +340,9 @@ function MapCanvas({
           hard-coded centre pin that sat here is gone â€” it always pointed at the
           middle of the screen no matter where the driver actually was. */}
       <LeafletMap dark={dark} marker={marker} zoom={zoom} follow={follow} controls={controls} controlsBottom={controlsBottom} route={route} />
+      {overlay && (
+        <div className="absolute inset-0 z-[450] pointer-events-none overflow-hidden">{overlay}</div>
+      )}
     </div>
   )
 }
@@ -342,7 +358,7 @@ function RiderNav({ active, go }: { active: RiderScreen; go: (s: RiderScreen) =>
       {([['home', 'Home', IC.home], ['activity', 'Activity', IC.clock], ['account', 'Account', IC.user]] as [RiderScreen, string, (c: string) => ReactNode][]).map(([id, label, Icon]) => (
         <button key={id} onClick={() => go(id)} className={`flex-1 flex flex-col items-center pt-3 pb-4 gap-[5px] transition-colors ${active === id ? 'text-[#EA4335]' : 'text-[#ADADAD]'}`}>
           {Icon(active === id ? '#EA4335' : '#ADADAD')}
-          <span className="text-[10px] font-semibold tracking-wider uppercase">{label}</span>
+          <span className="text-[11px] font-semibold capitalize">{label}</span>
         </button>
       ))}
     </nav>
@@ -1999,7 +2015,7 @@ function DriverNav({ active, go }: { active: DriverScreen; go: (s: DriverScreen)
       {([['driverHome', 'Drive', IC.car], ['earnings', 'Earnings', IC.wallet], ['driverAccount', 'Account', IC.user]] as [DriverScreen, string, (c: string) => ReactNode][]).map(([id, label, Icon]) => (
         <button key={id} onClick={() => go(id)} className={`flex-1 flex flex-col items-center pt-3 pb-4 gap-[5px] transition-colors ${active === id ? 'text-[#EA4335]' : 'text-[#ADADAD]'}`}>
           {Icon(active === id ? '#EA4335' : '#ADADAD')}
-          <span className="text-[10px] font-semibold tracking-wider uppercase">{label}</span>
+          <span className="text-[11px] font-semibold capitalize">{label}</span>
         </button>
       ))}
     </nav>
@@ -2014,7 +2030,20 @@ function DriverNav({ active, go }: { active: DriverScreen; go: (s: DriverScreen)
  */
 const ONLINE_CARD_HEIGHT = 145
 
-function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestData) => void; mode: AppMode; onMode: (m: AppMode) => void }) {
+/**
+ * The reference map's soft demand "heat" blobs — purely decorative (the strip
+ * under the map labels the view "illustrative map"). Rendered through
+ * MapCanvas's overlay slot: above the tiles, below the car pin.
+ */
+const HEAT_BLOBS = (
+  <div className="absolute inset-0">
+    <div className="absolute" style={{ left: '-8%', top: '3%', width: '56%', height: '44%', background: 'radial-gradient(circle at 50% 50%, rgba(234,67,53,0.20), rgba(234,67,53,0.10) 55%, rgba(234,67,53,0) 72%)' }} />
+    <div className="absolute" style={{ right: '-10%', top: '34%', width: '54%', height: '42%', background: 'radial-gradient(circle at 50% 50%, rgba(234,67,53,0.16), rgba(234,67,53,0.08) 55%, rgba(234,67,53,0) 72%)' }} />
+    <div className="absolute" style={{ right: '0%', bottom: '-8%', width: '46%', height: '36%', background: 'radial-gradient(circle at 50% 50%, rgba(52,168,83,0.14), rgba(52,168,83,0.07) 55%, rgba(52,168,83,0) 72%)' }} />
+  </div>
+)
+
+function DriverHome({ onRequest, mode, onMode, onTrips }: { onRequest: (r: RideRequestData) => void; mode: AppMode; onMode: (m: AppMode) => void; onTrips?: () => void }) {
   // Restored from local storage, exactly like the native app
   // (AsyncStorage "vura.driver.online") â€” so leaving and reopening the APK keeps
   // the driver online instead of silently resetting to Offline.
@@ -2022,6 +2051,27 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
   const [stats, setStats] = useState<DriverStats | null>(null)
   const [balance, setBalance] = useState(0)
   const [trips, setTrips] = useState<ReturnType<typeof normalizeRide>[]>([])
+
+  // "Time online" on the earnings card: a persistent session clock set when the
+  // driver goes online (survives relaunches via localStorage) plus a stored
+  // total, so the card still shows today's time after going offline — exactly
+  // the "2h 14m / Time online" stat in the reference design.
+  const [onlineSince, setOnlineSince] = useState<number | null>(() => {
+    const v = Number(localStorage.getItem('vura.driver.online.since') || '0')
+    return v > 0 ? v : null
+  })
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    const t = window.setInterval(() => setNowTick(Date.now()), 30000)
+    return () => window.clearInterval(t)
+  }, [])
+  const onlineMs =
+    Number(localStorage.getItem('vura.driver.online.total') || '0') +
+    (online && onlineSince ? Math.max(0, nowTick - onlineSince) : 0)
+  const onlineLabel = (() => {
+    const m = Math.max(0, Math.floor(onlineMs / 60000))
+    return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`
+  })()
 
   // Real driver data ??? the same endpoints the React Native driver app calls.
   useEffect(() => {
@@ -2067,6 +2117,22 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
   // Toggle online locally AND on the server, in one call.
   const setOnlineEverywhere = async (next: boolean) => {
     setOnline(next)
+    try {
+      if (next) {
+        if (!localStorage.getItem('vura.driver.online.since')) {
+          localStorage.setItem('vura.driver.online.since', String(Date.now()))
+        }
+        setOnlineSince(Number(localStorage.getItem('vura.driver.online.since')) || Date.now())
+      } else {
+        const since = Number(localStorage.getItem('vura.driver.online.since') || '0')
+        if (since > 0) {
+          const prev = Number(localStorage.getItem('vura.driver.online.total') || '0')
+          localStorage.setItem('vura.driver.online.total', String(prev + Math.max(0, Date.now() - since)))
+        }
+        localStorage.removeItem('vura.driver.online.since')
+        setOnlineSince(null)
+      }
+    } catch { /* storage unavailable */ }
     await goOnline(next).catch(() => { })
   }
 
@@ -2078,13 +2144,23 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
             following it as the driver moves (watchPosition), zoomed to street level.
             When online, the "Waiting for requests" card is pinned to the bottom of
             this area, so the map's own zoom/locate buttons are lifted to clear it. */}
-        <MapCanvas zoom={16} controls controlsBottom={online ? PANEL_RISE + ONLINE_CARD_HEIGHT + 12 : PANEL_RISE + 12} follow />
+        <MapCanvas zoom={16} controls controlsBottom={online ? PANEL_RISE + ONLINE_CARD_HEIGHT + 12 : PANEL_RISE + 12} follow overlay={HEAT_BLOBS} />
         <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between px-5 pt-12">
-          <div className="bg-white/90 backdrop-blur-md rounded-2xl px-3.5 py-2 shadow-sm border border-white/60 flex items-center gap-2">
+          <div className="bg-white/95 backdrop-blur-md rounded-2xl px-3.5 py-2 shadow-sm border border-white/70 flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${online ? 'bg-[#34A853]' : 'bg-[#D0D0D0]'}`}
               style={online ? { boxShadow: '0 0 0 3px rgba(52,168,83,0.18)' } : {}} />
-            <span className="text-[13px] text-[#1A1A1A] font-semibold">{online ? 'Online' : 'Offline'}</span>
+            <span className="text-[13px] text-[#1A1A1A] font-semibold">{online ? "You're online" : "You're offline"}</span>
           </div>
+        </div>
+
+        {/* Suburb chips floating over the heat blobs — the reference map's labels. */}
+        <div className="absolute z-10 left-4 top-[34%] bg-white/95 backdrop-blur-md rounded-full px-3 py-1.5 shadow-sm border border-white/70 flex items-center gap-1.5">
+          <span className="text-[13px] leading-none">🔥</span>
+          <span className="text-[12px] font-semibold text-[#1A1A1A]">Braamfontein</span>
+        </div>
+        <div className="absolute z-10 right-16 top-[56%] bg-white/95 backdrop-blur-md rounded-full px-3 py-1.5 shadow-sm border border-white/70 flex items-center gap-1.5">
+          <span className="text-[13px] leading-none">☕</span>
+          <span className="text-[12px] font-semibold text-[#1A1A1A]">Maboneng</span>
         </div>
 
         {/* Online floating card. Lifted by PANEL_RISE so the white panel's
@@ -2126,67 +2202,110 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
           z-index applies to flex items even when the position is static. Every other
           screen's panel in this file uses the same `bg-white z-10` pairing. */}
       <div className="flex-1 bg-white z-10 rounded-t-3xl shadow-[0_-4px_24px_rgba(0,0,0,0.06)] -mt-5 overflow-y-auto pb-24">
+        {/* Legend strip — sits between the map and the content, as in the reference. */}
+        <div className="flex items-center justify-between px-5 py-2.5 border-b border-[#F0F0F0]">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {IC.send('#6B6B6B')}
+            <span className="text-[11px] text-[#6B6B6B] font-medium truncate">Nearby demand · illustrative map</span>
+          </div>
+          <div className="flex items-center gap-2.5 shrink-0">
+            {[['#EA4335', 'High'], ['#FBBC04', 'Medium'], ['#34A853', 'Low']].map(([c, l]) => (
+              <span key={l} className="flex items-center gap-1 text-[10px] font-semibold text-[#6B6B6B]">
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
+                {l}
+              </span>
+            ))}
+          </div>
+        </div>
         <div className="px-5 pt-5">
-          {/* Go online CTA */}
-          {!online && (
-            <button onClick={() => setOnlineEverywhere(true)}
-              className="w-full bg-[#EA4335] text-white font-bold text-[16px] py-4 rounded-2xl mb-5 active:bg-[#C5221F] transition-colors"
-              style={{ boxShadow: '0 4px 16px rgba(234,67,53,0.28)' }}>
-              Go online
-            </button>
-          )}
+          {/* Headline + primary CTA — the reference design's "Ready when you are." block. */}
+          <h1 className="text-[26px] font-bold text-[#1A1A1A] leading-tight" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Ready when you are.</h1>
+          <p className="text-[13.5px] text-[#9E9E9E] mt-1.5 mb-4">Your next opportunity is out there. Go online and find your flow.</p>
+          <button onClick={() => setOnlineEverywhere(!online)}
+            className="w-full bg-[#EA4335] text-white font-bold text-[17px] py-4 rounded-2xl active:bg-[#C5221F] transition-colors flex items-center justify-between px-5"
+            style={{ boxShadow: '0 6px 20px rgba(234,67,53,0.30)' }}>
+            <span className="flex items-center gap-2.5">{IC.power('#fff')} {online ? 'Go offline' : 'Go online'}</span>
+            {IC.arrowRight('#fff')}
+          </button>
+          <div className="flex items-center justify-center gap-1.5 text-[11.5px] text-[#9E9E9E] my-4">
+            {IC.shield('#9E9E9E')} Your pace. Your schedule.
+          </div>
+          <div className="h-px bg-[#F0F0F0] mb-4" />
 
-          {/* Stats */}
-          <div className="grid grid-cols-3 gap-2.5 mb-5">
+          {/* Today's earnings — the reference design's bordered card. */}
+          <div className="rounded-2xl border border-[#EBEBEB] p-4 mb-6 flex items-center">
+            <div className="flex-1 min-w-0 pr-4">
+              <p className="text-[10px] uppercase tracking-[0.14em] text-[#ADADAD] font-bold">Today's earnings</p>
+              <p className="text-[30px] font-bold text-[#1A1A1A] leading-none mt-1.5" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{formatRand(stats?.today?.earned ?? 0)}</p>
+            </div>
+            <div className="w-px self-stretch bg-[#F0F0F0]" />
+            <div className="pl-4 flex items-stretch gap-4">
+              <div className="min-w-[64px]">
+                <p className="text-[16px] font-bold text-[#1A1A1A] leading-none" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{stats?.today?.rides ?? 0} trips</p>
+                <p className="text-[11px] text-[#9E9E9E] mt-1">Completed today</p>
+              </div>
+              <div className="min-w-[58px]">
+                <p className="text-[16px] font-bold text-[#1A1A1A] leading-none" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{onlineLabel}</p>
+                <p className="text-[11px] text-[#9E9E9E] mt-1">Time online</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Around you — the reference design's demand rail (demo data). */}
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[19px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Around you</h2>
+            <span className="text-[11px] font-semibold text-[#137333] bg-[#E6F4EA] rounded-full px-2.5 py-1">Demo demand</span>
+          </div>
+          <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-5 px-5 mb-6 no-scrollbar">
             {[
-              { l: 'Earned today', v: formatRand(stats?.today?.earned ?? 0) },
-              { l: 'Trips', v: String(stats?.allTime?.rides ?? 0) },
-              { l: 'This month', v: formatRand(stats?.thisMonth?.earned ?? 0) },
-            ].map(s => (
-              <div key={s.l} className="bg-[#F7F7F7] rounded-2xl p-3 text-center border border-[#F0F0F0]">
-                <p className="text-[16px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{s.v}</p>
-                <p className="text-[10px] text-[#ADADAD] mt-0.5 leading-tight font-semibold">{s.l}</p>
+              { name: 'Braamfontein', level: 'High demand', mins: '4 min away', c: '#EA4335', bg: '#FDECEA', icon: '🔥' },
+              { name: 'Maboneng', level: 'Medium demand', mins: '8 min away', c: '#F59E0B', bg: '#FEF7E0', icon: '⚡' },
+              { name: 'Rosebank', level: 'Low demand', mins: '12 min away', c: '#34A853', bg: '#E6F4EA', icon: '☕' },
+            ].map(z => (
+              <div key={z.name} className="shrink-0 rounded-2xl border border-[#EBEBEB] bg-white p-3.5" style={{ width: 156 }}>
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center text-[16px] mb-2.5" style={{ background: z.bg }}>{z.icon}</div>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: z.c }} />
+                  <span className="text-[11px] font-bold" style={{ color: z.c }}>{z.level}</span>
+                </div>
+                <p className="text-[15px] font-bold text-[#1A1A1A] leading-tight">{z.name}</p>
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="text-[11.5px] text-[#9E9E9E]">{z.mins}</span>
+                  {IC.arrowNE('#9E9E9E')}
+                </div>
               </div>
             ))}
           </div>
 
-          {/* Demand zones */}
-          <div className="bg-[#F7F7F7] rounded-2xl border border-[#F0F0F0] p-4 mb-5">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold">Demand nearby</p>
-              <span className="text-[11px] text-[#34A853] font-semibold">Live</span>
-            </div>
-            <div className="flex gap-2">
-              {[{ z: 'Downtown', l: 'High', c: '#EA4335', pct: 90 }, { z: 'SoMa', l: 'Medium', c: '#FBBC04', pct: 55 }, { z: 'Mission', l: 'Low', c: '#34A853', pct: 30 }].map(d => (
-                <div key={d.z} className="flex-1 rounded-xl p-3 bg-white border border-[#EBEBEB]">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <div className="w-1.5 h-1.5 rounded-full" style={{ background: d.c }} />
-                    <span className="text-[10px] font-bold" style={{ color: d.c }}>{d.l}</span>
-                  </div>
-                  <p className="text-[12px] text-[#1A1A1A] font-semibold">{d.z}</p>
-                  <div className="h-0.5 bg-[#F0F0F0] rounded-full mt-2 overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${d.pct}%`, background: d.c }} />
-                  </div>
-                </div>
-              ))}
-            </div>
+          {/* Your recent journeys */}
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[19px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Your recent journeys</h2>
+            <button onClick={() => onTrips?.()} className="flex items-center gap-1 text-[12.5px] font-semibold text-[#EA4335]">
+              View all trips {IC.arrowRight('#EA4335')}
+            </button>
           </div>
-
-          {/* Recent trips */}
-          <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mb-2">Recent trips</p>
           {trips.length === 0 ? (
             <p className="text-[12px] text-[#ADADAD] py-3">No completed trips yet.</p>
           ) : (
-            trips.map((t, i) => (
-              <div key={t.id} className={`flex items-center justify-between py-3.5 ${i < trips.length - 1 ? 'border-b border-[#F5F5F5]' : ''}`}>
-                <div className="min-w-0 flex-1 pr-3">
-                  <p className="text-[13px] text-[#1A1A1A] font-semibold truncate">{t.destination}</p>
-                  <p className="text-[11px] text-[#ADADAD] mt-0.5">{fmtTripTime(t.date)}</p>
+            <div className="rounded-2xl border border-[#EBEBEB] overflow-hidden divide-y divide-[#F2F2F2]">
+              {trips.map((t) => (
+                <div key={t.id} className="flex items-center gap-3 px-3.5 py-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-[#F5F5F5] flex items-center justify-center shrink-0">
+                    {IC.arrowSW('#6B6B6B')}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[14px] font-bold text-[#1A1A1A] truncate">{t.destination}</p>
+                    <p className="text-[11.5px] text-[#9E9E9E] truncate mt-0.5">{t.pickup} → {t.destination}</p>
+                  </div>
+                  <span className="text-[14px] font-bold text-[#1A1A1A] shrink-0" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{formatRand(t.fare)}</span>
                 </div>
-                <span className="text-[14px] font-bold text-[#1A1A1A] shrink-0" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{formatRand(t.fare)}</span>
-              </div>
-            ))
+              ))}
+            </div>
           )}
+
+          <p className="text-center text-[12px] text-[#ADADAD] my-6">
+            <span className="text-[#EA4335]">♡</span> A little more freedom. A little more you. That's Vura.
+          </p>
         </div>
       </div>
     </div>
@@ -3601,7 +3720,7 @@ export default function App() {
           )}
           {docsApproved === false && <VehicleLinkScreen gated onBack={() => {}} />}
           {docsApproved === true && <>
-          {dScreen === 'driverHome' && <DriverHome onRequest={(r: RideRequestData) => { setReq(r); setDScreen('request') }} mode={mode} onMode={switchMode} />}
+          {dScreen === 'driverHome' && <DriverHome onRequest={(r: RideRequestData) => { setReq(r); setDScreen('request') }} mode={mode} onMode={switchMode} onTrips={() => setDScreen('tripHistory')} />}
           {dScreen === 'request' && (
             <RideRequest
               request={req}
