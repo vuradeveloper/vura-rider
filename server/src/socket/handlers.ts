@@ -1407,16 +1407,27 @@ export function setupSocketHandlers(io: SocketIOServer) {
       try {
         const { rideId } = data;
         const dbUserId = await getDbUserId();
-        if (!dbUserId) return;
+        if (!dbUserId) {
+          // Silent bails here used to make "driver finished, rider still on
+          // Trip in progress" impossible to diagnose from the logs.
+          console.warn(`[complete] driver socket has no db user — completion ignored ride=${rideId}`);
+          return;
+        }
         const ride = await queryOne<{ id: string; driver_id: string; fare: number; status: string }>(
           "SELECT id, driver_id, status, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2",
           [rideId, dbUserId]
         );
-        if (!ride) return;
+        if (!ride) {
+          console.warn(
+            `[complete] ride ${rideId} not matched to driver ${dbUserId} — completion ignored`
+          );
+          return;
+        }
         await execute(
           "UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2",
           [ride.fare, rideId]
         );
+        console.log(`[complete] ride=${rideId} status=completed fare=${ride.fare}`);
         // Card preauthorization: the ride completing captures the hold for the
         // final fare (no-op when there is no hold; PAID still arrives only via
         // the preauthorization.capture.success webhook).

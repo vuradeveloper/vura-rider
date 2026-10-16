@@ -1606,16 +1606,42 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   // Same safety net as the matching screen (3s + foreground resume + reconnect):
   // if an event was missed â€” or the phone was locked when the driver arrived â€” the
   // server still knows the truth, so the rider's screen catches up regardless.
+  // WHY getRide(rideId) and NOT getActiveRide(): /me/active only returns ACTIVE
+  // rides by design, so a COMPLETED ride answers `null` and this check could
+  // never see status='completed' — one missed ride:completed event left the rider
+  // stuck on "Trip in progress" forever and the rating + tip sheet never opened.
+  const terminalRef = useRef(false)
   useEffect(() => {
     if (!rideId) return
     let alive = true
+    terminalRef.current = false
 
     const check = () => {
-      getActiveRide()
+      if (terminalRef.current) return
+      getRide(rideId)
         .then((r: any) => {
-          if (!alive || !r?.id || String(r.id) !== String(rideId)) return
+          if (!alive || !r?.id) return
           const st = String(r.status || '')
-          if (['accepted', 'driver_arrived', 'in_progress'].includes(st)) setStatus(st)
+          if (['accepted', 'driver_arrived', 'in_progress'].includes(st)) {
+            setStatus(st)
+            return
+          }
+          if (st === 'completed') {
+            terminalRef.current = true
+            setStatus('completed') // the `done` effect below opens the rating + tip sheet
+            setToast('Trip complete')
+            return
+          }
+          if (st === 'cancelled') {
+            terminalRef.current = true
+            setStatus('cancelled')
+            // Our OWN cancel shows its "funds released" sheet and navigates itself —
+            // don't yank the rider home from under it.
+            if (!cancelledByMe.current) {
+              void notifyRide('Ride cancelled', 'This trip was cancelled.')
+              onDone()
+            }
+          }
         })
         .catch(() => undefined)
     }
@@ -1704,10 +1730,13 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
     if (cancelling) return
     setCancelError('')
     if (!rideId) { onDone(); return }
+    // Flag BEFORE the request: the 3s status poll may see status='cancelled'
+    // the instant the server commits it — this stops the poll from navigating
+    // home before the "Your funds have been released" sheet can show.
+    cancelledByMe.current = true
     setCancelling(true)
     try {
       const r = await cancelRide(rideId, 'Rider cancelled')
-      cancelledByMe.current = true
       setStatus('cancelled')
       setCancelMsg(
         r?.releaseError
@@ -1718,6 +1747,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
       )
       setTimeout(() => onDone(), 1600) // the shell sends the rider home
     } catch (e: any) {
+      cancelledByMe.current = false // cancel failed — ride still live, unflag us
       setCancelError(e?.message || 'Could not cancel the ride. Please try again.')
     } finally {
       setCancelling(false)

@@ -834,6 +834,19 @@ router.patch("/:id/status", auth_1.requireAuth, async (req, res) => {
                     console.warn(`[preauth] auto-capture on completion ride=${id}:`, e?.message || e);
                 }
             });
+            // REST completion must announce itself the way the socket path does —
+            // the rider's trip screen (and its rating + tip sheet) keys off this event.
+            const doneRow = await (0, database_1.queryOne)(`SELECT GREATEST(COALESCE(NULLIF(r.actual_fare, 0), r.estimated_fare, 0.20)) AS fare,
+                u.firebase_uid AS passenger_fb
+           FROM rides r LEFT JOIN users u ON u.id = r.passenger_id
+          WHERE r.id = $1`, [id]).catch(() => null);
+            const io = global.__vuraIo;
+            io?.to(`ride:${id}`).emit("ride:completed", { riderTotal: Number(doneRow?.fare || 0) });
+            if (doneRow?.passenger_fb) {
+                io?.to(`user:${doneRow.passenger_fb}`).emit("ride:completed", {
+                    riderTotal: Number(doneRow?.fare || 0),
+                });
+            }
         }
         res.json({ success: true });
     }
