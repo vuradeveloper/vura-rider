@@ -13,6 +13,7 @@ const metrics_1 = require("../services/metrics");
 const destinationSession_1 = require("../services/destinationSession");
 const performanceTier_1 = require("../services/performanceTier");
 const adminRiders_1 = require("../services/adminRiders");
+const promos_1 = require("../services/promos");
 const pendingRequest = new WeakMap();
 /** Stamp the rider's tap. Returns the clock so the caller can keep it. */
 function markRequestReceived(socket) {
@@ -385,6 +386,24 @@ function setupSocketHandlers(io) {
                     }
                     return;
                 }
+                // ── Promo (rider side): the client may NAME the promo it displayed
+                // (promoId/promoCode), but the SERVER decides the discount — window and
+                // audience are re-checked here and the amount recomputed from scratch.
+                let rideFare = fare != null ? Number(fare) : null;
+                let appliedPromo = null;
+                if (rideFare != null && (data.promoId || data.promoCode)) {
+                    try {
+                        const promo = await (0, promos_1.ridePromoFor)("rider", String(data.promoId || data.promoCode));
+                        if (promo) {
+                            const applied = (0, promos_1.applyPromoToFare)(rideFare, promo);
+                            rideFare = applied.fare;
+                            appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
+                        }
+                    }
+                    catch {
+                        /* a promo lookup must never block booking */
+                    }
+                }
                 // Add the column if this deployment's DB predates it (no-op otherwise).
                 // CRITICAL: if the migration cannot run we fall back to the previous
                 // 10-column INSERT, so booking can NEVER break because of stops.
@@ -392,10 +411,15 @@ function setupSocketHandlers(io) {
                 const ride = waypointsReady
                     ? await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id, waypoints)
                VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10, $11)
-               RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null])
+               RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null])
                     : await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
                VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
-               RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null]);
+               RETURNING *`, [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null]);
+                // Remember what was applied (receipts / audits / support). Best-effort:
+                // the ride itself is already created and must never fail because of it.
+                if (ride && appliedPromo) {
+                    await (0, database_1.execute)(`UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`, [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]).catch(() => { });
+                }
                 // Link the successful card charge to this ride so it can be refunded on cancel.
                 if (cardChargeRef) {
                     await (0, database_1.execute)("UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2", [ride?.id, cardChargeRef]).catch(() => { });

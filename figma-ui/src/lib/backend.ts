@@ -1213,6 +1213,9 @@ export type RideRequestInput = {
   scheduledAt?: string | null;
   paymentMethod?: string;
   fare?: number;
+  /** Which promo the booking screen displayed — the SERVER re-validates and
+   *  recomputes the discount; this pointer only says which one to apply. */
+  promoId?: string;
   deviceId?: string;
 };
 
@@ -1262,6 +1265,7 @@ export async function requestRide(input: RideRequestInput): Promise<RideRequestR
       scheduledAt: input.scheduledAt || undefined,
       paymentMethod: input.paymentMethod || "cash",
       fare: input.fare,
+      promoId: input.promoId || undefined,
       deviceId: input.deviceId || deviceId(),
     });
   });
@@ -1823,6 +1827,25 @@ export const getDocsStatus = () =>
   apiFetch<{ approved: boolean; missing: string[]; required: string[] }>(
     "/api/documents/status"
   );
+
+// ── Promos ────────────────────────────────────────────────────────────────────
+
+export type ActivePromo = {
+  id: string;
+  code: string;
+  title: string;
+  subtitle: string | null;
+  audience: string;
+  discount_pct: number | string;
+  discount_fixed: number | string;
+};
+
+/**
+ * Live promos for ONE side of the marketplace (GET /api/promos/active).
+ * The server filters by window + audience — the other side never sees these.
+ */
+export const getActivePromos = (side: "rider" | "driver") =>
+  apiFetch<{ promos: ActivePromo[] }>(`/api/promos/active?side=${side}`);
 
 /**
  * Uploads a document — identical call to the native app's uploadDocumentToS3().

@@ -19,6 +19,7 @@ import driversRouter from "./routes/drivers";
 import { MIGRATION_ORDER, runMigrationsOnBoot } from "./services/migrateOnBoot";
 import { readFeatures } from "./services/featureFlags";
 import earningsRouter from "./routes/earnings";
+import promosRouter from "./routes/promos";
 import safetyRouter from "./routes/safety";
 import searchRouter from "./routes/search";
 import disputesRouter from "./routes/disputes";
@@ -241,6 +242,7 @@ app.use("/api/share", shareRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/face", faceRouter);
 app.use("/api/email", emailRouter);
+app.use("/api/promos", promosRouter);
 
 // ── Public share tracking page ──
 app.get("/share/:token", sharePage);

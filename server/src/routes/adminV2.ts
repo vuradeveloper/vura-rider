@@ -1381,6 +1381,258 @@ router.get("/money/earnings", requireAdmin("money.read"), async (_req: AuthReque
   }
 });
 
+// ── Promos (marketing) ────────────────────────────────────────────────────────
+// The console creates promos targeted at ONE side (rider / driver / both);
+// GET /api/promos/active serves the apps and the booking handler re-applies the
+// discount server-side. Every write is audited.
+
+const PROMO_AUDIENCES = ["rider", "driver", "both"] as const;
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+// GET /api/admin/v2/promos — list every promo, newest first.
+router.get("/promos", requireAdmin("settings.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    const promos = await query(
+      `SELECT id, code, title, subtitle, audience, discount_pct, discount_fixed,
+              active, starts_at, ends_at, created_at, updated_at
+         FROM admin_promos ORDER BY created_at DESC`
+    );
+    res.json({ promos });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/promos — create one.
+router.post("/promos", requireAdmin("settings.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    const code = String(req.body?.code || "").trim().toUpperCase();
+    const title = String(req.body?.title || "").trim();
+    const subtitle =
+      req.body?.subtitle != null && String(req.body.subtitle).trim()
+        ? String(req.body.subtitle).trim().slice(0, 120)
+        : null;
+    const audience = String(req.body?.audience || "rider");
+    const discountPct = Number(req.body?.discount_pct ?? 0);
+    const discountFixed = Number(req.body?.discount_fixed ?? 0);
+    const active = req.body?.active !== false;
+    const startsAt = req.body?.starts_at ? String(req.body.starts_at) : null;
+    const endsAt = req.body?.ends_at ? String(req.body.ends_at) : null;
+
+    if (!/^[A-Z0-9_-]{2,24}$/.test(code)) {
+      res.status(400).json({
+        error: "Code must be 2-24 characters: A-Z, 0-9, dash or underscore",
+      });
+      return;
+    }
+    if (!title || title.length > 80) {
+      res.status(400).json({ error: "Title is required (max 80 characters)" });
+      return;
+    }
+    if (!(PROMO_AUDIENCES as readonly string[]).includes(audience)) {
+      res.status(400).json({ error: `audience must be one of: ${PROMO_AUDIENCES.join(", ")}` });
+      return;
+    }
+    if (
+      !Number.isFinite(discountPct) || discountPct < 0 || discountPct > 100 ||
+      !Number.isFinite(discountFixed) || discountFixed < 0
+    ) {
+      res.status(400).json({ error: "discount_pct must be 0-100 and discount_fixed must be 0 or more" });
+      return;
+    }
+    if (discountPct <= 0 && discountFixed <= 0) {
+      res.status(400).json({ error: "Set a percentage or a fixed amount greater than zero" });
+      return;
+    }
+    if (startsAt && endsAt && new Date(startsAt).getTime() >= new Date(endsAt).getTime()) {
+      res.status(400).json({ error: "ends_at must be after starts_at" });
+      return;
+    }
+
+    let row: any;
+    try {
+      row = await queryOne<any>(
+        `INSERT INTO admin_promos (code, title, subtitle, audience, discount_pct, discount_fixed, active, starts_at, ends_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, code, title, subtitle, audience, discount_pct, discount_fixed, active, starts_at, ends_at, created_at`,
+        [code, title, subtitle, audience, round2(discountPct), round2(discountFixed), active, startsAt, endsAt]
+      );
+    } catch (e: any) {
+      if (/duplicate|unique/i.test(String(e?.message || e))) {
+        res.status(409).json({ error: `A promo with code ${code} already exists` });
+        return;
+      }
+      throw e;
+    }
+    await writeAudit(actor, {
+      action: "promo.create",
+      entityType: "admin_promo",
+      entityId: row?.id ?? null,
+      newValue: {
+        code,
+        title,
+        audience,
+        discount_pct: round2(discountPct),
+        discount_fixed: round2(discountFixed),
+        active,
+      },
+    });
+    res.status(201).json({ promo: row });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// PATCH /api/admin/v2/promos/:id — edit fields and/or flip active.
+router.patch("/promos/:id", requireAdmin("settings.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    const id = String(req.params.id || "");
+    const existing = await queryOne<any>(`SELECT * FROM admin_promos WHERE id = $1`, [id]);
+    if (!existing) {
+      res.status(404).json({ error: "Promo not found" });
+      return;
+    }
+
+    const next = {
+      title:
+        req.body?.title !== undefined ? String(req.body.title).trim() : String(existing.title),
+      subtitle:
+        req.body?.subtitle !== undefined
+          ? String(req.body.subtitle).trim().slice(0, 120) || null
+          : existing.subtitle,
+      audience:
+        req.body?.audience !== undefined ? String(req.body.audience) : String(existing.audience),
+      discount_pct:
+        req.body?.discount_pct !== undefined ? Number(req.body.discount_pct) : Number(existing.discount_pct),
+      discount_fixed:
+        req.body?.discount_fixed !== undefined
+          ? Number(req.body.discount_fixed)
+          : Number(existing.discount_fixed),
+      active:
+        req.body?.active !== undefined
+          ? req.body.active === true || req.body.active === "true"
+          : existing.active === true,
+      starts_at:
+        req.body?.starts_at !== undefined
+          ? req.body.starts_at
+            ? String(req.body.starts_at)
+            : null
+          : existing.starts_at,
+      ends_at:
+        req.body?.ends_at !== undefined
+          ? req.body.ends_at
+            ? String(req.body.ends_at)
+            : null
+          : existing.ends_at,
+    };
+
+    if (!next.title || next.title.length > 80) {
+      res.status(400).json({ error: "Title is required (max 80 characters)" });
+      return;
+    }
+    if (!(PROMO_AUDIENCES as readonly string[]).includes(next.audience)) {
+      res.status(400).json({ error: `audience must be one of: ${PROMO_AUDIENCES.join(", ")}` });
+      return;
+    }
+    if (
+      !Number.isFinite(next.discount_pct) || next.discount_pct < 0 || next.discount_pct > 100 ||
+      !Number.isFinite(next.discount_fixed) || next.discount_fixed < 0 ||
+      (next.discount_pct <= 0 && next.discount_fixed <= 0)
+    ) {
+      res.status(400).json({ error: "Set a percentage (0-100) or a fixed amount greater than zero" });
+      return;
+    }
+    if (next.starts_at && next.ends_at && new Date(next.starts_at).getTime() >= new Date(next.ends_at).getTime()) {
+      res.status(400).json({ error: "ends_at must be after starts_at" });
+      return;
+    }
+
+    const row = await queryOne<any>(
+      `UPDATE admin_promos
+          SET title = $2, subtitle = $3, audience = $4, discount_pct = $5,
+              discount_fixed = $6, active = $7, starts_at = $8, ends_at = $9,
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, code, title, subtitle, audience, discount_pct, discount_fixed,
+                  active, starts_at, ends_at, created_at, updated_at`,
+      [
+        id,
+        next.title,
+        next.subtitle,
+        next.audience,
+        round2(next.discount_pct),
+        round2(next.discount_fixed),
+        next.active,
+        next.starts_at,
+        next.ends_at,
+      ]
+    );
+    await writeAudit(actor, {
+      action: "promo.update",
+      entityType: "admin_promo",
+      entityId: id,
+      oldValue: {
+        title: existing.title,
+        audience: existing.audience,
+        discount_pct: Number(existing.discount_pct),
+        discount_fixed: Number(existing.discount_fixed),
+        active: existing.active === true,
+      },
+      newValue: {
+        title: next.title,
+        audience: next.audience,
+        discount_pct: next.discount_pct,
+        discount_fixed: next.discount_fixed,
+        active: next.active,
+      },
+    });
+    res.json({ promo: row });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// DELETE /api/admin/v2/promos/:id — completed rides keep their own
+// promo_code/promo_discount copy, so history and receipts never lose it.
+router.delete("/promos/:id", requireAdmin("settings.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    const id = String(req.params.id || "");
+    const existing = await queryOne<any>(`SELECT id, code, title FROM admin_promos WHERE id = $1`, [id]);
+    if (!existing) {
+      res.status(404).json({ error: "Promo not found" });
+      return;
+    }
+    await execute(`DELETE FROM admin_promos WHERE id = $1`, [id]);
+    await writeAudit(actor, {
+      action: "promo.delete",
+      entityType: "admin_promo",
+      entityId: id,
+      oldValue: { code: existing.code, title: existing.title },
+    });
+    res.json({ deleted: true });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 export default router;
 
 

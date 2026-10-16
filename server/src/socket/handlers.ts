@@ -20,6 +20,7 @@ import { noteIndexUpsertFailure, bump } from "../services/metrics";
 import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition, noteDestinationTripCompleted } from "../services/destinationSession";
 import { computeTierStatus } from "../services/performanceTier";
 import { assertRiderCanBook } from "../services/adminRiders";
+import { applyPromoToFare, ridePromoFor } from "../services/promos";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -464,6 +465,24 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return;
         }
 
+        // ── Promo (rider side): the client may NAME the promo it displayed
+        // (promoId/promoCode), but the SERVER decides the discount — window and
+        // audience are re-checked here and the amount recomputed from scratch.
+        let rideFare = fare != null ? Number(fare) : null;
+        let appliedPromo: { id: string; code: string; discount: number } | null = null;
+        if (rideFare != null && (data.promoId || data.promoCode)) {
+          try {
+            const promo = await ridePromoFor("rider", String(data.promoId || data.promoCode));
+            if (promo) {
+              const applied = applyPromoToFare(rideFare, promo);
+              rideFare = applied.fare;
+              appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
+            }
+          } catch {
+            /* a promo lookup must never block booking */
+          }
+        }
+
         // Add the column if this deployment's DB predates it (no-op otherwise).
         // CRITICAL: if the migration cannot run we fall back to the previous
         // 10-column INSERT, so booking can NEVER break because of stops.
@@ -476,14 +495,23 @@ export function setupSocketHandlers(io: SocketIOServer) {
               `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id, waypoints)
                VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10, $11)
                RETURNING *`,
-              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null]
+              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null]
             )
           : await queryOne<any>(
               `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
                VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
                RETURNING *`,
-              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, fare != null ? Number(fare) : null, paymentMethod || null, deviceId || null]
+              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null]
             );
+
+        // Remember what was applied (receipts / audits / support). Best-effort:
+        // the ride itself is already created and must never fail because of it.
+        if (ride && appliedPromo) {
+          await execute(
+            `UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`,
+            [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]
+          ).catch(() => {});
+        }
 
         // Link the successful card charge to this ride so it can be refunded on cancel.
         if (cardChargeRef) {

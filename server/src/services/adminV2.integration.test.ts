@@ -349,6 +349,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       "009_admin_vehicle_requests.sql",
       "010_doc_verification.sql",
       "011_doc_type_check.sql",
+      "012_promos.sql",
     ]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql
@@ -717,6 +718,70 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       );
     }
     expect((await requiredDocsStatus(id)).approved).toBe(true);
+  });
+
+  it("promos: create, list, toggle, validate and delete (all audited)", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+      const code = `P${Math.floor(Math.random() * 1e6).toString(36).toUpperCase()}`;
+
+      // Validation: no discount at all, and a percentage over 100, are 400s.
+      const noDiscount = await request("POST", "/api/admin/v2/promos", {
+        code: `${code}X`, title: "No discount", audience: "rider", discount_pct: 0, discount_fixed: 0,
+      });
+      expect(noDiscount.status).toBe(400);
+      const tooMuch = await request("POST", "/api/admin/v2/promos", {
+        code: `${code}Y`, title: "Too much", audience: "rider", discount_pct: 150,
+      });
+      expect(tooMuch.status).toBe(400);
+
+      // Create a fixed-amount rider promo.
+      const created = await request("POST", "/api/admin/v2/promos", {
+        code,
+        title: "R5 off your next ride",
+        subtitle: "Applies automatically at booking",
+        audience: "rider",
+        discount_fixed: 5,
+      });
+      expect(created.status).toBe(201);
+      expect(created.json.promo.code).toBe(code);
+      expect(created.json.promo.audience).toBe("rider");
+
+      // Duplicate codes are refused.
+      const dup = await request("POST", "/api/admin/v2/promos", {
+        code, title: "Dup", audience: "rider", discount_pct: 10,
+      });
+      expect(dup.status).toBe(409);
+
+      // List contains it.
+      const list = await request("GET", "/api/admin/v2/promos");
+      expect(list.status).toBe(200);
+      expect(list.json.promos.some((p: any) => p.code === code)).toBe(true);
+
+      // Flip it off.
+      const toggled = await request("PATCH", `/api/admin/v2/promos/${created.json.promo.id}`, {
+        active: false,
+      });
+      expect(toggled.status).toBe(200);
+      expect(toggled.json.promo.active).toBe(false);
+
+      // Audited.
+      const audit = await queryOne<any>(
+        `SELECT entity_id FROM admin_audit_log WHERE action = 'promo.create' ORDER BY id DESC LIMIT 1`
+      );
+      expect(audit?.entity_id).toBe(created.json.promo.id);
+
+      // Delete, then everything about it 404s.
+      const del = await request("DELETE", `/api/admin/v2/promos/${created.json.promo.id}`);
+      expect(del.status).toBe(200);
+      const gone = await request("PATCH", `/api/admin/v2/promos/${created.json.promo.id}`, {
+        active: true,
+      });
+      expect(gone.status).toBe(404);
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
   });
 
   it("suspend takes the driver offline, records history/audit, reinstate works, BLOCKED is terminal", async () => {

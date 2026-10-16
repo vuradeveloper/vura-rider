@@ -40,6 +40,7 @@ import {
   getEarnings,
   getMyDocuments,
   getDocsStatus,
+  getActivePromos,
   getMyLocation,
   getMyProfile,
   getNotifications,
@@ -587,6 +588,36 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
   )
 }
 
+/** The slice of an active promo this file needs (backend's ActivePromo). */
+type PromoInfo = {
+  id: string;
+  code: string;
+  title: string;
+  subtitle: string | null;
+  audience: string;
+  discount_pct: number | string;
+  discount_fixed: number | string;
+};
+
+// The price animation runs EXACTLY ONCE per promo per app run — the number
+// must never count down a second time, even if the screen remounts or the
+// rider switches tier while it counts (module-level, survives navigation).
+const animatedPromoIds = new Set<string>();
+
+/** 1 → discounted factor for PERCENTAGE promos (fixed promos keep rows as-is). */
+function promoFactorFor(p: PromoInfo): number {
+  const pct = Number(p.discount_pct) || 0;
+  return pct > 0 ? Math.max(0, 1 - pct / 100) : 1;
+}
+
+/** "R0.20" → "R0.10" at the given factor. Display only — the SERVER applies
+ *  the real discount to the charged fare when the ride is requested. */
+function promoPrice(price: string, factor: number): string {
+  const n = Number(String(price).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(n)) return price;
+  return `R${(n * factor).toFixed(2)}`;
+}
+
 function BookingScreen({ destination, onBack, onConfirm }: {
   destination: string
   onBack: () => void
@@ -597,6 +628,35 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   const [sel, setSel] = useState('go')
   const destName = destLabel(destination)
   const ride = rideOptions.find(r => r.id === sel)!
+
+  // ── Promo: TELL the rider first ("Promo applied"), then count the prices
+  // down ONCE. Fixed-amount promos show the banner only — their discount is
+  // taken off the charged fare server-side at booking.
+  const [promo, setPromo] = useState<PromoInfo | null>(null)
+  const [priceFactor, setPriceFactor] = useState(1)
+  useEffect(() => {
+    getActivePromos('rider')
+      .then((r) => setPromo(r?.promos?.[0] ?? null))
+      .catch(() => setPromo(null))
+  }, [])
+  useEffect(() => {
+    if (!promo) { setPriceFactor(1); return }
+    const target = promoFactorFor(promo)
+    if (animatedPromoIds.has(promo.id)) { setPriceFactor(target); return }
+    animatedPromoIds.add(promo.id)
+    const startedAt = Date.now()
+    const DURATION = 700
+    const t = window.setInterval(() => {
+      const p = Math.min(1, (Date.now() - startedAt) / DURATION)
+      const eased = 1 - Math.pow(1 - p, 3) // ease-out: the number settles
+      setPriceFactor(1 + (target - 1) * eased)
+      if (p >= 1) {
+        window.clearInterval(t)
+        setPriceFactor(target)
+      }
+    }, 30)
+    return () => window.clearInterval(t)
+  }, [promo])
 
   // â”€â”€ Payment method â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // `pay` is PAY_CASH or a saved card's id. Only 'cash' vs 'card' is sent with
@@ -847,8 +907,24 @@ function BookingScreen({ destination, onBack, onConfirm }: {
           </button>
         </div>
 
-        {/* Ride options */}
+        {/* Promo applied — announced BEFORE the prices, exactly as requested. */}
         <div className="px-5 py-4">
+          {promo && (
+            <div className="mb-3 flex items-center gap-3 rounded-2xl border border-[#CDEBCF] bg-[#E6F4EA] px-4 py-3">
+              <span className="text-[16px] leading-none">🎉</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-bold text-[#137333]">Promo applied — {promo.title}</p>
+                <p className="text-[11.5px] text-[#3C7D48] truncate">
+                  {Number(promo.discount_pct) > 0
+                    ? `${Number(promo.discount_pct)}% off your ride prices`
+                    : promo.subtitle || `R${Number(promo.discount_fixed).toFixed(2)} off your ride`}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-white border border-[#CDEBCF] px-2 py-1 text-[10.5px] font-bold text-[#137333]">
+                {promo.code}
+              </span>
+            </div>
+          )}
           <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mb-3">Choose your ride</p>
           <div className="flex flex-col gap-2">
             {rideOptions.map(opt => (
@@ -862,7 +938,14 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                   <p className="text-[12px] text-[#ADADAD]">{opt.desc} ?? {opt.seats} seats</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-[14px] text-[#1A1A1A] font-semibold">{opt.price}</p>
+                  <p className="text-[14px] text-[#1A1A1A] font-semibold">
+                    {promo && Number(promo.discount_pct) > 0
+                      ? promoPrice(opt.price, priceFactor)
+                      : opt.price}
+                  </p>
+                  {promo && Number(promo.discount_pct) > 0 && priceFactor < 1 && (
+                    <p className="text-[11px] text-[#ADADAD] line-through leading-tight">{opt.price}</p>
+                  )}
                   <p className="text-[12px] text-[#ADADAD]">{opt.eta}</p>
                 </div>
               </button>
@@ -1128,6 +1211,11 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
           const pickupAddress = await reverseGeocode(from.lat, from.lng)
             .then((p: any) => String(p?.address || p?.name || '').trim())
             .catch(() => '')
+          // Which promo the booking screen displayed — the SERVER re-validates
+          // the window + audience and recomputes the discount itself.
+          const promoId = await getActivePromos('rider')
+            .then((r) => r?.promos?.[0]?.id)
+            .catch(() => undefined)
           const res = await requestRide({
             pickupAddress: pickupAddress || `Pin ${from.lat.toFixed(5)}, ${from.lng.toFixed(5)}`,
             pickupLat: from.lat,
@@ -1142,6 +1230,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
             // Flat R0.20: the server charges the saved card this real amount
             // (previously no fare was sent, so nothing was ever taken).
             fare: RIDE_FARE,
+            promoId,
             paymentMethod: paymentMethod || 'cash',
           })
           if (!alive) return
@@ -2022,6 +2111,9 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
   const [stats, setStats] = useState<DriverStats | null>(null)
   const [balance, setBalance] = useState(0)
   const [trips, setTrips] = useState<ReturnType<typeof normalizeRide>[]>([])
+  // The active promo for the DRIVER side (audience driver/both) — a banner card
+  // on home; discounting is a rider-side concept, so drivers only SEE it.
+  const [driverPromo, setDriverPromo] = useState<PromoInfo | null>(null)
 
   // Real driver data ??? the same endpoints the React Native driver app calls.
   useEffect(() => {
@@ -2031,6 +2123,9 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
       .catch(() => { })
     getRecentTrips(3)
       .then((d) => setTrips(((d?.rides || []) as any[]).slice(0, 3).map(normalizeRide)))
+      .catch(() => { })
+    getActivePromos('driver')
+      .then((r) => setDriverPromo(r?.promos?.[0] ?? null))
       .catch(() => { })
     // If the driver was online when they last used the app, re-announce it to the
     // server on launch so rides keep being routed to them (the native app does
@@ -2127,6 +2222,22 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
           screen's panel in this file uses the same `bg-white z-10` pairing. */}
       <div className="flex-1 bg-white z-10 rounded-t-3xl shadow-[0_-4px_24px_rgba(0,0,0,0.06)] -mt-5 overflow-y-auto pb-24">
         <div className="px-5 pt-5">
+          {/* Active promo for the DRIVER side — the app's half of the audience pick. */}
+          {driverPromo && (
+            <div className="mb-4 flex items-center gap-3 rounded-2xl border border-[#F5E0C2] bg-[#FFF7E6] px-4 py-3.5">
+              <span className="text-[18px] leading-none">🎟️</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13.5px] font-bold text-[#1A1A1A] truncate">{driverPromo.title}</p>
+                <p className="text-[11.5px] text-[#7A5B12] truncate mt-0.5">
+                  {driverPromo.subtitle || 'Live for drivers right now'}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-white border border-[#F5E0C2] px-2 py-1 text-[10.5px] font-bold text-[#7A5B12]">
+                {driverPromo.code}
+              </span>
+            </div>
+          )}
+
           {/* Go online CTA */}
           {!online && (
             <button onClick={() => setOnlineEverywhere(true)}

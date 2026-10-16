@@ -56,6 +56,7 @@ const drivers_1 = __importDefault(require("./routes/drivers"));
 const migrateOnBoot_1 = require("./services/migrateOnBoot");
 const featureFlags_1 = require("./services/featureFlags");
 const earnings_1 = __importDefault(require("./routes/earnings"));
+const promos_1 = __importDefault(require("./routes/promos"));
 const safety_1 = __importDefault(require("./routes/safety"));
 const search_1 = __importDefault(require("./routes/search"));
 const disputes_1 = __importDefault(require("./routes/disputes"));
@@ -238,6 +239,7 @@ app.use("/api/share", share_1.default);
 app.use("/api/documents", documents_1.default);
 app.use("/api/face", face_1.default);
 app.use("/api/email", email_1.default);
+app.use("/api/promos", promos_1.default);
 // ── Public share tracking page ──
 app.get("/share/:token", share_1.sharePage);
 // ── Socket.IO ──
