@@ -11,6 +11,7 @@ const metrics_1 = require("../services/metrics");
 const vehicleImages_1 = require("../services/vehicleImages");
 const vehicleCatalogue_1 = require("../data/vehicleCatalogue");
 const vehicleImages_2 = require("../services/vehicleImages");
+const rideCategories_1 = require("../services/rideCategories");
 const tier_classifier_1 = require("../lib/tier-classifier");
 const destinationSession_1 = require("../services/destinationSession");
 const performanceTier_1 = require("../services/performanceTier");
@@ -91,7 +92,7 @@ router.get("/nearby", async (req, res) => {
 router.patch("/profile", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
-        const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, vehicle_body_type, vehicle_fuel_type, vehicle_doors, vehicle_seats, vehicle_derivative } = req.body;
+        const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, vehicle_body_type, vehicle_fuel_type, vehicle_doors, vehicle_seats, vehicle_derivative, vehicle_categories } = req.body;
         // NORMALISE the car on the way in: plate uppercase without spaces, colour stored
         // as a palette NAME, and the body type + category DERIVED from make + model (a
         // driver — or a client — can never choose the shape of a catalogued car).
@@ -121,7 +122,29 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
         await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_derivative VARCHAR(100)`).catch(() => { });
         await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tier VARCHAR(20)`).catch(() => { });
         await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tiers JSONB DEFAULT '[]'::jsonb`).catch(() => { });
-        const existing = await (0, database_1.queryOne)("SELECT id FROM driver_profiles WHERE user_id = $1", [user.id]);
+        // RIDE CLASS CATEGORIES (013): the CarScan report's "Eligible Categories"
+        // ("Economy,XL,Send"), stored canonicalised. Self-healing like every other
+        // column above, so a pre-013 database accepts the very same payload.
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_categories JSONB DEFAULT '[]'::jsonb`).catch(() => { });
+        const existing = await (0, database_1.queryOne)("SELECT id, vehicle_seats, body_type, vehicle_categories FROM driver_profiles WHERE user_id = $1", [user.id]);
+        // FINAL RIDE-CLASS LIST for this save. Recomputed whenever the client sends
+        // categories OR a seat count: an explicit CarScan grant always wins; an
+        // empty/absent grant falls back to the Seat Count + body derivation (the
+        // old Scans.ai report has no Eligible section at all — document (3).pdf),
+        // and everything is canonicalised to the dispatch tokens.
+        let finalCats = null;
+        if (vehicle_categories !== undefined || vehicle_seats !== undefined) {
+            const explicit = vehicle_categories !== undefined
+                ? (0, rideCategories_1.normaliseVehicleCategories)(vehicle_categories)
+                : (0, rideCategories_1.normaliseVehicleCategories)(existing?.vehicle_categories);
+            const seats = vehicle_seats !== undefined
+                ? Number.isFinite(Number(vehicle_seats))
+                    ? Number(vehicle_seats)
+                    : null
+                : existing?.vehicle_seats ?? null;
+            const bodyType = derivedBody ?? existing?.body_type ?? null;
+            finalCats = explicit.length > 0 ? explicit : (0, rideCategories_1.deriveVehicleCategories)(seats, bodyType);
+        }
         if (existing) {
             const updates = [];
             const params = [];
@@ -206,6 +229,11 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
                 params.push(vehicle_derivative);
                 idx++;
             }
+            if (finalCats !== null) {
+                updates.push(`vehicle_categories = $${idx}::jsonb`);
+                params.push(JSON.stringify(finalCats));
+                idx++;
+            }
             updates.push("updated_at = NOW()");
             params.push(existing.id);
             await (0, database_1.execute)(`UPDATE driver_profiles SET ${updates.join(", ")} WHERE id = $${idx}`, params);
@@ -213,6 +241,12 @@ router.patch("/profile", auth_1.requireAuth, async (req, res) => {
         else {
             await (0, database_1.execute)(`INSERT INTO driver_profiles (user_id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, is_online)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)`, [user.id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name]);
+            // A first-time save may already carry the ride classes (fresh scan):
+            // write them right after the row exists. Best-effort, same posture as
+            // every other newer column here.
+            if (finalCats !== null) {
+                await (0, database_1.execute)(`UPDATE driver_profiles SET vehicle_categories = $2::jsonb WHERE user_id = $1`, [user.id, JSON.stringify(finalCats)]).catch(() => { });
+            }
         }
         const profile = await (0, database_1.queryOne)("SELECT * FROM driver_profiles WHERE user_id = $1", [user.id]);
         // Vehicle photo cache. This is DB-only: if we already hold an approved image

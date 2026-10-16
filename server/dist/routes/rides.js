@@ -11,6 +11,7 @@ const vehicleImages_1 = require("../services/vehicleImages");
 const driverPhoto_1 = require("../services/driverPhoto");
 const trace_1 = require("../services/trace");
 const adminRiders_1 = require("../services/adminRiders");
+const rideCategories_1 = require("../services/rideCategories");
 const router = (0, express_1.Router)();
 // GET /api/rides/me/active-state â€” ONE call that rebuilds the app's world.
 //
@@ -131,7 +132,11 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             res.status(gateErr.status || 403).json({ error: gateErr.message || "Account not allowed" });
             return;
         }
-        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, fare, deviceId, waypoints, stops, } = req.body || {};
+        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, fare, deviceId, waypoints, stops, tier, } = req.body || {};
+        // THE TIER THE RIDER PICKED (go / comfort / xl / black). Dispatch matches
+        // it against the car's CarScan eligible categories, so it must reach the
+        // DB on the same row as the ride. Unknown values normalise to 'go'.
+        const rideTier = (0, rideCategories_1.canonicalTier)(tier);
         // Coordinates are mandatory: without them dispatch cannot match
         // (offerToNextDriver returns ride_has_no_pickup_coords) and the rider would sit
         // on "Finding your driver..." forever. Fail loudly now rather than accepting a
@@ -164,11 +169,23 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             }
             return;
         }
-        const ride = await (0, database_1.queryOne)(`INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
-                          destination_address, destination_lat, destination_lng,
-                          status, estimated_fare, payment_method, device_id, waypoints)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
-       RETURNING id, status`, [
+        // The tier column ships with migration 013; a database that has not run it
+        // yet must still book — exactly the waypointsReady pattern (booking can
+        // NEVER break because of a newer column).
+        const tierReady = await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'go'`)
+            .then(() => true)
+            .catch(() => false);
+        const ride = await (0, database_1.queryOne)(tierReady
+            ? `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                              destination_address, destination_lat, destination_lng,
+                              status, estimated_fare, payment_method, device_id, waypoints, tier)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11,$12)
+           RETURNING id, status`
+            : `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                              destination_address, destination_lat, destination_lng,
+                              status, estimated_fare, payment_method, device_id, waypoints)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
+           RETURNING id, status`, [
             rider.id,
             pickupAddress ?? null,
             Number(pickupLat), Number(pickupLng),
@@ -179,6 +196,7 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             paymentMethod || null,
             deviceId || null,
             rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
+            ...(tierReady ? [rideTier] : []),
         ]);
         if (!ride?.id) {
             res.status(500).json({ error: "Could not create the ride" });
@@ -837,6 +855,8 @@ async function ensureRouteColumn() {
     await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS route_data JSONB`).catch(() => { });
     // Rider stops captured at booking time (pickup â†’ waypointsâ€¦ â†’ drop-off).
     await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB`).catch(() => { });
+    // The tier the rider picked (013) — dispatch's ride-class filter reads it.
+    await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'go'`).catch(() => { });
 }
 ensureRouteColumn();
 exports.default = router;

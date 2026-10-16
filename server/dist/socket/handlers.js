@@ -14,6 +14,7 @@ const destinationSession_1 = require("../services/destinationSession");
 const performanceTier_1 = require("../services/performanceTier");
 const adminRiders_1 = require("../services/adminRiders");
 const promos_1 = require("../services/promos");
+const rideCategories_1 = require("../services/rideCategories");
 const pendingRequest = new WeakMap();
 /** Stamp the rider's tap. Returns the clock so the caller can keep it. */
 function markRequestReceived(socket) {
@@ -222,7 +223,7 @@ function setupSocketHandlers(io) {
             // rider-tap -> server-entry cost rather than starting late.
             markRequestReceived(socket);
             try {
-                const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops } = data;
+                const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops, tier } = data;
                 let dbUserId = await getDbUserId();
                 if (!dbUserId) {
                     // For testing and race condition safety, use the first available passenger or auto-insert a placeholder
@@ -419,6 +420,13 @@ function setupSocketHandlers(io) {
                 // the ride itself is already created and must never fail because of it.
                 if (ride && appliedPromo) {
                     await (0, database_1.execute)(`UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`, [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]).catch(() => { });
+                }
+                // THE RIDER'S TIER (013, ride-class matching). The column's default is
+                // 'go', so only a non-default tier needs writing; a DB without the
+                // column simply keeps the default — booking never breaks over it.
+                const rideTier = (0, rideCategories_1.canonicalTier)(tier);
+                if (ride?.id && rideTier !== "go") {
+                    await (0, database_1.execute)(`UPDATE rides SET tier = $2 WHERE id = $1`, [ride.id, rideTier]).catch(() => { });
                 }
                 // Link the successful card charge to this ride so it can be refunded on cancel.
                 if (cardChargeRef) {

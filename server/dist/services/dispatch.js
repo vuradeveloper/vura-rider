@@ -56,6 +56,7 @@ const driverIndex_1 = require("./driverIndex");
 const h3_1 = require("../lib/h3");
 const eta_1 = require("./eta");
 const metrics_1 = require("./metrics");
+const rideCategories_1 = require("./rideCategories");
 /** How long one driver has to answer before the ride moves on. */
 exports.OFFER_TTL_SECONDS = 15;
 /** A driver is only a candidate if we heard from them this recently. */
@@ -534,7 +535,8 @@ async function findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePrevi
     return ranked.slice(0, Math.max(limit, H3_CANDIDATE_POOL));
 }
 async function loadRide(rideId) {
-    return (0, database_1.queryOne)(`SELECT r.id, r.status, r.passenger_id, r.pickup_address, r.pickup_lat, r.pickup_lng,
+    return (0, database_1.queryOne)(`SELECT r.id, r.status, r.passenger_id, COALESCE(r.tier, 'go') AS tier,
+            r.pickup_address, r.pickup_lat, r.pickup_lng,
             r.destination_address, r.destination_lat, r.destination_lng,
             r.estimated_fare, r.payment_method, r.waypoints,
             COALESCE(r.offer_round, 0) AS offer_round, COALESCE(r.version, 0) AS version,
@@ -549,6 +551,83 @@ async function loadRide(rideId) {
         console.error(`[dispatch] loadRide FAILED ride=${rideId}:`, err?.message || err);
         return null;
     });
+}
+// ── RIDE CLASS FILTER (013) ───────────────────────────────────────────────────
+// The rider chose a tier (go / comfort / xl / black); only drivers whose car
+// is IN that class may be asked. Car classes come from the CarScan report's
+// "Eligible Categories" (stored canonicalised on driver_profiles.vehicle_categories),
+// derived from Seat Count + body when a report predates the section, and
+// defaulting to economy — so an unclassified fleet still serves 'go'.
+//
+// Runs AFTER findCandidates() in offerToNextDriver, i.e. on BOTH candidate
+// paths: the legacy haversine body is hash-guarded (_legacycheck.mjs) and must
+// stay byte-identical, and the H3 path already narrowed by status/radius —
+// this is the single place both converge. It can only narrow, never widen:
+//   1. strict     — eligible drivers for this tier…
+//   2. within 3km — …and if any of them is inside the first ladder rung
+//                   (match_radius_km [3,5,7]), ONLY those: the request goes to
+//                   the RIGHT car NEAR the rider.
+//   3. degrade    — nobody eligible? unclassified drivers may take any tier,
+//                   then everyone: a delivered ride beats a starved dispatch
+//                   while the fleet is still uploading reports. Traced either way.
+// The destination-mode module (Module 2) runs BEFORE this inside findCandidates
+// and is untouched: destination sessions keep their own accept/reject rules —
+// the class filter only decides whose session may be offered THIS tier's ride.
+async function filterCandidatesForTier(rideId, rideTier, candidates) {
+    if (candidates.length === 0)
+        return candidates;
+    try {
+        const tier = (0, rideCategories_1.canonicalTier)(rideTier);
+        const ids = candidates.map((c) => c.id);
+        let rows = [];
+        try {
+            const res = await (0, database_1.query)(`SELECT user_id, vehicle_categories, vehicle_seats, body_type
+           FROM driver_profiles WHERE user_id = ANY($1::uuid[])`, [ids]);
+            rows = Array.isArray(res) ? res : [];
+        }
+        catch {
+            // Pre-013 database (migration still to run): no column yet — every
+            // candidate is unclassified, which is exactly the old behaviour.
+            rows = [];
+        }
+        const byId = new Map(rows.map((r) => [r.user_id, r]));
+        const eligible = candidates.filter((c) => (0, rideCategories_1.tierAcceptsCategory)(tier, (0, rideCategories_1.effectiveCategories)(byId.get(c.id))));
+        let pool = eligible;
+        let mode = "strict";
+        if (pool.length === 0) {
+            pool = candidates.filter((c) => !(0, rideCategories_1.hasExplicitCategories)(byId.get(c.id)));
+            mode = "degraded_unclassified";
+            if (pool.length === 0) {
+                pool = candidates;
+                mode = "degraded_all";
+            }
+        }
+        const near3km = pool.filter((c) => Number(c.distance_km) <= 3);
+        if (near3km.length > 0)
+            pool = near3km;
+        (0, trace_1.trace)(rideId, "tier_filter", {
+            tier,
+            found: candidates.length,
+            eligible: eligible.length,
+            pool: pool.length,
+            within_3km: near3km.length,
+            mode,
+        });
+        if (mode !== "strict" || pool.length !== candidates.length) {
+            await logRideEvent(rideId, null, "tier_filter", {
+                tier,
+                found: candidates.length,
+                pool: pool.length,
+                mode,
+            }).catch(() => undefined);
+        }
+        return pool;
+    }
+    catch (err) {
+        // The class filter may never BE the reason a ride finds no driver.
+        console.warn(`[dispatch] tier filter FAILED ride=${rideId}: ${err?.message || err}; offering unfiltered`);
+        return candidates;
+    }
 }
 /**
  * Offer the ride to the closest not-yet-tried driver.
@@ -652,6 +731,11 @@ async function offerToNextDriver(io, rideId, round, opts) {
         await markNoDrivers(io, rideId);
         return { offered: false, reason: "no_candidates" };
     }
+    // RIDE CLASS: narrow to drivers whose car matches the tier the rider booked,
+    // preferring the ones within 3 km (see filterCandidatesForTier). Never empty
+    // for a non-empty candidate list (degradation ladder inside), so the loop
+    // below always has someone to try; raw counts stay in the traces above.
+    const pool = await filterCandidatesForTier(rideId, ride.tier, candidates);
     // ONE offer at a time: candidates arrive in rank order (ETA under flag-on,
     // distance under flag-off where there is exactly one), and the loop stops at
     // the first INSERT that sticks. The 001b partial unique index
@@ -663,7 +747,7 @@ async function offerToNextDriver(io, rideId, round, opts) {
     let offer = null;
     // Candidates skipped for being unreachable (socket down + push delivered 0).
     let undeliverable = 0;
-    for (const candidate of candidates) {
+    for (const candidate of pool) {
         const res = await (0, database_1.queryOne)(
         // REAL-TIME CANCEL GUARD (2026-10-15): re-check the ride's status AT
         // INSERT TIME. If the rider cancelled after loadRide(), this SELECT yields

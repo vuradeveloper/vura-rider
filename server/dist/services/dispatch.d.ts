@@ -96,6 +96,8 @@ export interface DispatchRide {
     id: string;
     status: string;
     passenger_id: string;
+    /** Ride class the rider booked (go/comfort/xl/black); 'go' when absent. */
+    tier: string;
     pickup_address: string | null;
     pickup_lat: number | null;
     pickup_lng: number | null;
