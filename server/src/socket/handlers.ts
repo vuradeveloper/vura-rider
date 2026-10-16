@@ -21,6 +21,7 @@ import { activateDestination, clearDestination, getDestinationStatus, onDriverPi
 import { computeTierStatus } from "../services/performanceTier";
 import { assertRiderCanBook } from "../services/adminRiders";
 import { applyPromoToFare, ridePromoFor } from "../services/promos";
+import { canonicalTier } from "../services/rideCategories";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -280,7 +281,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
       // rider-tap -> server-entry cost rather than starting late.
       markRequestReceived(socket);
       try {
-        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops } = data;
+        const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, paymentReference, fare, deviceId, waypoints, stops, tier } = data;
         let dbUserId = await getDbUserId();
 
         if (!dbUserId) {
@@ -511,6 +512,16 @@ export function setupSocketHandlers(io: SocketIOServer) {
             `UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`,
             [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]
           ).catch(() => {});
+        }
+
+        // THE RIDER'S TIER (013, ride-class matching). The column's default is
+        // 'go', so only a non-default tier needs writing; a DB without the
+        // column simply keeps the default — booking never breaks over it.
+        const rideTier = canonicalTier(tier);
+        if (ride?.id && rideTier !== "go") {
+          await execute(`UPDATE rides SET tier = $2 WHERE id = $1`, [ride.id, rideTier]).catch(
+            () => {}
+          );
         }
 
         // Link the successful card charge to this ride so it can be refunded on cancel.

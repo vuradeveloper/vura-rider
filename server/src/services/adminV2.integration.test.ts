@@ -125,6 +125,8 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
 );
 -- Self-heal: live snapshot selects lifecycle_status.
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(30);
+-- Ride class categories (013): the profile PATCH stores the CarScan grant.
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_categories JSONB DEFAULT '[]'::jsonb;
 CREATE TABLE IF NOT EXISTS driver_documents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   driver_id UUID NOT NULL REFERENCES users(id),
@@ -192,6 +194,12 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
 -- dispatch suite with "column r.waypoints does not exist". Same idempotent
 -- ALTER the server runs at boot (routes/rides.ts ensureRouteColumn).
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB;
+-- Ride class matching (013): booking writes rides.tier, the class filter
+-- reads driver_profiles.vehicle_categories/vehicle_seats/body_type.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'go';
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_categories JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_seats INTEGER;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS body_type VARCHAR(30);
 CREATE TABLE IF NOT EXISTS app_config (
   key TEXT PRIMARY KEY,
   value JSONB NOT NULL,

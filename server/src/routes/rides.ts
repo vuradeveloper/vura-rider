@@ -8,6 +8,7 @@ import { attachVehicleImages } from "../services/vehicleImages";
 import { resolveDriverPhotoUrl } from "../services/driverPhoto";
 import { trace, startTrace } from "../services/trace";
 import { assertRiderCanBook } from "../services/adminRiders";
+import { canonicalTier } from "../services/rideCategories";
 import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
@@ -152,8 +153,13 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     const {
       pickupAddress, pickupLat, pickupLng,
       destinationAddress, destinationLat, destinationLng,
-      paymentMethod, fare, deviceId, waypoints, stops,
+      paymentMethod, fare, deviceId, waypoints, stops, tier,
     } = req.body || {};
+
+    // THE TIER THE RIDER PICKED (go / comfort / xl / black). Dispatch matches
+    // it against the car's CarScan eligible categories, so it must reach the
+    // DB on the same row as the ride. Unknown values normalise to 'go'.
+    const rideTier = canonicalTier(tier);
 
     // Coordinates are mandatory: without them dispatch cannot match
     // (offerToNextDriver returns ride_has_no_pickup_coords) and the rider would sit
@@ -194,12 +200,27 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
       return;
     }
 
+    // The tier column ships with migration 013; a database that has not run it
+    // yet must still book — exactly the waypointsReady pattern (booking can
+    // NEVER break because of a newer column).
+    const tierReady = await execute(
+      `ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'go'`
+    )
+      .then(() => true)
+      .catch(() => false);
+
     const ride = await queryOne<any>(
-      `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
-                          destination_address, destination_lat, destination_lng,
-                          status, estimated_fare, payment_method, device_id, waypoints)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
-       RETURNING id, status`,
+      tierReady
+        ? `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                              destination_address, destination_lat, destination_lng,
+                              status, estimated_fare, payment_method, device_id, waypoints, tier)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11,$12)
+           RETURNING id, status`
+        : `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                              destination_address, destination_lat, destination_lng,
+                              status, estimated_fare, payment_method, device_id, waypoints)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
+           RETURNING id, status`,
       [
         rider.id,
         pickupAddress ?? null,
@@ -211,6 +232,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
         paymentMethod || null,
         deviceId || null,
         rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
+        ...(tierReady ? [rideTier] : []),
       ]
     );
 
@@ -961,6 +983,10 @@ async function ensureRouteColumn() {
   await execute(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS route_data JSONB`).catch(() => {});
   // Rider stops captured at booking time (pickup â†’ waypointsâ€¦ â†’ drop-off).
   await execute(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB`).catch(() => {});
+  // The tier the rider picked (013) — dispatch's ride-class filter reads it.
+  await execute(
+    `ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'go'`
+  ).catch(() => {});
 }
 ensureRouteColumn();
 

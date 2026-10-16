@@ -217,7 +217,12 @@ beforeAll(async () => {
     ALTER TABLE rides ADD COLUMN IF NOT EXISTS device_id TEXT;
     ALTER TABLE rides ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ;
     ALTER TABLE rides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
-    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION;
+    -- Ride class matching (013): the class filter selects tier + car classes.
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'go';
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_categories JSONB DEFAULT '[]'::jsonb;
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_seats INTEGER;
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS body_type VARCHAR(30)
   `);
   // Real migration, applied TWICE to prove idempotency on live Postgres
   // (TEST_MIGRATION.md step 1) — SQL the mocked tests cannot validate.
