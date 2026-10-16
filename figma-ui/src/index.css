@@ -39,8 +39,3 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #E0E0E0; border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: #BDBDBD; }
-
-/* Horizontal card rails (Around you): thumb-scroll without a visible bar. */
-.no-scrollbar { scrollbar-width: none; }
-.no-scrollbar::-webkit-scrollbar { display: none; }
-
