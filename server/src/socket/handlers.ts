@@ -1,7 +1,8 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { getAuth } from "../config/firebase";
 import { query, queryOne, execute } from "../config/database";
-import { refundTransaction, chargeAuthorization, getDefaultCardToken } from "../services/paystackPayment";
+import { refundTransaction } from "../services/paystackPayment";
+import { captureRideHold, createRideHold, releaseRideHold } from "../services/preauthorization";
 import { sendPushToUsers } from "../services/notify";
 import { markDriverLivePing, stopServerRideSim, syncSimToDriver } from "../services/rideSim";
 import {
@@ -373,68 +374,17 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
 
-        // ── Pre-booking payment (best-effort, non-blocking) ──
-        // Ride creation is NEVER blocked by payment so riders can always find
-        // a driver. If they have a saved card we pre-authorize it as a safety
-        // check; if the check fails (no card, decline) we still create the
-        // ride — the real charge happens at pickup. This guarantees drivers
-        // always see booking requests.
-        let cardChargeRef: string | null = null;
-        if (paymentMethod === "card" && fare != null) {
-          const amountRands = Number(fare);
-          if (amountRands > 0) {
-            const card = await getDefaultCardToken(dbUserId).catch(() => null);
-            if (!card) {
-              // NO SAVED CARD  -  BOOK ANYWAY.
-              // This branch used to emit a failure ack and return, so the ride was
-              // never created and NO DRIVER WAS EVER OFFERED IT: a card-paying rider
-              // could not get a car at all. Payment must never gate dispatch  -  the
-              // fare is settled outside the card. Logged, not fatal.
-              console.warn(`[preauth] rider ${dbUserId} has no saved card  -  booking ${amountRands} ZAR without a pre-auth`);
-            } else {
-              const rider = await queryOne<{ email: string }>(
-                "SELECT email FROM users WHERE id = $1", [dbUserId]
-              ).catch(() => null);
-              const reference =
-                `VURA${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-              let charge;
-              try {
-                charge = await chargeAuthorization({
-                  amountRands,
-                  reference,
-                  email: rider?.email || "rider@vura.com",
-                  authorizationCode: card.transaction_index,
-                });
-              } catch (err: any) {
-                charge = { success: false, message: err?.message || "Could not process your card." };
-              }
-              if (!charge?.success) {
-                // A DECLINED PRE-AUTH MUST NOT CANCEL THE BOOKING EITHER  -  same trap
-                // as above. Record it and let the driver receive the request.
-                console.warn(`[preauth] card declined for rider ${dbUserId}: ${charge?.message || "no message"}  -  booking anyway`);
-              } else {
-                cardChargeRef = reference;
-                try {
-                  await execute(`
-                    CREATE TABLE IF NOT EXISTS payments (
-                      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-                      user_id UUID, ride_id UUID,
-                      reference VARCHAR(100), amount NUMERIC(10,2),
-                      currency VARCHAR(3) DEFAULT 'ZAR', status VARCHAR(20),
-                      provider VARCHAR(20), raw_response JSONB,
-                      created_at TIMESTAMPTZ DEFAULT NOW(),
-                      updated_at TIMESTAMPTZ DEFAULT NOW()
-                    )`);
-                } catch { /* already exists */ }
-                await execute(
-                  `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
-                   VALUES ($1, NULL, $2, $3, 'ZAR', 'completed', 'paystack')`,
-                  [dbUserId, reference, amountRands]
-                ).catch(() => {});
-              }
-            }
-          }
-        }
+        // ── Card preauthorization happens AFTER the ack, never before ──
+        // Booking used to CHARGE the saved card right here (awaited before the
+        // ride row existed): money moved immediately, had to be refunded on
+        // cancel, and could race the completion charge. Under card
+        // preauthorization (docs: paystack.com/docs/payments/card-preauthorization/)
+        // nothing is charged at booking — once the ride exists and the ack is
+        // out, a HOLD is placed fire-and-forget (saved card →
+        // reserve_authorization → HOLD_ACTIVE; no card → HOLD_PENDING with a
+        // checkout URL the app opens through POST /api/rides/book, which is
+        // idempotent and returns that same hold). Ride creation is NEVER blocked
+        // by payment — payment must never gate dispatch.
         // ── Stops between pickup and drop-off ──
         // Accept `waypoints` (current apps) and `stops` (older payloads); each
         // entry is { address, lat, lng }. Stored in rides.waypoints (JSONB) so the
@@ -524,13 +474,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           );
         }
 
-        // Link the successful card charge to this ride so it can be refunded on cancel.
-        if (cardChargeRef) {
-          await execute(
-            "UPDATE payments SET ride_id = $1, updated_at = NOW() WHERE reference = $2",
-            [ride?.id, cardChargeRef]
-          ).catch(() => {});
-        }
+        // (The booking-time card CHARGE that used to live here linked its
+        // payments row via cardChargeRef — preauthorization replaced it: the
+        // hold's reference rides on the RIDE row, written by createRideHold
+        // below, and the PAID ledger row is written by the capture webhook.)
         // Backwards-compatible: also link any hosted-checkout reference provided.
         if (paymentReference) {
           await execute(
@@ -546,6 +493,39 @@ export function setupSocketHandlers(io: SocketIOServer) {
         trace(ride?.id ?? null, "trip_saved", { payment_method: paymentMethod || "cash" });
         socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
         if (ride) socket.join(`ride:${ride.id}`);
+
+        // ── Card preauthorization (fire-and-forget, AFTER the ack) ──
+        // The hold must never delay booking: the ack is already out and dispatch
+        // starts below regardless. Saved card → instant HOLD_ACTIVE; no card →
+        // HOLD_PENDING + checkout URL, which the app reads (and opens) through
+        // POST /api/rides/book — idempotent, so the client call that follows
+        // this returns the SAME hold instead of creating a second one.
+        if (ride?.id && paymentMethod === "card" && Number(rideFare) > 0) {
+          void (async () => {
+            try {
+              const email = String(
+                (
+                  await queryOne<{ email: string | null }>(
+                    "SELECT email FROM users WHERE id = $1",
+                    [dbUserId]
+                  ).catch(() => null)
+                )?.email || ""
+              ).trim();
+              if (!email) return;
+              await createRideHold({
+                rideId: String(ride.id),
+                userId: String(dbUserId),
+                amountRands: Number(rideFare),
+                email,
+              });
+            } catch (e: any) {
+              console.warn(
+                `[preauth] booking hold failed ride=${ride.id}:`,
+                e?.message || e
+              );
+            }
+          })();
+        }
 
         // ── Notify nearby drivers about the new ride ──
         // Find all online drivers and emit ride:request to each one so the
@@ -617,10 +597,21 @@ export function setupSocketHandlers(io: SocketIOServer) {
           if (elapsedMin > FEE_GRACE_MINUTES) fee = FEE_FLAT_RANDS;
         }
 
-        await execute(
+        const cancelRes = await execute(
           "UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW(), cancellation_fee = $3 WHERE id = $4 AND status IN ('searching','scheduled','no_drivers','accepted','driver_arrived')",
           [socket.userId, reason, fee, rideId]
         );
+        // Card preauthorization: cancelling frees the rider's hold immediately —
+        // but only when the cancel actually landed (idempotent release; a
+        // no-op for cash rides and already-released holds).
+        if ((cancelRes?.rowCount ?? 0) > 0) {
+          void releaseRideHold(String(rideId), "rider_cancel").catch((e) =>
+            console.warn(
+              `[preauth] cancel release failed ride=${rideId}:`,
+              e?.message || e
+            )
+          );
+        }
         stopServerRideSim(rideId);
 
         // ── Cancelling while an offer is out ──
@@ -1311,11 +1302,21 @@ export function setupSocketHandlers(io: SocketIOServer) {
         //    they never cancelled and trapped the driver on the trip screen. Now the
         //    ride is cancelled, the rider is told over the socket AND with a push, and
         //    both apps return to their home screens.
-        await execute(
+        const driverCancelRes = await execute(
           `UPDATE rides SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, cancelled_at = NOW()
            WHERE id = $3 AND status IN ('scheduled','searching','accepted','driver_arrived','in_progress')`,
           [dbUserId, reason || "Driver cancelled", rideId]
         );
+        // Card preauthorization: the RIDER's hold must be freed the moment the
+        // driver cancels too (idempotent, and only if the cancel landed).
+        if ((driverCancelRes?.rowCount ?? 0) > 0) {
+          void releaseRideHold(String(rideId), "driver_cancel").catch((e) =>
+            console.warn(
+              `[preauth] driver-cancel release failed ride=${rideId}:`,
+              e?.message || e
+            )
+          );
+        }
         stopServerRideSim(rideId);
         // Any offer still ringing for this ride stops immediately.
         await cancelPendingOffers(io, rideId, "driver_cancelled");
@@ -1416,6 +1417,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
           "UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2",
           [ride.fare, rideId]
         );
+        // Card preauthorization: the ride completing captures the hold for the
+        // final fare (no-op when there is no hold; PAID still arrives only via
+        // the preauthorization.capture.success webhook).
+        void captureRideHold(String(rideId)).catch((e) => {
+          if (e?.code !== "no_hold") {
+            console.warn(`[preauth] auto-capture ride=${rideId}:`, e?.message || e);
+          }
+        });
         stopServerRideSim(rideId);
         // Module 2: the FIRST completion of this trip increments the active
         // session's trips_completed and resets the idle timer to

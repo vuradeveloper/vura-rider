@@ -63,6 +63,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.paymentsMode = paymentsMode;
 exports.paystackConfig = paystackConfig;
 exports.isPaystackConfigured = isPaystackConfigured;
+exports.paystackFetch = paystackFetch;
 exports.initializeTransaction = initializeTransaction;
 exports.verifyTransaction = verifyTransaction;
 exports.chargeAuthorization = chargeAuthorization;
@@ -79,10 +80,15 @@ function paymentsMode() {
     return "mock";
 }
 function paystackConfig() {
+    // PAYSTACK_SECRET_KEY is accepted as the single-key fallback (any mode) so an
+    // install that keeps ONE secret in its environment — the shape the card
+    // preauthorization setup notes call for — works without renaming variables.
     return {
-        secretKey: paymentsMode() === "live"
-            ? process.env.PAYSTACK_SECRET_LIVE || ""
-            : process.env.PAYSTACK_SECRET_TEST || "",
+        secretKey: (paymentsMode() === "live"
+            ? process.env.PAYSTACK_SECRET_LIVE
+            : process.env.PAYSTACK_SECRET_TEST) ||
+            process.env.PAYSTACK_SECRET_KEY ||
+            "",
         callbackUrl: process.env.PAYSTACK_CALLBACK_URL || "",
         baseUrl: PAYSTACK_BASE_URL,
     };
@@ -90,6 +96,9 @@ function paystackConfig() {
 function isPaystackConfigured() {
     return Boolean(paystackConfig().secretKey);
 }
+// Exported for services/preauthorization.ts: the card-hold flow signs webhook
+// bodies and calls the /preauthorization/* endpoints through this same
+// Bearer-authenticated JSON client.
 async function paystackFetch(path, init = {}) {
     const cfg = paystackConfig();
     const res = await fetch(`${cfg.baseUrl}${path}`, {

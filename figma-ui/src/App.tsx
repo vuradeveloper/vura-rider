@@ -9,6 +9,7 @@ import type { LatLng } from './components/LeafletMap'
 import LeafletMap from './components/LeafletMap'
 import { HelpCenter, ReportIssue, SettingsScreen } from './components/SettingsScreen'
 import PaymentMethods from './components/PaymentMethods'
+import RidePaymentStatus from './components/RidePaymentStatus'
 import PromosScreen from './components/PromosScreen'
 import RiderProfile from './components/RiderProfile'
 import RiderSettings, { Guidelines } from './components/RiderSettings'
@@ -25,6 +26,8 @@ import type { Earnings as EarningsSummary } from './lib/backend'
 import {
   acceptRide,
   AuthUser,
+  BookRideHoldResult,
+  bookRideHold,
   // â”€â”€ rider â”€â”€
   cancelRide,
   completeTrip,
@@ -58,6 +61,7 @@ import {
   normalizeRide,
   NotificationRow,
   on,
+  openExternalUrl,
   openWaze,
   // â”€â”€ payment methods (booking screen) â”€â”€
   PaymentMethod,
@@ -1125,6 +1129,15 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
   const [pickBusy, setPickBusy] = useState(false)
   // "Are you sure?" before a cancel, and the yes-path that takes the rider home.
   const [confirmCancel, setConfirmCancel] = useState(false)
+  // Card preauthorization: the hold requested right after the booking ack, the
+  // error + retry if it failed (the booking itself never rolls back — payment
+  // must never gate dispatch), and the cancel sheet's loading/success/error.
+  const [hold, setHold] = useState<BookRideHoldResult | null>(null)
+  const [holdError, setHoldError] = useState('')
+  const [holdBusy, setHoldBusy] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState('')
+  const [cancelMsg, setCancelMsg] = useState('')
 
   // Search for the pickup by hand (the same geocoder the destination uses).
   useEffect(() => {
@@ -1240,6 +1253,15 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
           } else {
             rideIdRef.current = res.rideId
             setPhase('waiting')
+            // Card preauthorization: hold the fare now that the ride exists.
+            // The socket booking path may have placed the hold already —
+            // bookRideHold is idempotent and returns the SAME one. With no
+            // saved card the response carries the Paystack checkout URL,
+            // which opens in the secure tab; the status card below polls
+            // until the hold is active. A failed hold never cancels the
+            // booking (payment must never gate dispatch) — the card shows
+            // the error with a retry instead.
+            if ((paymentMethod || 'cash') === 'card') void requestHold()
           }
         } catch (e: any) {
           if (alive) {
@@ -1309,18 +1331,59 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
   }, [onMatched])
 
   // Cancelling asks first, then takes the rider home (the sheet is below).
-  async function cancel() {
+  function cancel() {
+    setCancelError('')
+    setCancelMsg('')
     setConfirmCancel(true)
   }
 
-  /** Runs only after the rider presses Yes on the sheet. */
-  async function doCancel() {
-    setConfirmCancel(false)
-    // Only cancel something that actually exists on the server.
-    if (rideIdRef.current) {
-      await cancelRide(rideIdRef.current, 'Rider cancelled').catch(() => { })
+  /** Asks the server to hold the fare (idempotent) and opens checkout if given. */
+  async function requestHold() {
+    const id = rideIdRef.current
+    if (!id || holdBusy) return
+    setHoldBusy(true)
+    setHoldError('')
+    try {
+      const h = await bookRideHold(id, RIDE_FARE)
+      setHold(h)
+      if (h?.authorizationUrl) void openExternalUrl(h.authorizationUrl)
+    } catch (e: any) {
+      setHoldError(e?.message || 'Could not hold funds on your card.')
+    } finally {
+      setHoldBusy(false)
     }
-    onCancel()
+  }
+
+  /**
+   * Runs when the rider presses Yes. ONE REST call cancels the ride AND
+   * releases the card hold — the sheet stays open with a spinner while that
+   * happens, then shows "Your funds have been released" (or the exact error)
+   * before sending the rider home. A failure keeps the sheet open for a retry:
+   * never pretend the money was freed when it was not.
+   */
+  async function doCancel() {
+    if (cancelling) return
+    setCancelError('')
+    if (!rideIdRef.current) {
+      onCancel()
+      return
+    }
+    setCancelling(true)
+    try {
+      const r = await cancelRide(rideIdRef.current, 'Rider cancelled')
+      setCancelMsg(
+        r?.releaseError
+          ? 'Ride cancelled — but releasing your funds failed. Please contact support.'
+          : r?.released
+            ? 'Your funds have been released'
+            : r?.message || 'Your ride has been cancelled'
+      )
+      setTimeout(() => onCancel(), 1600)
+    } catch (e: any) {
+      setCancelError(e?.message || 'Could not cancel the ride. Please try again.')
+    } finally {
+      setCancelling(false)
+    }
   }
 
   return (
@@ -1388,21 +1451,66 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
           </div>
         )}
 
+        {/* Card preauthorization: the live money state (holding funds → funds
+            held / searching → in progress → paid or released). Renders nothing
+            for cash rides. The hold error box appears only when the hold could
+            not be placed — the ride keeps searching regardless. */}
+        {paymentMethod === 'card' && !!rideIdRef.current && (
+          <div className="mt-4">
+            <RidePaymentStatus rideId={rideIdRef.current} />
+            {holdError && (
+              <div className="mt-2 rounded-2xl border border-[#F5C6C2] bg-[#FEF3F2] px-4 py-3 flex items-center gap-3">
+                <p className="text-[12px] text-[#C5221F] font-semibold flex-1">{holdError}</p>
+                <button
+                  onClick={() => void requestHold()}
+                  disabled={holdBusy}
+                  className="shrink-0 text-[12px] font-bold text-[#C5221F] border border-[#F5C6C2] rounded-xl px-3 py-2 disabled:opacity-60"
+                >
+                  {holdBusy ? 'Retrying…' : 'Try again'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {confirmCancel && (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-end" onClick={() => setConfirmCancel(false)}>
+          <div
+            className="fixed inset-0 z-50 bg-black/40 flex items-end"
+            onClick={() => { if (!cancelling && !cancelMsg) setConfirmCancel(false) }}
+          >
             <div className="w-full bg-white rounded-t-3xl p-5 pb-7" onClick={(e) => e.stopPropagation()}>
-              <h2 className="text-[18px] font-bold text-[#1A1A1A]">Cancel this ride?</h2>
-              <p className="text-[13px] text-[#6B6B6B] mt-1.5">
-                Are you sure? You will be taken back to the home screen.
-              </p>
-              <button onClick={doCancel}
-                className="w-full mt-5 bg-[#C5221F] text-white font-bold text-[15px] py-4 rounded-2xl active:bg-[#A81B19]">
-                Yes, cancel the ride
-              </button>
-              <button onClick={() => setConfirmCancel(false)}
-                className="w-full mt-3 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[14px] py-3.5 rounded-2xl active:bg-[#F7F7F7]">
-                No, keep my ride
-              </button>
+              <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
+              <h2 className="text-[18px] font-bold text-[#1A1A1A]">
+                {cancelMsg ? 'Ride cancelled' : 'Cancel this ride?'}
+              </h2>
+              {cancelMsg ? (
+                <p className="text-[14px] text-[#137333] font-semibold mt-2">{cancelMsg}</p>
+              ) : (
+                <>
+                  <p className="text-[13px] text-[#6B6B6B] mt-1.5">
+                    Are you sure? You will be taken back to the home screen.
+                  </p>
+                  {cancelError && (
+                    <p className="text-[13px] text-[#C5221F] font-semibold mt-2">{cancelError}</p>
+                  )}
+                  <button
+                    onClick={doCancel}
+                    disabled={cancelling}
+                    className="w-full mt-5 bg-[#C5221F] text-white font-bold text-[15px] py-4 rounded-2xl active:bg-[#A81B19] disabled:opacity-60 flex items-center justify-center gap-2"
+                  >
+                    {cancelling && (
+                      <span className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                    )}
+                    {cancelling ? 'Cancelling…' : 'Yes, cancel the ride'}
+                  </button>
+                  <button
+                    onClick={() => setConfirmCancel(false)}
+                    disabled={cancelling}
+                    className="w-full mt-3 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[14px] py-3.5 rounded-2xl active:bg-[#F7F7F7] disabled:opacity-50"
+                  >
+                    No, keep my ride
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1429,6 +1537,11 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   const cancelledByMe = useRef(false)
   // "Are you sure?" before cancelling.
   const [confirmCancel, setConfirmCancel] = useState(false)
+  // Card preauthorization cancel UX: spinner while the REST call cancels the
+  // ride AND releases the hold, then the released message or the exact error.
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState('')
+  const [cancelMsg, setCancelMsg] = useState('')
 
   /**
    * The live route to draw. It prefers the coordinates the SERVER holds for this
@@ -1575,18 +1688,40 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   // The Cancel button opens the "are you sure?" sheet instead of cancelling
   // straight away.
   function cancel() {
+    setCancelError('')
+    setCancelMsg('')
     setConfirmCancel(true)
   }
 
-  /** Runs only after the rider presses Yes. The server notifies the driver. */
+  /**
+   * Runs only after the rider presses Yes. ONE REST call cancels the ride AND
+   * releases the card hold — the sheet holds a spinner while that happens,
+   * then shows "Your funds have been released" (or the exact error, with the
+   * sheet still open for a retry) before the shell takes the rider home. The
+   * server notifies the driver either way.
+   */
   async function doCancel() {
-    setConfirmCancel(false)
+    if (cancelling) return
+    setCancelError('')
     if (!rideId) { onDone(); return }
-    cancelledByMe.current = true
-    await cancelRide(rideId, 'Rider cancelled').catch(() => { })
-    setStatus('cancelled')
-    setToast('Ride cancelled')
-    onDone() // the shell sends the rider home
+    setCancelling(true)
+    try {
+      const r = await cancelRide(rideId, 'Rider cancelled')
+      cancelledByMe.current = true
+      setStatus('cancelled')
+      setCancelMsg(
+        r?.releaseError
+          ? 'Ride cancelled — but releasing your funds failed. Please contact support.'
+          : r?.released
+            ? 'Your funds have been released'
+            : r?.message || 'Your ride has been cancelled'
+      )
+      setTimeout(() => onDone(), 1600) // the shell sends the rider home
+    } catch (e: any) {
+      setCancelError(e?.message || 'Could not cancel the ride. Please try again.')
+    } finally {
+      setCancelling(false)
+    }
   }
 
   return (
@@ -1673,6 +1808,13 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           <span className="ml-auto text-[12px] text-[#ADADAD] truncate">{ride?.payment_method || 'cash'}</span>
         </div>
 
+        {/* Card preauthorization: in-progress states — "Ride in progress —
+            funds held" → "confirming payment" → "Payment complete". Silent for
+            cash rides (the component itself renders nothing on NONE). */}
+        {rideId && String(ride?.payment_method || 'cash') === 'card' && (
+          <RidePaymentStatus rideId={rideId} className="mb-4" />
+        )}
+
         {toast && (
           <p className="text-center text-[12px] font-semibold text-[#137333] mb-3">{toast}</p>
         )}
@@ -1698,20 +1840,44 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           )}
         </div>
         {confirmCancel && (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-end" onClick={() => setConfirmCancel(false)}>
+          <div
+            className="fixed inset-0 z-50 bg-black/40 flex items-end"
+            onClick={() => { if (!cancelling && !cancelMsg) setConfirmCancel(false) }}
+          >
             <div className="w-full bg-white rounded-t-3xl p-5 pb-7" onClick={(e) => e.stopPropagation()}>
-              <h2 className="text-[18px] font-bold text-[#1A1A1A]">Cancel this ride?</h2>
-              <p className="text-[13px] text-[#6B6B6B] mt-1.5">
-                Are you sure? Your driver is told straight away and you go back to the home screen.
-              </p>
-              <button onClick={doCancel}
-                className="w-full mt-5 bg-[#C5221F] text-white font-bold text-[15px] py-4 rounded-2xl active:bg-[#A81B19]">
-                Yes, cancel the ride
-              </button>
-              <button onClick={() => setConfirmCancel(false)}
-                className="w-full mt-3 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[14px] py-3.5 rounded-2xl active:bg-[#F7F7F7]">
-                No, keep my ride
-              </button>
+              <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
+              <h2 className="text-[18px] font-bold text-[#1A1A1A]">
+                {cancelMsg ? 'Ride cancelled' : 'Cancel this ride?'}
+              </h2>
+              {cancelMsg ? (
+                <p className="text-[14px] text-[#137333] font-semibold mt-2">{cancelMsg}</p>
+              ) : (
+                <>
+                  <p className="text-[13px] text-[#6B6B6B] mt-1.5">
+                    Are you sure? Your driver is told straight away and you go back to the home screen.
+                  </p>
+                  {cancelError && (
+                    <p className="text-[13px] text-[#C5221F] font-semibold mt-2">{cancelError}</p>
+                  )}
+                  <button
+                    onClick={doCancel}
+                    disabled={cancelling}
+                    className="w-full mt-5 bg-[#C5221F] text-white font-bold text-[15px] py-4 rounded-2xl active:bg-[#A81B19] disabled:opacity-60 flex items-center justify-center gap-2"
+                  >
+                    {cancelling && (
+                      <span className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                    )}
+                    {cancelling ? 'Cancelling…' : 'Yes, cancel the ride'}
+                  </button>
+                  <button
+                    onClick={() => setConfirmCancel(false)}
+                    disabled={cancelling}
+                    className="w-full mt-3 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[14px] py-3.5 rounded-2xl active:bg-[#F7F7F7] disabled:opacity-50"
+                  >
+                    No, keep my ride
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}

@@ -9,6 +9,14 @@ import { resolveDriverPhotoUrl } from "../services/driverPhoto";
 import { trace, startTrace } from "../services/trace";
 import { assertRiderCanBook } from "../services/adminRiders";
 import { canonicalTier } from "../services/rideCategories";
+import {
+  captureRideHold,
+  createRideHold,
+  ensurePreauthSchema,
+  normalizePaymentStatus,
+  releaseRideHold,
+  PreauthError,
+} from "../services/preauthorization";
 import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
@@ -428,13 +436,20 @@ router.get("/me/active", requireAuth, async (req: AuthRequest, res: Response) =>
 // window so they can never show up as "Trip in progress" / be accepted again.
 export async function cleanupStaleRides(): Promise<number> {
   try {
-    const res = await execute(
+    const res = await query<{ id: string }>(
       `UPDATE rides
          SET status = 'expired', updated_at = NOW()
        WHERE status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
-         AND created_at < NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'`
+         AND created_at < NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
+       RETURNING id`
     );
-    return res?.rowCount ?? 0;
+    // Card preauthorization: an expired ride must never keep money held.
+    for (const row of res || []) {
+      releaseRideHold(row.id, "ride_expired").catch((e) =>
+        console.warn(`[preauth] release on expired ride ${row.id} failed:`, e?.message || e)
+      );
+    }
+    return res?.length ?? 0;
   } catch (err) {
     console.error("cleanupStaleRides error:", (err as any).message);
     return 0;
@@ -857,7 +872,19 @@ router.post("/scheduled/:id/cancel", requireAuth, async (req: AuthRequest, res: 
     io?.to(`ride:${req.params.id}`).emit("ride:cancelled", { reason: "Ride cancelled by user", cancellation_fee: fee });
     io?.to("drivers").emit("ride:cancelled", { rideId: req.params.id, reason: "Ride cancelled by user" });
 
-    res.json({ success: true, cancellation_fee: fee });
+    // Card preauthorization: cancelling frees the rider's hold immediately
+    // (idempotent — no hold / already released answers honestly).
+    let paymentStatus = "NONE";
+    let released = false;
+    try {
+      const rel = await releaseRideHold(String(req.params.id), "scheduled_cancel");
+      paymentStatus = rel.paymentStatus;
+      released = rel.released;
+    } catch (e: any) {
+      console.error("Scheduled-cancel hold release failed:", e);
+    }
+
+    res.json({ success: true, cancellation_fee: fee, paymentStatus, released });
   } catch (err: any) {
     console.error("Cancel scheduled ride error:", err);
     res.status(500).json({ error: err.message });
@@ -932,6 +959,14 @@ router.patch("/:id/status", requireAuth, async (req: AuthRequest, res: Response)
 
     if (status === "completed") {
       await settleFirstRide(String(id));
+      // Card preauthorization: the ride completing captures the hold for the
+      // final fare (no-op when there is no hold; PAID still arrives only via
+      // the capture.success webhook).
+      captureRideHold(String(id)).catch((e) => {
+        if (e?.code !== "no_hold") {
+          console.warn(`[preauth] auto-capture on completion ride=${id}:`, e?.message || e);
+        }
+      });
     }
 
     res.json({ success: true });
@@ -978,7 +1013,321 @@ router.post("/:id/route", requireAuth, async (req: AuthRequest, res: Response) =
   }
 });
 
-// Ensure columns added after the original schema exist (idempotent migrations).
+// ── Card preauthorization (Paystack holds) ────────────────────────────────────
+// Docs: https://paystack.com/docs/payments/card-preauthorization/
+// State machine + Paystack calls live in services/preauthorization.ts; these
+// routes are the HTTP surface the rider app drives:
+//   POST /api/rides/book          → hold → authorization_url (or instant
+//                                   HOLD_ACTIVE via Reserve-by-Code)
+//   POST /api/rides/:id/complete  → capture final fare → CAPTURE_PENDING
+//   POST /api/rides/:id/cancel    → release the hold → RELEASED
+//   GET  /api/rides/:id/payment   → status for the return/status screen
+
+/** Ride states a booking/hold may exist in. */
+const LIVE_RIDE_STATES = [
+  "scheduled",
+  "searching",
+  "no_drivers",
+  "accepted",
+  "driver_arrived",
+  "in_progress",
+];
+
+/** Loads a ride only when the caller is its rider or its driver. */
+async function loadRideForParty(rideId: string, firebaseUid: string) {
+  const user = await queryOne<{ id: string; email: string | null }>(
+    "SELECT id, email FROM users WHERE firebase_uid = $1",
+    [firebaseUid]
+  );
+  if (!user) return { user: null as any, ride: null as any, party: null };
+  const ride = await queryOne<any>(
+    `SELECT id, passenger_id, driver_id, status, payment_method, accepted_at,
+            payment_status, preauth_reference, hold_checkout_url,
+            hold_expires_at, hold_amount_cents, captured_amount, paid_at,
+            estimated_fare, actual_fare,
+            COALESCE(NULLIF(actual_fare, 0), estimated_fare) AS fare
+       FROM rides WHERE id = $1`,
+    [rideId]
+  ).catch(() => null);
+  const party =
+    ride && ride.passenger_id === user.id
+      ? "rider"
+      : ride && ride.driver_id === user.id
+        ? "driver"
+        : null;
+  return { user, ride, party };
+}
+
+function respondPreauthError(res: Response, err: any) {
+  if (err instanceof PreauthError) {
+    res.status(err.httpStatus).json({ error: err.message, code: err.code });
+    return true;
+  }
+  return false;
+}
+
+// POST /api/rides/book — place (or re-report) the card hold for a ride.
+//
+// Body: { rideId, riderEmail?, estimatedFare? } — the EMAIL and the ownership
+// decision come from the authenticated account (a client-supplied email is only
+// a fallback for accounts synced without one; Paystack's Reserve-by-Code
+// requires email + authorization_code to match the first transaction).
+// Amount: ZAR → cents, docs minimum 100 (services/preauthorization.ts).
+router.post("/book", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    await ensurePreauthSchema();
+    const rideId = String(req.body?.rideId || "");
+    if (!rideId) {
+      res.status(400).json({ error: "rideId is required" });
+      return;
+    }
+
+    const user = await queryOne<{ id: string; email: string | null }>(
+      "SELECT id, email FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) {
+      res.status(403).json({ error: "Account not synced yet. Try again in a moment." });
+      return;
+    }
+    const ride = await queryOne<any>(
+      `SELECT id, passenger_id, status, payment_method, estimated_fare
+         FROM rides WHERE id = $1`,
+      [rideId]
+    ).catch(() => null);
+    if (!ride) {
+      res.status(404).json({ error: "Ride not found" });
+      return;
+    }
+    if (ride.passenger_id !== user.id) {
+      res.status(403).json({ error: "This ride does not belong to you" });
+      return;
+    }
+    if (!LIVE_RIDE_STATES.includes(String(ride.status))) {
+      res.status(409).json({ error: `Ride is ${ride.status} — no hold can be placed.` });
+      return;
+    }
+    // Only card rides get card holds — cash/pay-later rides answer honestly and
+    // the client keeps going (payment must never gate dispatch).
+    if (String(ride.payment_method || "") === "pay_later") {
+      res.json({
+        rideId,
+        paymentStatus: "NONE",
+        reference: null,
+        authorizationUrl: null,
+        skipped: "not_card",
+      });
+      return;
+    }
+
+    const email = String(user.email || "").trim() || String(req.body?.riderEmail || "").trim();
+    if (!email) {
+      res.status(400).json({ error: "Your account has no email — needed for Paystack." });
+      return;
+    }
+
+    const estimated =
+      req.body?.estimatedFare != null && Number(req.body.estimatedFare) > 0
+        ? Number(req.body.estimatedFare)
+        : Number(ride.estimated_fare || 0);
+
+    const hold = await createRideHold({
+      rideId,
+      userId: user.id,
+      amountRands: estimated,
+      email,
+    });
+    res.json({
+      rideId,
+      reference: hold.reference,
+      paymentStatus: hold.paymentStatus,
+      authorizationUrl: hold.authorizationUrl ?? null,
+      holdExpiresAt: hold.holdExpiresAt ?? null,
+      alreadyHeld: Boolean(hold.alreadyHeld),
+    });
+  } catch (err: any) {
+    if (respondPreauthError(res, err)) return;
+    console.error("POST /api/rides/book error:", err);
+    res.status(500).json({ error: err?.message || "Could not start the card hold" });
+  }
+});
+
+// POST /api/rides/:id/complete — capture the hold for the FINAL fare.
+//
+// Payment-only: the ride's own status is flipped by the driver's end-trip (or
+// the sim PATCH below); this settles the money. Sets CAPTURE_PENDING and stops
+// — PAID is ONLY ever set by the preauthorization.capture.success webhook, so
+// an optimistic response can never claim money that later fails to settle.
+// Allowed for the ride's rider or driver; idempotent while a capture is
+// already pending/paid.
+router.post("/:id/complete", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { user, ride, party } = await loadRideForParty(
+      String(req.params.id),
+      req.userId!
+    );
+    if (!user || !ride) {
+      res.status(404).json({ error: "Ride not found" });
+      return;
+    }
+    if (!party) {
+      res.status(403).json({ error: "This ride does not belong to you" });
+      return;
+    }
+    const result = await captureRideHold(String(req.params.id));
+    res.json({
+      success: true,
+      rideId: ride.id,
+      paymentStatus: result.paymentStatus,
+      captured: result.captured,
+      alreadyProcessed: Boolean(result.alreadyProcessed),
+      capturedAmount: result.capturedAmount ?? null,
+      note: "PAID is confirmed by Paystack's capture.success webhook.",
+    });
+  } catch (err: any) {
+    if (respondPreauthError(res, err)) return;
+    console.error("POST /api/rides/:id/complete error:", err);
+    res.status(500).json({ error: err?.message || "Could not capture the fare" });
+  }
+});
+
+// GET /api/rides/:id/payment — the return/status screen's single poll:
+// payment state + ride state together (holding funds / driver searching /
+// ride in progress / paid / released / failed).
+router.get("/:id/payment", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    await ensurePreauthSchema();
+    const { user, ride, party } = await loadRideForParty(
+      String(req.params.id),
+      req.userId!
+    );
+    if (!user || !ride) {
+      res.status(404).json({ error: "Ride not found" });
+      return;
+    }
+    if (!party) {
+      res.status(403).json({ error: "This ride does not belong to you" });
+      return;
+    }
+    res.json({
+      rideId: ride.id,
+      rideStatus: ride.status,
+      paymentStatus: normalizePaymentStatus(ride.payment_status),
+      reference: ride.preauth_reference || null,
+      authorizationUrl: ride.hold_checkout_url || null,
+      holdExpiresAt: ride.hold_expires_at || null,
+      holdAmountCents: ride.hold_amount_cents ?? null,
+      capturedAmount: ride.captured_amount ?? null,
+      paidAt: ride.paid_at || null,
+    });
+  } catch (err: any) {
+    if (respondPreauthError(res, err)) return;
+    console.error("GET /api/rides/:id/payment error:", err);
+    res.status(500).json({ error: err?.message || "Could not read the payment status" });
+  }
+});
+
+// POST /api/rides/:id/cancel — cancel the ride AND release its card hold.
+//
+// The rider app's Cancel button calls THIS (REST) so the release is part of the
+// same request/response: the UI can show "Your funds have been released" (or a
+// precise error) without a second round-trip. Mirrors the fee policy and the
+// broadcasts of /scheduled/:id/cancel; the socket path releases too (both fire
+// releaseRideHold, which is idempotent).
+router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    await ensurePreauthSchema();
+    const rideId = String(req.params.id);
+    const { user, ride, party } = await loadRideForParty(rideId, req.userId!);
+    if (!user || !ride) {
+      res.status(404).json({ error: "Ride not found" });
+      return;
+    }
+    if (!party) {
+      res.status(403).json({ error: "This ride does not belong to you" });
+      return;
+    }
+
+    // Same cancellation-fee policy as the socket path: no fee while
+    // searching/scheduled, flat R15 once a driver was matched (after grace).
+    let fee = 0.0;
+    if (ride.status === "accepted" || ride.status === "driver_arrived") {
+      const acceptedAt = ride.accepted_at ? new Date(ride.accepted_at).getTime() : Date.now();
+      if ((Date.now() - acceptedAt) / 60000 > 2) fee = 15.0;
+    }
+
+    const alreadyCancelled = String(ride.status) === "cancelled";
+    const reason = String(req.body?.reason || "Ride cancelled by user").slice(0, 200);
+    const result = await execute(
+      `UPDATE rides
+          SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2,
+              cancelled_at = NOW(), cancellation_fee = $3, updated_at = NOW()
+        WHERE id = $4
+          AND status IN ('scheduled','searching','no_drivers','accepted','driver_arrived','in_progress')`,
+      [user.id, reason, fee, rideId]
+    );
+    const cancelled = (result?.rowCount ?? 0) > 0 || alreadyCancelled;
+    if (!cancelled) {
+      res.status(404).json({ error: "Ride not found or no longer active" });
+      return;
+    }
+    stopServerRideSim(rideId);
+
+    // Withdraw live offers + tell both apps (same events as the socket cancel).
+    const io = (global as any).__vuraIo as
+      | { to: (room: string) => { emit: (ev: string, ...args: any[]) => void } }
+      | undefined;
+    await cancelPendingOffers(io as any, rideId, "rider_cancelled");
+    io?.to(`ride:${rideId}`).emit("ride:cancelled", {
+      reason: "Ride cancelled by user",
+      cancellation_fee: fee,
+    });
+    io?.to("drivers").emit("ride:cancelled", {
+      rideId,
+      reason: "Ride cancelled by user",
+    });
+
+    // ── Release the hold (the whole point of this endpoint) ──
+    let paymentStatus = "NONE";
+    let released = false;
+    let releaseError: string | null = null;
+    try {
+      const rel = await releaseRideHold(rideId, "rest_cancel");
+      paymentStatus = rel.paymentStatus;
+      released = rel.released;
+    } catch (e: any) {
+      // The RIDE cancel must stand even if Paystack hiccups; the client is
+      // told exactly what happened (funds NOT yet released) and the reaper /
+      // expire_action=release remain the backstop.
+      releaseError = e?.message || "Could not release the hold";
+      paymentStatus = String((await queryOne<{ payment_status: string | null }>(
+        `SELECT payment_status FROM rides WHERE id = $1`,
+        [rideId]
+      ).catch(() => null))?.payment_status || "HOLD_ACTIVE");
+      console.error("Cancel hold release failed:", e);
+    }
+
+    res.json({
+      success: true,
+      cancellation_fee: fee,
+      paymentStatus,
+      released,
+      message: released
+        ? "Your funds have been released."
+        : releaseError
+          ? "Ride cancelled, but releasing your funds failed — please retry or contact support."
+          : "Ride cancelled.",
+      ...(releaseError ? { releaseError } : {}),
+    });
+  } catch (err: any) {
+    if (respondPreauthError(res, err)) return;
+    console.error("POST /api/rides/:id/cancel error:", err);
+    res.status(500).json({ error: err?.message || "Could not cancel the ride" });
+  }
+});
+
+
+
 async function ensureRouteColumn() {
   await execute(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS route_data JSONB`).catch(() => {});
   // Rider stops captured at booking time (pickup â†’ waypointsâ€¦ â†’ drop-off).

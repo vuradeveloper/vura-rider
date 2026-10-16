@@ -80,6 +80,8 @@ const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const SchedulingService_1 = require("./services/SchedulingService");
+const preauthorization_1 = require("./services/preauthorization");
+const paystackWebhook_1 = __importDefault(require("./routes/paystackWebhook"));
 const offerWorker_1 = require("./services/offerWorker");
 const performanceTier_1 = require("./services/performanceTier");
 const eta_1 = require("./services/eta");
@@ -123,6 +125,13 @@ app.use((0, cors_1.default)({
     origin: allowedOrigins,
     credentials: true,
 }));
+// ── Paystack card-preauthorization webhook ──
+// Mounted BEFORE express.json with express.raw: x-paystack-signature is the
+// HMAC SHA512 of the RAW request body, so the exact bytes Paystack signed must
+// survive parsing (docs: payments/webhooks). Verified in the route — nothing
+// unverified reaches the handlers.
+app.use("/api/paystack/webhook", express_1.default.raw({ type: "application/json", limit: "1mb" }));
+app.use("/api/paystack", paystackWebhook_1.default);
 // Body parsing — 30MB so base64 document uploads (≤15MB binary → ~20MB)
 // fit without a 413. Regular API calls are tiny; the extra headroom is cheap.
 app.use(express_1.default.json({ limit: "30mb" }));
@@ -257,6 +266,10 @@ exports.io = io;
 global.__vuraIo = io;
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 (0, SchedulingService_1.startScheduler)(io);
+// Card preauthorization reaper: releases holds on rides stuck in
+// searching/no_drivers past PREAUTH_STUCK_SEARCH_MINUTES (default 15), so a
+// cancelled/never-matched search can never leave money held on a rider's card.
+(0, preauthorization_1.startPreauthReaper)();
 // Module 3: nightly performance-tier recalc (02:00 SAST + boot catch-up).
 // Inert while `performance_tier_enabled` is false — the 003 seed default —
 // so a deploy of this code changes nothing until the flag is deliberately on.

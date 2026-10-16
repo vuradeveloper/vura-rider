@@ -43,6 +43,8 @@ import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/ve
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
+import { startPreauthReaper } from "./services/preauthorization";
+import paystackWebhookRouter from "./routes/paystackWebhook";
 import { startOfferWorker, getBuildCommit } from "./services/offerWorker";
 import { startPerformanceTierScheduler } from "./services/performanceTier";
 import { logEtaProviderStatus } from "./services/eta";
@@ -93,6 +95,17 @@ app.use(cors({
   origin: allowedOrigins,
   credentials: true,
 }));
+
+// ── Paystack card-preauthorization webhook ──
+// Mounted BEFORE express.json with express.raw: x-paystack-signature is the
+// HMAC SHA512 of the RAW request body, so the exact bytes Paystack signed must
+// survive parsing (docs: payments/webhooks). Verified in the route — nothing
+// unverified reaches the handlers.
+app.use(
+  "/api/paystack/webhook",
+  express.raw({ type: "application/json", limit: "1mb" })
+);
+app.use("/api/paystack", paystackWebhookRouter);
 
 // Body parsing — 30MB so base64 document uploads (≤15MB binary → ~20MB)
 // fit without a 413. Regular API calls are tiny; the extra headroom is cheap.
@@ -264,6 +277,11 @@ setupSocketHandlers(io);
 
 // Auto-book scheduled rides when their pickup time approaches (runs every 60s).
 startScheduler(io);
+
+// Card preauthorization reaper: releases holds on rides stuck in
+// searching/no_drivers past PREAUTH_STUCK_SEARCH_MINUTES (default 15), so a
+// cancelled/never-matched search can never leave money held on a rider's card.
+startPreauthReaper();
 
 // Module 3: nightly performance-tier recalc (02:00 SAST + boot catch-up).
 // Inert while `performance_tier_enabled` is false — the 003 seed default —

@@ -219,6 +219,29 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
+    // Card preauthorization: when this ride already carries a real hold (or the
+    // capture/paid states), DO NOT charge on top of it — the hold is captured
+    // once, for the final fare, when the ride completes. Without this guard a
+    // card ride could be charged at booking AND at arrival AND captured again.
+    if (rideId) {
+      const held = await queryOne<{ payment_status: string | null }>(
+        `SELECT payment_status FROM rides WHERE id = $1`,
+        [rideId]
+      ).catch(() => null);
+      const ps = String(held?.payment_status || "").toUpperCase();
+      if (ps === "HOLD_ACTIVE" || ps === "CAPTURE_PENDING" || ps === "PAID" || ps === "paid") {
+        res.json({
+          reference: null,
+          skipped: "preauth_hold",
+          paymentStatus: ps.toLowerCase(),
+          status: ps === "PAID" || ps === "paid" ? "success" : "pending",
+          message:
+            "This ride is already covered by a card hold — no separate charge was made.",
+        });
+        return;
+      }
+    }
+
     // Default saved card (authorization_code token).
     const savedCard = await queryOne<{
       transaction_index: string;

@@ -7,6 +7,7 @@ export interface PaystackConfig {
 }
 export declare function paystackConfig(): PaystackConfig;
 export declare function isPaystackConfigured(): boolean;
+export declare function paystackFetch<T>(path: string, init?: RequestInit): Promise<T>;
 export interface PaystackInitializeInput {
     amountRands: number;
     reference: string;

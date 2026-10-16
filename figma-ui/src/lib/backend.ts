@@ -1271,11 +1271,87 @@ export async function requestRide(input: RideRequestInput): Promise<RideRequestR
   });
 }
 
-/** The rider cancels an active ride. */
-export async function cancelRide(rideId: string, reason: string) {
-  const s = await getSocket();
-  s.emit("passenger:ride:cancel", { rideId, reason });
+/**
+ * The rider cancels an active ride — REST, ONE round-trip that cancels the
+ * ride AND releases the card hold (POST /api/rides/:id/cancel). The response
+ * says exactly what happened to the money: `released: true` means the hold is
+ * gone (no capture will follow); `releaseError` means the cancel landed but
+ * freeing the funds failed. apiFetch throws on non-2xx with the server's
+ * message, so callers keep their existing .catch() error handling.
+ */
+export async function cancelRide(rideId: string, reason: string): Promise<CancelRideResult> {
+  return apiFetch<CancelRideResult>(`/api/rides/${encodeURIComponent(rideId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
 }
+
+// ── Card preauthorization (Paystack holds) ────────────────────────────────────
+// The SERVER places, captures and releases the hold — this file only ever asks
+// for a hold and reads status. The Paystack secret key never reaches this
+// bundle, and React never calls capture/release directly.
+
+export type RidePaymentStatus =
+  | "NONE"
+  | "HOLD_PENDING"
+  | "HOLD_ACTIVE"
+  | "CAPTURE_PENDING"
+  | "PAID"
+  | "PAYMENT_FAILED"
+  | "RELEASED"
+  | "HOLD_EXPIRED";
+
+export type CancelRideResult = {
+  success?: boolean;
+  cancellation_fee?: number;
+  paymentStatus?: string;
+  released?: boolean;
+  message?: string;
+  releaseError?: string;
+};
+
+export type BookRideHoldResult = {
+  rideId: string;
+  reference: string | null;
+  paymentStatus: RidePaymentStatus;
+  authorizationUrl?: string | null;
+  holdExpiresAt?: string | null;
+  alreadyHeld?: boolean;
+  skipped?: string;
+};
+
+export type RidePaymentState = {
+  rideId: string;
+  rideStatus: string;
+  paymentStatus: RidePaymentStatus;
+  reference: string | null;
+  authorizationUrl?: string | null;
+  holdExpiresAt?: string | null;
+  holdAmountCents?: number | null;
+  capturedAmount?: number | string | null;
+  paidAt?: string | null;
+};
+
+/**
+ * Holds the fare for a ride (POST /api/rides/book). Idempotent: when the
+ * server already placed the hold (the socket booking path does it too, right
+ * after the ack) the SAME hold comes back — never a second one. With no saved
+ * card the response carries `authorizationUrl`: open it in the secure browser
+ * tab, and the hold activates when Paystack's preauthorization.reserve.success
+ * webhook lands. Throws {message, status} on failure (apiFetch contract).
+ */
+export const bookRideHold = (rideId: string, estimatedFare?: number) =>
+  apiFetch<BookRideHoldResult>("/api/rides/book", {
+    method: "POST",
+    body: JSON.stringify({
+      rideId,
+      ...(estimatedFare != null ? { estimatedFare } : {}),
+    }),
+  });
+
+/** Payment + ride state for the status/return screen — poll every few seconds. */
+export const getRidePayment = (rideId: string) =>
+  apiFetch<RidePaymentState>(`/api/rides/${encodeURIComponent(rideId)}/payment`);
 
 /** Move the pickup pin (socket form) — mirrors passenger:ride:update_pickup. */
 export async function socketUpdatePickup(rideId: string, address: string, lat: number, lng: number) {
