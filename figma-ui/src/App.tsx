@@ -2520,7 +2520,7 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
           posErrors += 1
           if (posErrors >= 3) setGeoIssue(true)
         },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
       )
       driverHeartbeat()
     }
@@ -2556,6 +2556,18 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
   const setOnlineEverywhere = async (next: boolean) => {
     setOnline(next)
     await goOnline(next).catch(() => { })
+    if (next) {
+      // IMMEDIATE announce on the button press itself — don't wait for the
+      // effect's first tick: heartbeat (keeps this driver matchable NOW) plus
+      // a CACHED fix (maximumAge 5 min) so a cold GPS still publishes a
+      // position within milliseconds instead of 10–30s from a cold start.
+      driverHeartbeat()
+      navigator.geolocation?.getCurrentPosition(
+        (p) => publishLocation(p.coords.latitude, p.coords.longitude, p.coords.heading ?? 0),
+        () => { },
+        { enableHighAccuracy: false, timeout: 4000, maximumAge: 300000 }
+      )
+    }
   }
 
   return (

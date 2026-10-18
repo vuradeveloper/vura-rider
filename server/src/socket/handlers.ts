@@ -1048,6 +1048,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
           // (including one parked as 'no_drivers'), instead of making the rider wait
           // for their next booking attempt.
           void reviveWaitingRides(io).catch(() => 0);
+          // SECOND PASS right after this session's first GPS ping lands: the
+          // revive above may run before any position exists (cold start → no
+          // coords → not a candidate yet), so one more revives the same
+          // waiting rides the moment the driver is actually matchable.
+          setTimeout(() => {
+            void reviveWaitingRides(io).catch(() => 0);
+          }, 3000);
         } else {
           socket.leave("drivers");
           // Offline drivers leave the index immediately: a queued offer to a
