@@ -320,7 +320,26 @@ async function getPayLaterEligibility(dbUserId) {
     await ensurePayLaterTables();
     const cfg = payLaterConfig();
     const account = await getAccount(dbUserId);
+    const card = await (0, paystackPayment_1.getDefaultCardToken)(dbUserId).catch(() => null);
     const rides = await countUnlockRides(dbUserId);
+    // WHY-NOT-UNLOCKED breakdown (pure diagnostics — it never gates anything): the
+    // unlock count is NOT "completed trips in history". It is completed rides that
+    // were PAID BY CARD ON THE RIDER'S CURRENT CARD, with the anti-farm cap (a
+    // driver pair counts at most 4 times). Riders who mostly test with cash (or
+    // re-added their card) see a much smaller number than their history — this
+    // explains the gap instead of leaving them guessing.
+    const breakdown = await (0, database_2.queryOne)(`SELECT COUNT(*)::int AS total_completed,
+            COUNT(*) FILTER (
+              WHERE r.driver_id IS NOT NULL
+                AND (LOWER(COALESCE(r.payment_method, '')) = 'card' OR r.card_auth_code IS NOT NULL)
+            )::int AS paid_by_card,
+            COUNT(*) FILTER (
+              WHERE r.driver_id IS NOT NULL
+                AND ( (r.card_auth_code IS NOT NULL AND r.card_auth_code = $2 AND $2 <> '')
+                      OR (r.card_auth_code IS NULL AND LOWER(COALESCE(r.payment_method, '')) = 'card') )
+            )::int AS same_card
+       FROM rides r
+      WHERE r.passenger_id = $1 AND r.status = 'completed'`, [dbUserId, card?.transaction_index || ""]).catch(() => null);
     const outstanding = await ledgerOutstanding(dbUserId);
     const unlocked = rides >= cfg.ridesToUnlock;
     const limit = account ? Number(account.credit_limit || 0) : computeCreditLimit(rides);
@@ -332,7 +351,6 @@ async function getPayLaterEligibility(dbUserId) {
         : null;
     const inCycle = Number(account?.repay_ride_count || 0);
     const cfgRepay = cfg.ridesToRepay;
-    const card = await (0, paystackPayment_1.getDefaultCardToken)(dbUserId).catch(() => null);
     return {
         enrolled: !!account,
         status: account?.status || null,
@@ -362,6 +380,13 @@ async function getPayLaterEligibility(dbUserId) {
         },
         has_card: !!card,
         card_last4: card?.last4 || null,
+        // Diagnostics only: how the counted number relates to the rider's history.
+        ride_breakdown: {
+            total_completed: breakdown?.total_completed ?? rides,
+            paid_by_card: breakdown?.paid_by_card ?? rides,
+            same_card: breakdown?.same_card ?? rides,
+            excluded_by_farm: Math.max(0, (breakdown?.same_card ?? rides) - rides),
+        },
     };
 }
 // ── Credit confirmations (webhook-driven; idempotent by construction) ─────────

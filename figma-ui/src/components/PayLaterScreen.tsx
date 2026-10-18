@@ -158,6 +158,11 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
   const repayCycle = elig?.ride_to_repay
   const canAuto = !!elig?.has_card && !!elig?.terms_accepted_at
   const autoOn = !!elig?.auto_debit.enabled
+  const totalRides = elig?.ride_breakdown?.total_completed ?? elig?.rides_completed ?? 0
+  const paidByCard = elig?.ride_breakdown?.paid_by_card ?? elig?.rides_completed ?? 0
+  const sameCard = elig?.ride_breakdown?.same_card ?? elig?.rides_completed ?? 0
+  const excludedByFarm = elig?.ride_breakdown?.excluded_by_farm ?? 0
+  const ridesCounted = elig?.rides_completed ?? 0
 
   return (
     <div className="flex flex-col h-screen bg-[#F7F7F7]">
@@ -249,8 +254,22 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
                 <p className="text-[11px] text-[#6B6B6B] mt-2.5 leading-snug">
                   Complete {Math.max(0, elig.rides_required - elig.rides_completed)} more paid ride
                   {elig.rides_required - elig.rides_completed === 1 ? '' : 's'} on your saved card to unlock
-                  Ride Now, Pay Later. Cash rides don’t count — the rides must be paid with the same card.
+                  Ride Now, Pay Later.
                 </p>
+                {/* WHY the count can be lower than ride history — spell out the
+                    three filters instead of leaving riders to guess. */}
+                <div className="mt-2.5 bg-[#F7F7F7] rounded-xl px-3 py-2.5">
+                  <p className="text-[10px] font-semibold text-[#4A4A4A] uppercase tracking-wider mb-1">
+                    Why {ridesCounted} of {totalRides}?
+                  </p>
+                  <p className="text-[10px] text-[#6B6B6B] leading-snug">
+                    You have <b>{totalRides}</b> completed rides — <b>{paidByCard}</b> were paid by card
+                    (cash doesn't count), <b>{sameCard}</b> with your current card (re-adding a card restarts
+                    the count), and each driver counts for at most 4 of your rides together (anti-farming)
+                    {' '}→ <b>{ridesCounted} counted</b>
+                    {excludedByFarm > 0 ? `, ${excludedByFarm} excluded by the driver cap` : ''}.
+                  </p>
+                </div>
               </div>
             )}
 

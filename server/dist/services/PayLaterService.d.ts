@@ -64,6 +64,12 @@ export declare function getPayLaterEligibility(dbUserId: string): Promise<{
     };
     has_card: boolean;
     card_last4: string | null;
+    ride_breakdown: {
+        total_completed: number;
+        paid_by_card: number;
+        same_card: number;
+        excluded_by_farm: number;
+    };
 }>;
 export type PayLaterEligibility = Awaited<ReturnType<typeof getPayLaterEligibility>>;
 /**
@@ -163,6 +169,12 @@ export declare function getPayLaterStatus(dbUserId: string): Promise<{
         };
         has_card: boolean;
         card_last4: string | null;
+        ride_breakdown: {
+            total_completed: number;
+            paid_by_card: number;
+            same_card: number;
+            excluded_by_farm: number;
+        };
     };
     account?: undefined;
     completed_rides?: undefined;
@@ -215,6 +227,12 @@ export declare function getPayLaterStatus(dbUserId: string): Promise<{
         };
         has_card: boolean;
         card_last4: string | null;
+        ride_breakdown: {
+            total_completed: number;
+            paid_by_card: number;
+            same_card: number;
+            excluded_by_farm: number;
+        };
     };
 }>;
 export declare function refreshPayLaterLimit(dbUserId: string): Promise<{

@@ -1388,6 +1388,13 @@ export type PayLaterEligibility = {
   };
   has_card: boolean;
   card_last4: string | null;
+  /** Diagnostics: why the counted number differs from the rider's history. */
+  ride_breakdown: {
+    total_completed: number;
+    paid_by_card: number;
+    same_card: number;
+    excluded_by_farm: number;
+  };
 };
 
 export type PayLaterTakeResult = {

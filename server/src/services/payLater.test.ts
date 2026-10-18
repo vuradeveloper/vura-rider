@@ -826,6 +826,37 @@ describe("getPayLaterEligibility — locked rider progress", () => {
       amount_per_ride_r: 0,
     });
     expect(e.auto_debit).toMatchObject({ enabled: false });
+    // Breakdown defaults to the counted number when the diagnostic query
+    // returns nothing (never invents a gap).
+    expect(e.ride_breakdown).toEqual({
+      total_completed: 3,
+      paid_by_card: 3,
+      same_card: 3,
+      excluded_by_farm: 0,
+    });
+  });
+
+  it("surfaces WHY rides don't count: history vs card vs same-card vs anti-farm", async () => {
+    vi.mocked(getDefaultCardToken).mockResolvedValue(null as any);
+    vi.mocked(queryOne).mockImplementation(
+      oneMock([
+        [
+          "COUNT(*) FILTER",
+          { total_completed: 9, paid_by_card: 6, same_card: 5 },
+        ],
+        ["SELECT COUNT(*)::text AS total", { total: "3" }], // counted: 5 − farm cap
+        ["COALESCE(SUM(\n        CASE entry_type", { total: "0" }],
+        ["FROM pay_later_accounts a", null],
+      ])
+    );
+    const e = await getPayLaterEligibility("rider-1");
+    expect(e.rides_completed).toBe(3);
+    expect(e.ride_breakdown).toEqual({
+      total_completed: 9, // what the rider sees in history
+      paid_by_card: 6,    // …of which paid by card (cash excluded)
+      same_card: 5,       // …of which on the CURRENT card (re-added card excluded)
+      excluded_by_farm: 2, // …minus rides with a driver used 5×+ (anti-farm)
+    });
   });
 });
 
