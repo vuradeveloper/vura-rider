@@ -1045,25 +1045,18 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             The full payment picker lives in a sheet, so the list stays compact
             instead of card rows eating half the screen. */}
         <div className="shrink-0 border-t border-[#F2F2F2] bg-white px-5 pt-1.5 pb-5">
-          {/* Uber One style promo row: a CHECKBOX the rider toggles. On by
-              default; spent/expired (usable=false) promo is locked off. */}
+          {/* Uber One style promo row: grey pill, logo + copy left, CHECKBOX on
+              the RIGHT. On by default; spent/expired (usable=false) locked off. */}
           {promo && (
             <button
               type="button"
               onClick={() => { if (promo.usable !== false) setPromoOn((v) => !v) }}
-              className={`w-full flex items-center gap-3 py-2 rounded-xl text-left ${promo.usable === false ? 'opacity-60' : 'active:bg-[#F7F7F7]'}`}
+              className={`w-full flex items-center gap-3 mb-2 px-3 py-2.5 rounded-xl bg-[#F7F7F7] text-left ${promo.usable === false ? 'opacity-60' : 'active:bg-[#EEEEEE]'}`}
             >
-              <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 ${promoOn && promo.usable !== false ? 'bg-[#1A1A1A] border-[#1A1A1A]' : 'border-[#D8D8D8] bg-white'}`}>
-                {promoOn && promo.usable !== false && (
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                )}
-              </span>
-              <span className="text-[15px] leading-none">🎉</span>
+              <span className="w-6 h-6 rounded-full bg-[#EA4335] text-white flex items-center justify-center shrink-0 text-[12px] font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>%</span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[13px] text-[#1A1A1A] font-semibold truncate">{promo.title}</span>
-                <span className="block text-[11px] text-[#ADADAD] truncate">
+                <span className="block text-[11px] text-[#8A8A8A] truncate">
                   {Number(promo.discount_pct) > 0
                     ? `${Number(promo.discount_pct)}% off this ride`
                     : `${formatRand(Number(promo.discount_fixed))} off this ride`}
@@ -1071,6 +1064,14 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                   {promo.valid_days ? ` · valid ${promo.valid_days} days` : ''}
                   {promo.usable === false ? ' · used up for you' : ''}
                 </span>
+              </span>
+              {/* checkbox sits on the RIGHT, exactly like Uber One's row */}
+              <span className={`w-[22px] h-[22px] rounded-md border-2 flex items-center justify-center shrink-0 ${promoOn && promo.usable !== false ? 'bg-[#1A1A1A] border-[#1A1A1A]' : 'border-[#C9C9C9] bg-white'}`}>
+                {promoOn && promo.usable !== false && (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
               </span>
             </button>
           )}

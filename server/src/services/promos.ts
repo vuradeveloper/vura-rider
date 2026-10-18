@@ -59,7 +59,38 @@ export function parseTargetUserIds(raw: unknown): string[] | null {
 
 /** Lazy v2 columns/table — same pattern as every money table (works pre-016). */
 export async function ensurePromoTables(): Promise<void> {
+  // Self-heal the WHOLE feature, not just the v2 bits: on a database where
+  // 012 never ran (the "Admin features are not available on this server yet"
+  // 503), the ALTERs below would silently fail and every read would keep
+  // 503-ing — so the base table, its index and the rides.promo_* columns are
+  // part of the same idempotent pass. Mirrors 012 + 016 verbatim.
   for (const ddl of [
+    `CREATE TABLE IF NOT EXISTS admin_promos (
+       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       code           TEXT NOT NULL UNIQUE,
+       title          TEXT NOT NULL,
+       subtitle       TEXT,
+       audience       TEXT NOT NULL DEFAULT 'rider'
+                      CHECK (audience IN ('rider','driver','both')),
+       discount_pct   NUMERIC(5,2) NOT NULL DEFAULT 0,
+       discount_fixed NUMERIC(10,2) NOT NULL DEFAULT 0,
+       active         BOOLEAN NOT NULL DEFAULT TRUE,
+       starts_at      TIMESTAMPTZ,
+       ends_at        TIMESTAMPTZ,
+       created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       CONSTRAINT admin_promos_discount CHECK (
+         (discount_pct > 0 AND discount_pct <= 100) OR discount_fixed > 0
+       ),
+       CONSTRAINT admin_promos_window CHECK (
+         ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at
+       )
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_admin_promos_active
+       ON admin_promos (active, audience, created_at DESC)`,
+    `ALTER TABLE rides ADD COLUMN IF NOT EXISTS promo_id UUID`,
+    `ALTER TABLE rides ADD COLUMN IF NOT EXISTS promo_code TEXT`,
+    `ALTER TABLE rides ADD COLUMN IF NOT EXISTS promo_discount NUMERIC(10,2) NOT NULL DEFAULT 0`,
     `ALTER TABLE admin_promos ADD COLUMN IF NOT EXISTS valid_days INTEGER`,
     `ALTER TABLE admin_promos ADD COLUMN IF NOT EXISTS rides_limit INTEGER`,
     `ALTER TABLE admin_promos ADD COLUMN IF NOT EXISTS target_user_ids UUID[]`,

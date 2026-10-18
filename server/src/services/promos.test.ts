@@ -193,10 +193,13 @@ describe("recordPromoUse — burn one redemption", () => {
   });
 });
 
-describe("ensurePromoTables — lazy 016 columns (same money-table pattern)", () => {
-  it("adds the v2 columns + redemption ledger idempotently", async () => {
+describe("ensurePromoTables — lazy 012+016 self-heal (same money-table pattern)", () => {
+  it("creates the base table/index + rides.promo_* columns and v2 columns + ledger", async () => {
     await ensurePromoTables();
     const ddls = vi.mocked(execute).mock.calls.map(([sql]) => String(sql));
+    expect(ddls.some((s) => s.includes("CREATE TABLE IF NOT EXISTS admin_promos"))).toBe(true);
+    expect(ddls.some((s) => s.includes("idx_admin_promos_active"))).toBe(true);
+    expect(ddls.some((s) => s.includes("ADD COLUMN IF NOT EXISTS promo_id"))).toBe(true);
     expect(ddls.some((s) => s.includes("ADD COLUMN IF NOT EXISTS valid_days"))).toBe(true);
     expect(ddls.some((s) => s.includes("ADD COLUMN IF NOT EXISTS rides_limit"))).toBe(true);
     expect(ddls.some((s) => s.includes("ADD COLUMN IF NOT EXISTS target_user_ids"))).toBe(true);
