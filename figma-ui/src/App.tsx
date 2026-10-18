@@ -9,6 +9,7 @@ import type { LatLng } from './components/LeafletMap'
 import LeafletMap from './components/LeafletMap'
 import { HelpCenter, ReportIssue, SettingsScreen } from './components/SettingsScreen'
 import PaymentMethods from './components/PaymentMethods'
+import PayLaterScreen from './components/PayLaterScreen'
 import RidePaymentStatus from './components/RidePaymentStatus'
 import PromosScreen from './components/PromosScreen'
 import RiderProfile from './components/RiderProfile'
@@ -48,6 +49,7 @@ import {
   getMyProfile,
   getNotifications,
   getPaymentMethods,
+  getPayLaterEligibility,
   getRecentSearches,
   getRecentTrips,
   getRide,
@@ -65,6 +67,8 @@ import {
   openWaze,
   // â”€â”€ payment methods (booking screen) â”€â”€
   PaymentMethod,
+  PayLaterEligibility,
+  PayLaterTakeResult,
   // (getStoredProfileInfo is already imported above â€” listed once only)
   Place,
   publishLocation,
@@ -86,12 +90,13 @@ import {
   startTrip,
   sendTip,
   submitRating,
+  takePayLaterRide,
   triggerSos,
   verifyPayment
 } from './lib/backend'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
-  | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report'
+  | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater'
 type DriverScreen = 'driverHome' | 'request' | 'pickup' | 'dropoff' | 'complete' | 'earnings' | 'driverAccount' | 'vehicle' | 'tripHistory' | 'settings' | 'help' | 'report' | 'wallet'
 type AppMode = 'rider' | 'driver'
 
@@ -103,6 +108,12 @@ type Waypoint = { address: string; lat: number; lng: number }
  * accepted values are the ones the server and the native app already use.
  */
 const PAY_CASH = 'cash'
+// Ride Now, Pay Later: a third payment method sent verbatim with the request
+// (server stores payment_method='pay_later' and books the ledger debit when the
+// ride completes). `payTag` is what every driver screen prints for it.
+const PAY_LATER = 'pay_later'
+const payTag = (m?: string | null) =>
+  m === 'cash' ? 'Cash' : m === PAY_LATER ? 'Pay Later' : 'Card'
 
 // ????????? Data ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 /** JS Sun=0..Sat=6 shifted to Mon=0..Sun=6, so the bars start on Monday. */
@@ -670,12 +681,19 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   const [pay, setPay] = useState<string>(PAY_CASH)
   const [addingCard, setAddingCard] = useState(false)
   const [cardMsg, setCardMsg] = useState('')
+  // Ride Now, Pay Later eligibility (one server blob, same numbers the booking
+  // guard enforces). The option only APPEARS once the rider has unlocked it;
+  // enrollment/terms/past-due are reflected in a non-selectable hint row.
+  const [pl, setPl] = useState<PayLaterEligibility | null>(null)
 
   const loadCards = async () => {
     const rows = await getPaymentMethods().catch(() => [] as PaymentMethod[])
     setCards(Array.isArray(rows) ? rows : [])
   }
-  useEffect(() => { loadCards() }, [])
+  useEffect(() => {
+    loadCards()
+    getPayLaterEligibility().then(setPl).catch(() => setPl(null))
+  }, [])
 
   async function removeCard(id: string) {
     setCards((rows) => rows.filter((c) => c.id !== id))
@@ -829,10 +847,15 @@ function BookingScreen({ destination, onBack, onConfirm }: {
 
   const payLabel = pay === PAY_CASH
     ? 'Cash'
-    : (() => {
-      const c = cards.find((x) => x.id === pay)
-      return c ? `${(c.card_type || 'Card').toUpperCase()} â€¢â€¢â€¢â€¢ ${c.last4 || 'Â·Â·Â·Â·'}` : 'Card'
-    })()
+    : pay === PAY_LATER
+      ? 'Ride now, pay later'
+      : (() => {
+        const c = cards.find((x) => x.id === pay)
+        return c ? `${(c.card_type || 'Card').toUpperCase()} â€¢â€¢â€¢â€¢ ${c.last4 || 'Â·Â·Â·Â·'}` : 'Card'
+      })()
+  // Pay Later is bookable only when enrolled + terms accepted + not past due —
+  // the same three checks the socket booking guard runs server-side.
+  const plReady = !!pl?.unlocked && !!pl?.enrolled && !!pl?.terms_accepted_at && !pl?.past_due
 
   return (
     <div className="flex flex-col h-screen">
@@ -973,6 +996,34 @@ function BookingScreen({ destination, onBack, onConfirm }: {
               icon={<span className="text-[16px]">ðŸ’µ</span>}
             />
 
+            {/* Ride Now, Pay Later — selectable only when bookable (enrolled +
+                terms accepted, not past due); otherwise a hint row that tells the
+                rider exactly what to do, never a dead button. */}
+            {pl?.unlocked && plReady && (
+              <PayRow
+                selected={pay === PAY_LATER}
+                onSelect={() => setPay(PAY_LATER)}
+                title="Ride Now, Pay Later"
+                subtitle={`Ride now, settle at month-end · ${formatRand(pl.available_r)} credit available`}
+                icon={<span className="text-[16px]">ðŸ•’</span>}
+              />
+            )}
+            {pl?.unlocked && !plReady && (
+              <div className="flex items-center gap-3 px-4 py-3.5 rounded-2xl border-2 border-dashed border-[#E8E8E8] bg-[#FAFAFA]">
+                <div className="w-9 h-9 rounded-xl bg-white border border-[#F0F0F0] flex items-center justify-center shrink-0 text-[15px]">ðŸ•’</div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] text-[#6B6B6B] font-semibold truncate">Ride Now, Pay Later</p>
+                  <p className="text-[11px] text-[#ADADAD] truncate">
+                    {pl.past_due
+                      ? `Repay your ${formatRand(pl.past_due_r)} past-due balance first`
+                      : pl.enrolled
+                        ? 'Accept the terms in Account → Ride Now, Pay Later'
+                        : 'Activate it in Account → Ride Now, Pay Later'}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {cards.map((c) => (
               <PayRow
                 key={c.id}
@@ -1002,7 +1053,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
         </div>
 
         <div className="px-5 pb-8">
-          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : 'card', stops)}
+          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops)}
             className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-4 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
             Confirm {ride.name}
           </button>
@@ -1138,6 +1189,9 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState('')
   const [cancelMsg, setCancelMsg] = useState('')
+  // Pay Later preflight result: the balance/limit shown while searching (null
+  // for cash/card rides and until the preflight answers).
+  const [plInfo, setPlInfo] = useState<PayLaterTakeResult | null>(null)
 
   // Search for the pickup by hand (the same geocoder the destination uses).
   useEffect(() => {
@@ -1229,6 +1283,17 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
           const promoId = await getActivePromos('rider')
             .then((r) => r?.promos?.[0]?.id)
             .catch(() => undefined)
+          // Ride Now, Pay Later: server-side preflight FIRST — active → terms
+          // accepted → not past due → the fare fits available credit. A refusal
+          // throws the server's exact reason into the catch below and the
+          // booking never goes out (the socket booking guard re-checks all of
+          // it again anyway — the client is never trusted).
+          let plOk: PayLaterTakeResult | null = null
+          if ((paymentMethod || 'cash') === PAY_LATER) {
+            plOk = await takePayLaterRide(RIDE_FARE)
+            if (!alive) return
+            setPlInfo(plOk)
+          }
           const res = await requestRide({
             pickupAddress: pickupAddress || `Pin ${from.lat.toFixed(5)}, ${from.lng.toFixed(5)}`,
             pickupLat: from.lat,
@@ -1406,9 +1471,17 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
             </h2>
             <p className="text-[13px] text-[#ADADAD] mt-1.5">{destName}</p>
             <p className="text-[12px] text-[#ADADAD] mt-1">
-              Paying by {paymentMethod === 'cash' ? 'cash' : 'card'}
+              Paying by {paymentMethod === PAY_LATER ? 'Pay Later' : paymentMethod === 'cash' ? 'cash' : 'card'}
               {stops && stops.length > 0 ? ` Â· ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
             </p>
+            {paymentMethod === PAY_LATER && plInfo && (
+              <p className="text-[11px] text-[#6B6B6B] mt-1 leading-snug">
+                Balance {formatRand(plInfo.outstanding_r)} · {formatRand(plInfo.available_r)} available
+                {plInfo.due_date
+                  ? ` · due ${new Date(plInfo.due_date).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}`
+                  : ''}
+              </p>
+            )}
             {error && (
               <p className="text-[12px] text-[#C5221F] font-semibold mt-2.5">{error}</p>
             )}
@@ -2237,7 +2310,7 @@ function RiderAccount({ mode, onMode, onSignOut, onNotifications, open }: {
             </div>
           ))}
         </div>
-        {[{ t: 'Account', items: [['Your Details', () => open('profile')], ['Payment Methods', () => open('payments')], ['Promos & Invites', () => open('promos')]] }, { t: 'Preferences', items: [['Notifications', onNotifications]] }, { t: 'Settings', items: [['Emergency Contacts', () => open('safety')], ['Share Trip Status', () => open('safety')], ['Community Guidelines', () => open('guidelines')], ['Help Center', () => open('help')], ['Report an Issue', () => open('report')]] }].map(sec => (
+        {[{ t: 'Account', items: [['Your Details', () => open('profile')], ['Payment Methods', () => open('payments')], ['Ride Now, Pay Later', () => open('paylater')], ['Promos & Invites', () => open('promos')]] }, { t: 'Preferences', items: [['Notifications', onNotifications]] }, { t: 'Settings', items: [['Emergency Contacts', () => open('safety')], ['Share Trip Status', () => open('safety')], ['Community Guidelines', () => open('guidelines')], ['Help Center', () => open('help')], ['Report an Issue', () => open('report')]] }].map(sec => (
           <div key={sec.t} className="bg-white mx-4 mt-3 rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
             <p className="text-[10px] uppercase tracking-widest text-[#ADADAD] font-semibold px-4 pt-3.5 pb-1">{sec.t}</p>
             {sec.items.map((item, i) => {
@@ -2528,7 +2601,7 @@ function RideRequest({ request, onAccept, onDecline }: { request: RideRequestDat
               <p className="text-[11px] text-[#ADADAD] uppercase tracking-widest font-semibold mb-1">{request?.isScheduled ? 'Scheduled pickup' : 'New request'}</p>
               <h2 className="text-[26px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{formatRand(request?.fare ?? 0)}</h2>
               <p className="text-[13px] text-[#ADADAD] mt-0.5">
-                {request?.paymentMethod === 'cash' ? 'Cash' : 'Card'}
+                {payTag(request?.paymentMethod)}
                 {request?.riderName ? ` ?? ${request.riderName}` : ''}
                 {request?.scheduledAt ? ` ?? ${new Date(request.scheduledAt).toLocaleString('en-ZA', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}` : ''}
               </p>
@@ -2572,7 +2645,7 @@ function RideRequest({ request, onAccept, onDecline }: { request: RideRequestDat
                   <span className="text-[11px] text-[#6B6B6B]">
                     {request?.riderRating ? Number(request.riderRating).toFixed(2) : 'New'}
                     {' ?? '}
-                    {request?.paymentMethod === 'cash' ? 'Cash' : 'Card'}
+                    {payTag(request?.paymentMethod)}
                   </span>
                 </div>
               </div>
@@ -2639,7 +2712,7 @@ function DriverPickup({ request, onArrived }: { request: RideRequestData | null;
                 <span className="text-[12px] text-[#6B6B6B]">
                   {request?.riderRating ? Number(request.riderRating).toFixed(2) : 'New'}
                   {' ?? '}
-                  {request?.paymentMethod === 'cash' ? 'Cash' : 'Card'}
+                  {payTag(request?.paymentMethod)}
                 </span>
               </div>
             </div>
@@ -2789,7 +2862,7 @@ function TripComplete({ request, onDone }: { request: RideRequestData | null; on
           {([
             ['Trip fare', formatRand(fare)],
             ['Service fee', `-${formatRand(fee)}`],
-            ['Payment', String(ride?.payment_method || request?.paymentMethod || 'Card')],
+            ['Payment', payTag(String(ride?.payment_method || request?.paymentMethod || 'card'))],
           ] as [string, string][]).map(([k, v]) => (
             <div key={k} className="flex justify-between py-2.5 border-b border-[#EBEBEB] last:border-0">
               <span className="text-[13px] text-[#6B6B6B]">{k}</span>
@@ -3875,6 +3948,7 @@ export default function App() {
           )}
           {rScreen === 'profile' && <RiderProfile onBack={() => setRScreen('account')} />}
           {rScreen === 'payments' && <PaymentMethods onBack={() => setRScreen('account')} />}
+          {rScreen === 'paylater' && <PayLaterScreen onBack={() => setRScreen('account')} />}
           {rScreen === 'promos' && <PromosScreen onBack={() => setRScreen('account')} />}
           {rScreen === 'safety' && <SafetyScreen onBack={() => setRScreen('account')} onReportIssue={() => setRScreen('report')} />}
           {rScreen === 'guidelines' && <Guidelines onBack={() => setRScreen('account')} />}

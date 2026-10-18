@@ -21,6 +21,7 @@ exports.releaseStuckHolds = releaseStuckHolds;
 exports.startPreauthReaper = startPreauthReaper;
 exports.stopPreauthReaper = stopPreauthReaper;
 exports.saveReusableAuthorization = saveReusableAuthorization;
+exports.recordWebhookEventOnce = recordWebhookEventOnce;
 exports.handlePreauthorizationEvent = handlePreauthorizationEvent;
 // ─────────────────────────────────────────────────────────────────────────────
 // CARD PREAUTHORIZATION — real holds on the rider's card (SERVER-SIDE ONLY).
@@ -162,6 +163,10 @@ async function ensurePreauthSchema() {
        )`);
         // The saved-card table the webhook writes reusable authorization codes into
         // (same shape routes/payments.ts creates — IF NOT EXISTS is a no-op there).
+        // `signature` is Paystack's per-card fingerprint (SIG_…) used by Pay Later
+        // eligibility to identify "the same card"; card_auth_code provenance lives
+        // on rides (015).
+        await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS card_auth_code VARCHAR(100)`);
         await (0, database_1.execute)(`CREATE TABLE IF NOT EXISTS saved_cards (
          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
          user_id UUID NOT NULL REFERENCES users(id),
@@ -172,9 +177,11 @@ async function ensurePreauthSchema() {
          exp_year INTEGER,
          card_number_masked VARCHAR(30),
          transaction_index VARCHAR(100),
+         signature VARCHAR(64),
          is_default BOOLEAN DEFAULT false,
          created_at TIMESTAMPTZ DEFAULT NOW()
        )`);
+        await (0, database_1.execute)(`ALTER TABLE saved_cards ADD COLUMN IF NOT EXISTS signature VARCHAR(64)`);
         schemaReady = true;
     }
     catch (err) {
@@ -597,8 +604,8 @@ async function saveReusableAuthorization(userId, auth) {
         const count = await (0, database_1.queryOne)(`SELECT COUNT(*)::int AS n FROM saved_cards WHERE user_id = $1`, [userId]);
         const isDefault = !Number(count?.n || 0);
         await (0, database_1.execute)(`INSERT INTO saved_cards
-         (user_id, card_type, last4, bank, exp_month, exp_year, transaction_index, is_default)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [
+         (user_id, card_type, last4, bank, exp_month, exp_year, transaction_index, signature, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [
             userId,
             String(auth.card_type || auth.brand || "card").slice(0, 20),
             String(auth.last4 || "").slice(0, 4) || "0000",
@@ -606,6 +613,7 @@ async function saveReusableAuthorization(userId, auth) {
             auth.exp_month ? parseInt(String(auth.exp_month), 10) : null,
             auth.exp_year ? parseInt(String(auth.exp_year), 10) : null,
             code,
+            auth.signature ? String(auth.signature).slice(0, 64) : null,
             isDefault,
         ]);
         return true;
@@ -617,7 +625,12 @@ async function saveReusableAuthorization(userId, auth) {
         return false;
     }
 }
-async function insertEventOnce(event, data, ref) {
+/**
+ * Records a webhook event instance exactly once (paystack_webhook_events PK).
+ * Exported so the Pay Later charge.* handlers share the same dedupe ledger —
+ * returns false when the event was already seen (replay) and must be ignored.
+ */
+async function recordWebhookEventOnce(event, data, ref) {
     await ensurePreauthSchema();
     // Replays carry the same Paystack data.id (+reference) → same primary key →
     // ON CONFLICT DO NOTHING reports 0 rows and the caller skips the transition.
@@ -645,7 +658,7 @@ async function handlePreauthorizationEvent(event, payload) {
     const done = (duplicate, handled, detail) => ({ received: true, event, duplicate, handled, detail });
     if (!ref)
         return done(false, false, "no reference in payload");
-    const fresh = await insertEventOnce(event, data, ref);
+    const fresh = await recordWebhookEventOnce(event, data, ref);
     if (!fresh)
         return done(true, false, "duplicate delivery ignored");
     const ride = await (0, database_1.queryOne)(`SELECT id, passenger_id, payment_status FROM rides WHERE preauth_reference = $1`, [ref]).catch(() => null);
@@ -670,7 +683,8 @@ async function handlePreauthorizationEvent(event, payload) {
                 hold_checkout_url = NULL,
                 updated_at = NOW()
           WHERE id = $1 AND payment_status = 'HOLD_PENDING'`, [ride.id, data.expiry_date ? String(data.expiry_date) : null]);
-            // Save the reusable token for next time (docs' Reserve-by-Code input).
+            // Save the reusable token for next time (docs' Reserve-by-Code input) —
+            // including the card signature for Pay Later same-card eligibility.
             if (ride.passenger_id && data.authorization) {
                 await saveReusableAuthorization(ride.passenger_id, data.authorization);
             }
@@ -685,6 +699,15 @@ async function handlePreauthorizationEvent(event, payload) {
                 updated_at = NOW()
           WHERE id = $1 AND payment_status = 'CAPTURE_PENDING'`, [ride.id, capturedRands]);
             if ((upd?.rowCount ?? 0) > 0) {
+                // Provenance for Pay Later eligibility: WHICH card paid this ride.
+                // countUnlockRides matches rides.card_auth_code against the rider's
+                // saved card token (saved_cards.transaction_index); legacy rides
+                // without provenance grandfather as card rides.
+                if (data.authorization?.authorization_code) {
+                    await (0, database_1.execute)(`UPDATE rides
+                SET card_auth_code = $2
+              WHERE id = $1 AND card_auth_code IS DISTINCT FROM $2`, [ride.id, String(data.authorization.authorization_code)]).catch(() => { });
+                }
                 // Ledger row so the money has a transaction trail (same table the
                 // card-charging flows write to).
                 try {

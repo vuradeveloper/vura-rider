@@ -1,1 +1,1 @@
-{"version":3,"file":"paystackWebhook.d.ts","sourceRoot":"","sources":["../../src/routes/paystackWebhook.ts"],"names":[],"mappings":"AAyBA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAqDxB,eAAe,MAAM,CAAC"}
+{"version":3,"file":"paystackWebhook.d.ts","sourceRoot":"","sources":["../../src/routes/paystackWebhook.ts"],"names":[],"mappings":"AA0BA,QAAA,MAAM,MAAM,4CAAW,CAAC;AA0DxB,eAAe,MAAM,CAAC"}

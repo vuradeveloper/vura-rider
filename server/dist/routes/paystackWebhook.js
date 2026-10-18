@@ -20,6 +20,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // ─────────────────────────────────────────────────────────────────────────────
 const express_1 = require("express");
 const preauthorization_1 = require("../services/preauthorization");
+const PayLaterService_1 = require("../services/PayLaterService");
 const router = (0, express_1.Router)();
 router.post("/webhook", async (req, res) => {
     try {
@@ -57,7 +58,12 @@ router.post("/webhook", async (req, res) => {
             res.status(400).json({ error: "missing event" });
             return;
         }
-        const result = await (0, preauthorization_1.handlePreauthorizationEvent)(event, payload);
+        // charge.* events are Pay Later REPAYMENT confirmations ("PLR…" references
+        // only — card registration / legacy charges are acknowledged, not touched).
+        // preauthorization.* keeps its own handler. Both are idempotent.
+        const result = event.startsWith("charge.")
+            ? await (0, PayLaterService_1.handlePayLaterChargeWebhook)(event, payload)
+            : await (0, preauthorization_1.handlePreauthorizationEvent)(event, payload);
         // 200: Paystack keeps retrying anything else for 72 hours. `duplicate`
         // answers are still 200 — a replay is success, not an error.
         res.status(200).json(result);

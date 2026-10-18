@@ -17,6 +17,7 @@ import {
   releaseRideHold,
   PreauthError,
 } from "../services/preauthorization";
+import { onRideCompletedPayLater, takePayLaterRide } from "../services/PayLaterService";
 import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
@@ -168,6 +169,22 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     // it against the car's CarScan eligible categories, so it must reach the
     // DB on the same row as the ride. Unknown values normalise to 'go'.
     const rideTier = canonicalTier(tier);
+
+    // Ride Now, Pay Later: the REST booking path runs the SAME guard as the
+    // socket path (active account → terms accepted → not past due → fare fits
+    // available credit). payment_method is CLIENT INPUT and can never be
+    // trusted: without this check anyone could book pay-later rides and, since
+    // the ledger debit requires an active account at completion, ride free.
+    if (String(paymentMethod || "").toLowerCase() === "pay_later") {
+      try {
+        await takePayLaterRide(rider.id, Number(fare) || 0);
+      } catch (plErr: any) {
+        res
+          .status(402)
+          .json({ error: plErr.message || "Ride Now, Pay Later is not available for this ride." });
+        return;
+      }
+    }
 
     // Coordinates are mandatory: without them dispatch cannot match
     // (offerToNextDriver returns ride_has_no_pickup_coords) and the rider would sit
@@ -967,6 +984,11 @@ router.patch("/:id/status", requireAuth, async (req: AuthRequest, res: Response)
           console.warn(`[preauth] auto-capture on completion ride=${id}:`, e?.message || e);
         }
       });
+      // Ride Now, Pay Later (same hook as the socket completion path):
+      // books the ledger debit for pay-later rides + ride-to-repay cycle.
+      onRideCompletedPayLater(String(id)).catch((e) =>
+        console.warn(`[paylater] completion hook ride=${id}:`, e?.message || e)
+      );
       // REST completion must announce itself the way the socket path does —
       // the rider's trip screen (and its rating + tip sheet) keys off this event.
       const doneRow = await queryOne<{ fare: number | null; passenger_fb: string | null }>(

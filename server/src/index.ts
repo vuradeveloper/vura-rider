@@ -44,6 +44,7 @@ import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startPreauthReaper } from "./services/preauthorization";
+import { startPayLaterWorker } from "./services/PayLaterService";
 import paystackWebhookRouter from "./routes/paystackWebhook";
 import { startOfferWorker, getBuildCommit } from "./services/offerWorker";
 import { startPerformanceTierScheduler } from "./services/performanceTier";
@@ -282,6 +283,11 @@ startScheduler(io);
 // searching/no_drivers past PREAUTH_STUCK_SEARCH_MINUTES (default 15), so a
 // cancelled/never-matched search can never leave money held on a rider's card.
 startPreauthReaper();
+
+// Ride Now, Pay Later collector: auto-debit pass (due dates + optional
+// threshold) every PAY_LATER_WORKER_INTERVAL_MS (default 6h) + one catch-up
+// run ~2 min after boot. Only charges riders who opted in.
+startPayLaterWorker();
 
 // Module 3: nightly performance-tier recalc (02:00 SAST + boot catch-up).
 // Inert while `performance_tier_enabled` is false — the 003 seed default —

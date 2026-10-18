@@ -290,11 +290,13 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
         [charge.success ? "completed" : "failed", JSON.stringify(charge), reference]
       ).catch(() => {});
 
-      // Record the charged fare on the ride so drivers see the correct earnings.
+      // Record the charged fare on the ride so drivers see the correct earnings,
+      // and stamp WHICH card paid it (Pay Later same-card eligibility provenance).
       if (charge.success && rideId) {
         await execute(
-          `UPDATE rides SET estimated_fare = $1, actual_fare = $1, payment_status = 'paid', payment_method = 'card', updated_at = NOW() WHERE id = $2`,
-          [amount, rideId]
+          `UPDATE rides SET estimated_fare = $1, actual_fare = $1, payment_status = 'paid', payment_method = 'card',
+           card_auth_code = $3, updated_at = NOW() WHERE id = $2`,
+          [amount, rideId, savedCard.transaction_index]
         ).catch(() => {});
       }
 
@@ -704,12 +706,12 @@ router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res
       `SELECT
          (SELECT COALESCE(SUM(COALESCE(actual_fare, estimated_fare, 0)), 0)::float FROM rides
            WHERE driver_id = $1 AND status = 'completed'
-             AND LOWER(COALESCE(payment_method, '')) = 'card') AS card_earnings,
+             AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS card_earnings,
          (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
            WHERE driver_id = $1 AND status = 'success') AS paid_out,
          (SELECT COUNT(*)::int FROM rides
            WHERE driver_id = $1 AND status = 'completed'
-             AND LOWER(COALESCE(payment_method, '')) = 'card') AS total_rides`,
+             AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS total_rides`,
       [user.id]
     );
 

@@ -13,6 +13,7 @@ const trace_1 = require("../services/trace");
 const adminRiders_1 = require("../services/adminRiders");
 const rideCategories_1 = require("../services/rideCategories");
 const preauthorization_1 = require("../services/preauthorization");
+const PayLaterService_1 = require("../services/PayLaterService");
 const router = (0, express_1.Router)();
 // GET /api/rides/me/active-state â€” ONE call that rebuilds the app's world.
 //
@@ -138,6 +139,22 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         // it against the car's CarScan eligible categories, so it must reach the
         // DB on the same row as the ride. Unknown values normalise to 'go'.
         const rideTier = (0, rideCategories_1.canonicalTier)(tier);
+        // Ride Now, Pay Later: the REST booking path runs the SAME guard as the
+        // socket path (active account → terms accepted → not past due → fare fits
+        // available credit). payment_method is CLIENT INPUT and can never be
+        // trusted: without this check anyone could book pay-later rides and, since
+        // the ledger debit requires an active account at completion, ride free.
+        if (String(paymentMethod || "").toLowerCase() === "pay_later") {
+            try {
+                await (0, PayLaterService_1.takePayLaterRide)(rider.id, Number(fare) || 0);
+            }
+            catch (plErr) {
+                res
+                    .status(402)
+                    .json({ error: plErr.message || "Ride Now, Pay Later is not available for this ride." });
+                return;
+            }
+        }
         // Coordinates are mandatory: without them dispatch cannot match
         // (offerToNextDriver returns ride_has_no_pickup_coords) and the rider would sit
         // on "Finding your driver..." forever. Fail loudly now rather than accepting a
@@ -834,6 +851,9 @@ router.patch("/:id/status", auth_1.requireAuth, async (req, res) => {
                     console.warn(`[preauth] auto-capture on completion ride=${id}:`, e?.message || e);
                 }
             });
+            // Ride Now, Pay Later (same hook as the socket completion path):
+            // books the ledger debit for pay-later rides + ride-to-repay cycle.
+            (0, PayLaterService_1.onRideCompletedPayLater)(String(id)).catch((e) => console.warn(`[paylater] completion hook ride=${id}:`, e?.message || e));
             // REST completion must announce itself the way the socket path does —
             // the rider's trip screen (and its rating + tip sheet) keys off this event.
             const doneRow = await (0, database_1.queryOne)(`SELECT GREATEST(COALESCE(NULLIF(r.actual_fare, 0), r.estimated_fare, 0.20)) AS fare,

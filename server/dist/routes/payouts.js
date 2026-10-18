@@ -122,10 +122,12 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             res.status(401).json({ error: "User not found" });
             return;
         }
-        // Withdrawable balance = the fares riders actually PAID BY CARD on completed rides,
-        // minus what has already been paid out. This is deliberately the SAME expression the
-        // wallet endpoint uses, so the figure on the driver's screen is exactly the figure
-        // they can cash out.
+        // Withdrawable balance = the fares riders actually PAID BY CARD on completed rides
+        // — including Pay Later rides (the PLATFORM fronts those: drivers are paid at
+        // completion regardless of whether the rider has settled their balance yet),
+        // minus what has already been paid out. This is deliberately the SAME expression
+        // the wallet endpoint uses, so the figure on the driver's screen is exactly the
+        // figure they can cash out.
         //
         // Two corrections to what this used to do: cash rides are excluded (the driver already
         // holds that money, and counting it let the same fare be taken twice), and
@@ -134,7 +136,7 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         const earnings = await (0, database_1.queryOne)(`SELECT
          (SELECT COALESCE(SUM(COALESCE(actual_fare, estimated_fare, 0)), 0)::float FROM rides
            WHERE driver_id = $1 AND status = 'completed'
-             AND LOWER(COALESCE(payment_method, '')) = 'card') AS card_earnings,
+             AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS card_earnings,
          (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
            WHERE driver_id = $1 AND status = 'success') AS paid_out`, [user.id]);
         const available = Math.max(0, Number(earnings?.card_earnings || 0) - Number(earnings?.paid_out || 0));

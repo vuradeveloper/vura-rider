@@ -137,6 +137,9 @@ export declare function saveReusableAuthorization(userId: string, auth: {
     exp_month?: string | number;
     exp_year?: string | number;
     reusable?: boolean;
+    /** Paystack's per-card fingerprint (SIG_…) — stored for Pay Later
+     *  same-card eligibility checks. Older webhook payloads may omit it. */
+    signature?: string;
 }): Promise<boolean>;
 export interface WebhookHandleResult {
     received: true;
@@ -145,6 +148,12 @@ export interface WebhookHandleResult {
     handled: boolean;
     detail?: string;
 }
+/**
+ * Records a webhook event instance exactly once (paystack_webhook_events PK).
+ * Exported so the Pay Later charge.* handlers share the same dedupe ledger —
+ * returns false when the event was already seen (replay) and must be ignored.
+ */
+export declare function recordWebhookEventOnce(event: string, data: any, ref: string): Promise<boolean>;
 /**
  * Applies one verified Paystack preauthorization event to the ride it belongs
  * to. Called ONLY from /api/paystack/webhook after the signature check.

@@ -1353,6 +1353,104 @@ export const bookRideHold = (rideId: string, estimatedFare?: number) =>
 export const getRidePayment = (rideId: string) =>
   apiFetch<RidePaymentState>(`/api/rides/${encodeURIComponent(rideId)}/payment`);
 
+// ── Ride Now, Pay Later ───────────────────────────────────────────────────────
+// Server: routes/payLater.ts (mounted at /api/payments/pay-later). The blob
+// below mirrors getPayLaterEligibility() 1:1 and drives BOTH progress bars:
+// unlock ("3 of 5 paid rides on your card") and ride-to-repay ("2 of 4 rides
+// cleared R25 each"), plus the balance/limit/due-date card.
+
+export type PayLaterEligibility = {
+  enrolled: boolean;
+  status: string | null;
+  unlocked: boolean;
+  rides_completed: number;
+  rides_required: number;
+  progress_pct: number;
+  limit_r: number;
+  outstanding_r: number;
+  available_r: number;
+  past_due: boolean;
+  past_due_r: number;
+  due_date: string | null;
+  terms_accepted_at: string | null;
+  auto_debit: {
+    enabled: boolean;
+    consent_at: string | null;
+    threshold_r: number;
+    retry_days: number[];
+  };
+  ride_to_repay: {
+    rides_required: number;
+    rides_done: number;
+    rides_left: number;
+    amount_per_ride_r: number;
+    outstanding_r: number;
+  };
+  has_card: boolean;
+  card_last4: string | null;
+};
+
+export type PayLaterTakeResult = {
+  approved: true;
+  limit_r: number;
+  outstanding_r: number;
+  available_r: number;
+  due_date: string | null;
+  terms_accepted_at: string | null;
+};
+
+export type PayLaterRepayResult = {
+  success?: boolean;
+  /** 'confirmed' in mock mode (balance updates now); 'pending' in sandbox/live
+   *  — the ledger only moves when the charge.success WEBHOOK lands. */
+  status: "confirmed" | "pending" | string;
+  reference?: string;
+  amount?: number;
+  message?: string;
+  account?: { credit_limit: number; outstanding: number; available: number };
+};
+
+/** Eligibility + balances + BOTH progress bars (works locked or enrolled). */
+export const getPayLaterEligibility = () =>
+  apiFetch<PayLaterEligibility>("/api/payments/pay-later/eligibility");
+
+/** Records the rider's explicit terms acceptance (booking guard requires it). */
+export const acceptPayLaterTerms = () =>
+  apiFetch<{ terms_accepted_at: string | null }>(
+    "/api/payments/pay-later/accept-terms",
+    { method: "POST" }
+  );
+
+/** Server-side preflight before booking a pay-later ride: active → terms →
+ *  not past due → fare fits available credit. Throws {message} when refused. */
+export const takePayLaterRide = (estimatedFare: number) =>
+  apiFetch<PayLaterTakeResult>("/api/payments/pay-later/take", {
+    method: "POST",
+    body: JSON.stringify({ estimatedFare }),
+  });
+
+/** Opt-in / revoke auto-debit consent (requires a saved card + terms). */
+export const setPayLaterAutoDebit = (enabled: boolean) =>
+  apiFetch<{ enabled: boolean; consent_at: string | null }>(
+    "/api/payments/pay-later/auto-debit",
+    { method: "POST", body: JSON.stringify({ enabled }) }
+  );
+
+/** "Pay what I owe" — charges the saved card; see PayLaterRepayResult.status. */
+export const repayPayLaterBalance = (amountRands?: number) =>
+  apiFetch<PayLaterRepayResult>("/api/payments/pay-later/repay", {
+    method: "POST",
+    body: JSON.stringify(amountRands != null ? { amountRands } : {}),
+  });
+
+/** Activates the account (card-first; server derives the saved card). */
+export const enrollPayLater = () =>
+  apiFetch<{ account: { credit_limit: number; outstanding: number; available: number } }>(
+    "/api/payments/pay-later/enroll",
+    { method: "POST", body: JSON.stringify({}) }
+  );
+
+
 /** Move the pickup pin (socket form) — mirrors passenger:ride:update_pickup. */
 export async function socketUpdatePickup(rideId: string, address: string, lat: number, lng: number) {
   const s = await getSocket();

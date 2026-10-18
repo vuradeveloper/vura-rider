@@ -3,6 +3,7 @@ import { getAuth } from "../config/firebase";
 import { query, queryOne, execute } from "../config/database";
 import { refundTransaction } from "../services/paystackPayment";
 import { captureRideHold, createRideHold, releaseRideHold } from "../services/preauthorization";
+import { ensurePayLaterTables, onRideCompletedPayLater } from "../services/PayLaterService";
 import { sendPushToUsers } from "../services/notify";
 import { markDriverLivePing, stopServerRideSim, syncSimToDriver } from "../services/rideSim";
 import {
@@ -325,9 +326,12 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // per-day / per-month velocity caps. Violations block the ride.
         if (paymentMethod === "pay_later") {
           try {
+            // Fresh DBs: make sure the ledger + consent columns exist first
+            // (lazy ensure; no-op once migration 015 or the ensure ran).
+            await ensurePayLaterTables();
             const acct = await queryOne<any>(
-              `SELECT id, status, credit_limit, outstanding, identity_fingerprint
-               FROM pay_later_accounts WHERE user_id = $1`,
+              `SELECT id, status, credit_limit, outstanding, identity_fingerprint, terms_accepted_at
+                 FROM pay_later_accounts WHERE user_id = $1`,
               [dbUserId]
             );
             const available = acct
@@ -338,6 +342,32 @@ export function setupSocketHandlers(io: SocketIOServer) {
                 success: false,
                 reason:
                   "Pay Later is not active on your account or you have no remaining credit. Add a card or repay your balance first.",
+              });
+              return;
+            }
+            // Terms must have been accepted BEFORE any pay-later ride (brief:
+            // balance/limit/options/due date shown and acceptance recorded).
+            if (!acct.terms_accepted_at) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason: "Please accept the Pay Later terms in your wallet first.",
+              });
+              return;
+            }
+            // Past due → blocked until repaid (brief rule). Normal card and
+            // cash rides are unaffected — only this payment method checks it.
+            const pastDue = await queryOne<{ id: string }>(
+              `SELECT id FROM pay_later_ledger
+                WHERE rider_id = $1 AND entry_type = 'debit' AND status = 'open'
+                  AND due_at IS NOT NULL AND due_at < NOW()
+                LIMIT 1`,
+              [dbUserId]
+            );
+            if (pastDue) {
+              socket.emit("ride:requested:ack", {
+                success: false,
+                reason:
+                  "You have an unpaid Pay Later balance past its due date. Repay your balance to ride now again.",
               });
               return;
             }
@@ -1436,6 +1466,12 @@ export function setupSocketHandlers(io: SocketIOServer) {
             console.warn(`[preauth] auto-capture ride=${rideId}:`, e?.message || e);
           }
         });
+        // Ride Now, Pay Later: books the ledger DEBIT for pay-later rides and
+        // advances the ride-to-repay cycle — idempotent, never breaks the
+        // completion itself.
+        void onRideCompletedPayLater(String(rideId)).catch((e) =>
+          console.warn(`[paylater] completion hook ride=${rideId}:`, e?.message || e)
+        );
         stopServerRideSim(rideId);
         // Module 2: the FIRST completion of this trip increments the active
         // session's trips_completed and resets the idle timer to

@@ -81,6 +81,7 @@ const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const preauthorization_1 = require("./services/preauthorization");
+const PayLaterService_1 = require("./services/PayLaterService");
 const paystackWebhook_1 = __importDefault(require("./routes/paystackWebhook"));
 const offerWorker_1 = require("./services/offerWorker");
 const performanceTier_1 = require("./services/performanceTier");
@@ -270,6 +271,10 @@ global.__vuraIo = io;
 // searching/no_drivers past PREAUTH_STUCK_SEARCH_MINUTES (default 15), so a
 // cancelled/never-matched search can never leave money held on a rider's card.
 (0, preauthorization_1.startPreauthReaper)();
+// Ride Now, Pay Later collector: auto-debit pass (due dates + optional
+// threshold) every PAY_LATER_WORKER_INTERVAL_MS (default 6h) + one catch-up
+// run ~2 min after boot. Only charges riders who opted in.
+(0, PayLaterService_1.startPayLaterWorker)();
 // Module 3: nightly performance-tier recalc (02:00 SAST + boot catch-up).
 // Inert while `performance_tier_enabled` is false — the 003 seed default —
 // so a deploy of this code changes nothing until the flag is deliberately on.

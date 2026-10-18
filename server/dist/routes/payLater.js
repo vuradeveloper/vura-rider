@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
-const iVerveService_1 = require("../services/iVerveService");
+const paystackPayment_1 = require("../services/paystackPayment");
 const PayLaterService_1 = require("../services/PayLaterService");
 const router = (0, express_1.Router)();
 async function resolveDbUserId(req, res, next) {
@@ -34,13 +34,10 @@ router.get("/status", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
 // POST /api/payments/pay-later/enroll — mandate + card validation + account
 router.post("/enroll", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
     try {
+        // Card-first enrollment (v1 upgrade): ONE saved card is the repayment
+        // rail — bank fields are now OPTIONAL (kept for the old screen's shape).
+        // The service derives the card from the rider's saved_cards when absent.
         const { accountHolder, bankCode, accountNumber, cardToken, identityFingerprint, deviceId } = req.body;
-        if (!accountHolder || !bankCode || !accountNumber) {
-            res
-                .status(400)
-                .json({ error: "accountHolder, bankCode and accountNumber are required" });
-            return;
-        }
         const result = await (0, PayLaterService_1.enrollPayLater)(req.dbUserId, {
             accountHolder,
             bankCode,
@@ -81,7 +78,7 @@ router.post("/:rideId/pay", auth_1.requireAuth, resolveDbUserId, async (req, res
 // ── Dev/test helpers (never reachable in live payment mode) ──
 // POST /api/payments/pay-later/collect — manually trigger the month-end job
 router.post("/collect", auth_1.requireAuth, async (req, res) => {
-    if ((0, iVerveService_1.paymentsMode)() === "live") {
+    if ((0, paystackPayment_1.paymentsMode)() === "live") {
         res.status(403).json({ error: "Disabled in live mode" });
         return;
     }
@@ -97,7 +94,7 @@ router.post("/collect", auth_1.requireAuth, async (req, res) => {
 // POST /api/payments/pay-later/dev/simulate — mark a completed ride as a
 // pay-later ride (mock only) so the full loop can be exercised end-to-end.
 router.post("/dev/simulate", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
-    if ((0, iVerveService_1.paymentsMode)() === "live") {
+    if ((0, paystackPayment_1.paymentsMode)() === "live") {
         res.status(403).json({ error: "Disabled in live mode" });
         return;
     }
@@ -112,6 +109,67 @@ router.post("/dev/simulate", auth_1.requireAuth, resolveDbUserId, async (req, re
     }
     catch (err) {
         console.error("Pay Later simulate error:", err);
+        res.status(400).json({ error: err.message });
+    }
+});
+// ── Ride Now, Pay Later (v1 upgrade endpoints) ────────────────────────────────
+// GET /api/payments/pay-later/eligibility — works for locked AND enrolled
+// riders: unlock progress ("3 of 5"), balance/limit/available, due date,
+// auto-debit state, ride-to-repay progress. Powers both progress bars.
+router.get("/eligibility", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
+    try {
+        res.json(await (0, PayLaterService_1.getPayLaterEligibility)(req.dbUserId));
+    }
+    catch (err) {
+        console.error("Pay Later eligibility error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// POST /api/payments/pay-later/accept-terms — records the rider's explicit
+// acceptance (the booking guard refuses pay-later rides without it).
+router.post("/accept-terms", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
+    try {
+        res.json(await (0, PayLaterService_1.acceptPayLaterTerms)(req.dbUserId));
+    }
+    catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+// POST /api/payments/pay-later/take — preflight before booking a pay-later
+// ride: active → terms → not past due → fare fits available credit. The
+// socket booking guard re-checks all of it server-side.
+router.post("/take", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
+    try {
+        const fare = Number(req.body?.estimatedFare ?? req.body?.fare ?? 0);
+        res.json(await (0, PayLaterService_1.takePayLaterRide)(req.dbUserId, fare));
+    }
+    catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+// POST /api/payments/pay-later/repay — "Pay what I owe": charges the saved
+// card (Paystack); the LEDGER only moves when the charge.success webhook
+// confirms → response is either confirmed (mock) or pending (sandbox/live).
+router.post("/repay", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
+    try {
+        const result = await (0, PayLaterService_1.repayWithCard)(req.dbUserId, {
+            amountRands: req.body?.amountRands,
+            rideId: req.body?.rideId || null,
+        });
+        res.json(result);
+    }
+    catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+// POST /api/payments/pay-later/auto-debit — opt-in consent + on/off switch
+// (requires a saved card and accepted terms to enable).
+router.post("/auto-debit", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
+    try {
+        const enabled = !!req.body?.enabled;
+        res.json(await (0, PayLaterService_1.setPayLaterAutoDebit)(req.dbUserId, enabled));
+    }
+    catch (err) {
         res.status(400).json({ error: err.message });
     }
 });

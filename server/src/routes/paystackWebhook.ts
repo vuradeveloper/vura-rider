@@ -22,6 +22,7 @@ import {
   paystackWebhookSecret,
   verifyPaystackSignature,
 } from "../services/preauthorization";
+import { handlePayLaterChargeWebhook } from "../services/PayLaterService";
 
 const router = Router();
 
@@ -64,7 +65,12 @@ router.post("/webhook", async (req: any, res: Response) => {
       return;
     }
 
-    const result = await handlePreauthorizationEvent(event, payload);
+    // charge.* events are Pay Later REPAYMENT confirmations ("PLR…" references
+    // only — card registration / legacy charges are acknowledged, not touched).
+    // preauthorization.* keeps its own handler. Both are idempotent.
+    const result = event.startsWith("charge.")
+      ? await handlePayLaterChargeWebhook(event, payload)
+      : await handlePreauthorizationEvent(event, payload);
     // 200: Paystack keeps retrying anything else for 72 hours. `duplicate`
     // answers are still 200 — a replay is success, not an error.
     res.status(200).json(result);
