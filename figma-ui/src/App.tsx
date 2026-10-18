@@ -36,8 +36,10 @@ import {
   deletePaymentMethod,
   DOC_LABELS,
   DocRow,
+  driverHeartbeat,
   DriverStats,
   ensureSession,
+  ensureSocketLive,
   formatRand,
   getActiveRide,
   getDriverStats,
@@ -2383,6 +2385,10 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
   // The active promo for the DRIVER side (audience driver/both) — a banner card
   // on home; discounting is a rider-side concept, so drivers only SEE it.
   const [driverPromo, setDriverPromo] = useState<PromoInfo | null>(null)
+  // Set when geolocation is denied/unavailable — the ONE silent killer of
+  // dispatch: without fixes the server drops this driver from matching after
+  // ~20s, so the rider must be TOLD instead of both sides wondering.
+  const [geoIssue, setGeoIssue] = useState(false)
 
   // Real driver data ??? the same endpoints the React Native driver app calls.
   useEffect(() => {
@@ -2414,19 +2420,62 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
   }, [onRequest])
 
   // While online, publish GPS so the server can match nearby rides.
+  //
+  // CADENCE IS THE WHOLE GAME: the server drops a driver from matching after
+  // ~20s without news (LOCATION_FRESH_SECONDS), so this loop must out-run it —
+  // 5s high-accuracy fixes PLUS a driver:heartbeat every 10s (the server's
+  // cheap liveness beacon: refreshes last_heartbeat_at AND touches the H3
+  // index row). The heartbeat keeps a stationary driver — or one whose GPS
+  // fix is slow/denied — matchable at their last known position, which is
+  // exactly what the live probes did and this app did not.
   useEffect(() => {
     if (!online) return
+    let posErrors = 0
     const push = () => {
       navigator.geolocation?.getCurrentPosition(
-        (p) => publishLocation(p.coords.latitude, p.coords.longitude, p.coords.heading ?? 0),
-        () => { },
-        { enableHighAccuracy: false, timeout: 8000 }
+        (p) => {
+          posErrors = 0
+          if (geoIssue) setGeoIssue(false)
+          publishLocation(p.coords.latitude, p.coords.longitude, p.coords.heading ?? 0)
+        },
+        () => {
+          // Fail LOUDLY after a few consecutive misses instead of silently
+          // letting the driver fade out of matching (the old empty handler
+          // hid exactly this).
+          posErrors += 1
+          if (posErrors >= 3) setGeoIssue(true)
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
       )
+      driverHeartbeat()
     }
     push()
-    const timer = window.setInterval(push, 15000)
-    return () => window.clearInterval(timer)
-  }, [online])
+    const gpsTimer = window.setInterval(push, 5000)
+    // Foreground resume: Android kills sockets and throttles timers while the
+    // app is backgrounded — on return, re-announce NOW (not at the next
+    // interval tick): live socket + online state + heartbeat + GPS.
+    const resume = () => {
+      if (document.visibilityState !== 'visible') return
+      ensureSocketLive()
+        .then(() => resyncOnlineState().catch(() => { }))
+        .finally(() => push())
+    }
+    document.addEventListener('visibilitychange', resume)
+    window.addEventListener('focus', resume)
+    // Network blip / server restart: socket.io reconnects by itself, but the
+    // server must be TOLD again that this driver is online — re-announce on
+    // every reconnect, exactly like the native app did.
+    const offConnect = on('connect', () => {
+      resyncOnlineState().catch(() => { })
+      push()
+    })
+    return () => {
+      window.clearInterval(gpsTimer)
+      document.removeEventListener('visibilitychange', resume)
+      window.removeEventListener('focus', resume)
+      offConnect()
+    }
+  }, [online, geoIssue])
 
   // Toggle online locally AND on the server, in one call.
   const setOnlineEverywhere = async (next: boolean) => {
@@ -2464,6 +2513,12 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
                 Go offline
               </button>
             </div>
+            {geoIssue && (
+              <p className="px-5 py-2.5 text-[11px] font-semibold text-[#C5221F] leading-snug bg-[#FCE8E6] border-b border-[#F5C6C2]">
+                Location is unavailable — riders nearby can't be matched to you.
+                Turn on this app's location permission (Android Settings → Apps → Vura → Permissions → Location).
+              </p>
+            )}
             <div className="grid grid-cols-3 divide-x divide-[#F2F2F2]">
               {[
                 { l: 'Balance', v: formatRand(balance) },

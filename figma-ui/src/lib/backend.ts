@@ -562,6 +562,17 @@ export function socketEmit(event: string, payload?: any) {
 }
 
 /**
+ * Cheap liveness beacon the server listens for (socket/handlers.ts):
+ * refreshes driver_profiles.last_heartbeat_at AND touches the H3 index row, so
+ * a stationary driver — or one whose GPS fix is slow/denied — stays MATCHABLE
+ * between location pings (the server drops drivers silent for ~20s). Send every
+ * ~10s while online and on every foreground resume.
+ */
+export function driverHeartbeat() {
+  socketEmit("driver:heartbeat");
+}
+
+/**
  * Re-announces the driver's online state to the server.
  *
  * The native app does this on EVERY socket (re)connect
@@ -574,6 +585,9 @@ export async function resyncOnlineState() {
   const on = getStoredOnline();
   const s = await getSocket();
   s.emit("driver:online", { online: on });
+  // Riding along with the state: a heartbeat too, so the server's freshness
+  // clock starts NOW instead of waiting for the first GPS fix.
+  if (on) s.emit("driver:heartbeat");
   return on;
 }
 
