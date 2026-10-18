@@ -3917,6 +3917,46 @@ export default function App() {
   function driverGo(s: DriverScreen) { setDNav(s); setDScreen(s) }
   function book(d: string) { setDest(d || 'Google HQ'); setRScreen('booking') }
 
+  // ── Driver: an offer/active trip must vanish the INSTANT the ride dies ──────
+  // The server already emits these to every offered driver's user room:
+  //   ride:offer:cancelled {rideId, reason}  — rider cancelled / ride expired
+  //                                            / superseded (ALL reasons)
+  //   ride:taken {rideId}                     — another driver won the race
+  //   ride:accepted:ack {success:false}       — THIS accept lost (race/409)
+  //   ride:cancelled                          — an ACTIVE trip died
+  // Without these listeners the card sat there with a live countdown and Accept
+  // failed with "Ride no longer available" — indistinguishable from a broken app.
+  useEffect(() => {
+    if (mode !== 'driver') return
+    const currentId = req?.id
+    const dismissOffer = (d: any) => {
+      const gone = d?.rideId || d?.id
+      if (!gone || (currentId && gone !== currentId)) return
+      setReq(null)
+      setDScreen((s) => (s === 'request' ? 'driverHome' : s))
+    }
+    const activeTripDied = (d: any) => {
+      const gone = d?.rideId || d?.id
+      if (!currentId || !gone || gone !== currentId) return
+      setReq(null)
+      setDScreen((s) =>
+        s === 'request' || s === 'pickup' || s === 'dropoff' ? 'driverHome' : s)
+    }
+    const acceptRejected = (d: any) => {
+      if (d && d.success === false) {
+        setReq(null)
+        setDScreen((s) => (s === 'request' ? 'driverHome' : s))
+      }
+    }
+    const offs = [
+      on('ride:offer:cancelled', dismissOffer),
+      on('ride:taken', dismissOffer),
+      on('ride:cancelled', activeTripDied),
+      on('ride:accepted:ack', acceptRejected),
+    ]
+    return () => { offs.forEach((f) => f()) }
+  }, [mode, req?.id])
+
   const riderNav = rScreen === 'home' || rScreen === 'activity' || rScreen === 'account'
   const driverNav = dScreen === 'driverHome' || dScreen === 'earnings' || dScreen === 'driverAccount'
 

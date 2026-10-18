@@ -487,6 +487,12 @@ export async function getSocket(): Promise<any> {
       "ride:requested:ack",
       "ride:no:drivers",
       "ride:expired",
+      // Driver-offer lifecycle (the server emits all three to user:<uid>):
+      // without these the request card sat there with a live countdown after
+      // the ride died, and Accept failed with "Ride no longer available".
+      "ride:offer:cancelled",
+      "ride:taken",
+      "ride:accepted:ack",
       "driver:location:update",
       "chat:message",
       "connect",
