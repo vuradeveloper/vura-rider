@@ -126,6 +126,15 @@ const rideOptions = [
   { id: 'black', name: 'Black', desc: 'Premium black car service', eta: '7 min', price: 'R0.20', seats: 4 },
 ]
 
+// Uber-style groups for "Choose your ride" — the same tier ids the server maps
+// onto CarScan "Eligible Categories" when matching drivers (go=economy …).
+// Empty groups never render.
+const RIDE_GROUPS: { label: string; ids: string[] }[] = [
+  { label: 'Economy', ids: ['go'] },
+  { label: 'Comfort', ids: ['comfort'] },
+  { label: 'Premium', ids: ['xl', 'black'] },
+]
+
 // Every ride in this build costs a flat R0.20.
 // This is the amount the server charges the saved card for real, so the price
 // on the tiers above, the price in the ride request and the price the driver
@@ -687,6 +696,11 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   // guard enforces). The option only APPEARS once the rider has unlocked it;
   // enrollment/terms/past-due are reflected in a non-selectable hint row.
   const [pl, setPl] = useState<PayLaterEligibility | null>(null)
+  // Uber-style sheet: when the list is scrolled the map shrinks so the sheet
+  // covers more of it; payment + Confirm live in a fixed footer, with the full
+  // picker behind a tap so it never eats the list's space.
+  const [scrolled, setScrolled] = useState(false)
+  const [payPicker, setPayPicker] = useState(false)
 
   const loadCards = async () => {
     const rows = await getPaymentMethods().catch(() => [] as PaymentMethod[])
@@ -858,17 +872,35 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   // Pay Later is bookable only when enrolled + terms accepted + not past due —
   // the same three checks the socket booking guard runs server-side.
   const plReady = !!pl?.unlocked && !!pl?.enrolled && !!pl?.terms_accepted_at && !pl?.past_due
+  // Compact footer caption under the payment label.
+  const paySubtitle = pay === PAY_CASH
+    ? 'Pay the driver directly'
+    : pay === PAY_LATER
+      ? (pl ? `${formatRand(pl.available_r)} credit available` : 'Ride now, pay later')
+      : (cards.find((x) => x.id === pay)?.bank || 'Saved card')
 
   return (
     <div className="flex flex-col h-screen">
-      <div className="relative" style={{ height: '38%' }}>
+      {/* Map — the sheet rises OVER it as the rider scrolls (Uber behaviour):
+          scrolling the list shrinks the map, so browsing covers a bit more of
+          it instead of nothing happening. */}
+      <div className="relative" style={{ height: scrolled ? '24%' : '38%', transition: 'height 260ms ease' }}>
         <MapCanvas route={mapRoute} />
         <button onClick={onBack} className="absolute top-12 left-5 z-10 w-10 h-10 rounded-full bg-white shadow-md flex items-center justify-center">
           {IC.chevLeft()}
         </button>
       </div>
 
-      <div className="flex-1 bg-white z-10 rounded-t-3xl -mt-5 overflow-y-auto shadow-[0_-4px_24px_rgba(0,0,0,0.08)]">
+      {/* Sheet: grabber + scrollable list, then a STICKY footer (payment row +
+          Confirm) that is visible whether the rider scrolls up or down. */}
+      <div className="flex-1 min-h-0 bg-white z-10 rounded-t-3xl -mt-5 flex flex-col shadow-[0_-4px_24px_rgba(0,0,0,0.08)]">
+        <div className="pt-2.5 pb-1 shrink-0 flex justify-center">
+          <div className="w-9 h-1 bg-[#E8E8E8] rounded-full" />
+        </div>
+        <div
+          className="flex-1 min-h-0 overflow-y-auto"
+          onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 12)}
+        >
         {/* Route: from -> any stops -> destination. The connector line and the dot
             column grow with the number of stops so the diagram stays honest about
             how many legs the trip has. */}
@@ -955,41 +987,92 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
           )}
           <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mb-3">Choose your ride</p>
-          <div className="flex flex-col gap-2">
-            {rideOptions.map(opt => (
-              <button key={opt.id} onClick={() => setSel(opt.id)}
-                className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl border-2 transition-all ${sel === opt.id ? 'border-[#1A1A1A] bg-white' : 'border-[#F2F2F2] bg-[#F7F7F7] hover:border-[#E0E0E0]'}`}>
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${sel === opt.id ? 'bg-[#1A1A1A]' : 'bg-white'}`}>
-                  {IC.car(sel === opt.id ? '#fff' : '#9E9E9E')}
+          {/* Uber-style groups: Economy / Comfort / Premium. */}
+          <div className="flex flex-col gap-3">
+            {RIDE_GROUPS.map((group) => {
+              const options = rideOptions.filter((o) => group.ids.includes(o.id))
+              if (options.length === 0) return null
+              return (
+                <div key={group.label}>
+                  <p className="text-[15px] font-bold text-[#1A1A1A] mb-2" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{group.label}</p>
+                  <div className="flex flex-col gap-2">
+                    {options.map(opt => (
+                      <button key={opt.id} onClick={() => setSel(opt.id)}
+                        className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl border-2 transition-all ${sel === opt.id ? 'border-[#1A1A1A] bg-white' : 'border-[#F2F2F2] bg-[#F7F7F7] hover:border-[#E0E0E0]'}`}>
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${sel === opt.id ? 'bg-[#1A1A1A]' : 'bg-white'}`}>
+                          {IC.car(sel === opt.id ? '#fff' : '#9E9E9E')}
+                        </div>
+                        <div className="flex-1 text-left">
+                          <p className="text-[14px] text-[#1A1A1A] font-semibold">{opt.name}</p>
+                          <p className="text-[12px] text-[#ADADAD]">{opt.desc} ?? {opt.seats} seats</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[14px] text-[#1A1A1A] font-semibold">
+                            {promo && Number(promo.discount_pct) > 0
+                              ? promoPrice(opt.price, priceFactor)
+                              : opt.price}
+                          </p>
+                          {promo && Number(promo.discount_pct) > 0 && priceFactor < 1 && (
+                            <p className="text-[11px] text-[#ADADAD] line-through leading-tight">{opt.price}</p>
+                          )}
+                          <p className="text-[12px] text-[#ADADAD]">{opt.eta}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex-1 text-left">
-                  <p className="text-[14px] text-[#1A1A1A] font-semibold">{opt.name}</p>
-                  <p className="text-[12px] text-[#ADADAD]">{opt.desc} ?? {opt.seats} seats</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[14px] text-[#1A1A1A] font-semibold">
-                    {promo && Number(promo.discount_pct) > 0
-                      ? promoPrice(opt.price, priceFactor)
-                      : opt.price}
-                  </p>
-                  {promo && Number(promo.discount_pct) > 0 && priceFactor < 1 && (
-                    <p className="text-[11px] text-[#ADADAD] line-through leading-tight">{opt.price}</p>
-                  )}
-                  <p className="text-[12px] text-[#ADADAD]">{opt.eta}</p>
-                </div>
-              </button>
-            ))}
+              )
+            })}
           </div>
+
+          <div className="h-3" />
+        </div>
         </div>
 
-        {/* Payment â€” on THIS page, so the rider picks how they pay before the
-            request goes out, exactly as the old app did. Cash is always offered;
-            saved cards come from the server, and Add card runs the Paystack
-            checkout. */}
-        <div className="px-5 py-4 border-t border-[#F2F2F2]">
-          <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mb-3">Payment</p>
+        {/* ── Sticky footer — payment + Confirm NEVER scroll away (Uber-style).
+            The full payment picker lives in a sheet, so the list stays compact
+            instead of card rows eating half the screen. */}
+        <div className="shrink-0 border-t border-[#F2F2F2] bg-white px-5 pt-1.5 pb-5">
+          <button onClick={() => setPayPicker(true)}
+            className="w-full flex items-center gap-3 py-2 active:opacity-70">
+            <div className="w-9 h-9 rounded-xl bg-[#F7F7F7] flex items-center justify-center shrink-0 text-[15px]">
+              {pay === PAY_CASH ? <span>ðŸ’µ</span> : pay === PAY_LATER ? <span>ðŸ•’</span> : IC.wallet()}
+            </div>
+            <div className="min-w-0 flex-1 text-left">
+              <p className="text-[14px] text-[#1A1A1A] font-semibold truncate">{payLabel}</p>
+              <p className="text-[11px] text-[#ADADAD] truncate">{paySubtitle}</p>
+            </div>
+            {IC.chevRight()}
+          </button>
+          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops)}
+            className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-3.5 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
+            Confirm {ride.name}
+          </button>
+          {stops.length > 0 && (
+            <p className="text-[11px] text-[#ADADAD] text-center mt-2">
+              {stops.length} stop{stops.length > 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+      </div>
 
-          <div className="flex flex-col gap-2">
+      {/* ── Payment picker sheet — Cash / saved cards / Pay Later / Add card ── */}
+      {payPicker && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/30" onClick={() => { if (!addingCard) setPayPicker(false) }} />
+          <div className="relative bg-white rounded-t-3xl max-h-[85%] flex flex-col shadow-[0_-4px_24px_rgba(0,0,0,0.18)]">
+            <div className="px-5 pt-4 pb-3 border-b border-[#F2F2F2]">
+              <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
+              <div className="flex items-center gap-3">
+                <span className="text-[16px] font-bold text-[#1A1A1A] flex-1" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                  Payment
+                </span>
+                <button onClick={() => setPayPicker(false)} disabled={addingCard}
+                  className="text-[13px] text-[#6B6B6B] font-semibold px-2 py-1 disabled:opacity-50">Done</button>
+              </div>
+            </div>
+            <div className="overflow-y-auto px-5 py-4">
+              <div className="flex flex-col gap-2">
             <PayRow
               selected={pay === PAY_CASH}
               onSelect={() => setPay(PAY_CASH)}
@@ -1053,17 +1136,9 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             <p className="text-[11px] text-[#6B6B6B] font-medium mt-2.5 leading-snug">{cardMsg}</p>
           )}
         </div>
-
-        <div className="px-5 pb-8">
-          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops)}
-            className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-4 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
-            Confirm {ride.name}
-          </button>
-          <p className="text-[11px] text-[#ADADAD] text-center mt-2.5">
-            {payLabel}{stops.length > 0 ? ` Â· ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
-          </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Stop picker. A sheet rather than a new screen, so the rider never loses
           the booking they were in the middle of. */}
