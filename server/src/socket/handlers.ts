@@ -22,7 +22,7 @@ import { noteIndexUpsertFailure, bump } from "../services/metrics";
 import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition, noteDestinationTripCompleted } from "../services/destinationSession";
 import { computeTierStatus } from "../services/performanceTier";
 import { assertRiderCanBook } from "../services/adminRiders";
-import { applyPromoToFare, ridePromoFor } from "../services/promos";
+import { applyPromoToFare, promoUsableFor, recordPromoUse, ridePromoFor } from "../services/promos";
 import { canonicalTier } from "../services/rideCategories";
 
 /**
@@ -447,17 +447,20 @@ export function setupSocketHandlers(io: SocketIOServer) {
         }
 
         // ── Promo (rider side): the client may NAME the promo it displayed
-        // (promoId/promoCode), but the SERVER decides the discount — window and
-        // audience are re-checked here and the amount recomputed from scratch.
+        // (promoId/promoCode), but the SERVER decides the discount — window,
+        // audience, per-user targeting and the N-days/N-rides redemption budget
+        // are re-checked here and the amount recomputed from scratch.
         let rideFare = fare != null ? Number(fare) : null;
         let appliedPromo: { id: string; code: string; discount: number } | null = null;
         if (rideFare != null && (data.promoId || data.promoCode)) {
           try {
-            const promo = await ridePromoFor("rider", String(data.promoId || data.promoCode));
-            if (promo) {
+            const promo = await ridePromoFor("rider", String(data.promoId || data.promoCode), dbUserId);
+            const usable = promo ? await promoUsableFor(promo, dbUserId) : false;
+            if (promo && usable) {
               const applied = applyPromoToFare(rideFare, promo);
               rideFare = applied.fare;
               appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
+              void recordPromoUse(promo, dbUserId).catch(() => {});
             }
           } catch {
             /* a promo lookup must never block booking */

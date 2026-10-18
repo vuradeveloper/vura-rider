@@ -66,6 +66,7 @@ import {
 } from "../services/adminMessaging";
 import { FeatureFlagError } from "../services/featureFlags";
 import { reviewDocument } from "../services/adminDocReview";
+import { parseTargetUserIds, ensurePromoTables } from "../services/promos";
 import {
   getMoneyOverview,
   listDriverEarnings,
@@ -1392,11 +1393,42 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// GET /api/admin/v2/promos/leads — who actually RIDES A LOT: the ranked list
+// the console uses to target specific riders (or drivers) with a promo
+// (target_user_ids). side=rider|driver, min_rides (default 3), limit (≤200).
+router.get("/promos/leads", requireAdmin("riders.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const side = String(req.query.side || "rider") === "driver" ? "driver" : "rider";
+    const minRides = Math.max(0, Math.floor(Number(req.query.min_rides ?? 3)));
+    const limit = Math.min(200, Math.max(1, Math.floor(Number(req.query.limit ?? 50))));
+    const key = side === "driver" ? "r.driver_id" : "r.passenger_id";
+    const users = await query<any>(
+      `SELECT ${key} AS user_id, u.email, u.full_name,
+              COUNT(*)::int AS rides,
+              ROUND(COALESCE(SUM(COALESCE(r.actual_fare, r.estimated_fare, 0)), 0)::numeric, 2) AS spent,
+              MAX(COALESCE(r.completed_at, r.created_at)) AS last_ride_at
+         FROM rides r
+         JOIN users u ON u.id = ${key}
+        WHERE r.status = 'completed'
+        GROUP BY ${key}, u.email, u.full_name
+       HAVING COUNT(*) >= $1
+        ORDER BY rides DESC
+        LIMIT $2`,
+      [minRides, limit]
+    );
+    res.json({ side, min_rides: minRides, users });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // GET /api/admin/v2/promos — list every promo, newest first.
 router.get("/promos", requireAdmin("settings.read"), async (_req: AuthRequest, res: Response) => {
   try {
+    await ensurePromoTables().catch(() => { }); // pre-016 DB gains the columns here
     const promos = await query(
       `SELECT id, code, title, subtitle, audience, discount_pct, discount_fixed,
+              valid_days, rides_limit, target_user_ids,
               active, starts_at, ends_at, created_at, updated_at
          FROM admin_promos ORDER BY created_at DESC`
     );
@@ -1426,6 +1458,22 @@ router.post("/promos", requireAdmin("settings.write"), async (req: AuthRequest, 
     const active = req.body?.active !== false;
     const startsAt = req.body?.starts_at ? String(req.body.starts_at) : null;
     const endsAt = req.body?.ends_at ? String(req.body.ends_at) : null;
+    // v2: N-days validity (from first use) + N-rides budget + specific targets.
+    const validDays =
+      req.body?.valid_days != null && String(req.body.valid_days).trim() !== ""
+        ? Math.floor(Number(req.body.valid_days))
+        : null;
+    const ridesLimit =
+      req.body?.rides_limit != null && String(req.body.rides_limit).trim() !== ""
+        ? Math.floor(Number(req.body.rides_limit))
+        : null;
+    let targetUserIds: string[] | null = null;
+    try {
+      targetUserIds = parseTargetUserIds(req.body?.target_user_ids);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Invalid target_user_ids" });
+      return;
+    }
 
     if (!/^[A-Z0-9_-]{2,24}$/.test(code)) {
       res.status(400).json({
@@ -1448,6 +1496,14 @@ router.post("/promos", requireAdmin("settings.write"), async (req: AuthRequest, 
       res.status(400).json({ error: "discount_pct must be 0-100 and discount_fixed must be 0 or more" });
       return;
     }
+    if (validDays != null && (!Number.isFinite(validDays) || validDays < 1 || validDays > 3650)) {
+      res.status(400).json({ error: "valid_days must be between 1 and 3650 days (or empty)" });
+      return;
+    }
+    if (ridesLimit != null && (!Number.isFinite(ridesLimit) || ridesLimit < 1 || ridesLimit > 10000)) {
+      res.status(400).json({ error: "rides_limit must be between 1 and 10000 rides (or empty)" });
+      return;
+    }
     if (discountPct <= 0 && discountFixed <= 0) {
       res.status(400).json({ error: "Set a percentage or a fixed amount greater than zero" });
       return;
@@ -1460,10 +1516,15 @@ router.post("/promos", requireAdmin("settings.write"), async (req: AuthRequest, 
     let row: any;
     try {
       row = await queryOne<any>(
-        `INSERT INTO admin_promos (code, title, subtitle, audience, discount_pct, discount_fixed, active, starts_at, ends_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, code, title, subtitle, audience, discount_pct, discount_fixed, active, starts_at, ends_at, created_at`,
-        [code, title, subtitle, audience, round2(discountPct), round2(discountFixed), active, startsAt, endsAt]
+        `INSERT INTO admin_promos (code, title, subtitle, audience, discount_pct, discount_fixed,
+                                   valid_days, rides_limit, target_user_ids,
+                                   active, starts_at, ends_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id, code, title, subtitle, audience, discount_pct, discount_fixed,
+                   valid_days, rides_limit, target_user_ids,
+                   active, starts_at, ends_at, created_at`,
+        [code, title, subtitle, audience, round2(discountPct), round2(discountFixed),
+         validDays, ridesLimit, targetUserIds, active, startsAt, endsAt]
       );
     } catch (e: any) {
       if (/duplicate|unique/i.test(String(e?.message || e))) {
@@ -1506,6 +1567,17 @@ router.patch("/promos/:id", requireAdmin("settings.write"), async (req: AuthRequ
       return;
     }
 
+    await ensurePromoTables().catch(() => { }); // pre-016 DB gains the columns here
+    let targetUserIds: string[] | null = existing.target_user_ids ?? null;
+    if (req.body?.target_user_ids !== undefined) {
+      try {
+        targetUserIds = parseTargetUserIds(req.body.target_user_ids);
+      } catch (e: any) {
+        res.status(400).json({ error: e?.message || "Invalid target_user_ids" });
+        return;
+      }
+    }
+
     const next = {
       title:
         req.body?.title !== undefined ? String(req.body.title).trim() : String(existing.title),
@@ -1537,6 +1609,20 @@ router.patch("/promos/:id", requireAdmin("settings.write"), async (req: AuthRequ
             ? String(req.body.ends_at)
             : null
           : existing.ends_at,
+      // v2: N-days validity (from the rider's first use) + N-rides budget.
+      valid_days:
+        req.body?.valid_days !== undefined
+          ? req.body.valid_days == null || String(req.body.valid_days).trim() === ""
+            ? null
+            : Math.floor(Number(req.body.valid_days))
+          : existing.valid_days ?? null,
+      rides_limit:
+        req.body?.rides_limit !== undefined
+          ? req.body.rides_limit == null || String(req.body.rides_limit).trim() === ""
+            ? null
+            : Math.floor(Number(req.body.rides_limit))
+          : existing.rides_limit ?? null,
+      target_user_ids: targetUserIds,
     };
 
     if (!next.title || next.title.length > 80) {
@@ -1555,6 +1641,14 @@ router.patch("/promos/:id", requireAdmin("settings.write"), async (req: AuthRequ
       res.status(400).json({ error: "Set a percentage (0-100) or a fixed amount greater than zero" });
       return;
     }
+    if (next.valid_days != null && (!Number.isFinite(next.valid_days) || next.valid_days < 1 || next.valid_days > 3650)) {
+      res.status(400).json({ error: "valid_days must be between 1 and 3650 days (or empty)" });
+      return;
+    }
+    if (next.rides_limit != null && (!Number.isFinite(next.rides_limit) || next.rides_limit < 1 || next.rides_limit > 10000)) {
+      res.status(400).json({ error: "rides_limit must be between 1 and 10000 rides (or empty)" });
+      return;
+    }
     if (next.starts_at && next.ends_at && new Date(next.starts_at).getTime() >= new Date(next.ends_at).getTime()) {
       res.status(400).json({ error: "ends_at must be after starts_at" });
       return;
@@ -1564,9 +1658,11 @@ router.patch("/promos/:id", requireAdmin("settings.write"), async (req: AuthRequ
       `UPDATE admin_promos
           SET title = $2, subtitle = $3, audience = $4, discount_pct = $5,
               discount_fixed = $6, active = $7, starts_at = $8, ends_at = $9,
+              valid_days = $10, rides_limit = $11, target_user_ids = $12,
               updated_at = NOW()
         WHERE id = $1
         RETURNING id, code, title, subtitle, audience, discount_pct, discount_fixed,
+                  valid_days, rides_limit, target_user_ids,
                   active, starts_at, ends_at, created_at, updated_at`,
       [
         id,
@@ -1578,6 +1674,9 @@ router.patch("/promos/:id", requireAdmin("settings.write"), async (req: AuthRequ
         next.active,
         next.starts_at,
         next.ends_at,
+        next.valid_days,
+        next.rides_limit,
+        next.target_user_ids,
       ]
     );
     await writeAudit(actor, {

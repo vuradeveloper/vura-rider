@@ -625,6 +625,11 @@ type PromoInfo = {
   audience: string;
   discount_pct: number | string;
   discount_fixed: number | string;
+  /** v2: per-rider budget set in the admin console (after first use). */
+  valid_days?: number | null;
+  rides_limit?: number | null;
+  /** Server's per-user verdict — false = this rider's budget/window is spent. */
+  usable?: boolean;
 };
 
 // The price animation runs EXACTLY ONCE per promo per app run — the number
@@ -650,8 +655,9 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   destination: string
   onBack: () => void
   onTier?: (t: string) => void
-  /** tier, payment method ('cash' | 'card') and any stops added before booking. */
-  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[]) => void
+  /** tier, payment method ('cash' | 'card' | 'pay_later'), stops and the
+   *  checkbox-selected promo id (null = the rider unchecked it → no promo). */
+  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[], promoId: string | null) => void
 }) {
   const [sel, setSel] = useState('go')
   const destName = destLabel(destination)
@@ -661,6 +667,10 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   // down ONCE. Fixed-amount promos show the banner only — their discount is
   // taken off the charged fare server-side at booking.
   const [promo, setPromo] = useState<PromoInfo | null>(null)
+  // Uber One style: the promo is a CHECKBOX in the sticky footer — on by
+  // default, unchecking it removes the discount from the prices AND from the
+  // booking payload (the server would refuse it anyway when spent/expired).
+  const [promoOn, setPromoOn] = useState(true)
   const [priceFactor, setPriceFactor] = useState(1)
   useEffect(() => {
     getActivePromos('rider')
@@ -1011,10 +1021,10 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                         <div className="text-right">
                           <p className="text-[14px] text-[#1A1A1A] font-semibold">
                             {promo && Number(promo.discount_pct) > 0
-                              ? promoPrice(opt.price, priceFactor)
+                              ? promoPrice(opt.price, promoOn ? priceFactor : 1)
                               : opt.price}
                           </p>
-                          {promo && Number(promo.discount_pct) > 0 && priceFactor < 1 && (
+                          {promo && promoOn && Number(promo.discount_pct) > 0 && priceFactor < 1 && (
                             <p className="text-[11px] text-[#ADADAD] line-through leading-tight">{opt.price}</p>
                           )}
                           <p className="text-[12px] text-[#ADADAD]">{opt.eta}</p>
@@ -1035,6 +1045,35 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             The full payment picker lives in a sheet, so the list stays compact
             instead of card rows eating half the screen. */}
         <div className="shrink-0 border-t border-[#F2F2F2] bg-white px-5 pt-1.5 pb-5">
+          {/* Uber One style promo row: a CHECKBOX the rider toggles. On by
+              default; spent/expired (usable=false) promo is locked off. */}
+          {promo && (
+            <button
+              type="button"
+              onClick={() => { if (promo.usable !== false) setPromoOn((v) => !v) }}
+              className={`w-full flex items-center gap-3 py-2 rounded-xl text-left ${promo.usable === false ? 'opacity-60' : 'active:bg-[#F7F7F7]'}`}
+            >
+              <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 ${promoOn && promo.usable !== false ? 'bg-[#1A1A1A] border-[#1A1A1A]' : 'border-[#D8D8D8] bg-white'}`}>
+                {promoOn && promo.usable !== false && (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </span>
+              <span className="text-[15px] leading-none">🎉</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] text-[#1A1A1A] font-semibold truncate">{promo.title}</span>
+                <span className="block text-[11px] text-[#ADADAD] truncate">
+                  {Number(promo.discount_pct) > 0
+                    ? `${Number(promo.discount_pct)}% off this ride`
+                    : `${formatRand(Number(promo.discount_fixed))} off this ride`}
+                  {promo.rides_limit ? ` · ${promo.rides_limit} ride${promo.rides_limit === 1 ? '' : 's'}` : ''}
+                  {promo.valid_days ? ` · valid ${promo.valid_days} days` : ''}
+                  {promo.usable === false ? ' · used up for you' : ''}
+                </span>
+              </span>
+            </button>
+          )}
           <button onClick={() => setPayPicker(true)}
             className="w-full flex items-center gap-3 py-2 active:opacity-70">
             <div className="w-9 h-9 rounded-xl bg-[#F7F7F7] flex items-center justify-center shrink-0 text-[15px]">
@@ -1046,7 +1085,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
             {IC.chevRight()}
           </button>
-          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops)}
+          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops, promoOn && promo && promo.usable !== false ? promo.id : null)}
             className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-3.5 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
             Confirm {ride.name}
           </button>
@@ -1235,13 +1274,16 @@ function PayRow({
   )
 }
 
-function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onMatched }: {
+function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId, onCancel, onMatched }: {
   destination: string
   tier?: string
-  /** 'cash' | 'card' â€” chosen on the booking screen and sent with the request. */
+  /** 'cash' | 'card' | 'pay_later' â€” chosen on the booking screen and sent with the request. */
   paymentMethod?: string
   /** Stops added on the booking screen, sent as the ride's waypoints. */
   stops?: Waypoint[]
+  /** The booking screen's promo checkbox decision: null = unchecked (NO promo),
+   *  undefined = no decision (fall back to the first live promo). */
+  chosenPromoId?: string | null
   onCancel: () => void
   onMatched: (rideId: string) => void
 }) {
@@ -1375,9 +1417,16 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
             .catch(() => '')
           // Which promo the booking screen displayed — the SERVER re-validates
           // the window + audience and recomputes the discount itself.
-          const promoId = await getActivePromos('rider')
-            .then((r) => r?.promos?.[0]?.id)
-            .catch(() => undefined)
+          // The promo CHECKBOX decision from the booking screen travels as a
+          // prop: null = rider unchecked it (book WITHOUT a promo), a string =
+          // exactly that promo, undefined = no decision (older flow → first
+          // live promo). The SERVER re-validates window/audience/targeting/
+          // N-days + N-rides and recomputes the discount itself regardless.
+          const promoId = chosenPromoId !== undefined
+            ? chosenPromoId ?? undefined
+            : await getActivePromos('rider')
+                .then((r) => r?.promos?.[0]?.id)
+                .catch(() => undefined)
           // Ride Now, Pay Later: server-side preflight FIRST — active → terms
           // accepted → not past due → the fare fits available credit. A refusal
           // throws the server's exact reason into the catch below and the
@@ -3968,6 +4017,9 @@ export default function App() {
   // Chosen on the booking screen and carried into the request: how the rider pays
   // ('cash' | 'card') and any stops added before confirming.
   const [payMethod, setPayMethod] = useState('cash')
+  // The promo checkbox decision from the booking screen (null = unchecked →
+  // book WITHOUT a promo; undefined = no decision made → first live promo).
+  const [bookPromoId, setBookPromoId] = useState<string | null | undefined>(undefined)
   const [rideStops, setRideStops] = useState<Waypoint[]>([])
   // The id of the ride the server created, used to track / cancel / rate it.
   const [rideId, setRideId] = useState<string | null>(null)
@@ -4157,10 +4209,11 @@ export default function App() {
               destination={dest}
               onBack={() => setRScreen('home')}
               onTier={setTier}
-              onConfirm={(t, pm, st) => {
+              onConfirm={(t, pm, st, promoId) => {
                 setTier(t)
                 setPayMethod(pm)
                 setRideStops(st)
+                setBookPromoId(promoId)
                 setRScreen('matching')
               }}
             />
@@ -4171,6 +4224,7 @@ export default function App() {
               tier={tier}
               paymentMethod={payMethod}
               stops={rideStops}
+              chosenPromoId={bookPromoId}
               onCancel={() => { setRideId(null); setRScreen('home') }}
               onMatched={(id) => { setRideId(id); setRScreen('ride') }}
             />

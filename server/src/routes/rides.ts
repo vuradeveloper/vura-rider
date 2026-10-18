@@ -18,6 +18,7 @@ import {
   PreauthError,
 } from "../services/preauthorization";
 import { onRideCompletedPayLater, takePayLaterRide } from "../services/PayLaterService";
+import { applyPromoToFare, promoUsableFor, recordPromoUse, ridePromoFor } from "../services/promos";
 import type { Server as SocketIOServer } from "socket.io";
 
 const router = Router();
@@ -225,6 +226,33 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
       return;
     }
 
+    // ── Promo (rider side): same server-authoritative rule as the socket path.
+    // The client may only NAME the promo it displayed; window, audience,
+    // per-user targeting and the N-days/N-rides redemption budget are re-checked
+    // here and the discount recomputed from scratch. (The REST path used to
+    // ignore promos entirely — the app books over REST, so nothing ever
+    // discounted.) A promo failure must NEVER block booking.
+    let rideFare = fare != null ? Number(fare) : null;
+    let appliedPromo: { id: string; code: string; discount: number } | null = null;
+    let promoForRecord: Awaited<ReturnType<typeof ridePromoFor>> = null;
+    if (rideFare != null && (req.body?.promoId || req.body?.promoCode)) {
+      try {
+        const promo = await ridePromoFor(
+          "rider",
+          String(req.body.promoId || req.body.promoCode),
+          rider.id
+        );
+        if (promo && (await promoUsableFor(promo, rider.id))) {
+          const applied = applyPromoToFare(rideFare, promo);
+          rideFare = applied.fare;
+          appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
+          promoForRecord = promo;
+        }
+      } catch {
+        /* promo lookup never blocks booking */
+      }
+    }
+
     // The tier column ships with migration 013; a database that has not run it
     // yet must still book — exactly the waypointsReady pattern (booking can
     // NEVER break because of a newer column).
@@ -253,7 +281,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
         destinationAddress ?? null,
         Number.isFinite(Number(destinationLat)) ? Number(destinationLat) : null,
         Number.isFinite(Number(destinationLng)) ? Number(destinationLng) : null,
-        fare != null ? Number(fare) : null,
+        rideFare,
         paymentMethod || null,
         deviceId || null,
         rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
@@ -264,6 +292,16 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     if (!ride?.id) {
       res.status(500).json({ error: "Could not create the ride" });
       return;
+    }
+
+    // Stamp what was applied (receipts/audits/support — same copy the socket
+    // path stores) and burn one redemption on the rider's promo budget.
+    if (appliedPromo) {
+      await execute(
+        `UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`,
+        [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]
+      ).catch(() => { /* history nicety — never blocks the booking */ });
+      if (promoForRecord) void recordPromoUse(promoForRecord, rider.id).catch(() => { });
     }
 
     // Start the trace here so trip_saved / dispatch_started / drivers_found /
