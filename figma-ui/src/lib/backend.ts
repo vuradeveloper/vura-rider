@@ -683,6 +683,32 @@ export type DriverStats = {
 export const getDriverStats = () => apiFetch<DriverStats>("/api/drivers/stats");
 
 /**
+ * SERVER truth for the online toggle — GET /api/drivers/me → profile.is_online.
+ * The local toggle is only intent: a staleness sweep demotes any driver who
+ * stops reporting (~20s silence / 15min for intent-off), so the badge must
+ * show what the SERVER believes, not what the app hopes. null = unknown
+ * (endpoint unreachable / shape changed) → caller keeps the local opinion.
+ */
+export async function getDriverServerOnline(): Promise<boolean | null> {
+  const res = await apiFetch<{ profile?: { is_online?: boolean } }>("/api/drivers/me");
+  return typeof res?.profile?.is_online === "boolean" ? res.profile.is_online : null;
+}
+
+/**
+ * REST twin of `driver:online` (routes/drivers.ts): records the intent
+ * server-side even if the socket emit is lost, revives waiting rides
+ * IMMEDIATELY and seeds the match index from the last known coords.
+ * Returns the server's answer (online_intent) — null on failure/gate.
+ */
+export async function setDriverServerOnline(online: boolean): Promise<boolean | null> {
+  const res = await apiFetch<{ online_intent?: boolean }>("/api/drivers/online", {
+    method: "POST",
+    body: JSON.stringify({ online }),
+  });
+  return typeof res?.online_intent === "boolean" ? res.online_intent : null;
+}
+
+/**
  * The driver's profile row (vehicle details).
  *
  * Response shape verified against the LIVE server with a real driver token:

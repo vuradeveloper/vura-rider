@@ -43,6 +43,7 @@ import {
   formatRand,
   getActiveRide,
   getDriverStats,
+  getDriverServerOnline,
   getEarnings,
   getMyDocuments,
   getDocsStatus,
@@ -93,6 +94,7 @@ import {
   sendTip,
   submitRating,
   takePayLaterRide,
+  setDriverServerOnline,
   triggerSos,
   verifyPayment
 } from './lib/backend'
@@ -2480,6 +2482,11 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
   // dispatch: without fixes the server drops this driver from matching after
   // ~20s, so the rider must be TOLD instead of both sides wondering.
   const [geoIssue, setGeoIssue] = useState(false)
+  // What the SERVER believes about this driver's online state (null = not yet
+  // known). The badge shows THIS — the local toggle is only intent; a
+  // staleness sweep can demote a silent driver at any moment, and the old
+  // local-only badge hid exactly that.
+  const [serverOnline, setServerOnline] = useState<boolean | null>(null)
 
   // Real driver data ??? the same endpoints the React Native driver app calls.
   useEffect(() => {
@@ -2584,7 +2591,52 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
         { enableHighAccuracy: false, timeout: 4000, maximumAge: 300000 }
       )
     }
+    // REST twin alongside the socket emit: records the intent server-side even
+    // if the emit is lost, revives waiting rides immediately and seeds the
+    // index from the last known coords — then adopt the SERVER's answer.
+    const truth = await setDriverServerOnline(next).catch(() => null)
+    if (truth !== null) setServerOnline(truth)
   }
+
+  // ── Server-truth sync: the badge shows what the SERVER believes, and a
+  // demotion while the driver still wants to be online SELF-HEALS.  ──────────
+  // Why this exists: offers only reach a driver the server considers online
+  // AND fresh. A lost emit / old APK / staleness-sweep demotion left the app
+  // showing "Online" while dispatch saw nobody — exactly the "works when YOU
+  // test it in the terminal" symptom: the terminal client supplied the
+  // online+heartbeat the phone never did, and every offer then reached the
+  // phone too (it receives fine — its SENDING was the broken half).
+  useEffect(() => {
+    let stopped = false
+    const sync = async () => {
+      const truth = await getDriverServerOnline().catch(() => null)
+      if (stopped || truth === null) return
+      setServerOnline(truth)
+      if (online && !truth) {
+        // The server lost us while the driver still wants to be online:
+        // re-announce over BOTH channels + heartbeat, right now.
+        await goOnline(true).catch(() => { })
+        await setDriverServerOnline(true).catch(() => null)
+        driverHeartbeat()
+        const again = await getDriverServerOnline().catch(() => null)
+        if (!stopped && again !== null) setServerOnline(again)
+      } else if (!online && truth) {
+        // Server says online but the local toggle is off — trust the server
+        // (the driver IS dispatchable): adopt it so the badge never lies.
+        await goOnline(true).catch(() => { })
+        setOnline(true)
+      }
+    }
+    void sync()
+    const iv = window.setInterval(sync, 15000)
+    const onVis = () => { if (document.visibilityState === 'visible') void sync() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      stopped = true
+      window.clearInterval(iv)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [online])
 
   return (
     <div className="flex flex-col h-screen bg-[#F7F7F7]">
@@ -2597,9 +2649,11 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
         <MapCanvas zoom={16} controls controlsBottom={online ? PANEL_RISE + ONLINE_CARD_HEIGHT + 12 : PANEL_RISE + 12} follow />
         <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between px-5 pt-12">
           <div className="bg-white/90 backdrop-blur-md rounded-2xl px-3.5 py-2 shadow-sm border border-white/60 flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${online ? 'bg-[#34A853]' : 'bg-[#D0D0D0]'}`}
-              style={online ? { boxShadow: '0 0 0 3px rgba(52,168,83,0.18)' } : {}} />
-            <span className="text-[13px] text-[#1A1A1A] font-semibold">{online ? 'Online' : 'Offline'}</span>
+            <div className={`w-2 h-2 rounded-full ${online && serverOnline !== false ? 'bg-[#34A853]' : online ? 'bg-[#FBBC04]' : 'bg-[#D0D0D0]'}`}
+              style={online && serverOnline !== false ? { boxShadow: '0 0 0 3px rgba(52,168,83,0.18)' } : {}} />
+            <span className="text-[13px] text-[#1A1A1A] font-semibold">
+              {!online ? 'Offline' : serverOnline === false ? 'Syncing…' : 'Online'}
+            </span>
           </div>
         </div>
 
