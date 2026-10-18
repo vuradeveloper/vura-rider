@@ -160,7 +160,6 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
   const autoOn = !!elig?.auto_debit.enabled
   const totalRides = elig?.ride_breakdown?.total_completed ?? elig?.rides_completed ?? 0
   const paidByCard = elig?.ride_breakdown?.paid_by_card ?? elig?.rides_completed ?? 0
-  const sameCard = elig?.ride_breakdown?.same_card ?? elig?.rides_completed ?? 0
   const excludedByFarm = elig?.ride_breakdown?.excluded_by_farm ?? 0
   const ridesCounted = elig?.rides_completed ?? 0
 
@@ -264,8 +263,8 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
                   </p>
                   <p className="text-[10px] text-[#6B6B6B] leading-snug">
                     You have <b>{totalRides}</b> completed rides — <b>{paidByCard}</b> were paid by card
-                    (cash doesn't count), <b>{sameCard}</b> with your current card (re-adding a card restarts
-                    the count), and each driver counts for at most 4 of your rides together (anti-farming)
+                    (cash and Pay Later rides don't count), and each driver counts for at most 4 of your
+                    rides together (anti-farming)
                     {' '}→ <b>{ridesCounted} counted</b>
                     {excludedByFarm > 0 ? `, ${excludedByFarm} excluded by the driver cap` : ''}.
                   </p>

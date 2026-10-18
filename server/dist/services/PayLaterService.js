@@ -190,37 +190,34 @@ async function getAccount(dbUserId) {
 function maskAccountNumber(accountNumber) {
     return `•••• ${accountNumber.slice(-4)}`;
 }
-// ── Eligibility: completed PAID rides on the SAME card ────────────────────────
+// ── Eligibility: completed rides that PROVED a card payment ──────────────────
 /**
- * Counts completed rides that paid with the rider's CURRENT saved card:
- *   • provenance match — rides.card_auth_code (stamped by the preauth capture
- *     webhook and the saved-card charge path) equals saved_cards.transaction_index;
- *   • grandfather — pre-feature card rides carry no provenance and count
- *     (they WERE card-paid; a ride paid by a DIFFERENT known card never counts);
+ * Counts completed rides that PROVED A CARD PAYMENT:
+ *   • payment_method='card' (the server's own card-paid marker) OR the ride
+ *     carries a card provenance stamp at all. A RE-ADDED card gets a NEW
+ *     Paystack authorization token (and removing a card deletes its row), so
+ *     matching only the CURRENT token — the old rule — silently zeroed every
+ *     ride from before a re-registration: a rider's own paid history must not
+ *     be erased by removing and re-adding their card;
  *   • anti ride-farming — a (rider, driver) pair used ≥5 completed times is
- *     excluded entirely (kept from v1).
- * With no saved card the provenance match is empty → only grandfathered
- * rides count (the brief's "one card" rule still holds once a card exists).
+ *     excluded entirely (kept from v1);
+ *   • cash and pay_later rides never count (unproven / credit, not card).
+ * Eligibility and the credit ladder both use this number.
  */
 async function countUnlockRides(dbUserId) {
-    const card = await (0, paystackPayment_1.getDefaultCardToken)(dbUserId).catch(() => null);
-    const authCode = card?.transaction_index || "";
     const row = await (0, database_2.queryOne)(`SELECT COUNT(*)::text AS total
        FROM rides r
       WHERE r.passenger_id = $1
         AND r.status = 'completed'
         AND r.driver_id IS NOT NULL
-        AND (
-              (r.card_auth_code IS NOT NULL AND r.card_auth_code = $2 AND $2 <> '')
-              OR (r.card_auth_code IS NULL AND LOWER(COALESCE(r.payment_method, '')) = 'card')
-            )
+        AND (LOWER(COALESCE(r.payment_method, '')) = 'card' OR r.card_auth_code IS NOT NULL)
         AND NOT EXISTS (
           SELECT 1 FROM rides r2
            WHERE r2.passenger_id = $1
              AND r2.driver_id = r.driver_id
              AND r2.status = 'completed'
           HAVING COUNT(*) >= 5
-        )`, [dbUserId, authCode]);
+        )`, [dbUserId]);
     return parseInt(row?.total || "0", 10);
 }
 /** v1 counter (any completed ride, no card provenance) — kept exported for
@@ -385,7 +382,7 @@ async function getPayLaterEligibility(dbUserId) {
             total_completed: breakdown?.total_completed ?? rides,
             paid_by_card: breakdown?.paid_by_card ?? rides,
             same_card: breakdown?.same_card ?? rides,
-            excluded_by_farm: Math.max(0, (breakdown?.same_card ?? rides) - rides),
+            excluded_by_farm: Math.max(0, (breakdown?.paid_by_card ?? rides) - rides),
         },
     };
 }

@@ -201,8 +201,8 @@ describe("computeCreditLimit — ladder from the brief", () => {
 
 // ── Eligibility counting (same card, anti-farm) ───────────────────────────────
 
-describe("countUnlockRides — completed PAID rides on the SAME card", () => {
-  it("passes the card transaction_index as provenance + keeps the anti-farm guard", async () => {
+describe("countUnlockRides — proven card-paid rides, anti-farm capped", () => {
+  it("counts card-proven rides WITHOUT depending on the current token (re-added cards keep their history)", async () => {
     vi.mocked(getDefaultCardToken).mockResolvedValue({
       transaction_index: "IDX-99",
       last4: "4242",
@@ -212,9 +212,12 @@ describe("countUnlockRides — completed PAID rides on the SAME card", () => {
     );
     expect(await countUnlockRides("rider-1")).toBe(5);
     const [sql, params] = vi.mocked(queryOne).mock.calls[0];
-    expect(sql).toContain("r.card_auth_code = $2"); // provenance match
+    // Proven card payment — NOT a current-token match: the old rule zeroed
+    // every ride from before a card re-registration.
+    expect(sql).toContain("OR r.card_auth_code IS NOT NULL");
+    expect(sql).toContain("= 'card'");
     expect(sql).toContain("HAVING COUNT(*) >= 5"); // anti ride-farming pair guard
-    expect(params).toEqual(["rider-1", "IDX-99"]);
+    expect(params).toEqual(["rider-1"]); // no token dependency any more
   });
 
   it("returns 0 when the count query finds nothing", async () => {
@@ -853,9 +856,9 @@ describe("getPayLaterEligibility — locked rider progress", () => {
     expect(e.rides_completed).toBe(3);
     expect(e.ride_breakdown).toEqual({
       total_completed: 9, // what the rider sees in history
-      paid_by_card: 6,    // …of which paid by card (cash excluded)
-      same_card: 5,       // …of which on the CURRENT card (re-added card excluded)
-      excluded_by_farm: 2, // …minus rides with a driver used 5×+ (anti-farm)
+      paid_by_card: 6,    // …of which proven card-paid (cash excluded)
+      same_card: 5,       // informational: stamped with a token on file now
+      excluded_by_farm: 3, // …minus rides with a driver used 5×+ (anti-farm)
     });
   });
 });

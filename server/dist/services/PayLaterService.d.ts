@@ -16,15 +16,17 @@ export declare function payLaterConfig(): PayLaterConfig;
 export declare function computeCreditLimit(completedRides: number): number;
 export declare function ensurePayLaterTables(): Promise<void>;
 /**
- * Counts completed rides that paid with the rider's CURRENT saved card:
- *   • provenance match — rides.card_auth_code (stamped by the preauth capture
- *     webhook and the saved-card charge path) equals saved_cards.transaction_index;
- *   • grandfather — pre-feature card rides carry no provenance and count
- *     (they WERE card-paid; a ride paid by a DIFFERENT known card never counts);
+ * Counts completed rides that PROVED A CARD PAYMENT:
+ *   • payment_method='card' (the server's own card-paid marker) OR the ride
+ *     carries a card provenance stamp at all. A RE-ADDED card gets a NEW
+ *     Paystack authorization token (and removing a card deletes its row), so
+ *     matching only the CURRENT token — the old rule — silently zeroed every
+ *     ride from before a re-registration: a rider's own paid history must not
+ *     be erased by removing and re-adding their card;
  *   • anti ride-farming — a (rider, driver) pair used ≥5 completed times is
- *     excluded entirely (kept from v1).
- * With no saved card the provenance match is empty → only grandfathered
- * rides count (the brief's "one card" rule still holds once a card exists).
+ *     excluded entirely (kept from v1);
+ *   • cash and pay_later rides never count (unproven / credit, not card).
+ * Eligibility and the credit ladder both use this number.
  */
 export declare function countUnlockRides(dbUserId: string): Promise<number>;
 /** v1 counter (any completed ride, no card provenance) — kept exported for
