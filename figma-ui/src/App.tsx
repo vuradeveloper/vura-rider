@@ -1289,6 +1289,22 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, onCancel, onM
     return () => clearInterval(i)
   }, [])
 
+  // The search DIES after ~90s with no genuinely-online driver (the offer
+  // budget is exhausted) — the server then emits ride:no:drivers / ride:expired.
+  // Without this listener the screen spun "Finding your driver" FOREVER on a
+  // ride the queue said no longer existed, so both sides kept chasing a dead
+  // search: the rider believed a ride was live, the driver "never received".
+  useEffect(() => {
+    const searchDied = (d: any) => {
+      const id = d?.rideId || d?.id
+      if (id && rideIdRef.current && id !== rideIdRef.current) return // another ride's event
+      setError('No drivers found nearby — this search has ended. Book again in a moment.')
+      setPhase('waiting')
+    }
+    const offs = [on('ride:no:drivers', searchDied), on('ride:expired', searchDied)]
+    return () => { offs.forEach((f) => f()) }
+  }, [])
+
   // A destination picked from search/saved places arrives as
   //   "Name||lat||lng"
   // so the exact coordinates the rider chose are used instead of geocoding the
