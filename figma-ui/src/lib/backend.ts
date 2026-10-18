@@ -1799,8 +1799,33 @@ export const deleteEmergencyContact = (id: string) =>
  * contacts. Paired with the "safety:sos" socket event (triggerSos below) the
  * same way the native app does it, so the driver/ops side sees it live too.
  */
-export const sosRest = (rideId: string) =>
-  apiFetch("/api/safety/sos", { method: "POST", body: JSON.stringify({ rideId }) });
+export const sosRest = (rideId: string, opts?: {
+  location?: { lat: number; lng: number } | null;
+  role?: "rider" | "driver";
+}) =>
+  apiFetch<{ success: boolean; id: string; message: string; ride_id: string | null }>("/api/safety/sos", {
+    method: "POST",
+    body: JSON.stringify({
+      rideId,
+      location: opts?.location ?? null,
+      role: opts?.role ?? "rider",
+    }),
+  });
+
+/** GET /api/safety/pin?rideId= — the rider's START CODE (§3). Only their own
+ *  live ride answers; nothing after the trip starts. */
+export const getRideStartPin = (rideId: string) =>
+  apiFetch<{ ride_id: string; pin: string; locked: boolean }>(
+    `/api/safety/pin?rideId=${encodeURIComponent(rideId)}`
+  );
+
+/** POST /api/safety/checkin/respond — the rider's answer to "Is everything
+ *  okay?" (§1). 'safe' closes the anomaly; 'sos' escalates it for real. */
+export const respondCheckin = (rideId: string, response: "safe" | "sos") =>
+  apiFetch<{ success: boolean; sos?: { id: string } }>("/api/safety/checkin/respond", {
+    method: "POST",
+    body: JSON.stringify({ rideId, response }),
+  });
 
 /**
  * POST /api/safety/share — the server mints the public tracking link the rider

@@ -87,6 +87,9 @@ import {
   searchPlaces,
   sendVerificationEmail,
   shareTrip,
+  sosRest,
+  getRideStartPin,
+  respondCheckin,
   signIn,
   signOut,
   signUp,
@@ -1789,6 +1792,44 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
     return () => { alive = false }
   }, [rideId])
 
+  // ── Safety suite state (§1 check-ins, §3 start PIN, §4 SOS) ──────────────
+  const [startPin, setStartPin] = useState<string | null>(null)
+  const [checkin, setCheckin] = useState<{ message: string; respond_by: string } | null>(null)
+  const [sosState, setSosState] = useState<'idle' | 'holding' | 'sent'>('idle')
+  const [sosMsg, setSosMsg] = useState('')
+  const sosHoldTimer = useRef<number | null>(null)
+
+  // §3: the start code appears once a driver is assigned and dies when the
+  // trip begins (the server refuses it after that anyway).
+  useEffect(() => {
+    if (!rideId || !['accepted', 'driver_arrived'].includes(status)) { setStartPin(null); return }
+    let alive = true
+    getRideStartPin(rideId)
+      .then((r) => { if (alive) setStartPin(r.pin) })
+      .catch(() => { if (alive) setStartPin(null) })
+    return () => { alive = false }
+  }, [rideId, status])
+
+  // §4: press-and-hold SOS — deliberate (1.5 s hold) but fast. The REST call
+  // enriches the alert server-side (names, phones, car, plate, live GPS).
+  async function fireSos() {
+    if (sosHoldTimer.current) { clearTimeout(sosHoldTimer.current); sosHoldTimer.current = null }
+    if (!rideId || sosState === 'sent') return
+    const r = await sosRest(rideId, { role: 'rider', location: myFix }).catch(() => null)
+    setSosState('sent')
+    setSosMsg(r?.message || "Help alerted — Vura's safety team has your details and live location.")
+    setCheckin(null)
+  }
+  const beginSosHold = () => {
+    if (sosState !== 'idle') return
+    setSosState('holding')
+    sosHoldTimer.current = window.setTimeout(() => { void fireSos() }, 1500)
+  }
+  const cancelSosHold = () => {
+    if (sosHoldTimer.current) { clearTimeout(sosHoldTimer.current); sosHoldTimer.current = null }
+    setSosState((s) => (s === 'holding' ? 'idle' : s))
+  }
+
   // Follow the ride's REAL status and the driver's live position over the socket
   // â€” the same events the native track screen listens to (lib/socket.ts).
   useEffect(() => {
@@ -1817,6 +1858,18 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
         setRide((r: any) => (r ? { ...r, driver_lat: d.lat, driver_lng: d.lng } : r))
       ),
       on('safety:ridecheck:alert', () => setToast('RideCheck: are you okay?')),
+      // §1: the anomaly check-in prompt — "Is everything okay?" with I'm-safe
+      // and SOS answers; silence lets the server escalate to the admin team.
+      on('safety:checkin', (d: any) =>
+        setCheckin({
+          message: d?.message || 'Is everything okay?',
+          respond_by: d?.respond_by || new Date(Date.now() + 120000).toISOString(),
+        })
+      ),
+      // §3: too many wrong PINs — check the car before getting in.
+      on('safety:pin_locked', () =>
+        setToast('Start PIN locked after wrong attempts — check the car and plate before you get in')
+      ),
     ]
     return () => offs.forEach((o) => o())
   }, [])
@@ -1918,12 +1971,6 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   }
   const progress = done ? 100 : status === 'in_progress' ? 60 : status === 'driver_arrived' ? 35 : 15
   const eta = status === 'accepted' ? Math.max(1, Number(ride?.duration_mins || 12)) : 0
-
-  async function sos() {
-    if (!rideId) return
-    await triggerSos(rideId).catch(() => { })
-    setToast('Emergency alert sent')
-  }
   async function share() {
     if (!rideId) return
     await shareTrip(rideId).catch(() => { })
@@ -2021,7 +2068,22 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
               {IC.phone()}
             </a>
             <button onClick={() => setToast('Chat opens from the driver card')} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#F7F7F7]">{IC.msg()}</button>
-            <button onClick={sos} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#FEF0EF]">{IC.shield()}</button>
+            {/* §4 SOS: press AND HOLD 1.5s — deliberate, but fast. Live red
+                while holding; green tick once the safety team has it. */}
+            <button
+              onPointerDown={beginSosHold}
+              onPointerUp={cancelSosHold}
+              onPointerLeave={cancelSosHold}
+              onPointerCancel={cancelSosHold}
+              title="Hold 1.5s to alert Vura's safety team"
+              className={`w-9 h-9 rounded-full border flex items-center justify-center select-none transition-colors ${
+                sosState === 'holding' ? 'bg-[#EA4335] border-[#EA4335]'
+                : sosState === 'sent' ? 'bg-[#137333] border-[#137333]'
+                : 'border-[#EBEBEB] bg-[#FEF0EF]'
+              }`}
+            >
+              {sosState === 'sent' ? IC.check('#fff') : IC.shield(sosState === 'holding' ? '#fff' : '#EA4335')}
+            </button>
           </div>
         </div>
 
@@ -2055,6 +2117,30 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           <span className="text-[12px] font-bold tracking-[0.15em] text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{plate}</span>
           <span className="ml-auto text-[12px] text-[#ADADAD] truncate">{ride?.payment_method || 'cash'}</span>
         </div>
+
+        {/* §3: the START CODE — share it ONLY with the driver of the matching
+            car. Single use; dies the moment the trip begins. */}
+        {startPin && !done && !cancelled && (
+          <div className="bg-[#1A1A1A] rounded-2xl px-4 py-3 mb-4 flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-white text-[12px] font-semibold leading-snug">
+                Start code — tell your driver only when the car matches
+              </p>
+              <p className="text-[#ADADAD] text-[11px] mt-0.5">Single use · cancelled with the trip</p>
+            </div>
+            <span className="text-white text-[26px] font-bold tracking-[0.28em] pl-1" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+              {startPin}
+            </span>
+          </div>
+        )}
+
+        {/* §4: SOS confirmation — the rider must KNOW help was alerted. */}
+        {sosState === 'sent' && (
+          <div className="bg-[#FEF0EF] border border-[#F5C6C2] rounded-xl px-3.5 py-2.5 mb-4">
+            <p className="text-[12px] font-bold text-[#C5221F]">SOS sent — help is alerted</p>
+            <p className="text-[11px] text-[#7A2E28] mt-0.5">{sosMsg}</p>
+          </div>
+        )}
 
         {/* Card preauthorization: in-progress states — "Ride in progress —
             funds held" → "confirming payment" → "Payment complete". Silent for
@@ -2167,6 +2253,38 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
                 className="w-full mt-5 bg-[#1A1A1A] text-white font-bold text-[15px] py-4 rounded-2xl disabled:opacity-50">
                 {busy ? 'Savingâ€¦' : 'Next'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* §1: the anomaly check-in — "Is everything okay?" I'm-safe / SOS.
+            If nobody answers, the server escalates to the admin team; tapping
+            either button stops that clock. */}
+        {checkin && !done && !cancelled && (
+          <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center px-6">
+            <div className="w-full bg-white rounded-3xl p-5 pb-6 max-w-[360px]">
+              <div className="w-10 h-10 rounded-full bg-[#FEF0EF] flex items-center justify-center mx-auto mb-3">
+                {IC.shield('#EA4335')}
+              </div>
+              <h2 className="text-[17px] font-bold text-[#1A1A1A] text-center">Is everything okay?</h2>
+              <p className="text-[13px] text-[#6B6B6B] text-center mt-2">{checkin.message}</p>
+              <button
+                onClick={async () => { await respondCheckin(rideId!, 'safe').catch(() => { }); setCheckin(null); setToast('Glad you are safe') }}
+                disabled={!rideId}
+                className="w-full mt-5 bg-[#137333] text-white font-bold text-[15px] py-3.5 rounded-2xl disabled:opacity-50"
+              >
+                I'm safe
+              </button>
+              <button
+                onClick={async () => { const r = await respondCheckin(rideId!, 'sos').catch(() => null); if (r) { setSosState('sent'); setSosMsg("Help alerted — Vura's safety team has your details and live location.") } setCheckin(null) }}
+                disabled={!rideId}
+                className="w-full mt-3 bg-[#EA4335] text-white font-bold text-[15px] py-3.5 rounded-2xl disabled:opacity-50"
+              >
+                Send SOS
+              </button>
+              <p className="text-[11px] text-[#ADADAD] text-center mt-3">
+                No answer tells our safety team to follow up on this trip.
+              </p>
             </div>
           </div>
         )}

@@ -42,11 +42,13 @@ import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
+import safetyAdminRouter from "./routes/safetyAdmin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startPreauthReaper } from "./services/preauthorization";
 import { startPayLaterWorker } from "./services/PayLaterService";
 import paystackWebhookRouter from "./routes/paystackWebhook";
 import { startOfferWorker, getBuildCommit } from "./services/offerWorker";
+import { startSafetyWorker } from "./services/safetyWorker";
 import { startPerformanceTierScheduler } from "./services/performanceTier";
 import { logEtaProviderStatus } from "./services/eta";
 import { logProviderSeams } from "./services/providerSeams";
@@ -250,6 +252,9 @@ app.use("/api/admin", adminRouter);
 // /api/admin/v2/* (the test harness mounts this router there; production used
 // to mount at /api/admin which 404'd every console call - fixed 2026-10-14).
 app.use("/api/admin/v2", adminV2Router);
+// Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
+// same admin/v2 tree so role checks + audit behave identically.
+app.use("/api/admin/v2/safety", safetyAdminRouter);
 app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);
@@ -774,6 +779,9 @@ async function start() {
   // Driver dispatch runs on the DB, not on setTimeout (a restart must not strand
   // a rider waiting for an offer that will never expire).
   startOfferWorker(io);
+// Safety (§1/§6): anomaly sweeps → rider check-ins → admin escalation, plus
+// the location-retention janitor. Wires once io exists.
+startSafetyWorker(io);
 
   // Report the ETA provider decision ONCE at boot: ROUTE_PROVIDER_URL set ->
   // OSRM-compatible table API; unset -> "ETA provider not configured" and

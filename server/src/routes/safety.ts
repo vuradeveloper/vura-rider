@@ -1,8 +1,20 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
+import { triggerSos } from "../services/sosService";
+import { respondCheckin } from "../services/checkinService";
+import { getRidePinForRider } from "../services/pinService";
 
 const router = Router();
+
+/** DB user id for the authed Firebase uid (the routes' shared resolution). */
+async function dbUserId(req: AuthRequest): Promise<string | null> {
+  const u = await queryOne<{ id: string }>(
+    "SELECT id FROM users WHERE firebase_uid = $1",
+    [req.userId!]
+  ).catch(() => null);
+  return u?.id ?? null;
+}
 
 // Ensure safety tables exist
 async function ensureTables() {
@@ -72,17 +84,59 @@ router.delete("/contacts/:id", requireAuth, async (req: AuthRequest, res: Respon
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/safety/sos — Trigger SOS
+// POST /api/safety/sos — Trigger SOS (§4): enriches the alert with both
+// people's names + phones, the car incl. plate, live GPS and the ride id/time,
+// stores it in sos_alerts for the admin console, and answers with the truth —
+// Vura's safety team is alerted; no emergency service is called automatically.
 router.post("/sos", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     await ensureTables();
-    const { rideId } = req.body;
-    await execute(
-      "INSERT INTO safety_events (ride_id, type, data) VALUES ($1, 'sos', $2)",
-      [rideId, JSON.stringify({ triggered_by: req.userId, timestamp: new Date().toISOString() })]
-    );
-    console.log(`🚨 SOS from ${req.userId} on ride ${rideId}`);
-    res.json({ success: true, message: "Emergency services have been notified" });
+    const uid = await dbUserId(req);
+    if (!uid) { res.status(404).json({ error: "User not found" }); return; }
+    const { rideId, location } = req.body || {};
+    const role: "rider" | "driver" = String(req.body?.role) === "driver" ? "driver" : "rider";
+    const result = await triggerSos({
+      rideId: rideId || null,
+      byUserId: uid,
+      byRole: role,
+      location:
+        location && Number.isFinite(Number(location.lat)) && Number.isFinite(Number(location.lng))
+          ? { lat: Number(location.lat), lng: Number(location.lng) }
+          : null,
+    });
+    res.json({ success: true, id: result.id, message: result.message, ride_id: result.ride_id });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/safety/checkin/respond — the rider's "I'm safe" (or SOS) answer
+// to the anomaly check-in prompt. Stops the admin escalation clock.
+router.post("/checkin/respond", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = await dbUserId(req);
+    if (!uid) { res.status(404).json({ error: "User not found" }); return; }
+    const { rideId, response } = req.body || {};
+    if (!rideId || !["safe", "sos"].includes(String(response))) {
+      res.status(400).json({ error: "rideId and response ('safe'|'sos') are required" });
+      return;
+    }
+    const io = (global as any).__vuraIo;
+    const out = await respondCheckin(io, String(rideId), uid, response as "safe" | "sos");
+    if (!out.ok) { res.status(400).json({ error: out.error }); return; }
+    res.json({ success: true, sos: out.sos ?? null });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/safety/pin?rideId= — the rider's start PIN (§3). Only the ride's
+// passenger can read it; nothing after the trip starts (spent/dead secret).
+router.get("/pin", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = await dbUserId(req);
+    if (!uid) { res.status(404).json({ error: "User not found" }); return; }
+    const rideId = String(req.query.rideId || "");
+    if (!rideId) { res.status(400).json({ error: "rideId is required" }); return; }
+    const out = await getRidePinForRider(rideId, uid);
+    if (!out) { res.status(404).json({ error: "No PIN for this ride" }); return; }
+    res.json({ ride_id: rideId, pin: out.pin, locked: out.locked });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 

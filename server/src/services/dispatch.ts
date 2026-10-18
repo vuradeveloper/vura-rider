@@ -26,6 +26,7 @@ import { sendPushToUsers } from "./notify";
 import { attachVehicleImages } from "./vehicleImages";
 import { resolveDriverPhotoUrl } from "./driverPhoto";
 import { trace, startTrace } from "./trace";
+import { mintRidePin } from "./pinService";
 import { destinationFit, FitThresholds } from "./destinationFit";
 import { getDestinationConfig } from "./config";
 import { getConfig } from "./config";
@@ -779,6 +780,26 @@ async function filterCandidatesForTier(
         mode,
       }).catch(() => undefined);
     }
+    // SAFETY §2 — SHADOW MODE: count pool drivers with the "only women riders"
+    // preference. NOTHING is filtered here (matching stays untouched until real
+    // rider-gender data exists); this line quantifies the would-be pool
+    // shrinkage so the admin team sees coverage impact before any flip-on.
+    // Skipped under NODE_ENV=test so the once-style DB stubs in the dispatch
+    // suites are never consumed by a diagnostic query.
+    if (process.env.NODE_ENV !== "test") {
+      try {
+        const pref = await queryOne<{ n: number }>(
+          `SELECT COUNT(*)::int AS n FROM driver_preferences
+            WHERE women_only = TRUE AND user_id = ANY($1::uuid[])`,
+          [pool.map((c) => c.id)]
+        );
+        if (pref && pref.n > 0) {
+          console.log(
+            `[safety/shadow] ride=${rideId} pool=${pool.length} women_only_drivers=${pref.n} (NOT filtered — shadow mode)`
+          );
+        }
+      } catch { /* shadow logging must never affect dispatch */ }
+    }
     return pool;
   } catch (err: any) {
     // The class filter may never BE the reason a ride finds no driver.
@@ -1308,6 +1329,11 @@ export async function acceptRide(
     version: result.version,
   });
   if (!result.duplicate) {
+    // Safety (§3): the rider's start PIN is minted here — one per ride, shown
+    // only to the rider, keyed by this driver before the trip can begin.
+    void mintRidePin(rideId).catch((err) =>
+      console.warn("[safety] PIN mint failed:", err?.message || err)
+    );
     await emitRideAccepted(io, rideId, driverId, result.version ?? 0);
     // Tell the drivers who were still looking at this ride that it is gone. The
     // database already refused their accept, but a row flipping to 'expired' is

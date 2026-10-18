@@ -45,6 +45,7 @@ export const MIGRATION_ORDER = [
   "014_ride_preauthorization.sql",
   "015_pay_later_upgrade.sql",
   "016_promos_v2.sql",
+  "017_safety.sql",
 ] as const;
 
 export type MigrationOutcome = "applied" | "skipped" | "failed";

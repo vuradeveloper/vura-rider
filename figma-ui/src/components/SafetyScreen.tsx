@@ -308,6 +308,11 @@ export function SafetyScreen({
           </div>
         )}
 
+        {/* §6 consent: trips are tracked ONLY while active, for safety. */}
+        <p className="text-[10px] text-[#ADADAD] leading-relaxed mt-4 px-1">
+          By using Vura you agree that active trips are tracked for safety: location is recorded only while a trip runs, kept for a limited period, then deleted. Vura's safety team sees trip details only when responding to a check-in or SOS.
+        </p>
+
         {/* Emergency contacts — real CRUD against /api/safety/contacts. */}
         <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 mt-3 shadow-sm">
           <div className="flex items-center justify-between mb-3">

@@ -24,6 +24,8 @@ import { computeTierStatus } from "../services/performanceTier";
 import { assertRiderCanBook } from "../services/adminRiders";
 import { applyPromoToFare, promoUsableFor, recordPromoUse, ridePromoFor } from "../services/promos";
 import { canonicalTier } from "../services/rideCategories";
+import { logRidePoint } from "../services/locationLog";
+import { verifyRidePin } from "../services/pinService";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -981,6 +983,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           // sees ONE car (the driver's real position), not a sim fighting it.
           markDriverLivePing(activeRide.id);
           syncSimToDriver(activeRide.id, Number(lat), Number(lng));
+          // Safety: persist the fix while the ride is active — this is the path
+          // anomaly detection + the admin live map draw (fire-and-forget; a
+          // history failure must never drop the rider-facing broadcast).
+          void logRidePoint(activeRide.id, dbUserId, Number(lat), Number(lng)).catch(() => { });
           io.to(`ride:${activeRide.id}`).emit("ride:driver:location", {
             rideId: activeRide.id,
             lat,
@@ -1418,10 +1424,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
       } catch (err: any) { console.error("Driver start error:", err); }
     });
 
-    // ── Driver: begin trip to destination ──
+    // ── Driver: begin trip to destination (PIN-gated, §3) ──
+    // The rider's start PIN must be keyed in first — this is the ONE place the
+    // status flips driver_arrived → in_progress. A ride whose PIN row is
+    // missing (mint failure / legacy) still starts; we never strand a trip.
     socket.on("driver:ride:begin", async (data) => {
       try {
-        const { rideId } = data;
+        const { rideId, pin } = data;
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
         const ride = await queryOne<{ id: string; driver_id: string }>(
@@ -1429,7 +1438,40 @@ export function setupSocketHandlers(io: SocketIOServer) {
           [rideId, dbUserId]
         );
         if (!ride) return;
-        await execute("UPDATE rides SET status = 'in_progress' WHERE id = $1", [rideId]);
+        const verdict = await verifyRidePin(rideId, dbUserId, String(pin ?? ""));
+        if (!verdict.ok) {
+          socket.emit("safety:pin_error", {
+            rideId,
+            error: verdict.error,
+            attempts_left: verdict.error === "wrong" ? verdict.attempts_left : 0,
+          });
+          if (verdict.error === "locked") {
+            // Somebody is hammering the code — tell the rider, loudly.
+            void (async () => {
+              const p = await queryOne<{ fb: string | null }>(
+                `SELECT u.firebase_uid AS fb FROM rides r
+                   JOIN users u ON u.id = r.passenger_id WHERE r.id = $1`,
+                [rideId]
+              ).catch(() => null);
+              if (p?.fb) {
+                io.to(`user:${p.fb}`).emit("safety:pin_locked", { rideId });
+                notifyUser(
+                  p.fb,
+                  "Trip start blocked",
+                  "The start PIN was entered incorrectly too many times. Check the car and plate before you get in.",
+                  { ride_id: rideId },
+                  rideId,
+                  "safety"
+                );
+              }
+            })();
+          }
+          return;
+        }
+        await execute(
+          "UPDATE rides SET status = 'in_progress', trip_started_at = NOW() WHERE id = $1",
+          [rideId]
+        );
         io.to(`ride:${rideId}`).emit("ride:started");
         // Redundant delivery to the rider's personal room — survives the rider's
         // ride-room membership being lost (e.g. backgrounded socket reconnect).
