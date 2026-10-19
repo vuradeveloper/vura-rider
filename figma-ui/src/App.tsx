@@ -90,6 +90,7 @@ import {
   sosRest,
   getRideStartPin,
   respondCheckin,
+  getSocket,
   signIn,
   signOut,
   signUp,
@@ -1744,6 +1745,112 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   )
 }
 
+/**
+ * In-ride chat sheet — joins the server's `chat:${rideId}` room, streams
+ * `chat:message`, loads `chat:history` on open. Membership is enforced
+ * SERVER-side (chat:join/chat:send refuse non-participants silently); the
+ * bubbles align on exactly two sender_role values: 'rider' | 'driver'.
+ */
+function ChatSheet({ rideId, peer, senderRole, onClose }: {
+  rideId: string
+  peer: string
+  senderRole: 'rider' | 'driver'
+  onClose: () => void
+}) {
+  const [msgs, setMsgs] = useState<any[] | null>(null)
+  const [text, setText] = useState('')
+  const endRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    getSocket().then((s) => s.emit('chat:join', { rideId })).catch(() => {})
+    const offs = [
+      on('chat:history', (h: any) => { if (alive) setMsgs(Array.isArray(h) ? h : []) }),
+      on('chat:message', (m: any) =>
+        setMsgs((cur) => (Array.isArray(cur) ? [...cur, m] : [m]))
+      ),
+    ]
+    return () => {
+      alive = false
+      offs.forEach((f) => f())
+      getSocket().then((s) => s.emit('chat:leave', { rideId })).catch(() => {})
+    }
+  }, [rideId])
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs?.length])
+
+  const send = async () => {
+    const t = text.trim()
+    if (!t) return
+    setText('')
+    const s = await getSocket().catch(() => null)
+    if (s) s.emit('chat:send', { rideId, message: t.slice(0, 500) })
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/40 flex items-end" onClick={onClose}>
+      <div
+        className="w-full bg-white rounded-t-3xl px-4 pt-3 pb-6 flex flex-col"
+        style={{ maxHeight: '78vh' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-3" />
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[15px] font-bold text-[#1A1A1A]">Chat · {peer}</span>
+          <button onClick={onClose} className="text-[13px] font-semibold text-[#6B6B6B] px-2 py-1">
+            Close
+          </button>
+        </div>
+        <div
+          className="overflow-y-auto px-3 py-3"
+          style={{ background: '#FAFAFA', borderRadius: 12, minHeight: 180, maxHeight: '52vh' }}
+        >
+          {msgs === null && <p className="text-[12px] text-[#ADADAD]">Loading conversation…</p>}
+          {msgs?.length === 0 && (
+            <p className="text-[12px] text-[#ADADAD]">
+              No messages yet — only you and {peer} can see this conversation.
+            </p>
+          )}
+          {(msgs || []).map((m) => {
+            const mine = (m.sender_role || 'rider') === senderRole
+            return (
+              <div key={m.id} className={`flex mb-2 ${mine ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`max-w-[75%] px-3 py-2 rounded-2xl text-[13px] leading-snug break-words ${
+                    mine
+                      ? 'bg-[#1A1A1A] text-white rounded-br-md'
+                      : 'bg-white border border-[#EBEBEB] text-[#1A1A1A] rounded-bl-md'
+                  }`}
+                >
+                  {String(m.message)}
+                </div>
+              </div>
+            )
+          })}
+          <div ref={endRef} />
+        </div>
+        <div className="flex gap-2 mt-3">
+          <input
+            className="flex-1 border border-[#EBEBEB] rounded-xl px-3 py-2.5 text-[14px] outline-none focus:border-[#1A1A1A]"
+            placeholder="Type a message…"
+            value={text}
+            maxLength={500}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void send() }}
+          />
+          <button
+            className="px-4 rounded-xl bg-[#1A1A1A] text-white font-semibold text-[13px] disabled:opacity-40"
+            disabled={!text.trim()}
+            onClick={() => void send()}
+          >
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function RideScreen({ destination, rideId, onDone }: { destination: string; rideId: string | null; onDone: () => void }) {
   const [ride, setRide] = useState<any>(null)
   const [status, setStatus] = useState<string>('accepted')
@@ -1798,6 +1905,13 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   const [sosState, setSosState] = useState<'idle' | 'holding' | 'sent'>('idle')
   const [sosMsg, setSosMsg] = useState('')
   const sosHoldTimer = useRef<number | null>(null)
+  // In-ride chat with the driver (server chat:join / chat:send). The ref keeps
+  // the socket listener honest about whether the sheet is open (closures go
+  // stale inside [] listener effects).
+  const [chatOpen, setChatOpen] = useState(false)
+  const chatOpenRef = useRef(false)
+  const openChat = () => { chatOpenRef.current = true; setChatOpen(true) }
+  const closeChat = () => { chatOpenRef.current = false; setChatOpen(false) }
 
   // §3: the start code appears once a driver is assigned and dies when the
   // trip begins (the server refuses it after that anyway).
@@ -1870,6 +1984,12 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
       on('safety:pin_locked', () =>
         setToast('Start PIN locked after wrong attempts — check the car and plate before you get in')
       ),
+      // In-ride chat: surface messages that land while the sheet is closed.
+      on('chat:message', (m: any) => {
+        if (!chatOpenRef.current) {
+          setToast(`${m?.sender_role === 'driver' ? 'Driver' : 'Rider'}: ${String(m?.message || '').slice(0, 60)}`)
+        }
+      }),
     ]
     return () => offs.forEach((o) => o())
   }, [])
@@ -2067,7 +2187,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
             >
               {IC.phone()}
             </a>
-            <button onClick={() => setToast('Chat opens from the driver card')} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#F7F7F7]">{IC.msg()}</button>
+            <button onClick={openChat} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#F7F7F7]">{IC.msg()}</button>
             {/* §4 SOS: press AND HOLD 1.5s — deliberate, but fast. Live red
                 while holding; green tick once the safety team has it. */}
             <button
@@ -2108,7 +2228,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           }
           compact={started && !done}
           onCall={() => { if (ride?.driver_phone) window.location.href = `tel:${ride.driver_phone}` }}
-          onMessage={() => setToast('Chat opens from the driver card')}
+          onMessage={openChat}
           onMore={() => setToast('Safety tools: Share trip, SOS, RideCheck')}
         />
 
@@ -2255,6 +2375,11 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
               </button>
             </div>
           </div>
+        )}
+
+        {/* In-ride chat with the driver (server chat:* events). */}
+        {chatOpen && rideId && (
+          <ChatSheet rideId={rideId} peer={driverName} senderRole="rider" onClose={closeChat} />
         )}
 
         {/* §1: the anomaly check-in — "Is everything okay?" I'm-safe / SOS.
