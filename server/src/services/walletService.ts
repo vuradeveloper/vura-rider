@@ -442,6 +442,12 @@ export interface WalletViewEntry {
   amount_cents: number;
   balance_after_cents: number;
   commission_cents: number;
+  // The inner split of that commission — what the driver asked to see per
+  // ride: Paystack's cut, the VAT slice and the platform's margin (all parts
+  // OF the commission, never on top of the driver).
+  paystack_fee_cents: number;
+  vat_cents: number;
+  margin_cents: number;
   created_at: string;
   payment_method: string | null;
   fare_rands: number | null;
@@ -458,7 +464,9 @@ export async function getWalletView(driverId: string): Promise<{
   const balance = await getBalanceCents(driverId);
   const entries = await query<WalletViewEntry>(
     `SELECT wl.id, wl.ride_id, wl.type, wl.status, wl.amount_cents,
-            wl.balance_after_cents, wl.commission_cents, wl.created_at,
+            wl.balance_after_cents, wl.commission_cents,
+            wl.paystack_fee_cents, wl.vat_cents, wl.margin_cents,
+            wl.created_at,
             LOWER(COALESCE(r.payment_method, '')) AS payment_method,
             COALESCE(r.actual_fare, r.estimated_fare, 0)::float AS fare_rands
        FROM wallet_ledger wl

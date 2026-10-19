@@ -105,7 +105,10 @@ vi.mock("../config/database", () => ({
           return {
             id: r.id, ride_id: r.ride_id, type: r.type, status: r.status,
             amount_cents: r.amount_cents, balance_after_cents: r.balance_after_cents,
-            commission_cents: r.commission_cents, created_at: r.created_at,
+            commission_cents: r.commission_cents,
+            paystack_fee_cents: r.paystack_fee_cents, vat_cents: r.vat_cents,
+            margin_cents: r.margin_cents,
+            created_at: r.created_at,
             payment_method: ride ? ride.method : null,
             fare_rands: ride ? ride.fare : null,
           };
