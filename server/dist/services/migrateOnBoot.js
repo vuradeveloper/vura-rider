@@ -51,6 +51,8 @@ exports.MIGRATION_ORDER = [
     "013_vehicle_categories.sql",
     "014_ride_preauthorization.sql",
     "015_pay_later_upgrade.sql",
+    "016_promos_v2.sql",
+    "017_safety.sql",
 ];
 /** Arbitrary app-wide advisory key — one constant so all boots serialise. */
 const ADVISORY_KEY = 726401001;

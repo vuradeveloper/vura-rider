@@ -765,5 +765,62 @@ router.get("/feature-status", auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// ── Safety §2: driver rider-preference (SHADOW MODE) ─────────────────────────
+// The toggle is stored and reported, but dispatch does NOT filter on it yet —
+// matching flips on only after real rider-gender data exists and the admin
+// team has reviewed the shadow metrics. `gender` decides who SEES the toggle
+// in the app ("women drivers only").
+router.get("/me/preferences", auth_1.requireAuth, async (req, res) => {
+    try {
+        const driverId = await resolveDriverId(req.userId);
+        if (!driverId) {
+            res.status(404).json({ error: "Driver not found" });
+            return;
+        }
+        await (0, database_1.execute)(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS gender VARCHAR(10)`).catch(() => { });
+        await (0, database_1.execute)(`CREATE TABLE IF NOT EXISTS driver_preferences (user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+         women_only BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`).catch(() => { });
+        const pref = await (0, database_1.queryOne)("SELECT women_only FROM driver_preferences WHERE user_id = $1", [driverId]).catch(() => null);
+        const prof = await (0, database_1.queryOne)("SELECT gender FROM driver_profiles WHERE user_id = $1", [driverId]).catch(() => null);
+        res.json({ women_only: pref?.women_only === true, gender: prof?.gender ?? null, shadow_mode: true });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+router.put("/me/preferences", auth_1.requireAuth, async (req, res) => {
+    try {
+        const driverId = await resolveDriverId(req.userId);
+        if (!driverId) {
+            res.status(404).json({ error: "Driver not found" });
+            return;
+        }
+        const { women_only, gender } = req.body || {};
+        if (gender !== undefined) {
+            const g = gender == null || gender === "" ? null : String(gender).toLowerCase();
+            if (g && !["female", "male", "other"].includes(g)) {
+                res.status(400).json({ error: "gender must be female, male, other or null" });
+                return;
+            }
+            await (0, database_1.execute)(`UPDATE driver_profiles SET gender = $1, updated_at = NOW() WHERE user_id = $2`, [g, driverId]);
+            // A non-woman driver switching gender off can't keep the promise the
+            // toggle makes — turn it off with them (visibility rule, not matching).
+            if (g !== "female" && women_only === undefined) {
+                await (0, database_1.execute)("UPDATE driver_preferences SET women_only = FALSE, updated_at = NOW() WHERE user_id = $1", [driverId]).catch(() => { });
+            }
+        }
+        if (women_only !== undefined) {
+            await (0, database_1.execute)(`INSERT INTO driver_preferences (user_id, women_only, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE SET women_only = $2, updated_at = NOW()`, [driverId, women_only === true]);
+        }
+        const pref = await (0, database_1.queryOne)("SELECT women_only FROM driver_preferences WHERE user_id = $1", [driverId]).catch(() => null);
+        const prof = await (0, database_1.queryOne)("SELECT gender FROM driver_profiles WHERE user_id = $1", [driverId]).catch(() => null);
+        res.json({ women_only: pref?.women_only === true, gender: prof?.gender ?? null, shadow_mode: true });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 exports.default = router;
 //# sourceMappingURL=drivers.js.map

@@ -4,7 +4,36 @@ const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const AffiliateService_1 = require("../services/AffiliateService");
+const firebase_1 = require("../config/firebase");
+const adminInvite_1 = require("../services/adminInvite");
 const router = (0, express_1.Router)();
+// POST /api/users/forgot-password — the console's "Forgot password?".
+// Emails a Firebase set-password link (delivered via Resend). ALWAYS answers
+// success: the response must not reveal which addresses have accounts.
+router.post("/forgot-password", async (req, res) => {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    try {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            res.json({ success: true });
+            return;
+        }
+        let link;
+        try {
+            link = await (0, firebase_1.getAuth)().generatePasswordResetLink(email, { url: adminInvite_1.CONSOLE_URL });
+        }
+        catch {
+            res.json({ success: true }); // no such account — stay silent
+            return;
+        }
+        const sent = await (0, adminInvite_1.sendPasswordResetEmail)(email, link);
+        console.log(`[admin-invite] password reset for ${email}: ${sent.ok ? "sent" : `FAILED — ${sent.error}`}`);
+        res.json({ success: true });
+    }
+    catch (err) {
+        console.warn("[admin-invite] forgot-password error:", err?.message || err);
+        res.json({ success: true });
+    }
+});
 // POST /api/users/sync — Create or update user from Firebase auth
 router.post("/sync", auth_1.requireAuth, async (req, res) => {
     try {

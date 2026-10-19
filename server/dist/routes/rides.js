@@ -14,6 +14,7 @@ const adminRiders_1 = require("../services/adminRiders");
 const rideCategories_1 = require("../services/rideCategories");
 const preauthorization_1 = require("../services/preauthorization");
 const PayLaterService_1 = require("../services/PayLaterService");
+const promos_1 = require("../services/promos");
 const router = (0, express_1.Router)();
 // GET /api/rides/me/active-state â€” ONE call that rebuilds the app's world.
 //
@@ -187,6 +188,29 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             }
             return;
         }
+        // ── Promo (rider side): same server-authoritative rule as the socket path.
+        // The client may only NAME the promo it displayed; window, audience,
+        // per-user targeting and the N-days/N-rides redemption budget are re-checked
+        // here and the discount recomputed from scratch. (The REST path used to
+        // ignore promos entirely — the app books over REST, so nothing ever
+        // discounted.) A promo failure must NEVER block booking.
+        let rideFare = fare != null ? Number(fare) : null;
+        let appliedPromo = null;
+        let promoForRecord = null;
+        if (rideFare != null && (req.body?.promoId || req.body?.promoCode)) {
+            try {
+                const promo = await (0, promos_1.ridePromoFor)("rider", String(req.body.promoId || req.body.promoCode), rider.id);
+                if (promo && (await (0, promos_1.promoUsableFor)(promo, rider.id))) {
+                    const applied = (0, promos_1.applyPromoToFare)(rideFare, promo);
+                    rideFare = applied.fare;
+                    appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
+                    promoForRecord = promo;
+                }
+            }
+            catch {
+                /* promo lookup never blocks booking */
+            }
+        }
         // The tier column ships with migration 013; a database that has not run it
         // yet must still book — exactly the waypointsReady pattern (booking can
         // NEVER break because of a newer column).
@@ -210,7 +234,7 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             destinationAddress ?? null,
             Number.isFinite(Number(destinationLat)) ? Number(destinationLat) : null,
             Number.isFinite(Number(destinationLng)) ? Number(destinationLng) : null,
-            fare != null ? Number(fare) : null,
+            rideFare,
             paymentMethod || null,
             deviceId || null,
             rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
@@ -219,6 +243,13 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         if (!ride?.id) {
             res.status(500).json({ error: "Could not create the ride" });
             return;
+        }
+        // Stamp what was applied (receipts/audits/support — same copy the socket
+        // path stores) and burn one redemption on the rider's promo budget.
+        if (appliedPromo) {
+            await (0, database_1.execute)(`UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`, [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]).catch(() => { });
+            if (promoForRecord)
+                void (0, promos_1.recordPromoUse)(promoForRecord, rider.id).catch(() => { });
         }
         // Start the trace here so trip_saved / dispatch_started / drivers_found /
         // offer_sent all share one trace_id for this ride.

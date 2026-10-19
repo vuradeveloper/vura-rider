@@ -79,11 +79,13 @@ const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmi
 const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
+const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const preauthorization_1 = require("./services/preauthorization");
 const PayLaterService_1 = require("./services/PayLaterService");
 const paystackWebhook_1 = __importDefault(require("./routes/paystackWebhook"));
 const offerWorker_1 = require("./services/offerWorker");
+const safetyWorker_1 = require("./services/safetyWorker");
 const performanceTier_1 = require("./services/performanceTier");
 const eta_1 = require("./services/eta");
 const providerSeams_1 = require("./services/providerSeams");
@@ -243,6 +245,9 @@ app.use("/api/admin", admin_1.default);
 // /api/admin/v2/* (the test harness mounts this router there; production used
 // to mount at /api/admin which 404'd every console call - fixed 2026-10-14).
 app.use("/api/admin/v2", adminV2_1.default);
+// Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
+// same admin/v2 tree so role checks + audit behave identically.
+app.use("/api/admin/v2/safety", safetyAdmin_1.default);
 app.use("/api/affiliates", affiliates_1.default);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", share_1.default);
@@ -755,6 +760,9 @@ async function start() {
     // Driver dispatch runs on the DB, not on setTimeout (a restart must not strand
     // a rider waiting for an offer that will never expire).
     (0, offerWorker_1.startOfferWorker)(io);
+    // Safety (§1/§6): anomaly sweeps → rider check-ins → admin escalation, plus
+    // the location-retention janitor. Wires once io exists.
+    (0, safetyWorker_1.startSafetyWorker)(io);
     // Report the ETA provider decision ONCE at boot: ROUTE_PROVIDER_URL set ->
     // OSRM-compatible table API; unset -> "ETA provider not configured" and
     // haversine ranking only (never the public OSRM demo in production).

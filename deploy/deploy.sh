@@ -28,6 +28,22 @@ git tag -l | grep '/' | while read -r tag; do
   git tag -d "$tag" >/dev/null
 done || true
 
+# 1.5 Stale-dist guard: CloudShell zips the COMMITTED server/dist — if it does
+# not match the last server-touching commit, the deploy silently ships OLD code
+# (hit 2026-10-19: dist was rebuilt only on a dev machine and never committed,
+# so every "successful" deploy kept serving the previous build).
+if [ -z "${SKIP_DIST_CHECK:-}" ]; then
+  DIST_COMMIT="$(tr -d '[:space:]' < server/dist/build-commit.txt 2>/dev/null || true)"
+  LAST_SERVER="$(git log -1 --format=%h -- server/src server/migrations server/package.json server/tsconfig.json)"
+  if [ "$DIST_COMMIT" != "$LAST_SERVER" ]; then
+    echo "ERROR: server/dist is stale (dist=${DIST_COMMIT:-missing}, last server commit=${LAST_SERVER:-none})."
+    echo "Fix:  cd server && npm run build   then: git add server/dist && git commit && git push"
+    echo "Set SKIP_DIST_CHECK=1 to bypass deliberately."
+    exit 1
+  fi
+  echo "dist check OK: $DIST_COMMIT matches the last server commit"
+fi
+
 # 2. Explicit, unique, slash-free label: <= 100 chars, matches [^/]+.
 LABEL="vura-$(git rev-parse --short HEAD)-$(date -u +%Y%m%d-%H%M%S)"
 
