@@ -67,6 +67,8 @@ import {
 import { FeatureFlagError } from "../services/featureFlags";
 import { reviewDocument } from "../services/adminDocReview";
 import { parseTargetUserIds, ensurePromoTables } from "../services/promos";
+import { getAuth } from "../config/firebase";
+import { CONSOLE_URL, randomTempPassword, sendAdminInviteEmail } from "../services/adminInvite";
 import {
   getMoneyOverview,
   listDriverEarnings,
@@ -206,14 +208,57 @@ router.post("/admins", requireAdmin("admins.manage"), async (req: AuthRequest, r
        RETURNING id, email, role, disabled, invited_by, created_at`,
       [email, role, actor.email]
     );
+
+    // ── Deliver the invitation — the row alone never told anyone. ──────────
+    // Existing Firebase account → email carries a "set your password" link
+    // (their rider/driver password is theirs to change); no account → created
+    // with a temporary password that the email carries. If delivery fails the
+    // temp password comes back to the INVITER (admins.manage) so the invite
+    // can still be passed on out-of-band — never silently lost.
+    let emailSent = false;
+    let emailError: string | null = null;
+    let tempPassword: string | null = null;
+    try {
+      const auth = getAuth();
+      let created = false;
+      try {
+        await auth.getUserByEmail(email);
+      } catch (e: any) {
+        if (e?.code !== "auth/user-not-found") throw e;
+        tempPassword = randomTempPassword();
+        await auth.createUser({
+          email,
+          password: tempPassword,
+          displayName: email.split("@")[0],
+        });
+        created = true;
+      }
+      const resetLink = created
+        ? null
+        : await auth
+            .generatePasswordResetLink(email, { url: CONSOLE_URL })
+            .catch(() => null);
+      const sent = await sendAdminInviteEmail({ email, role, tempPassword, resetLink });
+      emailSent = sent.ok;
+      if (!sent.ok) emailError = sent.error || "Email failed";
+    } catch (e: any) {
+      emailError = e?.message || "Could not prepare the invitation";
+    }
+
     await writeAudit(actor, {
       action: existing ? "admin.role_change" : "admin.invite",
       entityType: "admin_user",
       entityId: row?.id ?? null,
       oldValue: existing ? { role: existing.role, disabled: existing.disabled } : undefined,
-      newValue: { role, disabled: false },
+      newValue: { role, disabled: false, email_sent: emailSent },
     });
-    res.status(existing ? 200 : 201).json({ admin: row });
+    res.status(existing ? 200 : 201).json({
+      admin: row,
+      email_sent: emailSent,
+      email_error: emailError,
+      // Surfaced ONLY when delivery failed for a brand-new account.
+      ...(!emailSent && tempPassword ? { temp_password: tempPassword } : {}),
+    });
   } catch (err) {
     sendError(res, err);
   }
