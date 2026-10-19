@@ -23,7 +23,7 @@ const FROM_EMAIL = () => process.env.RESEND_FROM_EMAIL || "onboarding@ridevura.c
 /** Where the invitee signs in (Cloudflare Pages console). */
 exports.CONSOLE_URL = process.env.CONSOLE_URL || "https://vura-admin-backoffice.pages.dev";
 const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // no I/O — read-aloud friendly
-const LOWER = "abcdefghijkmnpqrstuvwxyz"; // no l
+const LOWER = "abcdefghjkmnpqrstuvwxyz"; // no i/l/o
 const DIGIT = "23456789"; // no 0/1
 const SYMBOL = "!@#$%^&*";
 /** 12 characters, at least one of each class — friendly to Firebase's policy. */
