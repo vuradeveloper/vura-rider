@@ -475,7 +475,7 @@ export async function getSocket(): Promise<any> {
       reconnectionDelayMax: 5000,
     });
     // Fan every server event out to subscribers.
-    [
+    const FORWARDED = [
       "ride:request",
       "ride:accepted",
       "ride:driver:arrived",
@@ -498,8 +498,17 @@ export async function getSocket(): Promise<any> {
       "connect",
       "connect_error",
       "disconnect",
-    ].forEach((evt) => {
+    ];
+    FORWARDED.forEach((evt) => {
       socket.on(evt, (data: any) => emitLocal(evt, data));
+    });
+    // Catch-all: forward EVERY server event NOT named above. The safety suite
+    // (safety:checkin, safety:pin_locked) and chat:history were silently
+    // swallowed by this whitelist — those features looked dead while the
+    // server worked perfectly. Duplicates are skipped so no listener ever
+    // fires twice.
+    socket.onAny((event: string, data: any) => {
+      if (!FORWARDED.includes(event)) emitLocal(event, data);
     });
 
     // Force a fresh token and retry immediately, as the old apps do, instead of

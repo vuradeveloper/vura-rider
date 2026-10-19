@@ -788,7 +788,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
       try {
         const { rideId } = data;
         if (!rideId) return;
-        if (!(await chatMember(rideId))) return; // not our ride → silent
+        if (!(await chatMember(rideId))) {
+          console.warn(`[chat] join refused ride=${rideId} socket=${socket.userId || "?"}`);
+          return;
+        }
         socket.join(`chat:${rideId}`);
         // Send the existing conversation history so the screen isn't empty.
         await ensureChatTable();
@@ -818,7 +821,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
         if (!dbUserId) throw new Error("User details not synced.");
         const text = String(message || "").trim().slice(0, 500);
         if (!text) return;
-        if (!(await chatMember(rideId))) return; // not our ride → silent
+        if (!(await chatMember(rideId))) {
+          console.warn(`[chat] send refused ride=${rideId} socket=${socket.userId || "?"}`);
+          return;
+        }
         await ensureChatTable();
         const msg = await queryOne<any>(
           `INSERT INTO chat_messages (ride_id, sender_id, message)

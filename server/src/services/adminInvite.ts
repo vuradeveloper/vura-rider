@@ -17,7 +17,7 @@ export const CONSOLE_URL =
   process.env.CONSOLE_URL || "https://vura-admin-backoffice.pages.dev";
 
 const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // no I/O — read-aloud friendly
-const LOWER = "abcdefghijkmnpqrstuvwxyz"; // no l
+const LOWER = "abcdefghjkmnpqrstuvwxyz"; // no i/l/o
 const DIGIT = "23456789"; // no 0/1
 const SYMBOL = "!@#$%^&*";
 

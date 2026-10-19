@@ -1912,6 +1912,9 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   const chatOpenRef = useRef(false)
   const openChat = () => { chatOpenRef.current = true; setChatOpen(true) }
   const closeChat = () => { chatOpenRef.current = false; setChatOpen(false) }
+  // The Safety Center WITHOUT leaving the trip — contacts, sharing and
+  // RideCheck all work mid-ride (SafetyScreen keys off the live active ride).
+  const [safetyOpen, setSafetyOpen] = useState(false)
 
   // §3: the start code appears once a driver is assigned and dies when the
   // trip begins (the server refuses it after that anyway).
@@ -2278,6 +2281,11 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
             className="flex-1 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[13px] py-3.5 rounded-2xl active:bg-[#F7F7F7] disabled:opacity-40">
             Share trip
           </button>
+          <button onClick={() => setSafetyOpen(true)}
+            className="px-4 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[13px] py-3.5 rounded-2xl active:bg-[#F7F7F7]"
+            title="Safety center — contacts, sharing, RideCheck (stays on your trip)">
+            Safety
+          </button>
           {started || done ? (
             done ? (
               <button onClick={() => setSheet(true)} className="flex-1 bg-[#1A1A1A] text-white font-semibold text-[13px] py-3.5 rounded-2xl transition">
@@ -2380,6 +2388,21 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
         {/* In-ride chat with the driver (server chat:* events). */}
         {chatOpen && rideId && (
           <ChatSheet rideId={rideId} peer={driverName} senderRole="rider" onClose={closeChat} />
+        )}
+
+        {/* Safety Center as an OVERLAY — the rider never leaves the ride screen
+            (the bottom nav is hidden during trips by design, and the trip
+            continuity effect restores this screen from the DB on any return). */}
+        {safetyOpen && (
+          <div className="fixed inset-0 z-[85] bg-white overflow-y-auto">
+            <SafetyScreen
+              onBack={() => setSafetyOpen(false)}
+              onReportIssue={() => {
+                setSafetyOpen(false)
+                setToast('Report an issue after your trip — Activity → Help')
+              }}
+            />
+          </div>
         )}
 
         {/* §1: the anomaly check-in — "Is everything okay?" I'm-safe / SOS.
