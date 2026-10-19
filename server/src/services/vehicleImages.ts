@@ -1109,9 +1109,13 @@ export async function runCarsxeFetch(
   const autoApproved = autoApproveEnabled && confidentStudio;
 
   await execute(
+    // Explicit casts on $9: `SET status = $9` (VARCHAR assignment) plus
+    // `CASE WHEN $9 = 'approved'` (unknown-literal comparison) otherwise give
+    // Postgres two candidate types for one parameter — the same "inconsistent
+    // types deduced for parameter" failure fixed on the SOS route.
     `UPDATE vehicle_images
-        SET status = $9,
-            approved_at = CASE WHEN $9 = 'approved' THEN NOW() ELSE approved_at END,
+        SET status = $9::text,
+            approved_at = CASE WHEN $9::text = 'approved' THEN NOW() ELSE approved_at END,
             image_url = $2, storage_key = $3, source_url = $4,
             context_link = $5, width = $6, height = $7, candidates = $8::jsonb, api_calls_used = 1
       WHERE id = $1`,

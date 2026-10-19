@@ -48,6 +48,7 @@ import { verifyDocument } from "./docVerification";
 import { requiredDocsStatus } from "./adminDocReview";
 import { getObjectFromS3 } from "../lib/s3";
 import adminV2Router from "../routes/adminV2";
+import safetyAdminRouter from "../routes/safetyAdmin";
 
 // S3 is not reachable from the scratch harness — mock it so the seed/upload
 // paths (processVehicleImage → sharp runs FOR REAL, only the bucket is faked)
@@ -358,6 +359,9 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       "010_doc_verification.sql",
       "011_doc_type_check.sql",
       "012_promos.sql",
+      "014_ride_preauthorization.sql",
+      "016_promos_v2.sql",
+      "017_safety.sql",
     ]) {
       const sql = readFileSync(join(process.cwd(), "migrations", file), "utf8");
       const statements = sql
@@ -387,6 +391,25 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       `ALTER TABLE rides ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ`,
       `ALTER TABLE rides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
       `ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION`,
+      // Safety suite tables the mounted /v2/safety router touches (017 shape —
+      // IF NOT EXISTS so a shared scratch container that already has 017 is
+      // untouched). sos_alerts exists so the SOS Acknowledge/Resolve
+      // regression test below can run the REAL statement against real PG.
+      `CREATE TABLE IF NOT EXISTS sos_alerts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        ride_id UUID REFERENCES rides(id) ON DELETE SET NULL,
+        triggered_by UUID REFERENCES users(id),
+        triggered_by_role VARCHAR(20),
+        status VARCHAR(20) NOT NULL DEFAULT 'active'
+          CHECK (status IN ('active','acknowledged','resolved')),
+        payload JSONB,
+        acknowledged_by UUID,
+        acknowledged_at TIMESTAMPTZ,
+        resolved_by UUID,
+        resolved_at TIMESTAMPTZ,
+        outcome TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
     ]) {
       await execute(stmt);
     }
@@ -394,6 +417,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     const app = express();
     app.use(express.json());
     app.use("/api/admin/v2", adminV2Router);
+    app.use("/api/admin/v2/safety", safetyAdminRouter);
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => resolve());
     });
@@ -430,6 +454,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await execute(`DELETE FROM support_ticket_messages`);
     await execute(`DELETE FROM support_tickets`);
     await execute(`DELETE FROM ride_events`);
+    await execute(`DELETE FROM sos_alerts`);
     await execute(`DELETE FROM admin_campaigns`);
     // schema_migrations may not exist in the scratch container (it is created
     // by migrateOnBoot, which this suite does not run) — best-effort cleanup.
@@ -1256,6 +1281,80 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
 
 
 
+
+  it("SOS inbox: acknowledge → resolve writes status, actors, outcome (42804 regression)", async () => {
+    process.env.ADMIN_EMAILS = "boss@vura.test";
+    try {
+      authUser.email = "boss@vura.test";
+
+      // actorUserId resolves the admin's users.id for acknowledged_by/resolved_by.
+      const adminUser = await queryOne<{ id: string }>(
+        `INSERT INTO users (firebase_uid, full_name, email, phone, role)
+         VALUES ($1, 'Boss Admin', 'boss@vura.test', '0820000000', 'rider')
+         ON CONFLICT DO NOTHING RETURNING id`,
+        [`ft-boss-${Date.now()}`]
+      );
+      const rideId = await seedTrip("in_progress");
+      const seeded = await queryOne<{ id: string }>(
+        `INSERT INTO sos_alerts (ride_id, triggered_by_role, status, payload)
+         VALUES ($1, 'rider', 'active', '{"kind":"sos"}'::jsonb)
+         RETURNING id`,
+        [rideId]
+      );
+      const id = seeded!.id;
+
+      // ── REGRESSION: this UPDATE used to fail with
+      //   42804 inconsistent types deduced for parameter $2
+      // because `SET status = $2` (VARCHAR assignment) and
+      // `CASE WHEN $2 = 'acknowledged'` (unknown-literal comparison) gave
+      // Postgres two candidate types for the same parameter. The fix casts
+      // every use explicitly — this test runs the REAL statement on real PG.
+      const ack = await request("PATCH", `/api/admin/v2/safety/sos/${id}`, {
+        status: "acknowledged",
+      });
+      expect(ack.status).toBe(200);
+      expect(ack.json.alert.status).toBe("acknowledged");
+      // (acknowledged_at/resolved_at are asserted on the row below — the
+      // route's RETURNING only carries id, ride_id, status, outcome.)
+
+      const resolved = await request("PATCH", `/api/admin/v2/safety/sos/${id}`, {
+        status: "resolved",
+        outcome: "Called rider — safe, no emergency.",
+      });
+      expect(resolved.status).toBe(200);
+      expect(resolved.json.alert.status).toBe("resolved");
+
+      const row = await queryOne<any>(
+        `SELECT status, acknowledged_by, acknowledged_at, resolved_by, resolved_at, outcome
+           FROM sos_alerts WHERE id = $1`,
+        [id]
+      );
+      expect(row.status).toBe("resolved");
+      expect(row.acknowledged_at).toBeTruthy();
+      expect(row.resolved_at).toBeTruthy();
+      expect(String(row.outcome)).toContain("safe");
+      if (adminUser) {
+        expect(row.acknowledged_by).toBe(adminUser.id);
+        expect(row.resolved_by).toBe(adminUser.id);
+      }
+
+      // Validation + 404 still behave.
+      expect(
+        (await request("PATCH", `/api/admin/v2/safety/sos/${id}`, { status: "nope" })).status
+      ).toBe(400);
+      expect(
+        (
+          await request("PATCH", `/api/admin/v2/safety/sos/00000000-0000-0000-0000-000000000000`, {
+            status: "acknowledged",
+          })
+        ).status
+      ).toBe(404);
+    } finally {
+      await execute(`DELETE FROM sos_alerts`).catch(() => {});
+      await execute(`DELETE FROM users WHERE email = 'boss@vura.test'`).catch(() => {});
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
 
   it("support inbox: create → reply → resolve, all audited; permissions enforced", async () => {
     process.env.ADMIN_EMAILS = "boss@vura.test";

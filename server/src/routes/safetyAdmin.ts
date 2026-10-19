@@ -227,15 +227,21 @@ router.patch("/sos/:id", requireAdmin("tickets.write"), async (req: AuthRequest,
       return;
     }
     const actorId = await actorUserId(actor);
+    // NOTE the explicit ::text / ::uuid / :: casts on EVERY parameter use:
+    // `SET status = $2` (VARCHAR(20) assignment context) and
+    // `CASE WHEN $2 = 'acknowledged'` (unknown-literal comparison, which PG
+    // deduces as TEXT) used to give Postgres TWO candidate types for $2 —
+    // live symptom: "42804 inconsistent types deduced for parameter $2" on
+    // every Acknowledge/Resolve press. One cast per use = one deduction.
     const row = await queryOne<any>(
       `UPDATE sos_alerts
-          SET status = $2,
-              acknowledged_by = CASE WHEN $2 = 'acknowledged' THEN $3 ELSE acknowledged_by END,
-              acknowledged_at = CASE WHEN $2 = 'acknowledged' THEN NOW() ELSE acknowledged_at END,
-              resolved_by   = CASE WHEN $2 = 'resolved' THEN $3 ELSE resolved_by END,
-              resolved_at   = CASE WHEN $2 = 'resolved' THEN NOW() ELSE resolved_at END,
-              outcome = COALESCE($4, outcome)
-        WHERE id = $1
+          SET status = $2::text,
+              acknowledged_by = CASE WHEN $2::text = 'acknowledged' THEN $3::uuid ELSE acknowledged_by END,
+              acknowledged_at = CASE WHEN $2::text = 'acknowledged' THEN NOW() ELSE acknowledged_at END,
+              resolved_by   = CASE WHEN $2::text = 'resolved' THEN $3::uuid ELSE resolved_by END,
+              resolved_at   = CASE WHEN $2::text = 'resolved' THEN NOW() ELSE resolved_at END,
+              outcome = COALESCE($4::text, outcome)
+        WHERE id = $1::uuid
         RETURNING id, ride_id, status, outcome`,
       [String(req.params.id), status, actorId, outcome]
     );

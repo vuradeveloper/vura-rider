@@ -250,6 +250,16 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS version INT DEFAULT 0;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION;
+-- 014 ride preauthorization: the hold/capture columns that every
+-- payment_status statement in rides.ts / preauthorization.ts selects — the
+-- SQL inventory below validates those statements against real Postgres.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS preauth_reference TEXT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS hold_checkout_url TEXT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS hold_expires_at TIMESTAMPTZ;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS hold_amount_cents INTEGER;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS captured_amount NUMERIC(10,2);
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS card_auth_code VARCHAR(100);
 `;
 
 function migrationSql(file: string): string {
