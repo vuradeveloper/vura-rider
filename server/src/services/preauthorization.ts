@@ -923,9 +923,10 @@ export async function handlePreauthorizationEvent(
   const ride = await queryOne<{
     id: string;
     passenger_id: string | null;
+    driver_id: string | null;
     payment_status: string | null;
   }>(
-    `SELECT id, passenger_id, payment_status FROM rides WHERE preauth_reference = $1`,
+    `SELECT id, passenger_id, driver_id, payment_status FROM rides WHERE preauth_reference = $1`,
     [ref]
   ).catch(() => null);
   if (!ride) {
@@ -1010,6 +1011,19 @@ export async function handlePreauthorizationEvent(
         console.log(
           `[preauth] CAPTURED R${capturedRands.toFixed(2)} ride=${ride.id} ref=${ref}`
         );
+        // ── Commission spec: the capture webhook is what RELEASES the driver's
+        // wallet credit (pending → posted). Idempotent — a duplicate delivery
+        // promotes nothing. The webhook's real Paystack fee refines the split.
+        try {
+          const feeCents =
+            data.fee != null && Number.isFinite(Number(data.fee))
+              ? Math.round(Number(data.fee))
+              : null;
+          const { confirmCardRideCredit } = await import("../services/walletService");
+          await confirmCardRideCredit(ride.driver_id ?? "", ride.id, feeCents);
+        } catch (e: any) {
+          console.warn(`[wallet] webhook confirm ride=${ride.id}:`, e?.message || e);
+        }
         return done(false, true, "paid");
       }
       const after = await queryOne<{ payment_status: string | null }>(
@@ -1032,6 +1046,14 @@ export async function handlePreauthorizationEvent(
       console.error(
         `[preauth] CAPTURE FAILED ride=${ride.id} ref=${ref} message=${data.message || "n/a"}`
       );
+      // Wallet: the capture never happened — the pending driver credit must
+      // not survive (voided; never posted, so the balance never moved anyway).
+      try {
+        const { closeRideWalletEntries } = await import("../services/walletService");
+        await closeRideWalletEntries(ride.id, "capture_failed");
+      } catch (e: any) {
+        console.warn(`[wallet] capture.failed close ride=${ride.id}:`, e?.message || e);
+      }
       return done(false, (upd?.rowCount ?? 0) > 0, "payment failed");
     }
 

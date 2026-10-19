@@ -675,6 +675,17 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // to the ride room still see the request card).
         io.to("drivers").emit("ride:cancelled", { rideId, reason });
 
+        // Wallet: a cancelled ride must never leave money standing — void a
+        // pending card credit, reverse any posted entry (once, idempotent).
+        void (async () => {
+          try {
+            const { closeRideWalletEntries } = await import("../services/walletService");
+            await closeRideWalletEntries(rideId, "rider_cancelled");
+          } catch (e: any) {
+            console.warn(`[wallet] cancel close ride=${rideId}:`, e?.message || e);
+          }
+        })();
+
         // Push "ride cancelled" to the assigned driver (and any driver watching).
         (async () => {
           const drv = await queryOne<{ firebase_uid: string }>(
@@ -1388,6 +1399,15 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // Any offer still ringing for this ride stops immediately.
         await cancelPendingOffers(io, rideId, "driver_cancelled");
         await releaseDriver(dbUserId);
+        // Wallet: void the pending credit / reverse posted entries (idempotent).
+        void (async () => {
+          try {
+            const { closeRideWalletEntries } = await import("../services/walletService");
+            await closeRideWalletEntries(rideId, "driver_cancelled");
+          } catch (e: any) {
+            console.warn(`[wallet] cancel close ride=${rideId}:`, e?.message || e);
+          }
+        })();
 
         const cancelPayload = { rideId, reason: "Your driver cancelled the trip." };
         // Instant delivery to the ride room (the rider is on the trip screen)...
@@ -1554,15 +1574,31 @@ export function setupSocketHandlers(io: SocketIOServer) {
         if (ride.status !== "completed") {
           void noteDestinationTripCompleted(dbUserId, rideId).catch(() => undefined);
         }
-        // Record the driver's earnings so the wallet / pending-earnings
-        // endpoint shows the real amount the driver earned from this ride.
+        // Earnings record + WALLET LEDGER (commission spec): the 10% split is
+        // computed once — driver_earnings keeps real fee/net for the admin
+        // Money screen, and the wallet entry follows the payment method:
+        // cash debits commission NOW (the wallet may go negative — the driver
+        // holds the rider's cash); card / Pay-Later posts a PENDING credit the
+        // Paystack capture webhook releases (webhook-gated, so money the
+        // rider never actually paid can never reach the driver's wallet).
         try {
-          await execute(
-            `INSERT INTO driver_earnings (driver_id, ride_id, gross_amount, fee, net_amount)
-             VALUES ($1, $2, $3, 0, $3)`,
-            [dbUserId, rideId, ride.fare || 0]
+          const methodRow = await queryOne<{ payment_method: string | null }>(
+            "SELECT payment_method FROM rides WHERE id = $1",
+            [rideId]
+          ).catch(() => null);
+          const method = String(
+            methodRow?.payment_method ?? (ride as any)?.payment_method ?? ""
           );
-        } catch {}
+          const { recordRideCompletion, backfillDriverLedger } = await import(
+            "../services/walletService"
+          );
+          // Seed this driver's pre-wallet history FIRST (once — the guard is
+          // "no ledger rows at all"), then post this ride (idempotent).
+          await backfillDriverLedger(dbUserId).catch(() => { });
+          await recordRideCompletion(dbUserId, rideId, Number(ride.fare || 0), method);
+        } catch (e: any) {
+          console.warn(`[wallet] completion hook ride=${rideId}:`, e?.message || e);
+        }
         io.to(`ride:${rideId}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
         // Driver is free again: straight back into the dispatch pool (status flips
         // to 'available' while they stay online, 'offline' otherwise).

@@ -1243,8 +1243,10 @@ export async function acceptRide(
       estimated_fare: string | null;
       version: number | null;
       driver_id: string | null;
+      payment_method: string | null;
     }>(
-      `SELECT id, status, passenger_id, estimated_fare, COALESCE(version, 0) AS version, driver_id
+      `SELECT id, status, passenger_id, estimated_fare, COALESCE(version, 0) AS version, driver_id,
+              payment_method
          FROM rides WHERE id = $1 FOR UPDATE`,
       [rideId]
     );
@@ -1260,6 +1262,35 @@ export async function acceptRide(
     }
     if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
       return { ok: false, error: `Ride is ${ride.status}` };
+    }
+
+    // ── Commission spec: ACCEPT-TIME CASH BLOCK ────────────────────────────
+    // A wallet below the configured negative limit refuses NEW CASH rides —
+    // cash commission is charged at completion with no webhook to gate it,
+    // so an unbounded debt would keep growing. CARD rides stay open: they are
+    // exactly how a negative balance recovers. (Card acceptance is never
+    // blocked — the wallet can't go further negative on a card ride.)
+    if (String(ride.payment_method || "").trim().toLowerCase() === "cash") {
+      try {
+        const { cashRideBlocked, getBalanceCents, getWalletConfig } = await import(
+          "./walletService"
+        );
+        const cfg = await getWalletConfig();
+        const balance = await getBalanceCents(driverId);
+        if (cashRideBlocked(balance, cfg)) {
+          return {
+            ok: false,
+            error:
+              `Your balance is R${(balance / 100).toFixed(2)} — below the ` +
+              `R${cfg.negative_limit_rand} limit, so cash rides are paused. ` +
+              `Take card rides to clear your balance.`,
+          };
+        }
+      } catch (e: any) {
+        // Fail OPEN on wallet-read errors: never strand a driver out of work
+        // because a config read glitched (the completion hook still charges).
+        console.warn(`[wallet] cash-guard check failed driver=${driverId}:`, e?.message || e);
+      }
     }
 
     // Claim this driver's offer if they have a live one.

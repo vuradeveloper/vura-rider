@@ -43,6 +43,7 @@ import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/ve
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
 import safetyAdminRouter from "./routes/safetyAdmin";
+import walletAdminRouter from "./routes/walletAdmin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startPreauthReaper } from "./services/preauthorization";
 import { startPayLaterWorker } from "./services/PayLaterService";
@@ -255,6 +256,8 @@ app.use("/api/admin/v2", adminV2Router);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
 app.use("/api/admin/v2/safety", safetyAdminRouter);
+// Commission / wallet tuning (10% split, VAT slice, cash negative limit).
+app.use("/api/admin/v2/wallet", walletAdminRouter);
 app.use("/api/affiliates", affiliatesRouter);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", shareRouter);
