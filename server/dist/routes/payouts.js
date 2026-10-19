@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ensurePayoutsTable = ensurePayoutsTable;
 const express_1 = require("express");
@@ -122,24 +155,30 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             res.status(401).json({ error: "User not found" });
             return;
         }
-        // Withdrawable balance = the fares riders actually PAID BY CARD on completed rides
-        // — including Pay Later rides (the PLATFORM fronts those: drivers are paid at
-        // completion regardless of whether the rider has settled their balance yet),
-        // minus what has already been paid out. This is deliberately the SAME expression
-        // the wallet endpoint uses, so the figure on the driver's screen is exactly the
-        // figure they can cash out.
-        //
-        // Two corrections to what this used to do: cash rides are excluded (the driver already
-        // holds that money, and counting it let the same fare be taken twice), and
-        // COALESCE(actual_fare, estimated_fare, 0) means a completed ride whose actual_fare was
-        // never written still counts instead of silently reading R0.00.
-        const earnings = await (0, database_1.queryOne)(`SELECT
-         (SELECT COALESCE(SUM(COALESCE(actual_fare, estimated_fare, 0)), 0)::float FROM rides
-           WHERE driver_id = $1 AND status = 'completed'
-             AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS card_earnings,
-         (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
-           WHERE driver_id = $1 AND status = 'success') AS paid_out`, [user.id]);
-        const available = Math.max(0, Number(earnings?.card_earnings || 0) - Number(earnings?.paid_out || 0));
+        // ── LEDGER IS THE SOURCE OF TRUTH (commission spec): available cash-out
+        // = the wallet's posted balance (card credits after webhook capture,
+        // − cash commissions, − previous payouts). Clamped at 0: you can never
+        // withdraw money you owe. The legacy rides-derived expression remains
+        // only as a fallback if the ledger tables are unreachable mid-deploy.
+        let available = -1;
+        try {
+            const { getBalanceCents, walletLedgerReady } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+            if (await walletLedgerReady()) {
+                available = Math.max(0, Math.round(await getBalanceCents(user.id)) / 100);
+            }
+        }
+        catch {
+            available = -1;
+        }
+        if (available < 0) {
+            const earnings = await (0, database_1.queryOne)(`SELECT
+           (SELECT COALESCE(SUM(COALESCE(actual_fare, estimated_fare, 0)), 0)::float FROM rides
+             WHERE driver_id = $1 AND status = 'completed'
+               AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS card_earnings,
+           (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
+             WHERE driver_id = $1 AND status = 'success') AS paid_out`, [user.id]);
+            available = Math.max(0, Number(earnings?.card_earnings || 0) - Number(earnings?.paid_out || 0));
+        }
         if (amountRands > available) {
             res.status(400).json({ error: `Insufficient balance. You have R${available.toFixed(2)} available to cash out.` });
             return;
@@ -189,6 +228,15 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             }
             catch (err) {
                 console.warn("Mark-paid earnings error:", err);
+            }
+            // ── Ledger debit: the successful cash-out reduces the wallet balance
+            // (idempotent per payout id — a retried success can't double-debit).
+            try {
+                const { recordPayoutDebit } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+                await recordPayoutDebit(user.id, payoutId, amountRands);
+            }
+            catch (err) {
+                console.warn(`[wallet] payout debit failed payout=${payoutId}:`, err?.message || err);
             }
         }
         res.json({

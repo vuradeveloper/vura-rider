@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupSocketHandlers = setupSocketHandlers;
 const firebase_1 = require("../config/firebase");
@@ -547,6 +580,17 @@ function setupSocketHandlers(io) {
                 // cards for this ride disappear immediately (drivers not yet joined
                 // to the ride room still see the request card).
                 io.to("drivers").emit("ride:cancelled", { rideId, reason });
+                // Wallet: a cancelled ride must never leave money standing — void a
+                // pending card credit, reverse any posted entry (once, idempotent).
+                void (async () => {
+                    try {
+                        const { closeRideWalletEntries } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+                        await closeRideWalletEntries(rideId, "rider_cancelled");
+                    }
+                    catch (e) {
+                        console.warn(`[wallet] cancel close ride=${rideId}:`, e?.message || e);
+                    }
+                })();
                 // Push "ride cancelled" to the assigned driver (and any driver watching).
                 (async () => {
                     const drv = await (0, database_1.queryOne)("SELECT u.firebase_uid FROM rides r LEFT JOIN users u ON u.id = r.driver_id WHERE r.id = $1", [rideId]).catch(() => null);
@@ -1181,6 +1225,16 @@ function setupSocketHandlers(io) {
                 // Any offer still ringing for this ride stops immediately.
                 await (0, dispatch_1.cancelPendingOffers)(io, rideId, "driver_cancelled");
                 await (0, dispatch_1.releaseDriver)(dbUserId);
+                // Wallet: void the pending credit / reverse posted entries (idempotent).
+                void (async () => {
+                    try {
+                        const { closeRideWalletEntries } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+                        await closeRideWalletEntries(rideId, "driver_cancelled");
+                    }
+                    catch (e) {
+                        console.warn(`[wallet] cancel close ride=${rideId}:`, e?.message || e);
+                    }
+                })();
                 const cancelPayload = { rideId, reason: "Your driver cancelled the trip." };
                 // Instant delivery to the ride room (the rider is on the trip screen)...
                 io.to(`ride:${rideId}`).emit("ride:cancelled", cancelPayload);
@@ -1322,13 +1376,25 @@ function setupSocketHandlers(io) {
                 if (ride.status !== "completed") {
                     void (0, destinationSession_1.noteDestinationTripCompleted)(dbUserId, rideId).catch(() => undefined);
                 }
-                // Record the driver's earnings so the wallet / pending-earnings
-                // endpoint shows the real amount the driver earned from this ride.
+                // Earnings record + WALLET LEDGER (commission spec): the 10% split is
+                // computed once — driver_earnings keeps real fee/net for the admin
+                // Money screen, and the wallet entry follows the payment method:
+                // cash debits commission NOW (the wallet may go negative — the driver
+                // holds the rider's cash); card / Pay-Later posts a PENDING credit the
+                // Paystack capture webhook releases (webhook-gated, so money the
+                // rider never actually paid can never reach the driver's wallet).
                 try {
-                    await (0, database_1.execute)(`INSERT INTO driver_earnings (driver_id, ride_id, gross_amount, fee, net_amount)
-             VALUES ($1, $2, $3, 0, $3)`, [dbUserId, rideId, ride.fare || 0]);
+                    const methodRow = await (0, database_1.queryOne)("SELECT payment_method FROM rides WHERE id = $1", [rideId]).catch(() => null);
+                    const method = String(methodRow?.payment_method ?? ride?.payment_method ?? "");
+                    const { recordRideCompletion, backfillDriverLedger } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+                    // Seed this driver's pre-wallet history FIRST (once — the guard is
+                    // "no ledger rows at all"), then post this ride (idempotent).
+                    await backfillDriverLedger(dbUserId).catch(() => { });
+                    await recordRideCompletion(dbUserId, rideId, Number(ride.fare || 0), method);
                 }
-                catch { }
+                catch (e) {
+                    console.warn(`[wallet] completion hook ride=${rideId}:`, e?.message || e);
+                }
                 io.to(`ride:${rideId}`).emit("ride:completed", { riderTotal: ride.fare || 0 });
                 // Driver is free again: straight back into the dispatch pool (status flips
                 // to 'available' while they stay online, 'offline' otherwise).

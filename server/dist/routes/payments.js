@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
@@ -594,18 +627,77 @@ router.get("/driver/earnings/pending", auth_1.requireAuth, async (req, res) => {
              AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS total_rides`, [user.id]);
         const cardEarnings = Number(earnings?.card_earnings || 0);
         const paidOut = Number(earnings?.paid_out || 0);
-        const balance = Math.max(0, cardEarnings - paidOut);
+        // ── LEDGER IS THE SOURCE OF TRUTH (commission spec): the wallet balance
+        // is the sum of POSTED wallet_ledger entries — card credits land only
+        // after the Paystack capture webhook, cash commissions debit at
+        // completion, cash-outs subtract. total_earnings stays the WITHDRAWABLE
+        // figure (clamped ≥ 0): a negative balance is money owed, shown on
+        // /driver/wallet, and can never be cashed out. The legacy rides-derived
+        // expression survives only as a fallback if the ledger is unreachable.
+        let balanceCents = null;
+        let balance = Math.max(0, cardEarnings - paidOut);
+        try {
+            const { getBalanceCents, walletLedgerReady } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+            if (await walletLedgerReady()) {
+                balanceCents = await getBalanceCents(user.id);
+                balance = Math.max(0, Math.round(balanceCents) / 100);
+            }
+        }
+        catch {
+            balanceCents = null;
+        }
         res.json({
             ...(earnings || {}),
             card_earnings: cardEarnings,
             paid_out: paidOut,
             total_earnings: balance,
             balance,
+            balance_cents: balanceCents,
+            owed_rand: balanceCents != null && balanceCents < 0 ? Math.abs(balanceCents) / 100 : 0,
             total_rides: Number(earnings?.total_rides || 0),
         });
     }
     catch (err) {
         console.error("Pending earnings error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// GET /api/payments/driver/wallet — §5 wallet page: the ledger balance plus
+// the per-ride history (date, payment type, fare, commission, net, running
+// balance). A negative balance is reported plainly as money owed, with the
+// recovery rule spelled out so the screen can explain it.
+router.get("/driver/wallet", auth_1.requireAuth, async (req, res) => {
+    try {
+        const user = await getOrCreateUser(req.userId);
+        if (!user) {
+            res.json({ balance_cents: 0, balance_rand: 0, entries: [] });
+            return;
+        }
+        const { getWalletView, getWalletConfig } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+        const [view, cfg] = await Promise.all([getWalletView(user.id), getWalletConfig()]);
+        res.json({
+            balance_cents: view.balance_cents,
+            balance_rand: Math.round(view.balance_cents) / 100,
+            negative: view.balance_cents < 0,
+            owed_rand: view.balance_cents < 0 ? Math.abs(view.balance_cents) / 100 : 0,
+            commission_pct: view.commission_pct,
+            negative_limit_rand: cfg.negative_limit_rand,
+            entries: view.entries.map((e) => ({
+                id: e.id,
+                ride_id: e.ride_id,
+                type: e.type,
+                status: e.status,
+                date: e.created_at,
+                payment_method: e.payment_method || null,
+                fare_rand: e.fare_rands != null ? Number(e.fare_rands) : null,
+                commission_rand: Math.round(Number(e.commission_cents || 0)) / 100,
+                amount_rand: Math.round(Number(e.amount_cents)) / 100,
+                balance_after_rand: Math.round(Number(e.balance_after_cents)) / 100,
+            })),
+        });
+    }
+    catch (err) {
+        console.error("Wallet view error:", err);
         res.status(500).json({ error: err.message });
     }
 });

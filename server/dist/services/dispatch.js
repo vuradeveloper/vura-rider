@@ -20,6 +20,39 @@
 // their notification labels already treat 'searching' as "finding your driver");
 // the per-driver offer lifecycle lives in ride_offers.status.
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DRIVER_STALE_SECONDS = exports.MAX_OFFER_ROUNDS = exports.LOCATION_FRESH_SECONDS = exports.OFFER_TTL_SECONDS = void 0;
 exports.hasLiveSocket = hasLiveSocket;
@@ -988,7 +1021,8 @@ async function startDispatch(io, rideId) {
 async function acceptRide(io, params) {
     const { rideId, driverId } = params;
     const result = await (0, database_1.withTransaction)(async (client) => {
-        const rideRes = await client.query(`SELECT id, status, passenger_id, estimated_fare, COALESCE(version, 0) AS version, driver_id
+        const rideRes = await client.query(`SELECT id, status, passenger_id, estimated_fare, COALESCE(version, 0) AS version, driver_id,
+              payment_method
          FROM rides WHERE id = $1 FOR UPDATE`, [rideId]);
         const ride = rideRes.rows[0];
         if (!ride)
@@ -1002,6 +1036,32 @@ async function acceptRide(io, params) {
         }
         if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
             return { ok: false, error: `Ride is ${ride.status}` };
+        }
+        // ── Commission spec: ACCEPT-TIME CASH BLOCK ────────────────────────────
+        // A wallet below the configured negative limit refuses NEW CASH rides —
+        // cash commission is charged at completion with no webhook to gate it,
+        // so an unbounded debt would keep growing. CARD rides stay open: they are
+        // exactly how a negative balance recovers. (Card acceptance is never
+        // blocked — the wallet can't go further negative on a card ride.)
+        if (String(ride.payment_method || "").trim().toLowerCase() === "cash") {
+            try {
+                const { cashRideBlocked, getBalanceCents, getWalletConfig } = await Promise.resolve().then(() => __importStar(require("./walletService")));
+                const cfg = await getWalletConfig();
+                const balance = await getBalanceCents(driverId);
+                if (cashRideBlocked(balance, cfg)) {
+                    return {
+                        ok: false,
+                        error: `Your balance is R${(balance / 100).toFixed(2)} — below the ` +
+                            `R${cfg.negative_limit_rand} limit, so cash rides are paused. ` +
+                            `Take card rides to clear your balance.`,
+                    };
+                }
+            }
+            catch (e) {
+                // Fail OPEN on wallet-read errors: never strand a driver out of work
+                // because a config read glitched (the completion hook still charges).
+                console.warn(`[wallet] cash-guard check failed driver=${driverId}:`, e?.message || e);
+            }
         }
         // Claim this driver's offer if they have a live one.
         const offerUpd = await client.query(`UPDATE ride_offers SET status = 'accepted', updated_at = NOW()

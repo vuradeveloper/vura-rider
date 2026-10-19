@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PreauthError = exports.RIDE_PAYMENT_STATUSES = void 0;
 exports.normalizePaymentStatus = normalizePaymentStatus;
@@ -661,7 +694,7 @@ async function handlePreauthorizationEvent(event, payload) {
     const fresh = await recordWebhookEventOnce(event, data, ref);
     if (!fresh)
         return done(true, false, "duplicate delivery ignored");
-    const ride = await (0, database_1.queryOne)(`SELECT id, passenger_id, payment_status FROM rides WHERE preauth_reference = $1`, [ref]).catch(() => null);
+    const ride = await (0, database_1.queryOne)(`SELECT id, passenger_id, driver_id, payment_status FROM rides WHERE preauth_reference = $1`, [ref]).catch(() => null);
     if (!ride) {
         // A valid event for something we don't track: still 200 so Paystack stops
         // retrying — just nothing to update.
@@ -718,6 +751,19 @@ async function handlePreauthorizationEvent(event, payload) {
                     console.warn("[preauth] payments ledger insert failed:", e?.message || e);
                 }
                 console.log(`[preauth] CAPTURED R${capturedRands.toFixed(2)} ride=${ride.id} ref=${ref}`);
+                // ── Commission spec: the capture webhook is what RELEASES the driver's
+                // wallet credit (pending → posted). Idempotent — a duplicate delivery
+                // promotes nothing. The webhook's real Paystack fee refines the split.
+                try {
+                    const feeCents = data.fee != null && Number.isFinite(Number(data.fee))
+                        ? Math.round(Number(data.fee))
+                        : null;
+                    const { confirmCardRideCredit } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+                    await confirmCardRideCredit(ride.driver_id ?? "", ride.id, feeCents);
+                }
+                catch (e) {
+                    console.warn(`[wallet] webhook confirm ride=${ride.id}:`, e?.message || e);
+                }
                 return done(false, true, "paid");
             }
             const after = await (0, database_1.queryOne)(`SELECT payment_status FROM rides WHERE id = $1`, [ride.id]);
@@ -727,6 +773,15 @@ async function handlePreauthorizationEvent(event, payload) {
             const upd = await (0, database_1.execute)(`UPDATE rides SET payment_status = 'PAYMENT_FAILED', updated_at = NOW()
           WHERE id = $1 AND payment_status = 'CAPTURE_PENDING'`, [ride.id]);
             console.error(`[preauth] CAPTURE FAILED ride=${ride.id} ref=${ref} message=${data.message || "n/a"}`);
+            // Wallet: the capture never happened — the pending driver credit must
+            // not survive (voided; never posted, so the balance never moved anyway).
+            try {
+                const { closeRideWalletEntries } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
+                await closeRideWalletEntries(ride.id, "capture_failed");
+            }
+            catch (e) {
+                console.warn(`[wallet] capture.failed close ride=${ride.id}:`, e?.message || e);
+            }
             return done(false, (upd?.rowCount ?? 0) > 0, "payment failed");
         }
         case "preauthorization.release.success": {

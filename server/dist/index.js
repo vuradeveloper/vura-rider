@@ -80,6 +80,7 @@ const vehicleImages_1 = require("./services/vehicleImages");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
+const walletAdmin_1 = __importDefault(require("./routes/walletAdmin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const preauthorization_1 = require("./services/preauthorization");
 const PayLaterService_1 = require("./services/PayLaterService");
@@ -248,6 +249,8 @@ app.use("/api/admin/v2", adminV2_1.default);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
 app.use("/api/admin/v2/safety", safetyAdmin_1.default);
+// Commission / wallet tuning (10% split, VAT slice, cash negative limit).
+app.use("/api/admin/v2/wallet", walletAdmin_1.default);
 app.use("/api/affiliates", affiliates_1.default);
 app.use("/api/ratings", require("./routes/ratings").default);
 app.use("/api/share", share_1.default);
