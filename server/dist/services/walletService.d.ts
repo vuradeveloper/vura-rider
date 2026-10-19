@@ -77,6 +77,9 @@ export interface WalletViewEntry {
     amount_cents: number;
     balance_after_cents: number;
     commission_cents: number;
+    paystack_fee_cents: number;
+    vat_cents: number;
+    margin_cents: number;
     created_at: string;
     payment_method: string | null;
     fare_rands: number | null;

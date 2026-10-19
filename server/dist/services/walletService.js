@@ -328,7 +328,9 @@ async function getWalletView(driverId) {
     const cfg = await getWalletConfig();
     const balance = await getBalanceCents(driverId);
     const entries = await (0, database_1.query)(`SELECT wl.id, wl.ride_id, wl.type, wl.status, wl.amount_cents,
-            wl.balance_after_cents, wl.commission_cents, wl.created_at,
+            wl.balance_after_cents, wl.commission_cents,
+            wl.paystack_fee_cents, wl.vat_cents, wl.margin_cents,
+            wl.created_at,
             LOWER(COALESCE(r.payment_method, '')) AS payment_method,
             COALESCE(r.actual_fare, r.estimated_fare, 0)::float AS fare_rands
        FROM wallet_ledger wl

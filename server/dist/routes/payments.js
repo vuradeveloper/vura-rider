@@ -691,6 +691,10 @@ router.get("/driver/wallet", auth_1.requireAuth, async (req, res) => {
                 payment_method: e.payment_method || null,
                 fare_rand: e.fare_rands != null ? Number(e.fare_rands) : null,
                 commission_rand: Math.round(Number(e.commission_cents || 0)) / 100,
+                // The 10% split, per ride: each part comes OUT of the commission.
+                paystack_fee_rand: Math.round(Number(e.paystack_fee_cents || 0)) / 100,
+                vat_rand: Math.round(Number(e.vat_cents || 0)) / 100,
+                margin_rand: Math.round(Number(e.margin_cents || 0)) / 100,
                 amount_rand: Math.round(Number(e.amount_cents)) / 100,
                 balance_after_rand: Math.round(Number(e.balance_after_cents)) / 100,
             })),
