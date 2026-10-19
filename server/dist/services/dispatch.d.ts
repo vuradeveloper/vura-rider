@@ -110,6 +110,9 @@ export interface DispatchRide {
     offer_round: number | null;
     version: number | null;
     passenger_fb: string | null;
+    /** Real rider identity for the offer card — the driver can call them (§: chat/call). */
+    passenger_name: string | null;
+    passenger_phone: string | null;
 }
 export declare function loadRide(rideId: string): Promise<DispatchRide | null>;
 /**

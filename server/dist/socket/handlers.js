@@ -630,16 +630,26 @@ function setupSocketHandlers(io) {
             }
         });
         // ── Chat ──
+        // Only the ride's own two people may read or write this conversation.
+        const chatMember = async (rideId) => {
+            const me = await getDbUserId();
+            if (!me)
+                return false;
+            const ride = await (0, database_1.queryOne)("SELECT passenger_id, driver_id FROM rides WHERE id = $1", [rideId]).catch(() => null);
+            return !!ride && (ride.passenger_id === me || ride.driver_id === me);
+        };
         socket.on("chat:join", async (data) => {
             try {
                 const { rideId } = data;
                 if (!rideId)
                     return;
+                if (!(await chatMember(rideId)))
+                    return; // not our ride → silent
                 socket.join(`chat:${rideId}`);
                 // Send the existing conversation history so the screen isn't empty.
                 await ensureChatTable();
                 const history = await (0, database_1.query)(`SELECT cm.id, cm.ride_id, cm.sender_id, cm.message, cm.created_at,
-                  COALESCE(u.role, 'rider') AS sender_role
+                  CASE WHEN u.role = 'driver' THEN 'driver' ELSE 'rider' END AS sender_role
            FROM chat_messages cm
            LEFT JOIN users u ON u.id = cm.sender_id
            WHERE cm.ride_id = $1
@@ -662,15 +672,19 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     throw new Error("User details not synced.");
-                if (!message || !String(message).trim())
+                const text = String(message || "").trim().slice(0, 500);
+                if (!text)
                     return;
+                if (!(await chatMember(rideId)))
+                    return; // not our ride → silent
                 await ensureChatTable();
                 const msg = await (0, database_1.queryOne)(`INSERT INTO chat_messages (ride_id, sender_id, message)
            VALUES ($1, $2, $3)
-           RETURNING id, ride_id, sender_id, message, created_at`, [rideId, dbUserId, String(message).trim()]);
+           RETURNING id, ride_id, sender_id, message, created_at`, [rideId, dbUserId, text]);
                 io.to(`chat:${rideId}`).emit("chat:message", {
                     ...msg,
-                    sender_role: socket.userRole || "rider",
+                    // Normalised so BOTH apps align bubbles on exactly two values.
+                    sender_role: socket.userRole === "driver" ? "driver" : "rider",
                 });
             }
             catch (err) {

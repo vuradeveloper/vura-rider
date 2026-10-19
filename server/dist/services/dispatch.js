@@ -541,7 +541,8 @@ async function loadRide(rideId) {
             r.destination_address, r.destination_lat, r.destination_lng,
             r.estimated_fare, r.payment_method, r.waypoints,
             COALESCE(r.offer_round, 0) AS offer_round, COALESCE(r.version, 0) AS version,
-            u.firebase_uid AS passenger_fb
+            u.firebase_uid AS passenger_fb,
+            u.full_name AS passenger_name, u.phone AS passenger_phone
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
       WHERE r.id = $1`, [rideId]
@@ -845,8 +846,9 @@ async function offerToNextDriver(io, rideId, round, opts) {
             paymentMethod: ride.payment_method || "cash",
             waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
             stops: Array.isArray(ride.waypoints) ? ride.waypoints : [],
-            riderName: "Rider",
-            riderRating: 5,
+            // Real rider identity: the driver's card can call/message them directly.
+            riderName: ride.passenger_name || "Rider",
+            riderPhone: ride.passenger_phone || null,
             distanceToPickupKm: Number(candidate.distance_km?.toFixed?.(2) ?? candidate.distance_km),
         };
         if (room) {
