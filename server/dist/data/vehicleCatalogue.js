@@ -116,7 +116,6 @@ exports.MAKE_MODELS = {
         { model: "Staria", body: "minibus", category: "xl" },
     ],
     Kia: [
-        { model: "Picanto", body: "hatchback" },
         { model: "Rio", body: "hatchback" },
         { model: "Pegas", body: "sedan" },
         { model: "Sonet", body: "suv" },

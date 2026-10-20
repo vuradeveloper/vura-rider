@@ -54,6 +54,8 @@ exports.MIGRATION_ORDER = [
     "016_promos_v2.sql",
     "017_safety.sql",
     "018_wallet.sql",
+    "019_affiliate_credit.sql",
+    "020_remove_picanto.sql",
 ];
 /** Arbitrary app-wide advisory key — one constant so all boots serialise. */
 const ADVISORY_KEY = 726401001;
