@@ -39,6 +39,7 @@ const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
 const preauthorization_1 = require("../services/preauthorization");
 const PayLaterService_1 = require("../services/PayLaterService");
+const AffiliateService_1 = require("../services/AffiliateService");
 const notify_1 = require("../services/notify");
 const rideSim_1 = require("../services/rideSim");
 const dispatch_1 = require("../services/dispatch");
@@ -421,6 +422,16 @@ function setupSocketHandlers(io) {
                         /* a promo lookup must never block booking */
                     }
                 }
+                // ── Invite credit ("Invite & earn" R5): the rider CHOOSES at booking
+                // to spend their referral balance on this trip. The client only flips
+                // the switch; the amount is min(balance, remaining fare), server-side
+                // (same rule as the REST booking path).
+                let inviteCredit = 0;
+                if (rideFare != null && rideFare > 0 && data.useAffiliateCredit === true) {
+                    inviteCredit = await (0, AffiliateService_1.inviteCreditAvailable)(dbUserId, rideFare).catch(() => 0);
+                    if (inviteCredit > 0)
+                        rideFare = Math.max(0, rideFare - inviteCredit);
+                }
                 // Add the column if this deployment's DB predates it (no-op otherwise).
                 // CRITICAL: if the migration cannot run we fall back to the previous
                 // 10-column INSERT, so booking can NEVER break because of stops.
@@ -436,6 +447,22 @@ function setupSocketHandlers(io) {
                 // the ride itself is already created and must never fail because of it.
                 if (ride && appliedPromo) {
                     await (0, database_1.execute)(`UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`, [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]).catch(() => { });
+                }
+                // Spend the invite credit the rider chose — debit + record atomically;
+                // if the debit cannot land, the fare goes back up (nothing is free
+                // without the money moving). Runs BEFORE dispatch, so drivers only
+                // ever see the final fare.
+                if (inviteCredit > 0 && ride?.id) {
+                    await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS affiliate_credit NUMERIC(12,2) NOT NULL DEFAULT 0`).catch(() => { });
+                    const spent = await (0, AffiliateService_1.spendInviteCredit)(dbUserId, ride.id, inviteCredit).catch(() => false);
+                    if (spent) {
+                        await (0, database_1.execute)(`UPDATE rides SET affiliate_credit = $2 WHERE id = $1`, [ride.id, inviteCredit]).catch(() => { });
+                    }
+                    else {
+                        await (0, database_1.execute)(`UPDATE rides SET estimated_fare = COALESCE(estimated_fare, 0) + $2 WHERE id = $1`, [ride.id, inviteCredit]).catch(() => { });
+                        rideFare = Number(rideFare || 0) + inviteCredit; // hold/dispatch see the real fare
+                        inviteCredit = 0;
+                    }
                 }
                 // THE RIDER'S TIER (013, ride-class matching). The column's default is
                 // 'go', so only a non-default tier needs writing; a DB without the
@@ -1355,6 +1382,12 @@ function setupSocketHandlers(io) {
                 }
                 await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2", [ride.fare, rideId]);
                 console.log(`[complete] ride=${rideId} status=completed fare=${ride.fare}`);
+                // "Invite & earn": the FIRST completed ride of a REFERRED rider pays the
+                // inviter their R5 (idempotent — unique per ride). The REST completion
+                // path always had this hook; without it here, app-driven completions
+                // (this socket path — which is how real trips end) never settled
+                // referrals and the money never went in.
+                void (0, AffiliateService_1.settleFirstRide)(String(rideId)).catch((e) => console.warn(`[affiliate] settle ride=${rideId}:`, e?.message || e));
                 // Card preauthorization: the ride completing captures the hold for the
                 // final fare (no-op when there is no hold; PAID still arrives only via
                 // the preauthorization.capture.success webhook).

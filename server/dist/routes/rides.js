@@ -211,6 +211,15 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
                 /* promo lookup never blocks booking */
             }
         }
+        // ── Invite credit ("Invite & earn" R5): the rider CHOOSES at booking to
+        // spend their referral balance on this trip. The client only flips the
+        // switch — the amount is min(balance, remaining fare), server-side.
+        let inviteCredit = 0;
+        if (rideFare != null && rideFare > 0 && req.body?.useAffiliateCredit === true) {
+            inviteCredit = await (0, AffiliateService_1.inviteCreditAvailable)(rider.id, rideFare).catch(() => 0);
+            if (inviteCredit > 0)
+                rideFare = Math.max(0, rideFare - inviteCredit);
+        }
         // The tier column ships with migration 013; a database that has not run it
         // yet must still book — exactly the waypointsReady pattern (booking can
         // NEVER break because of a newer column).
@@ -251,6 +260,20 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             if (promoForRecord)
                 void (0, promos_1.recordPromoUse)(promoForRecord, rider.id).catch(() => { });
         }
+        // Spend the invite credit the booking chose: debit + record atomically
+        // (once per ride, balance can never go negative). If the debit cannot
+        // land, the fare goes back up — nothing is free without the money moving.
+        if (inviteCredit > 0 && ride?.id) {
+            await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS affiliate_credit NUMERIC(12,2) NOT NULL DEFAULT 0`).catch(() => { });
+            const spent = await (0, AffiliateService_1.spendInviteCredit)(rider.id, ride.id, inviteCredit).catch(() => false);
+            if (spent) {
+                await (0, database_1.execute)(`UPDATE rides SET affiliate_credit = $2 WHERE id = $1`, [ride.id, inviteCredit]).catch(() => { });
+            }
+            else {
+                await (0, database_1.execute)(`UPDATE rides SET estimated_fare = COALESCE(estimated_fare, 0) + $2 WHERE id = $1`, [ride.id, inviteCredit]).catch(() => { });
+                inviteCredit = 0;
+            }
+        }
         // Start the trace here so trip_saved / dispatch_started / drivers_found /
         // offer_sent all share one trace_id for this ride.
         (0, trace_1.startTrace)(ride.id);
@@ -272,6 +295,7 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             status: "searching",
             ms: Date.now() - t0,
             dispatching: Boolean(io),
+            appliedInviteCredit: inviteCredit,
         });
         // Dispatch AFTER the response is flushed. `io` can be undefined during a
         // deploy restart; the offerWorker still picks the ride up on its next tick via
@@ -671,6 +695,11 @@ router.get("/:id/receipt", auth_1.requireAuth, async (req, res) => {
             res.status(404).json({ error: "Ride not found" });
             return;
         }
+        // Invite credit line (019) — read separately so a pre-019 database still
+        // answers with the receipt instead of 500ing.
+        ride.affiliate_credit = await (0, database_1.queryOne)("SELECT affiliate_credit FROM rides WHERE id = $1", [req.params.id])
+            .then((r) => Number(r?.affiliate_credit ?? 0))
+            .catch(() => 0);
         res.json({ receipt: ride });
     }
     catch (err) {

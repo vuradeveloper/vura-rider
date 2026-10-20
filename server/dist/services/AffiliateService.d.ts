@@ -19,6 +19,18 @@ export declare function useBalanceForRide(dbUserId: string, rideId: string): Pro
     success: boolean;
     balance: number;
 }>;
+/** Pure: how much credit may come off this fare — min(balance, fare), never negative. */
+export declare function inviteCreditForFare(balance: number, fare: number): number;
+/** Read-only pre-check at booking: how much MAY come off. Never throws. */
+export declare function inviteCreditAvailable(dbUserId: string, fare: number): Promise<number>;
+/**
+ * Spend the credit the booking chose: debit the balance and record the spend
+ * in ONE transaction, guarded so the balance can never go negative and
+ * unique per ride so a re-fire can never double-spend. Returns false when the
+ * money did NOT move (caller must put the fare back — nothing is free without
+ * the balance actually moving).
+ */
+export declare function spendInviteCredit(dbUserId: string, rideId: string, discount: number): Promise<boolean>;
 export declare function listPayouts(status?: string): Promise<any[]>;
 export declare function approvePayout(payoutId: string, adminUid: string): Promise<{
     success: boolean;
