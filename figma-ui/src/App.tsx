@@ -4114,6 +4114,24 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
   const [password, setPassword] = useState('')
   const [otp, setOtp] = useState('')
   const [code, setCode] = useState('')
+  // "Invite & earn" at SIGNUP: an optional referral code — pre-filled when the
+  // rider arrived through someone's invite link (?ref=VURA-NAME-XXXX), sent
+  // with the signup so the SERVER attaches the referral the moment the account
+  // exists (POST /api/users/sync carries referralCode → claimReferral).
+  const [inviteCode, setInviteCode] = useState('')
+  useEffect(() => {
+    try {
+      const fromUrl =
+        new URLSearchParams(window.location.search).get('ref') ||
+        new URLSearchParams(window.location.hash.replace(/^#/, '')).get('ref')
+      if (fromUrl) {
+        localStorage.setItem('vura.invite.pending', fromUrl.toUpperCase())
+        window.history.replaceState(null, '', window.location.pathname)
+      }
+      const stored = localStorage.getItem('vura.invite.pending')
+      if (stored) setInviteCode(stored.toUpperCase())
+    } catch { /* no window/location — the field stays blank and optional */ }
+  }, [])
   const [sendingEmail, setSendingEmail] = useState(false)
   const [emailFailed, setEmailFailed] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -4164,7 +4182,11 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
       await signUp(email.trim(), password, {
         fullName: `${firstName.trim()} ${lastName.trim()}`,
         phone: `${countryCode}${phone.replace(/\s/g, '')}`,
+        // The server claims this at sync time (and never blocks signup if the
+        // code is wrong — the account is simply created without a referral).
+        referralCode: inviteCode.trim() || undefined,
       })
+      try { localStorage.removeItem('vura.invite.pending') } catch { /* ignore */ }
       onSuccess()
     } catch (e: any) {
       setError(e?.message || 'Could not create the account')
@@ -4218,6 +4240,13 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
           <InputField label="First name" placeholder="Alex" value={firstName} onChange={setFirstName} />
           <InputField label="Last name" placeholder="Johnson" value={lastName} onChange={setLastName} />
           <InputField label="Email address" type="email" placeholder="you@example.com" value={email} onChange={setEmail} />
+          <InputField
+            label="Invite code (optional)"
+            placeholder="VURA-NAME-XXXX"
+            value={inviteCode}
+            onChange={(v) => setInviteCode(v.toUpperCase())}
+            hint="Got a friend's code? You both get R5 off a ride."
+          />
         </>) : step === 2 ? (<>
           {/* Country code selector + phone number, exactly like the native
               signup (CountrySelect sits to the left of the number). */}
