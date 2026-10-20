@@ -241,6 +241,8 @@ export function ReceiptScreen({
             <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 mt-3 shadow-sm flex flex-col gap-2.5">
               {row('Fare', formatRand(fare))}
               {row('Service fee', formatRand(fee))}
+              {Number(receipt.affiliate_credit || 0) > 0 &&
+                row('Invite credit (from your balance)', `−${formatRand(Number(receipt.affiliate_credit))}`)}
               {tipSent != null && row('Driver tip', formatRand(tipSent))}
               <div className="border-t border-[#F5F5F5] my-0.5" />
               {row('Total', formatRand(total), true)}

@@ -93,6 +93,7 @@ import {
   getSocket,
   signIn,
   signOut,
+  getAffiliateSummary,
   signUp,
   startTrip,
   sendTip,
@@ -661,7 +662,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   onTier?: (t: string) => void
   /** tier, payment method ('cash' | 'card' | 'pay_later'), stops and the
    *  checkbox-selected promo id (null = the rider unchecked it → no promo). */
-  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[], promoId: string | null) => void
+  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[], promoId: string | null, useInviteCredit: boolean) => void
 }) {
   const [sel, setSel] = useState('go')
   const destName = destLabel(destination)
@@ -717,6 +718,16 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   // picker behind a tap so it never eats the list's space.
   const [scrolled, setScrolled] = useState(false)
   const [payPicker, setPayPicker] = useState(false)
+  // ── Invite credit ("Invite & earn" R5): the rider's referral balance can
+  // come off THIS trip if they choose. The SERVER decides the amount
+  // (min(balance, fare)) and debits the balance — this only flips the switch.
+  const [inviteBalance, setInviteBalance] = useState(0)
+  const [inviteOn, setInviteOn] = useState(false)
+  useEffect(() => {
+    getAffiliateSummary()
+      .then((r) => setInviteBalance(Number(r?.affiliate?.balance) || 0))
+      .catch(() => setInviteBalance(0))
+  }, [])
 
   const loadCards = async () => {
     const rows = await getPaymentMethods().catch(() => [] as PaymentMethod[])
@@ -1079,6 +1090,28 @@ function BookingScreen({ destination, onBack, onConfirm }: {
               </span>
             </button>
           )}
+          {inviteBalance > 0 && (
+            <button
+              type="button"
+              onClick={() => setInviteOn((v) => !v)}
+              className="w-full flex items-center gap-3 mb-2 px-3 py-2.5 rounded-xl bg-[#F7F7F7] text-left active:bg-[#EEEEEE]"
+            >
+              <span className="w-6 h-6 rounded-full bg-[#137333] text-white flex items-center justify-center shrink-0 text-[11px] font-bold" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>R</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] text-[#1A1A1A] font-semibold truncate">Use invite credit</span>
+                <span className="block text-[11px] text-[#8A8A8A] truncate">
+                  {formatRand(Math.min(inviteBalance, RIDE_FARE))} off this trip · balance {formatRand(inviteBalance)}
+                </span>
+              </span>
+              <span className={`w-[22px] h-[22px] rounded-md border-2 flex items-center justify-center shrink-0 ${inviteOn ? 'bg-[#1A1A1A] border-[#1A1A1A]' : 'border-[#C9C9C9] bg-white'}`}>
+                {inviteOn && (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </span>
+            </button>
+          )}
           <button onClick={() => setPayPicker(true)}
             className="w-full flex items-center gap-3 py-2 active:opacity-70">
             <div className="w-9 h-9 rounded-xl bg-[#F7F7F7] flex items-center justify-center shrink-0 text-[15px]">
@@ -1090,7 +1123,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
             {IC.chevRight()}
           </button>
-          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops, promoOn && promo && promo.usable !== false ? promo.id : null)}
+          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops, promoOn && promo && promo.usable !== false ? promo.id : null, inviteOn && inviteBalance > 0)}
             className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-3.5 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
             Confirm {ride.name}
           </button>
@@ -1279,7 +1312,7 @@ function PayRow({
   )
 }
 
-function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId, onCancel, onMatched }: {
+function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId, useInviteCredit, onCancel, onMatched }: {
   destination: string
   tier?: string
   /** 'cash' | 'card' | 'pay_later' â€” chosen on the booking screen and sent with the request. */
@@ -1289,6 +1322,9 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   /** The booking screen's promo checkbox decision: null = unchecked (NO promo),
    *  undefined = no decision (fall back to the first live promo). */
   chosenPromoId?: string | null
+  /** The booking screen's "Use invite credit" switch — the SERVER takes
+   *  min(balance, fare) off the trip and debits the referral balance. */
+  useInviteCredit?: boolean
   onCancel: () => void
   onMatched: (rideId: string) => void
 }) {
@@ -1458,6 +1494,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
             // (previously no fare was sent, so nothing was ever taken).
             fare: RIDE_FARE,
             promoId,
+            useAffiliateCredit: useInviteCredit === true,
             paymentMethod: paymentMethod || 'cash',
           })
           if (!alive) return
@@ -4287,6 +4324,8 @@ export default function App() {
   // The promo checkbox decision from the booking screen (null = unchecked →
   // book WITHOUT a promo; undefined = no decision made → first live promo).
   const [bookPromoId, setBookPromoId] = useState<string | null | undefined>(undefined)
+  // "Use invite credit" from the booking screen — travels to the ride request.
+  const [bookInvite, setBookInvite] = useState(false)
   const [rideStops, setRideStops] = useState<Waypoint[]>([])
   // The id of the ride the server created, used to track / cancel / rate it.
   const [rideId, setRideId] = useState<string | null>(null)
@@ -4476,11 +4515,12 @@ export default function App() {
               destination={dest}
               onBack={() => setRScreen('home')}
               onTier={setTier}
-              onConfirm={(t, pm, st, promoId) => {
+              onConfirm={(t, pm, st, promoId, useInvite) => {
                 setTier(t)
                 setPayMethod(pm)
                 setRideStops(st)
                 setBookPromoId(promoId)
+  setBookInvite(useInvite)
                 setRScreen('matching')
               }}
             />
@@ -4492,6 +4532,7 @@ export default function App() {
               paymentMethod={payMethod}
               stops={rideStops}
               chosenPromoId={bookPromoId}
+  useInviteCredit={bookInvite}
               onCancel={() => { setRideId(null); setRScreen('home') }}
               onMatched={(id) => { setRideId(id); setRScreen('ride') }}
             />

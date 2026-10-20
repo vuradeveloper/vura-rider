@@ -315,6 +315,79 @@ export async function useBalanceForRide(dbUserId: string, rideId: string) {
   return { success: true, balance: parseFloat(updated.balance) };
 }
 
+// ── Booking-time spend ("Invite & earn", the R5): the rider CHOOSES at
+// booking to put their referral balance against a trip's fare. This is the
+// spec mechanic — a DISCOUNT on one of YOUR trips, opt-in — as opposed to
+// useBalanceForRide below (a legacy full-fare sweep on completed rides).
+
+/** Pure: how much credit may come off this fare — min(balance, fare), never negative. */
+export function inviteCreditForFare(balance: number, fare: number): number {
+  const b = Number(balance);
+  const f = Number(fare);
+  if (!isFinite(b) || !isFinite(f) || b <= 0 || f <= 0) return 0;
+  return Math.min(b, f);
+}
+
+/** Read-only pre-check at booking: how much MAY come off. Never throws. */
+export async function inviteCreditAvailable(dbUserId: string, fare: number): Promise<number> {
+  try {
+    const affiliate = await getAffiliateByUser(dbUserId);
+    if (!affiliate || affiliate.status !== "active") return 0;
+    return inviteCreditForFare(parseFloat(affiliate.balance), fare);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Spend the credit the booking chose: debit the balance and record the spend
+ * in ONE transaction, guarded so the balance can never go negative and
+ * unique per ride so a re-fire can never double-spend. Returns false when the
+ * money did NOT move (caller must put the fare back — nothing is free without
+ * the balance actually moving).
+ */
+export async function spendInviteCredit(
+  dbUserId: string,
+  rideId: string,
+  discount: number
+): Promise<boolean> {
+  if (!(discount > 0)) return false;
+  const affiliate = await getAffiliateByUser(dbUserId).catch(() => null);
+  if (!affiliate) return false;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const upd = await client.query(
+      `UPDATE affiliates SET balance = balance - $1
+        WHERE id = $2 AND balance >= $1
+        RETURNING balance`,
+      [discount, affiliate.id]
+    );
+    if (!upd.rowCount || upd.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return false; // balance raced away / insufficient — spend nothing
+    }
+    const ins = await client.query(
+      `INSERT INTO affiliate_transactions (affiliate_id, type, amount, ride_id, reference)
+       VALUES ($1, 'credit_used', $2, $3, $4)
+       ON CONFLICT (affiliate_id, type, ride_id) DO NOTHING
+       RETURNING id`,
+      [affiliate.id, -discount, rideId, `Invite credit applied to ride #${String(rideId).slice(0, 8)}`]
+    );
+    if (!ins.rowCount || ins.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return false; // already recorded for this ride — never double-debit
+    }
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    return false;
+  } finally {
+    client.release();
+  }
+}
+
 export async function listPayouts(status?: string) {
   return query(
     `SELECT p.id, p.amount, p.method, p.status, p.created_at, p.paid_at,

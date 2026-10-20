@@ -209,6 +209,15 @@ export default function PromosScreen({ onBack }: { onBack: () => void }) {
                   </div>
                 ))}
               </div>
+
+              <div className="mt-3 bg-[#E6F4EA] border border-[#CEEAD6] rounded-xl px-3 py-2.5">
+                <p className="text-[12px] font-semibold text-[#137333]">
+                  Balance to spend: R{Number(aff.balance || 0).toFixed(2)}
+                </p>
+                <p className="text-[11px] text-[#3C6B46] mt-0.5 leading-snug">
+                  Flip "Use invite credit" on when you book a trip and it comes off that fare — it's yours to choose, trip by trip.
+                </p>
+              </div>
             </>
           )}
         </div>

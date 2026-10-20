@@ -1271,6 +1271,9 @@ export type RideRequestInput = {
   /** Which promo the booking screen displayed — the SERVER re-validates and
    *  recomputes the discount; this pointer only says which one to apply. */
   promoId?: string;
+  /** "Invite & earn": the rider CHOSE to spend their referral balance on this
+   *  trip. The server takes min(balance, fare) off and debits the balance. */
+  useAffiliateCredit?: boolean;
   deviceId?: string;
 };
 
@@ -1321,6 +1324,7 @@ export async function requestRide(input: RideRequestInput): Promise<RideRequestR
       paymentMethod: input.paymentMethod || "cash",
       fare: input.fare,
       promoId: input.promoId || undefined,
+      useAffiliateCredit: input.useAffiliateCredit === true,
       deviceId: input.deviceId || deviceId(),
     });
   });

@@ -4,6 +4,7 @@ import { query, queryOne, execute } from "../config/database";
 import { refundTransaction } from "../services/paystackPayment";
 import { captureRideHold, createRideHold, releaseRideHold } from "../services/preauthorization";
 import { ensurePayLaterTables, onRideCompletedPayLater } from "../services/PayLaterService";
+import { inviteCreditAvailable, settleFirstRide, spendInviteCredit } from "../services/AffiliateService";
 import { sendPushToUsers } from "../services/notify";
 import { markDriverLivePing, stopServerRideSim, syncSimToDriver } from "../services/rideSim";
 import {
@@ -469,6 +470,16 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
 
+        // ── Invite credit ("Invite & earn" R5): the rider CHOOSES at booking
+        // to spend their referral balance on this trip. The client only flips
+        // the switch; the amount is min(balance, remaining fare), server-side
+        // (same rule as the REST booking path).
+        let inviteCredit = 0;
+        if (rideFare != null && rideFare > 0 && data.useAffiliateCredit === true) {
+          inviteCredit = await inviteCreditAvailable(dbUserId, rideFare).catch(() => 0);
+          if (inviteCredit > 0) rideFare = Math.max(0, rideFare - inviteCredit);
+        }
+
         // Add the column if this deployment's DB predates it (no-op otherwise).
         // CRITICAL: if the migration cannot run we fall back to the previous
         // 10-column INSERT, so booking can NEVER break because of stops.
@@ -497,6 +508,27 @@ export function setupSocketHandlers(io: SocketIOServer) {
             `UPDATE rides SET promo_id = $2, promo_code = $3, promo_discount = $4 WHERE id = $1`,
             [ride.id, appliedPromo.id, appliedPromo.code, appliedPromo.discount]
           ).catch(() => {});
+        }
+
+        // Spend the invite credit the rider chose — debit + record atomically;
+        // if the debit cannot land, the fare goes back up (nothing is free
+        // without the money moving). Runs BEFORE dispatch, so drivers only
+        // ever see the final fare.
+        if (inviteCredit > 0 && ride?.id) {
+          await execute(
+            `ALTER TABLE rides ADD COLUMN IF NOT EXISTS affiliate_credit NUMERIC(12,2) NOT NULL DEFAULT 0`
+          ).catch(() => {});
+          const spent = await spendInviteCredit(dbUserId, ride.id, inviteCredit).catch(() => false);
+          if (spent) {
+            await execute(`UPDATE rides SET affiliate_credit = $2 WHERE id = $1`, [ride.id, inviteCredit]).catch(() => {});
+          } else {
+            await execute(
+              `UPDATE rides SET estimated_fare = COALESCE(estimated_fare, 0) + $2 WHERE id = $1`,
+              [ride.id, inviteCredit]
+            ).catch(() => {});
+            rideFare = Number(rideFare || 0) + inviteCredit; // hold/dispatch see the real fare
+            inviteCredit = 0;
+          }
         }
 
         // THE RIDER'S TIER (013, ride-class matching). The column's default is
@@ -1551,6 +1583,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
           [ride.fare, rideId]
         );
         console.log(`[complete] ride=${rideId} status=completed fare=${ride.fare}`);
+        // "Invite & earn": the FIRST completed ride of a REFERRED rider pays the
+        // inviter their R5 (idempotent — unique per ride). The REST completion
+        // path always had this hook; without it here, app-driven completions
+        // (this socket path — which is how real trips end) never settled
+        // referrals and the money never went in.
+        void settleFirstRide(String(rideId)).catch((e) =>
+          console.warn(`[affiliate] settle ride=${rideId}:`, e?.message || e)
+        );
         // Card preauthorization: the ride completing captures the hold for the
         // final fare (no-op when there is no hold; PAID still arrives only via
         // the preauthorization.capture.success webhook).
