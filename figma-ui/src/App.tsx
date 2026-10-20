@@ -94,6 +94,7 @@ import {
   signIn,
   signOut,
   getAffiliateSummary,
+  getRideReceipt,
   signUp,
   startTrip,
   sendTip,
@@ -2104,6 +2105,19 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   // The driver pressed End trip: open the rating + tip window immediately.
   useEffect(() => { if (done) setSheet(true) }, [done])
 
+  // Fare summary for that sheet — what was paid, and how much of it was the
+  // invite credit. The server's RECEIPT is the source of truth (its fare is
+  // already the discounted amount; affiliate_credit is the memo line).
+  const [tripReceipt, setTripReceipt] = useState<any>(null)
+  useEffect(() => {
+    if (!done || !rideId) return
+    let alive = true
+    getRideReceipt(rideId).then((r: any) => { if (alive) setTripReceipt(r) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [done, rideId])
+  const paidFare = Number(tripReceipt?.fare ?? ride?.actual_fare ?? ride?.estimated_fare ?? 0)
+  const inviteApplied = Number(tripReceipt?.affiliate_credit || 0)
+
   async function finishTrip() {
     if (!rideId) { setSheet(false); onDone(); return }
     setBusy(true)
@@ -2393,6 +2407,22 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
               <p className="text-[12px] text-[#6B6B6B] mt-1">
                 Rate {driverName} and add a tip if you would like to.
               </p>
+
+              {(paidFare > 0 || inviteApplied > 0) && (
+                <div className="mt-3 bg-[#F7F7F7] rounded-2xl px-4 py-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-[#6B6B6B]">Trip fare</span>
+                    <span className="text-[14px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                      {formatRand(paidFare)}
+                    </span>
+                  </div>
+                  {inviteApplied > 0 && (
+                    <p className="text-[11px] text-[#137333] font-semibold mt-1">
+                      R{inviteApplied.toFixed(2)} of it came off your invite credit — thanks for riding with Vura.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="flex justify-center gap-3 my-5">
                 {[1, 2, 3, 4, 5].map((n) => (
