@@ -1039,9 +1039,11 @@ export type AffiliateSummary = {
 export type AffiliateReferral = {
   id: string;
   referred_name?: string | null;
+  referred_email?: string | null;
   status?: string | null;
   rewarded_amount?: number | string | null;
   created_at?: string | null;
+  settled_at?: string | null;
 };
 
 export type AffiliateTransaction = {
@@ -2103,6 +2105,11 @@ export type ActivePromo = {
   audience: string;
   discount_pct: number | string;
   discount_fixed: number | string;
+  /** v2 promos (016): post-first-use validity + budget + per-user verdict. */
+  valid_days?: number | null;
+  rides_limit?: number | null;
+  expires_at?: string | null;
+  usable?: boolean;
 };
 
 /**

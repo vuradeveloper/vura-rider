@@ -2,20 +2,16 @@ import { useEffect, useState } from 'react'
 import { Header } from './SettingsScreen'
 import {
   claimReferralCode,
+  getActivePromos,
   getAffiliateReferrals,
   getAffiliateSummary,
   getAffiliateTransactions,
   registerAffiliate,
+  type ActivePromo,
   type AffiliateReferral,
   type AffiliateSummary,
   type AffiliateTransaction,
 } from '../lib/backend'
-
-/** The two offers the old Promotions screen carried. */
-const OFFERS = [
-  { title: '20% off your next 3 rides', desc: 'Up to R50 per ride. Valid until end of month.' },
-  { title: 'R100 Welcome Bonus', desc: 'Applied automatically on your first ride.' },
-]
 
 const STATUS: Record<string, { label: string; bg: string; fg: string; dot: string }> = {
   pending: { label: 'Pending', bg: '#FFF7E6', fg: '#8A5A00', dot: '#FBBC04' },
@@ -47,6 +43,16 @@ export default function PromosScreen({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [tick, setTick] = useState(0)
+
+  // REAL active offers — the server's window+audience-filtered promos
+  // (GET /api/promos/active?side=rider). Nothing hardcoded: what Vura actually
+  // runs (e.g. WINTER40) is exactly what appears here, live.
+  const [offers, setOffers] = useState<ActivePromo[] | null>(null)
+  useEffect(() => {
+    getActivePromos('rider')
+      .then((r) => setOffers(Array.isArray(r?.promos) ? r.promos : []))
+      .catch(() => setOffers([]))
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -143,17 +149,52 @@ export default function PromosScreen({ onBack }: { onBack: () => void }) {
 
         <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mt-4 mb-2">Active offers</p>
         <div className="flex flex-col gap-2">
-          {OFFERS.map((o) => (
-            <div key={o.title} className="bg-white rounded-2xl border border-[#F0F0F0] p-4 flex items-start gap-3 shadow-sm">
-              <div className="w-10 h-10 rounded-full bg-[#FCE8E6] flex items-center justify-center shrink-0">
-                <span className="text-[17px]">🎁</span>
-              </div>
-              <div className="min-w-0">
-                <p className="text-[14px] font-semibold text-[#1A1A1A]">{o.title}</p>
-                <p className="text-[12px] text-[#6B6B6B] mt-1 leading-snug">{o.desc}</p>
-              </div>
+          {offers === null ? (
+            <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 shadow-sm">
+              <p className="text-[12px] text-[#ADADAD]">Checking for offers…</p>
             </div>
-          ))}
+          ) : offers.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 shadow-sm text-center">
+              <p className="text-[13px] font-semibold text-[#1A1A1A]">No active offers right now</p>
+              <p className="text-[12px] text-[#ADADAD] mt-1 leading-snug">
+                Real offers only — when Vura runs one, it lands here automatically.
+              </p>
+            </div>
+          ) : offers.map((o) => {
+            const pct = Number(o.discount_pct) || 0
+            const fixed = Number(o.discount_fixed) || 0
+            const off = pct > 0 ? `${pct}% off your ride` : fixed > 0 ? `R${fixed.toFixed(2)} off your ride` : ''
+            const usable = o.usable !== false
+            const meta = [
+              o.rides_limit ? `${o.rides_limit} ride${Number(o.rides_limit) === 1 ? '' : 's'}` : '',
+              o.valid_days ? `valid ${o.valid_days} days` : '',
+              o.expires_at
+                ? `until ${new Date(o.expires_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}`
+                : '',
+            ].filter(Boolean).join(' · ')
+            return (
+              <div key={o.id} className={`bg-white rounded-2xl border border-[#F0F0F0] p-4 flex items-start gap-3 shadow-sm ${usable ? '' : 'opacity-60'}`}>
+                <div className="w-10 h-10 rounded-full bg-[#FCE8E6] flex items-center justify-center shrink-0">
+                  <span className="text-[15px] font-bold text-[#EA4335]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>%</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[14px] font-semibold text-[#1A1A1A] truncate">{o.title}</p>
+                    <span className="shrink-0 rounded bg-[#F7F7F7] border border-[#EBEBEB] px-1.5 py-0.5 text-[10px] font-bold text-[#6B6B6B]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                      {o.code}
+                    </span>
+                  </div>
+                  {o.subtitle ? (
+                    <p className="text-[12px] text-[#6B6B6B] mt-1 leading-snug">{o.subtitle}</p>
+                  ) : null}
+                  <p className="text-[12px] text-[#EA4335] font-semibold mt-1">
+                    {off}{usable ? '' : ' · used up for you'}
+                  </p>
+                  {meta ? <p className="text-[11px] text-[#ADADAD] mt-1">{meta}</p> : null}
+                </div>
+              </div>
+            )
+          })}
         </div>
 
         <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mt-4 mb-2">Invite &amp; earn</p>
@@ -225,25 +266,36 @@ export default function PromosScreen({ onBack }: { onBack: () => void }) {
         {referrals.length > 0 && (
           <>
             <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mt-4 mb-2">
-              People who joined with your code
+              People you invited
             </p>
             <div className="bg-white rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
               {referrals.map((r, i) => {
                 const st = STATUS[String(r.status || 'pending')] || STATUS.pending
+                const joined = r.created_at
+                  ? new Date(r.created_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })
+                  : ''
+                const settled = r.settled_at
+                  ? new Date(r.settled_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })
+                  : ''
+                const s = String(r.status || 'pending')
+                const line =
+                  s === 'settled'
+                    ? `First ride done${settled ? ` ${settled}` : ''} — R5 paid`
+                    : s === 'lapsed'
+                      ? `No first ride within 90 days${joined ? ` · joined ${joined}` : ''}`
+                      : s === 'disqualified'
+                        ? 'Reward cancelled'
+                        : `Joined${joined ? ` ${joined}` : ''} — waiting for their first ride`
                 return (
                   <div key={r.id} className={`flex items-center gap-3 px-4 py-3.5 ${i < referrals.length - 1 ? 'border-b border-[#F5F5F5]' : ''}`}>
                     <div className="w-9 h-9 rounded-full bg-[#F2F2F2] flex items-center justify-center shrink-0">
                       <span className="text-[13px] font-bold text-[#6B6B6B]">
-                        {String(r.referred_name || '?').charAt(0).toUpperCase()}
+                        {String(r.referred_name || r.referred_email || '?').charAt(0).toUpperCase()}
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-semibold text-[#1A1A1A] truncate">{r.referred_name || 'Vura rider'}</p>
-                      <p className="text-[11px] text-[#ADADAD] mt-0.5">
-                        {r.created_at
-                          ? new Date(r.created_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
-                          : ''}
-                      </p>
+                      <p className="text-[13px] font-semibold text-[#1A1A1A] truncate">{r.referred_name || r.referred_email || 'Vura rider'}</p>
+                      <p className="text-[11px] text-[#ADADAD] mt-0.5">{line}</p>
                     </div>
                     {Number(r.rewarded_amount) > 0 && (
                       <span className="shrink-0 text-[12px] font-bold text-[#1E7B43]">
@@ -256,6 +308,20 @@ export default function PromosScreen({ onBack }: { onBack: () => void }) {
                   </div>
                 )
               })}
+            </div>
+          </>
+        )}
+
+        {aff && referrals.length === 0 && (
+          <>
+            <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mt-4 mb-2">
+              People you invited
+            </p>
+            <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 shadow-sm">
+              <p className="text-[13px] font-semibold text-[#1A1A1A]">No invites yet</p>
+              <p className="text-[12px] text-[#ADADAD] mt-1 leading-snug">
+                Share your code — everyone who joins with it appears here with their status.
+              </p>
             </div>
           </>
         )}
