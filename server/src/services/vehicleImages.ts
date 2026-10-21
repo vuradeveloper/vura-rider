@@ -1698,7 +1698,11 @@ export async function autoFillMissingColours(limit = 3, allColours = false): Pro
 
 export async function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage> {
   const resolved = await resolveVehicleImage(v);
-  if (resolved.url) return resolved;
+
+  // Only skip the request when we have an exact colour match. If we fell back to
+  // a white/other-colour image (matched: "model") or found nothing (matched: "none"),
+  // queue a console request so the driver's actual colour gets a photo.
+  if (resolved.url && resolved.matched === "exact") return resolved;
 
   // Admin-v2: queue the gap for the console + alert the driver ONCE
   // (both when the worker will search and when the Car DB simply lacks it).

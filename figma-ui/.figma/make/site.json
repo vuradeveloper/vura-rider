@@ -1,0 +1,10 @@
+{
+  "description": "Effortlessly book rides with a user-friendly interface designed for seamless navigation, catering to commuters seeking reliable transportation solutions.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

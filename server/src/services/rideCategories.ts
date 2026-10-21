@@ -44,8 +44,8 @@ export type RideCategory =
 const TIER_ACCEPTS: Record<string, readonly RideCategory[]> = {
   go: ["economy", "standard", "wait_save", "electric"],
   comfort: ["comfort", "business", "electric"],
-  xl: ["xl", "van", "electric"],
-  x: ["xl", "van", "electric"],
+  xl: ["xl", "van", "electric", "standard", "economy"],
+  x: ["xl", "van", "electric", "standard", "economy"],
   black: ["premium", "business"],
 };
 

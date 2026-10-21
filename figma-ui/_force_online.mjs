@@ -1,0 +1,11 @@
+const KEY='AIzaSyC3lSrWd0JHWS8FzyaW9h8GgQyzNK3sC3Q';
+const API='https://api.ridevura.com';
+const su = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'specials39u7@gmail.com',password:'Makhavhu@77',returnSecureToken:true})});
+const j = await su.json(); const H={'Content-Type':'application/json',Authorization:'Bearer '+j.idToken};
+const post = await fetch(API+'/api/drivers/online',{method:'POST',headers:H,body:JSON.stringify({online:true})});
+console.log('POST /api/drivers/online {online:true} ->', post.status, JSON.stringify(await post.json()));
+await new Promise(r=>setTimeout(r,5000));
+const me = await (await fetch(API+'/api/drivers/me',{headers:H})).json();
+console.log('drivers/me now -> is_online:', me.profile?.is_online, 'status:', me.profile?.status);
+const act = await (await fetch(API+'/api/rides/me/active-state',{headers:H})).json();
+console.log('active-state now -> offer:', JSON.stringify(act.offer)?.slice(0,220) ?? null, '| ride:', JSON.stringify(act.ride)?.slice(0,120) ?? null);

@@ -1,0 +1,12 @@
+import { io } from 'socket.io-client';
+const KEY='AIzaSyC3lSrWd0JHWS8FzyaW9h8GgQyzNK3sC3Q';
+const API='https://api.ridevura.com';
+const su = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'specials39u7@gmail.com',password:'Makhavhu@77',returnSecureToken:true})});
+const j = await su.json();
+const s = io(API,{auth:{token:j.idToken},transports:['websocket'],reconnection:false,timeout:10000});
+const events=[];
+s.on('ride:queue',(d)=>{events.push(['queue',d]);console.log('ride:queue ->',JSON.stringify(d))});
+for (const e of ['ride:request','ride:offer']) s.on(e,(d)=>{events.push([e,d]);console.log('OFFER',e,'->',String(JSON.stringify(d)).slice(0,140))});
+s.on('connect',()=>{console.log('socket connected'); s.emit('driver:online',{online:true}); console.log('emitted driver:online{true}, watching 8s…')});
+s.on('connect_error',(e)=>console.log('socket error',e?.message));
+setTimeout(()=>{console.log('--- after 8s: events seen:',events.length,'---');process.exit(0)},8000);

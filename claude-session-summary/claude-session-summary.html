@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>AI Usage Log - Studio Equipment Booking (Aug 2026)</title>
+<style>
+  :root{ --bg:#1c1b19; --bubble:#2e2d2a; --text:#eeece6; --dim:#a09c93; --line:#35342f; --acc:#d97757; }
+  *{ box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,"Segoe UI",Inter,system-ui,Roboto,sans-serif; }
+  @page{ size:A4; margin:0; }
+  .page{ max-width:700px; margin:0 auto; padding:30px 34px 26px; }
+  .head{ display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding-bottom:16px; }
+  .head h1{ font-size:15px; font-weight:600; margin:0; }
+  .head .sub{ margin-left:auto; font-size:10.5px; color:var(--dim); letter-spacing:.02em; text-align:right; }
+  .star{ width:20px; height:20px; flex:none; }
+  .ic{ width:13px; height:13px; flex:none; }
+  .note{ margin:18px 0 8px; padding:10px 14px; font-size:11.5px; line-height:1.6; color:var(--dim);
+    background:#21201d; border:1px solid var(--line); border-left:3px solid var(--acc); border-radius:8px; }
+  .day{ display:flex; align-items:center; gap:12px; margin:30px 0 20px; break-inside:avoid; page-break-inside:avoid; }
+  .day::before,.day::after{ content:""; height:1px; flex:1; background:var(--line); }
+  .day span{ font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); white-space:nowrap; }
+  .ex{ margin:0 0 26px; break-inside:avoid; page-break-inside:avoid; }
+  .you{ background:var(--bubble); border:1px solid #3b3a35; border-radius:14px; padding:11px 15px;
+    font-size:13px; line-height:1.55; color:var(--text); }
+  .stamp{ margin:7px 4px 0; font-size:10.5px; color:var(--dim); }
+  .cl{ margin:16px 4px 0; }
+  .cl-l{ display:flex; align-items:center; gap:7px; font-size:12px; font-weight:600; color:#e9e6df; margin-bottom:7px; }
+  .cl-b{ font-size:13px; line-height:1.62; color:#d8d5cd; margin:0; }
+  .cl-b p{ margin:0 0 8px; }
+  .cl-b p:last-child{ margin-bottom:0; }
+  .foot{ border-top:1px solid var(--line); margin-top:30px; padding-top:12px; font-size:10px; line-height:1.7; color:var(--dim); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><symbol id="star" viewBox="0 0 24 24"><g stroke="#d97757" stroke-width="2.4" stroke-linecap="round" fill="none"><path d="M12 2.5v19"/><path d="M2.5 12h19"/><path d="M5.2 5.2l13.6 13.6"/><path d="M18.8 5.2L5.2 18.8"/></g></symbol></svg>
+<div class="page">
+
+  <div class="head">
+    <svg class="star"><use href="#star"/></svg>
+    <h1>AI Usage Log</h1>
+    <div class="sub">Studio Equipment Booking: Web / Mobile / API<br/>16-26 Aug 2026</div>
+  </div>
+
+  <div class="note">A shortened recap of four real sessions — no code, just the guidance and the outcomes. Prompts and replies are condensed from the original exported transcripts; the times shown are the original session timestamps.</div>
+
+  <div class="day"><span>16 August 2026 · Statistics page — build &amp; revert</span></div>
+
+  <div class="ex">
+    <div class="you">Update the Statistics page — be creative. Pull the data, transform and clean the raw data, and make it easy to understand and use for decisions: show the patterns and thresholds, explain where the data came from and how it was cleaned, show equipment quality and future utility, tell us which equipment is in demand so we can stock more, add a map of where students will be shooting, and reduce the noise — keep it clean and impressive. Project: studioequipmentbooking.</div>
+    <div class="stamp">You · 23:03</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Explored the project first — structure, data sources, booking and equipment flows — then planned the approach. Built a data layer that cleans and aggregates the booking data, reusable dashboard components, and an interactive shooting-locations map, and rewired the Statistics page onto them. TypeScript and the production build passed.</p>
+    </div>
+  </div>
+
+  <div class="ex">
+    <div class="you">revert back please</div>
+    <div class="stamp">You · 23:17</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Everything rolled back — original page restored, new files removed, build clean. Net change to the codebase: none.</p>
+    </div>
+  </div>
+
+  <div class="day"><span>20 August 2026 · Statistics page — buttons, charts &amp; “make it speak”</span></div>
+
+  <div class="ex">
+    <div class="you">On the Stats page, create white buttons that match our design — under each button must be its own chart. The buttons must be linear, following each other, in order — most important graph first.</div>
+    <div class="stamp">You · 14:17</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Planned and built it: a horizontal row of chart-selector buttons in the app's style, with only the selected chart shown below. The charts were ordered by importance — onboarding funnel first, then gear condition, booking fulfilment, demand vs supply, utilisation, peak hours, damage views and genre mix. Build passed.</p>
+    </div>
+  </div>
+
+  <div class="ex">
+    <div class="you">Buttons must be corners with only a little rounding — not round. Also reduce the size of the summary boxes, and remove the demo-preview description.</div>
+    <div class="stamp">You · later that afternoon</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Softened the buttons to gentle corners, compacted the summary tiles into slimmer cards, and removed the demo note. Rebuilt cleanly.</p>
+    </div>
+  </div>
+
+  <div class="ex">
+    <div class="you">The graph must speak to them. Each chart must show proof of where it came from — the smaller charts or data behind it — with less text and more icons, in one consistent pattern. The user must be able to make an informed decision just by seeing it; the chart must do the thinking. Keep it clean, with more white space.</div>
+    <div class="stamp">You · 18:06</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Reworked every chart card into one pattern: a proof line showing exactly which data feeds the chart (e.g. Students + Workshops + Projects → Onboarding Funnel), a single automatically-computed verdict line that interprets the numbers for you, and a calmer layout with more breathing room. The source chips are clickable to move between charts, and the colour palette was quietened for readability. The page briefly went blank during the refactor — traced to a bad edit and fixed — and the build stayed green.</p>
+    </div>
+  </div>
+
+  <div class="ex">
+    <div class="you">Also create or update these chart types: a true Pareto bar chart (largest-to-smallest bars with a cumulative percentage line) and a box-and-whisker plot for comparing distributions.</div>
+    <div class="stamp">You · 18:34</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Not reached in this session — work continued on finishing the chart-card refactor, and the session was cut off by provider errors before these two chart types were added.</p>
+    </div>
+  </div>
+
+  <div class="day"><span>22 August 2026 · Statistics page — review &amp; green highlights</span></div>
+
+  <div class="ex">
+    <div class="you">Can you see the Statistics page on this project?</div>
+    <div class="stamp">You · 20:38</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Reviewed it and described what's on the page: the onboarding funnel, gear condition, booking fulfilment, demand vs supply, peak hours, utilisation, damage Pareto and trend, genre mix and repair turnaround — all computed from the same data the rest of the app uses, with lecturer-scoped views, drill-down links and step-through animations.</p>
+    </div>
+  </div>
+
+  <div class="ex">
+    <div class="you">Make the recommendation text flash in our green — the green used on the supply/demand bar graph.</div>
+    <div class="stamp">You · 20:40</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Applied the pulsing green treatment to the positive “all good” recommendation lines across the stats panels, keeping red reserved for recommendations that need action.</p>
+    </div>
+  </div>
+
+  <div class="day"><span>26 August 2026 · Mobile Equipment page &amp; kit-bag booking logic</span></div>
+
+  <div class="ex">
+    <div class="you">Two problems: on the phone, the Equipment page is a blank white screen. And the kit bags must not be limited by counters — if one student books a kit today and another books the same kit for a different day, it must not say “not enough”, because the calendar already prevents double-booking. Counters are fine for extras only. Spot all the gaps and tell me how we'll fix it quickly.</div>
+    <div class="stamp">You · 14:29</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude</div>
+      <p class="cl-b">Started the investigation — went through the mobile project and the API (booking and kit controllers, the Docker setup and database migrations) to trace both the blank page and the kit-count logic, and a gap list was taking shape. The session then kept dropping on provider errors (overload and connection failures); a follow-up at 14:37 hit the same errors, so no fixes were applied before it ended.</p>
+    </div>
+  </div>
+
+  <div class="foot">Condensed on 4 Oct 2026 from four exported Claude Code session transcripts — 16 Aug (fbcd2841), 20 Aug (ea135515), 22 Aug (f47187bd) and 26 Aug (f7903d37) 2026. Replies here are shortened summaries of the original assistant messages; the full transcripts remain in the original exports.</div>
+</div>
+</body>
+</html>

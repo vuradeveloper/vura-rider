@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SEMS — System Walkthrough (Web · Mobile · API)</title>
+<style>
+  :root{ --bg:#1c1b19; --card:#232220; --text:#eeece6; --dim:#a09c93; --line:#35342f; --acc:#d97757; }
+  *{ box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,"Segoe UI",Inter,system-ui,Roboto,sans-serif; }
+  @page{ size:A4; margin:0; }
+  .page{ max-width:720px; margin:0 auto; padding:30px 34px 26px; }
+  .head{ display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding-bottom:16px; }
+  .head h1{ font-size:16px; font-weight:600; margin:0; }
+  .head .sub{ margin-left:auto; font-size:10.5px; color:var(--dim); text-align:right; line-height:1.5; }
+  .star{ width:20px; height:20px; flex:none; }
+  .note{ margin:18px 0 10px; padding:10px 14px; font-size:11.5px; line-height:1.6; color:var(--dim);
+    background:#21201d; border:1px solid var(--line); border-left:3px solid var(--acc); border-radius:8px; }
+  .note b{ color:#d9d6ce; }
+  .h2{ display:flex; align-items:baseline; gap:9px; margin:32px 0 10px; break-inside:avoid; page-break-inside:avoid; }
+  .h2 .num{ color:var(--acc); font-weight:700; font-size:14px; }
+  .h2 h3{ font-size:15.5px; margin:0; font-weight:600; }
+  .h2 .tag{ margin-left:auto; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); }
+  .lead{ margin:0 0 14px; font-size:12.5px; color:#c9c6be; line-height:1.6; }
+  ul{ margin:0 0 12px; padding-left:20px; }
+  li{ margin:0 0 6px; font-size:12.7px; line-height:1.55; color:#d8d5cd; }
+  li b, .a b, .lead b{ color:#e9e6df; }
+  ol{ margin:0 0 12px; padding-left:22px; }
+  .qa{ margin:0 0 14px; break-inside:avoid; page-break-inside:avoid; }
+  .q{ margin:0 0 4px; font-size:12.8px; font-weight:600; color:#ece9e2; line-height:1.5; }
+  .q::before{ content:"Q · "; color:var(--acc); font-weight:700; }
+  .a{ margin:0; font-size:12.7px; line-height:1.62; color:#d3d0c8; }
+  .code{ font-family:Consolas,"Cascadia Mono",monospace; font-size:10.6px; background:#232220;
+    border:1px solid var(--line); border-radius:8px; padding:10px 13px; line-height:1.7; color:#d0cdc5;
+    white-space:pre-wrap; margin:10px 0 16px; }
+  .demo{ margin:14px 0 6px; padding:12px 15px; background:#241f1b; border:1px solid #4a3327; border-radius:10px;
+    font-size:12.3px; line-height:1.6; color:#e3ddd2; }
+  .demo b{ color:var(--acc); }
+  .docnote{ margin:14px 0 0; padding-top:8px; border-top:1px dashed var(--line); font-size:10.8px; color:var(--dim); line-height:1.6; }
+  .foot{ border-top:1px solid var(--line); margin-top:30px; padding-top:12px; font-size:10px; line-height:1.7; color:var(--dim); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><symbol id="star" viewBox="0 0 24 24"><g stroke="#d97757" stroke-width="2.4" stroke-linecap="round" fill="none"><path d="M12 2.5v19"/><path d="M2.5 12h19"/><path d="M5.2 5.2l13.6 13.6"/><path d="M18.8 5.2L5.2 18.8"/></g></symbol></svg>
+<div class="page">
+
+  <div class="head">
+    <svg class="star"><use href="#star"/></svg>
+    <h1>SEMS — System Walkthrough</h1>
+    <div class="sub">Studio Equipment Booking<br/>Web · Mobile · API — teaching guide &amp; Q&amp;A</div>
+  </div>
+
+  <div class="note"><b>How to use this:</b> each part of the system gets a short walkthrough plus the questions you'll be asked, with short verified answers. Compiled from the live code on 4 Oct 2026 and the project's own <b>Docs/</b> folder — every answer here traces back to a file, an endpoint or a table.</div>
+
+  <div class="h2"><span class="num">1</span><h3>The whole system at a glance</h3><span class="tag">architecture</span></div>
+  <ul>
+    <li><b>Three repos, three jobs:</b> <b>Team22-API</b> is the Express API + PostgreSQL + the docker-compose that runs everything; <b>Team22-Main</b> is the web front-end (plus the Docs/ folder); <b>Team22-Mobile</b> is the same front-end wrapped into an Android APK.</li>
+    <li><b>Three containers:</b> studio_booking_db (Postgres 15, database <i>semsequipmentbooking</i>), studio_booking_api (Node/Express on port 5000), studio_booking_frontend (nginx serving the built React app on port 80). One command starts the stack: <i>docker compose up -d</i> in Team22-API; helper scripts start-studio.ps1 / check-studio.ps1 watch it.</li>
+    <li><b>One origin:</b> the browser only ever talks to nginx; nginx proxies <i>/api/</i> and <i>/uploads/</i> to the API — which is why the web app needs no CORS handling and image URLs stay relative.</li>
+    <li><b>Five roles:</b> Student, Lecturer, Studio Staff, Admin, Security — each with its own sidebar, landing page and allowed routes. Enforcement happens twice: in the UI (ProtectedRoute) and in the API (verifyToken + role checks).</li>
+  </ul>
+  <div class="code">browser → apiFetch() → /api/… → nginx → Express (src/app.js)
+→ verifyToken (JWT) → requireRole([…]) → controller → PostgreSQL</div>
+
+  <div class="h2"><span class="num">2</span><h3>The booking journey, end to end</h3><span class="tag">the spine of any demo</span></div>
+  <ol>
+    <li><b>Project first.</b> A student registers a project; a lecturer approves it. Nothing can be booked against an unapproved project — the API refuses it outright.</li>
+    <li><b>Workshop gate.</b> Booking only opens after workshop attendance is confirmed for that student (the booking page checks eligibility first).</li>
+    <li><b>Book.</b> The student picks a kit bag or extras (they land in the cart), chooses shoot dates on the calendar, and pins the shooting location on the map (stored on the project).</li>
+    <li><b>Submit.</b> POST /api/bookings — inside one database transaction the API re-checks every model for overlapping bookings and allocates real item rows (FOR UPDATE SKIP LOCKED), so two people can never grab the same unit at once.</li>
+    <li><b>Review.</b> Staff see the pending booking in Reservation review; Approve is the gate that makes it visible to the hand-over desk.</li>
+    <li><b>Check-out.</b> Staff inspect every item and capture four angle photos; the student signs with their own 4-digit studio PIN; a receipt is issued.</li>
+    <li><b>Gate.</b> Security scans the student’s pass; the booking record itself is the paperwork.</li>
+    <li><b>Check-in.</b> Each item comes back with a condition (good / fair / damaged) or is flagged missing; one damaged item automatically creates a damage report, a maintenance log, a pending approval and an insurance claim.</li>
+    <li><b>Aftermath.</b> Repairs list, approvals queue (staff propose → admin confirms), insurance hub (admin decides claims), notifications (overdue / short stock / late returns) and the statistics dashboard.</li>
+  </ol>
+  <div class="demo"><b>Five-minute classroom demo</b> (adapted from the project’s own demo script): sign in as the student (<i>student@studio.edu</i>) → Book equipment: pick a kit, a shoot date, pin “Braamfontein” on the map → as staff (<i>staff@studio.edu</i>): Reservation review → Approve → Equipment check-out: angle photos + student PIN → check one item in as <b>Damaged</b> → show it on Repairs &amp; damage → then the request in Equipment approvals and the claim in Insurance hub → finish on <b>Shooting locations</b>, filtering the date to show was / is / will be shooting.</div>
+
+  <div class="h2"><span class="num">3</span><h3>Web app — Team22-Main</h3><span class="tag">React · Vite · Tailwind</span></div>
+  <p class="lead">What it is: the React front-end that students, staff, lecturers, admins and security use in a browser. Routes live in App.tsx; each role’s landing page and sidebar are derived from the same role map.</p>
+
+  <div class="qa">
+    <p class="q">What is the web app built with, and how does it talk to the backend?</p>
+    <p class="a">React + TypeScript on Vite, styled with Tailwind and shadcn/ui. Shared state lives in five contexts (Role, Project, Student, Reservation, Equipment), and every HTTP call goes through one helper — <b>apiFetch()</b> in src/lib/api.ts — which attaches the bearer token. On the web the API base is empty, so all calls ride through nginx on the same origin.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">Walk me through a student booking a kit.</p>
+    <p class="a">Four steps — Kit → Date → Terms → Done. Kit bags and extras go into the cart. Dates are picked on a hand-built calendar (no third-party booking widget): fully booked days are greyed out and a shoot is capped at three days. The shooting location is searched through the project’s own /api/geo/search proxy, pinned on a map and saved on the project. Submitting sends POST /api/bookings — blocked earlier if the project isn’t approved or the workshop hasn’t been attended.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">How does the calendar know which days are already busy?</p>
+    <p class="a">It asks the API for the overlapping bookings of everything in the cart (<i>/api/bookings/timeline?modelId=…&amp;all=true</i>) and, for kit bags, the kit’s booked windows (<i>/api/bookings/kit-bookings?kitid=…</i>). For extras, a day disables only when the requested quantity exceeds what’s free; a kit blocks its whole booked window.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">What happens after the student submits?</p>
+    <p class="a">The booking arrives as <b>pending</b> in the staff queue — Reservation review. Approve / Reject (PATCH /api/bookings/:id/approve or /reject) flips the status; only approved bookings appear at the hand-over desk.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">Describe check-out.</p>
+    <p class="a">Three steps: Review → Inspect → Sign-off. Every item is ticked off and four angle photos are captured (front / back / left / right — re-shooting an angle replaces the old photo). The student accepts the terms and types their own 4-digit studio PIN, which proves they were present; the hand-over is confirmed and a receipt is issued.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">What does the Shooting locations page do?</p>
+    <p class="a">It pins every project on a map and colours each pin for the selected date — “shooting on this date” (green), “will be shooting” (blue), “was shooting” (grey). It answers one operational question: where is our gear on day X. (War story: the date picker used to open <i>behind</i> the map because leaflet’s panes paint up to z-index 800 — fixed by giving the map its own stacking context.)</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">What does the Statistics page show?</p>
+    <p class="a">KPI cards and charts (bookings, utilisation, damages) that follow a date filter — week / month / semester / all, plus a custom range. The numbers are computed from the same live data the other pages read, so there is no separate analytics database to drift out of sync. Each chart follows the “speak for themselves” pattern: a proof line naming the data behind it and a one-line verdict.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">Who sees what — and where is that enforced?</p>
+    <p class="a">The sidebar, the landing page and ProtectedRoute all filter by role — lecturers land on project approvals, security lands on the scan screen, everyone else on the dashboard. The API re-checks every request, so hiding a button is never the only defence.</p>
+  </div>
+
+  <p class="docnote">All 21 screens are documented one-by-one in the project’s Docs/ folder — endpoints, tables and the reason each was built that way (start at Docs/README.md).</p>
+
+  <div class="h2"><span class="num">4</span><h3>Mobile app — Team22-Mobile</h3><span class="tag">Capacitor · Android</span></div>
+  <p class="lead">What it is: the same React front-end, wrapped with Capacitor and built into an Android APK — so students can use the studio system from a phone on the local network.</p>
+
+  <div class="qa">
+    <p class="q">Is the mobile app a separate codebase?</p>
+    <p class="a">No. It is the same front-end (the “Front end” folder mirrors the web app’s src/), wrapped by Capacitor (appId <i>com.studio.booking</i>, webDir <i>dist</i>) and built into <b>StudioBooking-Hotspot.apk</b>. The android/ folder is the Gradle project; dist/ holds the built web bundle.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">How does the phone reach the API without nginx?</p>
+    <p class="a">The build sets VITE_API_URL to the hotspot machine (e.g. <i>http://192.168.137.1:5000</i>) and apiFetch calls the API directly; on the web the same code leaves the base empty and rides through nginx instead. Photo URLs resolve through mediaUrl(), with mediaAlternateUrl() as a fallback that retries http://&lt;host&gt;:5000 when needed.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">How is it deployed for a class?</p>
+    <p class="a">The PC runs the database + API containers (the mobile repo ships its own docker-compose.yml) and shares a hotspot; students connect to it and use the APK. Tip: test the Equipment page on the phone before a live demo — a blank Equipment screen was seen once, and the session investigating it (26 Aug) was interrupted before a fix was confirmed, so treat it as a check-before-demo item.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">Do photos and uploads work on the phone?</p>
+    <p class="a">Yes — same endpoints and storage as the web: the phone uploads to the API host, and the returned /uploads/... paths resolve against that host.</p>
+  </div>
+
+  <div class="h2"><span class="num">5</span><h3>API — Team22-API</h3><span class="tag">Node · Express 5 · PostgreSQL</span></div>
+  <p class="lead">What it is: a Node/Express 5 application that owns every rule, all the SQL and all file uploads. server.js boots src/app.js, which mounts fourteen routers under /api and serves /uploads statically.</p>
+
+  <div class="qa">
+    <p class="q">What is the backend made of?</p>
+    <p class="a">Express 5 with a single shared PostgreSQL pool (src/config/db.js — the only database connection), JWT auth, helmet + CORS + rate limiting, multer for uploads, pdfkit for PDFs/receipts, and a notification bot that starts with the server. The route files stay thin; all the SQL lives in the controllers.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">How is access controlled?</p>
+    <p class="a">Every sensitive route runs <b>verifyToken</b> (a JWT “digital ticket” — 401 if it is missing, 403 if it is invalid) and then <b>requireRole([...])</b> against the database’s role names (Studio Staff, Admin, Lecturer, …). The maintenance/supervision area adds local guards: staff propose status changes, an admin records the decision. The UI mirrors these rules, but the API is the enforcement point.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">How is double-booking actually prevented?</p>
+    <p class="a">Three cooperating layers: the calendar disables fully booked days before submission; kit windows expose the kit’s existing bookings so an overlapping window is blacked out; and at submit time POST /api/bookings runs inside a transaction that re-checks overlaps and allocates physical item rows with <b>FOR UPDATE SKIP LOCKED</b>. If a unit was taken mid-request it is skipped; if a request cannot be fully satisfied the whole transaction rolls back — no half-bookings.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">How do kit bags differ from extras — and why don’t kits say “not enough”?</p>
+    <p class="a">A kit bag is a physical kit (kits table) built from a template (kit_types + a kit_type_items checklist; untracked lines like “AX11 has a fixed lens” never create inventory). Kits are booked as a unit <b>against the calendar</b>: a booking blocks the kit’s dates, and another student can book the same bag for different days — only overlapping windows are blocked (returned / rejected / cancelled bookings are ignored). Extras are individual models where availability is counted per unit.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">What must be true before a booking is accepted?</p>
+    <p class="a">The student exists, has workshop attendance confirmed, and owns or is on the team of a project whose status is <b>approved</b>. Each failure returns a specific message (“Workshop attendance has not been confirmed…”, “This project has not been approved by your lecturer yet”).</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">What happens when a return is damaged or missing?</p>
+    <p class="a">returnBooking normalises each item’s condition; damaged items create a damage report, a maintenance log, a pending approval and an insurance claim in a single transaction, with the evidence photos linked onto the records (a shared helper resolves the right image; audit-damage-evidence.js fails if any record’s photo URL is empty).</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">Two best “under the hood” stories?</p>
+    <p class="a"><b>The geocoding proxy</b> (/api/geo/search): the public provider throttles browser calls and the packaged phone app has no Referer, so the API does the lookup itself — user agent, 10-minute cache, ~1 request/second, Johannesburg bias. <b>The notification bot:</b> operational rules (overdue kits, short stock, late returns) become alerts in the in-app bell, checked every few minutes.</p>
+  </div>
+
+  <div class="h2"><span class="num">6</span><h3>Database</h3><span class="tag">PostgreSQL 15</span></div>
+  <p class="lead">The database is created from numbered migrations — the Postgres container runs database/init.sql/*.sql in order the first time it boots on an empty volume.</p>
+
+  <div class="qa">
+    <p class="q">Where does the schema live, and how do I rebuild it?</p>
+    <p class="a">Team22-API/database/init.sql/ — files <b>000 to 026</b>. 000 is the baseline schema; the rest are the migrations and seeds in the order the project grew (003–006 kits, 013/025 insurance, 018–021 kit bags vs extras, 022 the 4-digit PINs, 026 maintenance evidence photos). A new change = the next number; rebuilding from scratch is just a fresh volume + docker compose up.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">Which tables matter most?</p>
+    <p class="a">Grouped: <b>Identity</b> — role, User, student / lecturer / studiostaff / admin / security. <b>Catalogue</b> — categories, equipmentmodels → equipmentitems (each serial-numbered unit), locations. <b>Kits</b> — kit_types, kit_type_items, kits. <b>Booking</b> — project, project_team, project_invites, bookings, bookingitems, gatepasses, bookingdocuments, cart_items, workshop_codes. <b>Workflow</b> — damagereports, maintenancelogs, pending_approval, insurance, insurance_claims, equipment_condition_images, equipmentnotifications.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">How does the database know what’s available?</p>
+    <p class="a">Two facts working together: each physical unit (equipmentitems) carries a <b>currentstatus</b> (available, on-set, in-repair, damaged, missing, …) and each booking line (bookingitems) carries expected / actual pickup and return timestamps. The calendars, the inventory page and the availability logic all read that pair.</p>
+  </div>
+
+  <div class="h2"><span class="num">7</span><h3>Questions you’ll get asked</h3><span class="tag">quick answers</span></div>
+
+  <div class="qa">
+    <p class="q">“One student books a kit today; another wants the same kit for a different day — will the system say there isn’t enough?”</p>
+    <p class="a">No. Kit bags are booked against the calendar, not a stock counter: only overlapping dates are blocked, and the bag just has to be back before the next booking. Counters apply to extras.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">“Two students book the same camera for the same day — what happens?”</p>
+    <p class="a">The second request finds no free unit for the overlapping dates inside its transaction. Nothing is half-saved (the transaction rolls back) and the student is told the equipment isn’t available.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">“Where do I look to find our gear?”</p>
+    <p class="a">Inventory: is it available. Tracked equipment: who has this specific serial unit, with photos and history. Booking history: what a project has out. Shooting locations: where productions are on any date.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">“Tell the life story of one dropped lens.”</p>
+    <p class="a">Checked in as <b>Damaged</b> → a damage report, maintenance log, approval request and insurance claim are created together → it appears in Repairs &amp; damage → a staff member proposes “in-repair”, an admin confirms → Insurance hub decides the claim and the register updates. Photos and timestamps exist at every step.</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">“Who can do what?”</p>
+    <p class="a"><b>Student:</b> projects, bookings, gate pass, own PIN. <b>Lecturer:</b> approve/reject projects, attendance. <b>Studio Staff:</b> approve bookings, check-out/in, inventory, repairs. <b>Admin:</b> insurance decisions, approval confirmations, accounts. <b>Security:</b> the scan screen only. (Enforced in the UI and again in the API.)</p>
+  </div>
+
+  <div class="qa">
+    <p class="q">“It’s demo day and something dies — how do I recover?”</p>
+    <p class="a">Restart the stack with <i>docker compose up -d</i> and check it with check-studio.ps1; the web opens on port 80, the API answers on :5000 (/api/health). For the phone, re-test the hotspot address before students connect.</p>
+  </div>
+
+  <div class="h2"><span class="num">8</span><h3>How this was built — AI usage notes</h3><span class="tag">honest record</span></div>
+  <p class="lead">Short, factual notes on where AI assistance shows up, per part of the system — documented so it can be discussed in the open.</p>
+  <ul>
+    <li><b>Web:</b> three real sessions shaped the Statistics page — 16 Aug (a full redesign, built then reverted on request), 20 Aug (the UX rework: chart-selector buttons, the proof/verdict pattern, quieter colours), 22 Aug (flashing-green positive recommendations).</li>
+    <li><b>Mobile &amp; API:</b> the 26 Aug session investigated the blank Equipment page on the phone and the kit-bag booking logic; it was interrupted by provider errors before fixes were confirmed.</li>
+    <li><b>Scope note:</b> those are the four sessions on record. The system grew well beyond them, and the durable record of how anything works is the code itself plus the project’s Docs/ folder — 21 page-by-page documents, a master code map and a calendar walkthrough. When in doubt: open the doc, open the file.</li>
+  </ul>
+
+  <div class="foot">Compiled 4 Oct 2026 from the live codebases (Team22-API · Team22-Main · Team22-Mobile) and the project’s own Docs/ folder. Companion document: the AI Usage Log covering the 16–26 Aug 2026 sessions.</div>
+</div>
+</body>
+</html>

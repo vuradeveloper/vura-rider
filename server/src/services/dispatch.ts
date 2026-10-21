@@ -757,7 +757,10 @@ async function filterCandidatesForTier(
     );
     let pool = eligible;
     let mode = "strict";
-    if (pool.length === 0) {
+    // BLACK is premium-only: never degrade to economy/unclassified cars.
+    // A Picanto (economy/comfort) must never receive a black ride.
+    const canDegrade = tier !== "black";
+    if (pool.length === 0 && canDegrade) {
       pool = candidates.filter((c) => !hasExplicitCategories(byId.get(c.id)));
       mode = "degraded_unclassified";
       if (pool.length === 0) {

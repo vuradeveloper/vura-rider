@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Debugging &amp; Testing — SEMS case files</title>
+<style>
+  :root{ --bg:#1c1b19; --card:#232220; --text:#eeece6; --dim:#a09c93; --line:#35342f; --acc:#d97757; }
+  *{ box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,"Segoe UI",Inter,system-ui,Roboto,sans-serif; }
+  @page{ size:A4; margin:0; }
+  .page{ max-width:720px; margin:0 auto; padding:30px 34px 26px; }
+  .head{ display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding-bottom:16px; }
+  .head h1{ font-size:16px; font-weight:600; margin:0; }
+  .head .sub{ margin-left:auto; font-size:10.5px; color:var(--dim); text-align:right; line-height:1.5; }
+  .star{ width:20px; height:20px; flex:none; }
+  .note{ margin:18px 0 10px; padding:10px 14px; font-size:11.5px; line-height:1.6; color:var(--dim);
+    background:#21201d; border:1px solid var(--line); border-left:3px solid var(--acc); border-radius:8px; }
+  .note b{ color:#d9d6ce; }
+  .h2{ display:flex; align-items:baseline; gap:9px; margin:30px 0 10px; break-inside:avoid; page-break-inside:avoid; }
+  .h2 .num{ color:var(--acc); font-weight:700; font-size:14px; }
+  .h2 h3{ font-size:15.5px; margin:0; font-weight:600; }
+  .h2 .tag{ margin-left:auto; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); }
+  ul{ margin:0 0 12px; padding-left:20px; }
+  li{ margin:0 0 6px; font-size:12.7px; line-height:1.55; color:#d8d5cd; }
+  li b, p b{ color:#e9e6df; }
+  .code{ font-family:Consolas,"Cascadia Mono",monospace; font-size:10.6px; background:#232220;
+    border:1px solid var(--line); border-radius:8px; padding:8px 12px; line-height:1.7; color:#d0cdc5; margin:8px 0 12px; }
+  .case{ margin:0 0 20px; break-inside:avoid; page-break-inside:avoid; }
+  .case h4{ display:flex; align-items:baseline; gap:8px; margin:0 0 6px; font-size:13.5px; font-weight:600; color:#ece9e2; line-height:1.45; }
+  .case h4 .cid{ color:var(--acc); font-size:10.5px; font-weight:700; letter-spacing:.09em; flex:none; }
+  .case p{ margin:0 0 6px; font-size:12.7px; line-height:1.6; color:#d3d0c8; }
+  .you{ background:#2e2d2a; border:1px solid #3b3a35; border-radius:14px; padding:10px 14px;
+    font-size:12.8px; line-height:1.55; color:#eeece6; margin:8px 0 0; break-inside:avoid; page-break-inside:avoid; }
+  .stamp{ margin:6px 4px 0; font-size:10.5px; color:var(--dim); }
+  .cl{ margin:14px 4px 0; }
+  .cl-l{ display:flex; align-items:center; gap:7px; font-size:12px; font-weight:600; color:#e9e6df; margin-bottom:6px; }
+  .ic{ width:12px; height:12px; flex:none; }
+  .cl-b{ font-size:12.7px; line-height:1.6; color:#d3d0c8; margin:0 0 7px; }
+  .foot{ border-top:1px solid var(--line); margin-top:28px; padding-top:12px; font-size:10px; line-height:1.7; color:var(--dim); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><symbol id="star" viewBox="0 0 24 24"><g stroke="#d97757" stroke-width="2.4" stroke-linecap="round" fill="none"><path d="M12 2.5v19"/><path d="M2.5 12h19"/><path d="M5.2 5.2l13.6 13.6"/><path d="M18.8 5.2L5.2 18.8"/></g></symbol></svg>
+<div class="page">
+
+  <div class="head">
+    <svg class="star"><use href="#star"/></svg>
+    <h1>Debugging &amp; Testing</h1>
+    <div class="sub">Studio Equipment Booking<br/>real bugs, causes and fixes — Web · Mobile · API</div>
+  </div>
+
+  <div class="note"><b>What this is:</b> nine real cases from this project, compiled from the live code and the project's own <b>Docs/</b> folder on 4 Oct 2026. No invented dialogs and no fake logs — every case below traces to a file, a migration or a documented fix, and case 9 shows a live code-review exchange with its actual prompt. Format: <b>symptom → investigation → root cause → fix → lesson</b>.</div>
+
+  <div class="h2"><span class="num">0</span><h3>How this project is tested</h3><span class="tag">testing gates</span></div>
+  <ul>
+    <li><b>The build gate.</b> <i>vite build</i> must pass before anything ships — the production build is the fastest full-project check, and it caught the broken JSX in case 6.</li>
+    <li><b>Component tests.</b> A vitest setup in both front ends (check vitest.config.ts), with tests such as <i>handover/CheckIn.test.tsx</i> mounting real pages and asserting behaviour.</li>
+    <li><b>API checks as collections.</b> <i>API/testers/*.rest</i> — auth-project, project, register, workshop and maintenance requests you can fire in VS Code's REST client against :5000 with a bearer token.</li>
+    <li><b>One-command health check.</b> <i>check-studio.ps1</i> reports the three containers, fetches the web app and confirms its JS bundle, then logs in through the API.</li>
+    <li><b>Data audit.</b> <i>docker exec studio_booking_api node audit-damage-evidence.js</i> — walks every damage record and fails (exit code 1) if a record with a photo resolves to nothing.</li>
+    <li><b>Migration discipline.</b> database/init.sql is numbered 000–026; a fresh volume rebuilds the same database every time, so "works on my machine" has one answer: recreate it.</li>
+  </ul>
+
+  <div class="h2"><span class="num">1</span><h3>The case files</h3><span class="tag">nine real cases</span></div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 1</span>The date picker that opened behind the map</h4>
+    <p><b>Symptom.</b> Clicking “All dates” on the Shooting locations page appeared to do nothing — the calendar couldn’t be clicked at all.</p>
+    <p><b>Investigation.</b> The popover was rendering <i>behind</i> the map.</p>
+    <p><b>Root cause.</b> Leaflet’s internal panes paint up to z-index 800, and the map container had no stacking context of its own, while the popover sits at z-index 50 — so every overlay the app opened ended up under the map.</p>
+    <p><b>Fix.</b> One line — <i>.leaflet-container { z-index: 0 }</i> in index.css gives the map its own stacking context, so calendars, dropdowns and dialogs now always sit above every map in the app.</p>
+    <p><b>Lesson.</b> z-index fights aren’t won by raising the popover’s number — they’re won by containing the layer that misbehaves.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 2</span>The photo that showed on one page but not another</h4>
+    <p><b>Symptom.</b> A damage photo was visible on the tracked-equipment page, but the damage log, the history dialog and the printed report showed nothing.</p>
+    <p><b>Investigation.</b> Two different stores turned out to be involved.</p>
+    <p><b>Root cause.</b> Angle/evidence photos live in <i>equipment_condition_images</i>, while damage records (damagereports, maintenancelogs) carry a single <i>imageurl</i> column. Uploads always wrote the first store and only <i>best-effort</i> linked the second — so a record created at another time stayed empty while the file sat safely in /uploads.</p>
+    <p><b>Fix (three layers).</b> <b>Write time:</b> the upload endpoints now stamp the item’s newest damage report and maintenance log (plus the exact logId/reportId when the screen sends them). <b>Read time:</b> one shared rule in damageEvidence.js — the record’s own imageurl first, then the newest evidence photo — feeds every damage screen and the PDF. <b>Verification:</b> audit-damage-evidence.js fails if any record’s photo URL resolves to nothing, and a safe, re-runnable SQL backfill filled the old NULLs.</p>
+    <p><b>Lesson.</b> When one fact lives in two tables, there must be a single resolution rule — plus an audit that proves it.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 3</span>“You do not have permission” — with the buttons right there</h4>
+    <p><b>Symptom.</b> Staff could see the Equipment approvals buttons, but every action returned “you do not have permission”.</p>
+    <p><b>Investigation.</b> The page sits in the staff sidebar; the endpoints behind it were admin-only.</p>
+    <p><b>Root cause.</b> The UI and the API disagreed about who may do what — the classic two-layer permission drift.</p>
+    <p><b>Fix.</b> The routes now accept Studio Staff as well as Admin (the supervision guards), while the decision itself stays stricter — staff propose, admin confirms — matching how the page was designed.</p>
+    <p><b>Lesson.</b> “The button exists” and “the action is allowed” are two separate questions. When they disagree, one of the layers is wrong — find out which.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 4</span>The kit that said “not enough” even though nobody had it</h4>
+    <p><b>Symptom.</b> Booking the same kit bag for a different day triggered availability complaints — even though the calendar already prevents overlapping bookings and the kit was not out.</p>
+    <p><b>Investigation.</b> Kits were being treated as loose stock (a quantity) instead of as a physical bag with dates.</p>
+    <p><b>Root cause.</b> One availability model trying to serve two different things.</p>
+    <p><b>Fix.</b> Split the model — <b>kit bags are booked as a unit against the calendar</b>: their booked windows (from /api/bookings/kit-bookings) block only overlapping dates, and returned / rejected / cancelled bookings are ignored. Individual <b>extras keep per-unit counters</b>. Migrations 018–021 separate kit bags from extras and clean up the legacy counters.</p>
+    <p><b>Lesson.</b> If a resource is borrowed as a whole object, its availability is <i>dates</i>, not quantity. Model it the way it is actually used.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 5</span>The numbers that lied twice</h4>
+    <p><b>5a — the 1970 date.</b> A maintenance row with no logged date printed “01 Jan 1970”, because <i>new Date(undefined)</i> walks straight to the Unix epoch. Fixed by showing a dash when there is no date.</p>
+    <p><b>5b — spelling drift.</b> Older rows stored conditions as “Good” / “good” / “Fair”; comparisons now normalise to lower case so mixed-spelling history keeps working.</p>
+    <p><b>Lesson.</b> Display bugs often expose data you didn’t know you had. Handle the <i>absence</i> of a value, not just the value.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 6</span>The page that went blank after a big edit</h4>
+    <p><b>Symptom.</b> After a large UI refactor, /app/statistics rendered blank.</p>
+    <p><b>Investigation.</b> The production build finally failed with “Unterminated regular expression”, pointing at a JSX fragment line.</p>
+    <p><b>Root cause.</b> Scripted edits had left orphaned fragment tags and mixed indentation — the component’s structure was corrupted without anyone hand-editing it.</p>
+    <p><b>Fix.</b> Re-read the exact file, repaired the JSX structure, build passed.</p>
+    <p><b>Lesson.</b> After bulk or scripted edits, run the build <i>before</i> opening the browser. The blank screen is the symptom; the parser is the truth.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 7</span>The calendar clinic — when every day looks free</h4>
+    <p><b>Symptom.</b> A booking calendar renders, but every day looks available (or the grid looks empty).</p>
+    <p><b>Checklist</b> (from the project’s calendar walkthrough):</p>
+    <ul>
+      <li><b>401 vs 403.</b> 401 = no/expired token in localStorage; 403 = the token is fine but requireRole does not include your role.</li>
+      <li><b>The istracked flag.</b> The fleet query only includes models flagged istracked = true.</li>
+      <li><b>Null windows.</b> Booking lines with both pickup and return NULL are skipped on purpose.</li>
+      <li><b>Statuses.</b> Returned / rejected / cancelled bookings are ignored by the kit query.</li>
+      <li><b>Month paging.</b> Booking history refetches per month — check the from/to it sends.</li>
+      <li><b>Off-by-one.</b> Postgres returns timestamps; the grid normalises with startOfDay() on the client — compare the raw API string with the tile it paints.</li>
+    </ul>
+    <p><b>Lesson.</b> Calendars fail in the data, not in the drawing. Check what the API returned before touching the grid.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 8</span>Open case — the blank Equipment page on the phone</h4>
+    <p><b>Symptom.</b> The Equipment page on the Android app showed a blank white screen on the phone.</p>
+    <p><b>Status.</b> <i>Open.</i> The debugging session (26 Aug) traced the mobile flow but was interrupted before a fix was confirmed.</p>
+    <p><b>How to approach it:</b> (1) confirm the phone is on the hotspot and <i>/api/health</i> answers on the API’s LAN address; (2) check whether the page’s data request returns 200 on the phone (compare with the laptop); (3) verify the VITE_API_URL baked into the APK matches the machine’s current address; (4) then investigate rendering.</p>
+    <p><b>Lesson.</b> An open case, documented honestly, is still useful engineering — it tells the next person exactly where to start.</p>
+  </div>
+
+  <div class="case">
+    <h4><span class="cid">CASE 9</span>The module with no bouncer — a live review of the project API</h4>
+    <div class="you">projectbooking find something</div>
+    <div class="stamp">You · 4 Oct 2026 — the request, verbatim</div>
+    <div class="cl">
+      <div class="cl-l"><svg class="ic"><use href="#star"/></svg>Claude — opened the real files, then reported</div>
+      <p class="cl-b">Read <i>project.controller.js</i> (1,045 lines), <i>projects.routes.js</i>, the schema and migrations, and the booking flow that consumes projects — then reported real defects, each one verifiable in the files. Condensed below; every reference is exact:</p>
+      <ul>
+        <li><b>Anyone can approve any project — logged out.</b> <i>projects.routes.js:37</i> patches a project with no <i>verifyToken</i>, and the handler accepts <i>status</i> with no owner check at all (<i>project.controller.js:223–307</i>). One request sets “approved” — which unlocks bookings, because <i>createBooking</i> trusts that single word (<i>booking.controller.js:136</i>).</li>
+        <li><b>Anyone can remove any team member.</b> <i>projects.routes.js:58</i> — no token and no creator check; the handler only verifies the row exists before deleting (<i>project.controller.js:873–910</i>).</li>
+        <li><b>Invitee names and emails readable by anyone.</b> <i>projects.routes.js:46</i> has no token — and inside, the “is the requester the project creator?” check is a comment with no code under it (<i>project.controller.js:534–536</i>).</li>
+        <li><b>A rejected invite can flip back to accepted.</b> The pending check runs outside the transaction, and the accept update has no <i>AND status='pending'</i> guard (<i>project.controller.js:671 vs 717–722</i>). The reject path does guard; accept doesn’t.</li>
+        <li><b>Two writes, no transaction — and a colliding ID scheme.</b> <i>createProject</i> inserts the project row and the team row separately (<i>project.controller.js:88–114</i>); <i>applicationid</i> uses the last four digits of a timestamp (<i>76</i>), so two projects created 10 seconds apart share an ID — and no migration 000–026 puts a UNIQUE constraint on <i>projectcode</i> or <i>applicationid</i>.</li>
+        <li><b>Counters that disagree with the list.</b> <i>countProjects</i> counts only projects you created (<i>13–38</i>); <i>getMyProjects</i> also counts team membership (<i>940–941</i>) — the dashboard can show 0 while the project list shows rows.</li>
+      </ul>
+      <p class="cl-b">Also flagged in the same pass: <i>coursecode</i> stores a course name (up to 200 characters) in a VARCHAR(50) column; the team endpoint silently hides members without workshop attendance; the <i>test-auth</i> debug route is still mounted; and raw database errors ride along on 500 responses. Honest calibration, from the same review: every query is parameterised (no SQL injection found), <i>acceptInvite</i> shows the right transaction pattern, and <i>bookings.routes.js</i> guards every one of its routes — the projects router is the outlier, which is exactly why these holes are worth a case file.</p>
+    </div>
+    <p><b>Lesson.</b> A guard has two layers — the route (who may call) and the handler (who may touch which row) — and one missing layer can silently defeat a correct guard in another file. And the starting prompt was five words: the review worked because it opened the real code, not because the prompt was clever.</p>
+  </div>
+
+  <div class="foot">Compiled 4 Oct 2026 from the live code (Team22-API · Team22-Main · Team22-Mobile) and the project’s own Docs/ folder. Companion documents: the AI Usage Log (16–26 Aug 2026 sessions) and the System Walkthrough (Web · Mobile · API).</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Vura</string>
+    <string name="title_activity_main">Vura</string>
+    <string name="package_name">app.vura.rider.figma</string>
+    <string name="custom_url_scheme">app.vura.rider.figma</string>
+</resources>

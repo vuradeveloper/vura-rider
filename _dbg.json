@@ -1,0 +1,51 @@
+{
+ "ids": [
+  "driver-2"
+ ],
+ "trace": [
+  {
+   "trace_id": "41771959-749f-4c9c-83ab-fabf31e18abd",
+   "stage": "destination_filter",
+   "at": "2026-10-08T11:57:36.162Z",
+   "ms_from_start": 35,
+   "considered": 1,
+   "kept": 1,
+   "removed": 1,
+   "errors": 0,
+   "allowlist": 1
+  }
+ ],
+ "fitCalls": [
+  [
+   {
+    "lat": -26.1,
+    "lng": 28.05
+   },
+   {
+    "lat": null,
+    "lng": null
+   },
+   {
+    "lat": -26.1,
+    "lng": 28.04
+   },
+   {
+    "lat": -26.1,
+    "lng": 28.055
+   },
+   {
+    "dropoffRadiusKm": 3,
+    "crossTrackKm": 5,
+    "alongTolKm": 0.5
+   }
+  ]
+ ],
+ "fitImpl": "function(...s) {\n    let r = T(t);\n    r.called = !0, r.callCount++, r.calls.push(s);\n    let S = r.next.shift();\n    if (S) {\n      r.results.push(S);\n      let [o, g] = S;\n      if (o === \"ok\")\n    ",
+ "queryOne": [
+  "SELECT destination_lat, destination_lng FROM rides WHERE id = $1"
+ ],
+ "query": [
+  "SELECT u.id, u.firebase_uid, dp.current_lat, dp.current_lng,\n         ",
+  "SELECT user_id, destination_lat, destination_lng FROM driver_profiles\n"
+ ]
+}
