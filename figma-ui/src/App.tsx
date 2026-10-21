@@ -1394,9 +1394,6 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   // for cash/card rides and until the preflight answers).
   const [plInfo, setPlInfo] = useState<PayLaterTakeResult | null>(null)
 
-  // Silent driver decline retry counter — max 3 retries before showing error.
-  const [retryAttempt, setRetryAttempt] = useState(0)
-
   // Wait & Save: 6-minute (360s) countdown before dispatching to drivers.
   // Only available for economy tiers, max 2 riders.
   const [waitSaveTimer, setWaitSaveTimer] = useState(360)
@@ -1440,19 +1437,15 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   // Without this listener the screen spun "Finding your driver" FOREVER on a
   // ride the queue said no longer existed, so both sides kept chasing a dead
   // search: the rider believed a ride was live, the driver "never received".
+  // Silent driver decline: NEVER show an error — the rider can wait as long as
+  // they want and press Cancel whenever they feel like it. Just keep re-dispatching
+  // to the next available driver forever.
   useEffect(() => {
     const searchDied = (d: any) => {
       const id = d?.rideId || d?.id
       if (id && rideIdRef.current && id !== rideIdRef.current) return // another ride's event
-      // Silent driver decline: retry instead of showing "No drivers found".
-      // Increment retry attempt and re-dispatch to the next available driver.
-      if (retryAttempt < 3) {
-        setRetryAttempt((a) => a + 1)
-        void bookRide()
-        return
-      }
-      setError('No drivers found nearby — this search has ended. Book again in a moment.')
-      setPhase('waiting')
+      // Silently retry — no error, no "No drivers found", ever.
+      void bookRide()
     }
     const offs = [on('ride:no:drivers', searchDied), on('ride:expired', searchDied)]
     return () => { offs.forEach((f) => f()) }
