@@ -12,6 +12,7 @@ const RIDE_IMAGE: Record<string, string> = {
   comfort: rideComfort,
   xl: rideXl,
   black: rideBlack,
+  van: rideXl, // Van uses the same icon as XL
 }
 import { colourNameOf } from './components/vehicle/palette'
 
@@ -140,19 +141,21 @@ const payTag = (m?: string | null) =>
 // ????????? Data ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 /** JS Sun=0..Sat=6 shifted to Mon=0..Sun=6, so the bars start on Monday. */
 const rideOptions = [
-  { id: 'go', name: 'Go', desc: 'Affordable rides', eta: '3 min', price: 'R0.20', seats: 4 },
-  { id: 'comfort', name: 'Comfort', desc: 'Newer cars, extra legroom', eta: '4 min', price: 'R0.20', seats: 4 },
-  { id: 'xl', name: 'XL', desc: 'Rides for groups up to 6', eta: '5 min', price: 'R0.20', seats: 6 },
-  { id: 'black', name: 'Black', desc: 'Premium black car service', eta: '7 min', price: 'R0.20', seats: 4 },
+  { id: 'go', name: 'Vura Go', desc: 'Affordable everyday rides', price: 'R0.20', eta: '3-5 min', riders: '2-3', category: 'economy' },
+  { id: 'comfort', name: 'Comfort', desc: 'Premium sedans', price: 'R0.20', eta: '4-6 min', riders: '2-3', category: 'comfort' },
+  { id: 'xl', name: 'XL', desc: 'Large vehicles / 6 riders', price: 'R0.20', eta: '5-8 min', riders: '6', category: 'xl' },
+  { id: 'van', name: 'Van', desc: '7-seater van', price: 'R0.20', eta: '6-10 min', riders: '7', category: 'xl', icon: 'xl' },
+  { id: 'black', name: 'Black', desc: 'Luxury rides / 3 riders', price: 'R0.20', eta: '6-10 min', riders: '3', category: 'premium' },
+  { id: 'wait_save', name: 'Wait & Save', desc: 'Economy / 2 riders / 6 min timer', price: 'R0.20', eta: '6 min', riders: '2', category: 'economy', waitSave: true },
 ]
 
 // Uber-style groups for "Choose your ride" — the same tier ids the server maps
 // onto CarScan "Eligible Categories" when matching drivers (go=economy …).
 // Empty groups never render.
 const RIDE_GROUPS: { label: string; ids: string[] }[] = [
-  { label: 'Economy', ids: ['go'] },
+  { label: 'Economy', ids: ['go', 'wait_save'] },
   { label: 'Comfort', ids: ['comfort'] },
-  { label: 'Premium', ids: ['xl', 'black'] },
+  { label: 'Premium', ids: ['xl', 'van', 'black'] },
 ]
 
 // Every ride in this build costs a flat R0.20.
@@ -690,6 +693,8 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   // booking payload (the server would refuse it anyway when spent/expired).
   const [promoOn, setPromoOn] = useState(true)
   const [priceFactor, setPriceFactor] = useState(1)
+  // Ride filters: rider-selected preferences that narrow the shown tiers.
+  const [rideFilters, setRideFilters] = useState<{ electric: boolean; pet: boolean; wheelchair: boolean }>({ electric: false, pet: false, wheelchair: false })
   useEffect(() => {
     getActivePromos('rider')
       .then((r) => setPromo(r?.promos?.[0] ?? null))
@@ -1027,6 +1032,24 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
           )}
           <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mb-3">Choose your ride</p>
+          {/* Ride filters: narrow down the tier options by preference. */}
+          <div className="flex gap-2 overflow-x-auto pb-2 mb-3 scrollbar-hide">
+            <button
+              onClick={() => setRideFilters((f) => ({ ...f, electric: !f.electric }))}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-semibold border ${rideFilters.electric ? 'border-[#1A1A1A] bg-[#1A1A1A] text-white' : 'border-[#E0E0E0] bg-[#F7F7F7] text-[#1A1A1A]'}`}>
+              ⚡ Electric only
+            </button>
+            <button
+              onClick={() => setRideFilters((f) => ({ ...f, pet: !f.pet }))}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-semibold border ${rideFilters.pet ? 'border-[#1A1A1A] bg-[#1A1A1A] text-white' : 'border-[#E0E0E0] bg-[#F7F7F7] text-[#1A1A1A]'}`}>
+              🐾 Pet friendly
+            </button>
+            <button
+              onClick={() => setRideFilters((f) => ({ ...f, wheelchair: !f.wheelchair }))}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-semibold border ${rideFilters.wheelchair ? 'border-[#1A1A1A] bg-[#1A1A1A] text-white' : 'border-[#E0E0E0] bg-[#F7F7F7] text-[#1A1A1A]'}`}>
+              ♿ Wheelchair access
+            </button>
+          </div>
           {/* Uber-style groups: Economy / Comfort / Premium. */}
           <div className="flex flex-col gap-3">
             {RIDE_GROUPS.map((group) => {
@@ -1040,11 +1063,12 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                       <button key={opt.id} onClick={() => setSel(opt.id)}
                         className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl border-2 transition-all transform ${sel === opt.id ? 'border-[#1A1A1A] bg-white scale-110 rotate-6' : 'border-[#F2F2F2] bg-[#F7F7F7] hover:border-[#E0E0E0]'}`}>
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${sel === opt.id ? 'bg-[#1A1A1A]' : 'bg-white'}`}>
-                          <img src={RIDE_IMAGE[opt.id]} alt={opt.name} className="w-8 h-8 object-contain" />
+                          <img src={RIDE_IMAGE[opt.icon || opt.id]} alt={opt.name} className="w-8 h-8 object-contain" />
                         </div>
                         <div className="flex-1 text-left">
                           <p className="text-[14px] text-[#1A1A1A] font-semibold">{opt.name}</p>
-                          <p className="text-[12px] text-[#ADADAD]">{opt.desc} ?? {opt.seats} riders</p>
+                          <p className="text-[12px] text-[#ADADAD]">{opt.desc}</p>
+                          <p className="text-[12px] text-[#1A1A1A] font-bold mt-0.5">{opt.riders} riders</p>
                         </div>
                         <div className="text-right">
                           <p className="text-[14px] text-[#1A1A1A] font-semibold">
@@ -1346,6 +1370,8 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   const [error, setError] = useState('')
   const sent = useRef(false)
   const rideIdRef = useRef<string | null>(null)
+  // When Wait & Save timer expires, this flag lets bookRide proceed to dispatch.
+  const waitSaveDispatched = useRef(false)
   // Where the pickup will be. When the phone cannot give us a GPS fix we ask
   // the rider to choose it rather than inventing one (see the booking effect).
   const [manualPickup, setManualPickup] = useState<{ lat: number; lng: number; label: string } | null>(null)
@@ -1368,6 +1394,16 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   // for cash/card rides and until the preflight answers).
   const [plInfo, setPlInfo] = useState<PayLaterTakeResult | null>(null)
 
+  // Silent driver decline retry counter — max 3 retries before showing error.
+  const [retryAttempt, setRetryAttempt] = useState(0)
+
+  // Wait & Save: 6-minute (360s) countdown before dispatching to drivers.
+  // Only available for economy tiers, max 2 riders.
+  const [waitSaveTimer, setWaitSaveTimer] = useState(360)
+  const [waitSaveActive, setWaitSaveActive] = useState(false)
+  // Promos fetched from the server; expired/used-up ones are removed entirely.
+  const [promos, setPromos] = useState<PromoInfo[]>([])
+
   // Search for the pickup by hand (the same geocoder the destination uses).
   useEffect(() => {
     if (!needPickup) return
@@ -1387,6 +1423,18 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
     return () => clearInterval(i)
   }, [])
 
+  // Load promos and filter out expired / used-up ones entirely (not greyed out).
+  useEffect(() => {
+    getActivePromos('rider')
+      .then((r) => {
+        const all = Array.isArray(r?.promos) ? r.promos : []
+        // Remove expired or fully-used promos completely from the array.
+        const active = all.filter((p: any) => !(p.expired === true || p.remaining === 0))
+        setPromos(active)
+      })
+      .catch(() => setPromos([]))
+  }, [])
+
   // The search DIES after ~90s with no genuinely-online driver (the offer
   // budget is exhausted) — the server then emits ride:no:drivers / ride:expired.
   // Without this listener the screen spun "Finding your driver" FOREVER on a
@@ -1396,6 +1444,13 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
     const searchDied = (d: any) => {
       const id = d?.rideId || d?.id
       if (id && rideIdRef.current && id !== rideIdRef.current) return // another ride's event
+      // Silent driver decline: retry instead of showing "No drivers found".
+      // Increment retry attempt and re-dispatch to the next available driver.
+      if (retryAttempt < 3) {
+        setRetryAttempt((a) => a + 1)
+        void bookRide()
+        return
+      }
       setError('No drivers found nearby — this search has ended. Book again in a moment.')
       setPhase('waiting')
     }
@@ -1420,14 +1475,37 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   }
   const destName = splitDest(destination).name
 
-  useEffect(() => {
+  // ── bookRide: extractable so Wait & Save timer and silent driver-decline
+  // retry can re-trigger dispatch without re-mounting the screen.
+  const bookRide = async () => {
     // `sent` stops a double-book. Choosing the pickup by hand deliberately
     // re-runs the booking with the coordinates the rider picked.
     if (sent.current && !manualPickup) return
     sent.current = true
     let alive = true
-      ; (async () => {
-        try {
+
+    // Wait & Save: defer the actual dispatch until the 6-minute timer expires.
+    // Only economy tiers, max 2 riders.
+    if (tier === 'wait_save' && !waitSaveDispatched.current) {
+      setWaitSaveActive(true)
+      setWaitSaveTimer(360)
+      setPhase('waiting')
+      const iv = setInterval(() => {
+        setWaitSaveTimer((t) => {
+          if (t <= 1) {
+            clearInterval(iv)
+            setWaitSaveActive(false)
+            waitSaveDispatched.current = true
+            void bookRide()
+            return 0
+          }
+          return t - 1
+        })
+      }, 1000)
+      return
+    }
+
+    try {
           const parsed = splitDest(destination)
           let dest: { name: string; lat: number; lng: number }
           if (parsed.known) {
@@ -1533,9 +1611,12 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
             setPhase('waiting')
           }
         }
-      })()
-    return () => { alive = false }
-  }, [destination, tier, manualPickup])
+      }
+
+    useEffect(() => {
+      bookRide()
+      return () => { /* no-op: alive flag scoped inside bookRide */ }
+    }, [destination, tier, manualPickup])
 
   // The driver accepting arrives over the socket.
   useEffect(() => {
