@@ -1525,19 +1525,23 @@ export async function resolveVehicleRequests(cacheKey: string, imageId: string):
       model: string | null;
       year: number | null;
     }>(
-      // Match on make|model ONLY (slugified cache_key parts 1-2), ignoring the
-      // year bucket and colour: resolveVehicleImage serves ANY year/colour of a
-      // make|model (exact → make-scoped pickBestWhiteRow with the white fallback),
-      // so a request must resolve the same way the driver will actually SEE the
-      // photo. An exact cache_key match misses when the admin uploads a white
-      // master via year-range filename (…|any|white) for a driver who saved a
-      // specific year+colour (…|2017-2020|red) — the image shows but the request
-      // never closed and the driver was never pushed. make|model covers all of it.
+      // Match on make|model AND colour (slugified cache_key parts 1, 2, 4),
+      // ignoring only the year bucket: an open request must stay open until an
+      // image of the SAME colour is approved — otherwise a White upload silently
+      // resolves a Red request and the admin never sees it in the Requests tab.
+      // Year bucket is ignored because resolveVehicleImage serves any year of a
+      // make|model|colour via the white fallback, so a 2016-2019 White image
+      // answers a 2017 White request just as well.
+      // A full cache_key match would be too strict: admin uploads
+      // …|2016-2019|white for a driver who saved …|2017|white — same colour,
+      // different year bucket — and the request should close because the driver
+      // will see that white photo.
       `UPDATE admin_vehicle_requests
           SET status = 'resolved', image_id = $2, resolved_at = NOW(), updated_at = NOW()
         WHERE status = 'open'
           AND split_part(cache_key, '|', 1) = split_part($1, '|', 1)
           AND split_part(cache_key, '|', 2) = split_part($1, '|', 2)
+          AND split_part(cache_key, '|', 4) = split_part($1, '|', 4)
         RETURNING driver_id, make, model, year`,
       [key, imageId]
     );
