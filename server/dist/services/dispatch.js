@@ -629,7 +629,10 @@ async function filterCandidatesForTier(rideId, rideTier, candidates) {
         const eligible = candidates.filter((c) => (0, rideCategories_1.tierAcceptsCategory)(tier, (0, rideCategories_1.effectiveCategories)(byId.get(c.id))));
         let pool = eligible;
         let mode = "strict";
-        if (pool.length === 0) {
+        // BLACK is premium-only: never degrade to economy/unclassified cars.
+        // A Picanto (economy/comfort) must never receive a black ride.
+        const canDegrade = tier !== "black";
+        if (pool.length === 0 && canDegrade) {
             pool = candidates.filter((c) => !(0, rideCategories_1.hasExplicitCategories)(byId.get(c.id)));
             mode = "degraded_unclassified";
             if (pool.length === 0) {
