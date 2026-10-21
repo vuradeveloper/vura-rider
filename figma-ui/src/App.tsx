@@ -1,6 +1,18 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import VehicleImage, { resolveVehicleImage } from './components/vehicle/VehicleImage'
+
+import rideGo from './assets/ride-go.png'
+import rideComfort from './assets/ride-comfort.png'
+import rideXl from './assets/ride-xl.png'
+import rideBlack from './assets/ride-black.png'
+
+const RIDE_IMAGE: Record<string, string> = {
+  go: rideGo,
+  comfort: rideComfort,
+  xl: rideXl,
+  black: rideBlack,
+}
 import { colourNameOf } from './components/vehicle/palette'
 
 import DriverVehicleCard from './components/DriverVehicleCard'
@@ -1026,13 +1038,13 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                   <div className="flex flex-col gap-2">
                     {options.map(opt => (
                       <button key={opt.id} onClick={() => setSel(opt.id)}
-                        className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl border-2 transition-all ${sel === opt.id ? 'border-[#1A1A1A] bg-white' : 'border-[#F2F2F2] bg-[#F7F7F7] hover:border-[#E0E0E0]'}`}>
+                        className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl border-2 transition-all transform ${sel === opt.id ? 'border-[#1A1A1A] bg-white scale-110 rotate-6' : 'border-[#F2F2F2] bg-[#F7F7F7] hover:border-[#E0E0E0]'}`}>
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${sel === opt.id ? 'bg-[#1A1A1A]' : 'bg-white'}`}>
-                          {IC.car(sel === opt.id ? '#fff' : '#9E9E9E')}
+                          <img src={RIDE_IMAGE[opt.id]} alt={opt.name} className="w-8 h-8 object-contain" />
                         </div>
                         <div className="flex-1 text-left">
                           <p className="text-[14px] text-[#1A1A1A] font-semibold">{opt.name}</p>
-                          <p className="text-[12px] text-[#ADADAD]">{opt.desc} ?? {opt.seats} seats</p>
+                          <p className="text-[12px] text-[#ADADAD]">{opt.desc} ?? {opt.seats} riders</p>
                         </div>
                         <div className="text-right">
                           <p className="text-[14px] text-[#1A1A1A] font-semibold">
