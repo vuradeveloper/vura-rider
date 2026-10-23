@@ -146,7 +146,7 @@ const rideOptions = [
   { id: 'xl', name: 'XL', desc: 'Large vehicles / 6 riders', price: 'R0.20', eta: '5-8 min', riders: '6', category: 'xl' },
   { id: 'van', name: 'Van', desc: '7-seater van', price: 'R0.20', eta: '6-10 min', riders: '7', category: 'xl', icon: 'xl' },
   { id: 'black', name: 'Black', desc: 'Luxury rides / 3 riders', price: 'R0.20', eta: '6-10 min', riders: '3', category: 'premium' },
-  { id: 'wait_save', name: 'Wait & Save', desc: 'Economy / 2 riders / 6 min timer', price: 'R0.20', eta: '6 min', riders: '2', category: 'economy', waitSave: true },
+  { id: 'wait_save', name: 'Wait & Save', desc: 'Economy / 2 riders / 6 min timer', price: 'R0.20', eta: '6 min', riders: '2', category: 'economy', waitSave: true, icon: 'go' },
 ]
 
 // Uber-style groups for "Choose your ride" — the same tier ids the server maps
@@ -678,11 +678,18 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   onTier?: (t: string) => void
   /** tier, payment method ('cash' | 'card' | 'pay_later'), stops and the
    *  checkbox-selected promo id (null = the rider unchecked it → no promo). */
-  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[], promoId: string | null, useInviteCredit: boolean) => void
+  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[], promoId: string | null, useInviteCredit: boolean, manualPickup?: { lat: number; lng: number; label: string } | null) => void
 }) {
   const [sel, setSel] = useState('go')
   const destName = destLabel(destination)
   const ride = rideOptions.find(r => r.id === sel)!
+  // Manual pickup override — when the rider taps "From" or "To" and types an
+  // address, this is sent with the booking so MatchingScreen uses it instead of GPS.
+  const [manualPickup, setManualPickup] = useState<{ lat: number; lng: number; label: string } | null>(null)
+  const [showPickupInput, setShowPickupInput] = useState(false)
+  const [pickupQ, setPickupQ] = useState('')
+  const [pickupRes, setPickupRes] = useState<Place[]>([])
+  const [pickupBusy, setPickupBusy] = useState(false)
 
   // ── Promo: TELL the rider first ("Promo applied"), then count the prices
   // down ONCE. Fixed-amount promos show the banner only — their discount is
@@ -755,6 +762,20 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     loadCards()
     getPayLaterEligibility().then(setPl).catch(() => setPl(null))
   }, [])
+
+  // Manual pickup search â€” same geocoder as MatchingScreen's needPickup.
+  useEffect(() => {
+    if (!showPickupInput) return
+    const q = pickupQ.trim()
+    if (q.length < 2) { setPickupRes([]); return }
+    let alive = true
+    setPickupBusy(true)
+    searchPlaces(q)
+      .then((rows) => { if (alive) setPickupRes(rows || []) })
+      .catch(() => { if (alive) setPickupRes([]) })
+      .finally(() => { if (alive) setPickupBusy(false) })
+    return () => { alive = false }
+  }, [pickupQ, showPickupInput])
 
   async function removeCard(id: string) {
     setCards((rows) => rows.filter((c) => c.id !== id))
@@ -963,39 +984,68 @@ function BookingScreen({ destination, onBack, onConfirm }: {
               <div className="w-2.5 h-2.5 rounded-full bg-[#EA4335] border-2 border-white shadow" />
             </div>
             <div className="flex flex-col gap-3 flex-1">
-              <div className="bg-[#F7F7F7] rounded-xl px-3 py-2">
-                <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">From</p>
-                <p className="text-[13px] text-[#1A1A1A] font-semibold">Current Location</p>
+              <div
+                className="bg-[#F7F7F7] rounded-xl px-3 py-2 cursor-pointer"
+                onClick={() => setShowPickupInput(true)}
+              >
+                <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">
+                  From
+                </p>
+                <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
+                  Current Location
+                </p>
               </div>
               {stops.map((s, i) => (
-                <div key={i} className="bg-[#F7F7F7] rounded-xl px-3 py-2 flex items-center gap-2">
+                <div
+                  key={i}
+                  className="bg-[#F7F7F7] rounded-xl px-3 py-2 flex items-center gap-2"
+                >
                   <div className="min-w-0 flex-1">
-                    <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">Stop {i + 1}</p>
-                    <p className="text-[13px] text-[#1A1A1A] font-semibold truncate">{destLabel(s.address)}</p>
+                    <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">
+                      Stop {i + 1}
+                    </p>
+                    <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
+                      {destLabel(s.address)}
+                    </p>
                   </div>
-                  {/* Reorder â€” the driver visits stops in this order. */}
-                  <div className="shrink-0 flex flex-col">
-                    <button onClick={() => moveStop(i, -1)} disabled={i === 0}
+                  {/* Drag handle + reorder â€” the driver visits stops in this order. */}
+                  <div className="shrink-0 flex flex-col gap-1">
+                    <button
+                      onClick={() => moveStop(i, -1)}
+                      disabled={i === 0}
                       aria-label={`Move stop ${i + 1} earlier`}
-                      className={`w-7 h-5 flex items-center justify-center text-[10px] leading-none rounded-t-md ${i === 0 ? 'text-[#DADADA]' : 'text-[#6B6B6B] active:bg-[#EDEDED]'}`}>
-                      â–²
+                      className={`w-8 h-8 flex items-center justify-center text-[11px] font-bold rounded-md ${i === 0 ? 'text-[#DADADA]' : 'text-[#1A1A1A] active:bg-[#EDEDED]'}`}
+                    >
+                      ⠇↑
                     </button>
-                    <button onClick={() => moveStop(i, 1)} disabled={i === stops.length - 1}
+                    <button
+                      onClick={() => moveStop(i, 1)}
+                      disabled={i === stops.length - 1}
                       aria-label={`Move stop ${i + 1} later`}
-                      className={`w-7 h-5 flex items-center justify-center text-[10px] leading-none rounded-b-md ${i === stops.length - 1 ? 'text-[#DADADA]' : 'text-[#6B6B6B] active:bg-[#EDEDED]'}`}>
-                      â–¼
+                      className={`w-8 h-8 flex items-center justify-center text-[11px] font-bold rounded-md ${i === stops.length - 1 ? 'text-[#DADADA]' : 'text-[#1A1A1A] active:bg-[#EDEDED]'}`}
+                    >
+                      ⠇↓
                     </button>
                   </div>
-                  <button onClick={() => setStops((rows) => rows.filter((_, x) => x !== i))}
+                  <button
+                    onClick={() => setStops((rows) => rows.filter((_, x) => x !== i))}
                     aria-label={`Remove stop ${i + 1}`}
-                    className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[#9E9E9E] text-[16px] leading-none active:bg-[#EDEDED]">
-                    Ã—
+                    className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[#9E9E9E] text-[16px] leading-none active:bg-[#EDEDED]"
+                  >
+                    ×
                   </button>
                 </div>
               ))}
-              <div className="bg-[#F7F7F7] rounded-xl px-3 py-2">
-                <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">To</p>
-                <p className="text-[13px] text-[#1A1A1A] font-semibold">{destName}</p>
+              <div
+                className="bg-[#F7F7F7] rounded-xl px-3 py-2 cursor-pointer"
+                onClick={() => setShowPickupInput(true)}
+              >
+                <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">
+                  To
+                </p>
+                <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
+                  {destName}
+                </p>
               </div>
             </div>
           </div>
@@ -1012,6 +1062,46 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             )}
           </button>
         </div>
+
+        {/* Manual pickup entry â€” tap From/To to type a custom pickup address */}
+        {showPickupInput && (
+          <div className="mt-5 border border-[#EBEBEB] rounded-2xl p-4 text-left">
+            <p className="text-[13px] font-semibold text-[#1A1A1A] mb-2">
+              Pick your pickup location
+            </p>
+            <input
+              value={pickupQ}
+              onChange={(e) => setPickupQ(e.target.value)}
+              placeholder="Search a street, place or landmark"
+              className="w-full border border-[#EBEBEB] rounded-xl px-3.5 py-3 text-[13px] outline-none focus:border-[#EA4335]"
+            />
+            {pickupBusy && <p className="text-[12px] text-[#ADADAD] mt-2">Searching...</p>}
+            <div className="mt-2 max-h-56 overflow-y-auto">
+              {pickupRes.map((p, i) => (
+                <button
+                  key={`${p.lat}-${p.lng}-${i}`}
+                  onClick={() => {
+                    setManualPickup({ lat: p.lat, lng: p.lng, label: p.address || p.name })
+                    setShowPickupInput(false)
+                    setPickupQ('')
+                    setPickupRes([])
+                  }}
+                  className="w-full text-left px-1 py-2.5 border-b border-[#F2F2F2] last:border-0 active:bg-[#F7F7F7]"
+                >
+                  <span className="block text-[13px] font-semibold text-[#1A1A1A]">{p.name}</span>
+                  <span className="block text-[12px] text-[#ADADAD]">{p.address}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => { setShowPickupInput(false); setPickupQ(''); setPickupRes([]) }}
+              className="mt-3 w-full text-[12px] text-[#ADADAD] text-center"
+            >
+              Use current location
+            </button>
+          </div>
+        )}
+
 
         {/* Promo applied — announced BEFORE the prices, exactly as requested. */}
         <div className="px-5 py-4">
@@ -1160,7 +1250,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
             {IC.chevRight()}
           </button>
-          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops, promoOn && promo && promo.usable !== false ? promo.id : null, inviteOn && inviteBalance > 0)}
+          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops, promoOn && promo && promo.usable !== false ? promo.id : null, inviteOn && inviteBalance > 0, manualPickup)}
             className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-3.5 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
             Confirm {ride.name}
           </button>
@@ -4472,6 +4562,7 @@ export default function App() {
   // "Use invite credit" from the booking screen — travels to the ride request.
   const [bookInvite, setBookInvite] = useState(false)
   const [rideStops, setRideStops] = useState<Waypoint[]>([])
+  const [manualPickup, setManualPickupState] = useState<{ lat: number; lng: number; label: string } | null>(null)
   // The id of the ride the server created, used to track / cancel / rate it.
   const [rideId, setRideId] = useState<string | null>(null)
   const [rScreen, setRScreen] = useState<RiderScreen>('home')
