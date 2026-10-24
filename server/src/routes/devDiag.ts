@@ -1,10 +1,10 @@
 import { Router, Request, Response } from "express";
 import { statSync } from "fs";
 import { join } from "path";
-import { query } from "../config/database";
+import { query, queryOne } from "../config/database";
 import { uploadToS3, deleteFromS3 } from "../lib/s3";
 import { READ_KEY } from "./devLogs";
-import { carsxeUsage } from "../services/vehicleImages";
+import { carsxeUsage, vehicleImageSource } from "../services/vehicleImages";
 
 // ── Environment diagnostics ────────────────────────────────────────────────────
 //   GET /api/dev/diag?key=…        what the live instance is actually running
@@ -96,7 +96,10 @@ router.get("/", async (req: Request, res: Response) => {
       cwd: process.cwd(),
     },
     sharp: sharpStatus,
-    carsxe: { keySet: Boolean(process.env.CARSXE_API_KEY), budget },
+    // CarsXE is retired; the budget is historical only. `source` proves which
+    // store the live server will actually read photos from.
+    carsxe: { retired: true, keySet: Boolean(process.env.CARSXE_API_KEY), budget },
+    vehicleImages: { source: vehicleImageSource() },
     storage: {
       bucket: process.env.AWS_S3_BUCKET || "MISSING",
       region: process.env.AWS_S3_REGION || "(default af-south-1)",
@@ -171,6 +174,26 @@ router.get("/", async (req: Request, res: Response) => {
     );
   } catch (err: any) {
     out.dispatch = { error: String(err?.message || err) };
+  }
+
+  // Car DB reality check: are the admin's queues actually populated, and do
+  // driver profiles have the categories dispatch needs? This is read-only.
+  try {
+    const counts = await queryOne<any>(
+      `SELECT
+         (SELECT COUNT(*) FROM vehicle_images)::int AS images_total,
+         (SELECT COUNT(*) FROM vehicle_images WHERE status = 'approved' AND image_url IS NOT NULL)::int AS images_approved,
+         (SELECT COUNT(*) FROM vehicle_images
+            WHERE status = 'approved' AND image_url IS NOT NULL
+              AND (categories IS NULL OR cardinality(categories) = 0))::int AS images_missing_category,
+         (SELECT COUNT(*) FROM driver_profiles)::int AS drivers_total,
+         (SELECT COUNT(*) FROM driver_profiles
+            WHERE vehicle_categories IS NULL OR vehicle_categories = '[]'::jsonb)::int AS drivers_missing_categories,
+         (SELECT COUNT(*) FROM admin_vehicle_requests WHERE status = 'open')::int AS open_vehicle_requests`
+    );
+    out.carDb = { source: vehicleImageSource(), ...(counts || {}) };
+  } catch (err: any) {
+    out.carDb = { source: vehicleImageSource(), error: String(err?.message || err) };
   }
 
   // Rides still looking for a driver, and whether an offer is actually out. A rider

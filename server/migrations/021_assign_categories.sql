@@ -5,7 +5,8 @@
 -- from the static catalogue so all cars already in the DB get a real tier.
 --
 -- Damage scope: none. Only updates rows where categories IS NULL.
-BEGIN;
+-- The migrator already wraps each file in a transaction, so this file must not
+-- open its own.
 
 -- Static catalogue as a CTE: (make, model, category)
 WITH model_catalogue AS (
@@ -106,5 +107,3 @@ update_categories AS (
 
 -- Report summary
 SELECT 'rows updated' AS status, COUNT(*) AS count FROM vehicle_images WHERE categories IS NOT NULL AND categories != '{}';
-
-COMMIT;

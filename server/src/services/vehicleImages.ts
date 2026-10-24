@@ -1,21 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// vehicleImages.ts — the vehicle PHOTO cache (CarsXE-backed, but the API key
-// lives only here on the server and is never sent to any app).
+// vehicleImages.ts — the vehicle PHOTO cache.
+// CarsXE is retired. Photos come from the team’s own Car DB (admin upload /
+// import), and this module only reads, stores and resolves those rows.
 //
-// The whole point of this file is that a CarsXE call happens AT MOST ONCE per
-// make|model|generation|colour, ever:
+// After a driver saves a car, resolveVehicleImage() is a DB-only lookup.
+// When the car has no photo, the admin request queue records the gap.
 //
-//   driver saves a car ─► resolveVehicleImage()  (DB only, 0 calls)
-//                       └► nothing approved yet ─► claimVehicleImageFetch()
-//                          INSERT … ON CONFLICT (cache_key) DO NOTHING
-//                          └─ only the winner queues ONE CarsXE call
-//
-// After that every driver with the same car is served the cached, approved row —
-// including a different model year inside the same generation (a 2019 Picanto
-// reuses the 2017-2020 image) and, when the car has no render in the colour the
-// driver picked, the white model of it.
+// Every driver with the same car is then served the cached, approved row —
+// including a different model year inside the same generation and, when the
+// car has no render in the driver’s colour, the white model of it.
 //
 // Statuses: queued -> pending -> approved | rejected | none_found
+// (legacy statuses remain only so old imported rows keep loading)
 // ─────────────────────────────────────────────────────────────────────────────
 import { query, queryOne, execute } from "../config/database";
 import { uploadToS3, deleteFromS3 } from "../lib/s3";
@@ -396,6 +392,8 @@ export interface WhiteRow {
   colour?: string | null;
   image_url: string | null;
   approved_at: string | null;
+  /** Admin-assigned ride classes for this car photo. */
+  categories?: string[] | null;
 }
 
 export interface WhitePick {
@@ -467,6 +465,8 @@ export interface ResolvedVehicleImage {
   url: string | null;
   cacheKey: string;
   matched: "exact" | "model-colour" | "model" | "none";
+  /** Ride classes attached to the resolved Car DB row, if the admin set them. */
+  categories?: string[] | null;
 }
 
 /**
@@ -493,12 +493,14 @@ export async function resolveVehicleImage(v?: VehicleLike | null): Promise<Resol
   // The driver's own colour, or white when he did not state one.
   const colour = slug(v?.colour || v?.vehicle_color) || WHITE;
 
-  const exact = await queryOne<{ image_url: string }>(
-    `SELECT image_url FROM vehicle_images
+  const exact = await queryOne<{ image_url: string; categories: string[] | null }>(
+    `SELECT image_url, categories FROM vehicle_images
       WHERE cache_key = $1 AND LOWER(colour) = $2 AND status = 'approved' AND image_url IS NOT NULL`,
     [cacheKey, colour]
   );
-  if (exact?.image_url) return { url: exact.image_url, cacheKey, matched: "exact" };
+  if (exact?.image_url) {
+    return { url: exact.image_url, cacheKey, matched: "exact", categories: exact.categories };
+  }
 
   // Every approved row for this make — ALL colours come back and the colour is
   // chosen by pickBestWhiteRow, so this is still ONE query. The range label is free
@@ -507,7 +509,7 @@ export async function resolveVehicleImage(v?: VehicleLike | null): Promise<Resol
   const rawMakeSlug = normToken(v?.make || v?.vehicle_make);
   const makes = Array.from(new Set([make, canonicalMake(rawMakeSlug), rawMakeSlug].filter(Boolean)));
   const rows = await query<WhiteRow>(
-    `SELECT cache_key, make, model, year, year_range, colour, image_url, approved_at
+    `SELECT cache_key, make, model, year, year_range, colour, image_url, approved_at, categories
        FROM vehicle_images
       WHERE make = ANY($1::text[])
         AND status = 'approved' AND image_url IS NOT NULL`,
@@ -522,7 +524,43 @@ export async function resolveVehicleImage(v?: VehicleLike | null): Promise<Resol
     url: pick.row.image_url as string,
     cacheKey,
     matched: pickedColour === colour ? "model-colour" : "model",
+    categories: pick.row.categories,
   };
+}
+
+/**
+ * Merge admin-assigned Car DB categories into a driver's dispatch categories.
+ * Additive: a driver never loses a category another source (CarScan) granted.
+ */
+export async function mergeDriverVehicleCategories(
+  driverId: string,
+  categories: string[] | null | undefined
+): Promise<number> {
+  const extra = Array.from(
+    new Set((categories || []).map((c) => String(c || "").trim().toLowerCase()).filter(Boolean))
+  );
+  if (!driverId || !extra.length) return 0;
+  try {
+    const rows = await query<{ user_id: string }>(
+      `UPDATE driver_profiles dp
+          SET vehicle_categories = COALESCE((
+                SELECT jsonb_agg(DISTINCT c)
+                  FROM unnest(
+                    ARRAY(SELECT jsonb_array_elements_text(
+                      COALESCE(dp.vehicle_categories, '[]'::jsonb)
+                    )) || $2::text[]
+                  ) AS c
+              ), '[]'::jsonb),
+              updated_at = NOW()
+        WHERE dp.user_id = $1
+        RETURNING dp.user_id`,
+      [driverId, extra]
+    );
+    return rows.length;
+  } catch (err: any) {
+    console.error("[vehicleImages] category merge failed:", err?.message || err);
+    return 0;
+  }
 }
 
 /**
@@ -1171,6 +1209,9 @@ export function startVehicleImageWorker(intervalMs = 30_000): NodeJS.Timeout {
           WHERE status = 'fetching'
             AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - INTERVAL '5 minutes')`
       ).catch(() => {});
+      // CarsXE is retired: never drain a legacy 'queued' row into the external
+      // search. Auto-fill above still runs (it recolours the local Car DB).
+      if (vehicleImageSource() !== "carsxe") return;
       if ((await carsxeUsage()).blocked) return;
       const rows = await query<{ cache_key: string }>(
         `SELECT cache_key FROM vehicle_images WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`
@@ -1440,9 +1481,10 @@ export async function attachVehicleImages<R = any>(rows: R | R[] | null): Promis
  * deleted: flipping VEHICLE_IMAGES_SOURCE=carsxe restores it exactly.
  */
 export function vehicleImageSource(): "cardb" | "carsxe" {
-  return String(process.env.VEHICLE_IMAGES_SOURCE || "cardb").trim().toLowerCase() === "carsxe"
-    ? "carsxe"
-    : "cardb";
+  // CarsXE has been removed from the product. Keep the union type for the
+  // legacy worker/import code paths, but never let an old environment variable
+  // turn the external search back on.
+  return "cardb";
 }
 
 // ── Admin-v2 request queue (migration 009; created here too for first-boot) ──
@@ -1545,6 +1587,32 @@ export async function resolveVehicleRequests(cacheKey: string, imageId: string):
         RETURNING driver_id, make, model, year`,
       [key, imageId]
     );
+    // An approved photo's admin categories must reach the drivers whose car it
+    // answers, or the category would only decorate the catalogue and dispatch
+    // would keep using an empty profile category.
+    if (open.length) {
+      await execute(
+        `UPDATE driver_profiles dp
+            SET vehicle_categories = COALESCE((
+                  SELECT jsonb_agg(DISTINCT c)
+                    FROM unnest(
+                      ARRAY(SELECT jsonb_array_elements_text(
+                        COALESCE(dp.vehicle_categories, '[]'::jsonb)
+                      )) || vi.categories
+                    ) AS c
+                ), '[]'::jsonb),
+                updated_at = NOW()
+           FROM vehicle_images vi
+          WHERE vi.id = $2
+            AND vi.categories IS NOT NULL
+            AND cardinality(vi.categories) > 0
+            AND dp.user_id = ANY($1::uuid[])`,
+        [open.map((r) => r.driver_id), imageId]
+      ).catch((err) =>
+        console.error("[vehicleImages] request category sync failed:", err?.message || err)
+      );
+    }
+
     for (const r of open) {
       const label = [r.make, r.model, r.year].filter(Boolean).join(" ");
       await sendPushToUsers([r.driver_id], {
@@ -1698,6 +1766,13 @@ export async function autoFillMissingColours(limit = 3, allColours = false): Pro
 
 export async function noteDriverVehicle(v: VehicleLike): Promise<ResolvedVehicleImage> {
   const resolved = await resolveVehicleImage(v);
+
+  // The admin's Car DB is the authority for a car model's ride classes. Merge
+  // them into the driver's profile so an image category actually changes who
+  // receives that tier (dispatch reads driver_profiles.vehicle_categories).
+  if (v.driverId && resolved.categories?.length) {
+    await mergeDriverVehicleCategories(v.driverId, resolved.categories);
+  }
 
   // Only skip the request when we have an exact colour match. If we fell back to
   // a white/other-colour image (matched: "model") or found nothing (matched: "none"),

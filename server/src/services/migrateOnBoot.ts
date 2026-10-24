@@ -49,6 +49,7 @@ export const MIGRATION_ORDER = [
   "018_wallet.sql",
   "019_affiliate_credit.sql",
   "020_remove_picanto.sql",
+  "021_assign_categories.sql",
   "022_ride_tier_default.sql",
 ] as const;
 

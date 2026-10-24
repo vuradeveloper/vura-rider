@@ -141,12 +141,12 @@ const payTag = (m?: string | null) =>
 // ????????? Data ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 /** JS Sun=0..Sat=6 shifted to Mon=0..Sun=6, so the bars start on Monday. */
 const rideOptions = [
-  { id: 'go', name: 'Vura Go', desc: 'Affordable everyday rides', price: 'R1.00', eta: '3-5 min', riders: '2', category: 'economy' },
-  { id: 'comfort', name: 'Comfort', desc: 'Premium sedans', price: 'R1.00', eta: '4-6 min', riders: '3', category: 'comfort' },
-  { id: 'xl', name: 'XL', desc: 'Large vehicles / 6 riders', price: 'R1.00', eta: '5-8 min', riders: '6', category: 'xl' },
-  { id: 'van', name: 'Van', desc: '7-seater van', price: 'R1.00', eta: '6-10 min', riders: '7', category: 'xl', icon: 'xl' },
-  { id: 'black', name: 'Black', desc: 'Luxury rides / 3 riders', price: 'R1.00', eta: '6-10 min', riders: '3', category: 'premium' },
-  { id: 'wait_save', name: 'Wait & Save', desc: 'Economy / 2 riders / 6 min timer', price: 'R1.00', eta: '6 min', riders: '2', category: 'economy', waitSave: true, icon: 'go' },
+  { id: 'go', name: 'Vura Go', desc: 'Affordable everyday rides', price: 'R5.00', eta: '3-5 min', riders: '2', category: 'economy' },
+  { id: 'comfort', name: 'Comfort', desc: 'Premium sedans', price: 'R5.00', eta: '4-6 min', riders: '3', category: 'comfort' },
+  { id: 'xl', name: 'XL', desc: 'Large vehicles / 6 riders', price: 'R5.00', eta: '5-8 min', riders: '6', category: 'xl' },
+  { id: 'van', name: 'Van', desc: '7-seater van', price: 'R5.00', eta: '6-10 min', riders: '7', category: 'xl', icon: 'xl' },
+  { id: 'black', name: 'Black', desc: 'Luxury rides / 3 riders', price: 'R5.00', eta: '6-10 min', riders: '3', category: 'premium' },
+  { id: 'wait_save', name: 'Wait & Save', desc: 'Economy / 2 riders / 6 min timer', price: 'R5.00', eta: '6 min', riders: '2', category: 'economy', waitSave: true, icon: 'go' },
 ]
 
 // Uber-style groups for "Choose your ride" — the same tier ids the server maps
@@ -158,11 +158,11 @@ const RIDE_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Premium', ids: ['xl', 'van', 'black'] },
 ]
 
-// Every ride in this build costs a flat R1.00.
+// Every ride in this build costs a flat R5.00.
 // This is the amount the server charges the saved card for real, so the price
 // on the tiers above, the price in the ride request and the price the driver
 // sees are all the same number.
-const RIDE_FARE = 1
+const RIDE_FARE = 5
 
 // â”€â”€ Date helpers, copied from the React Native app (earnings.tsx / trips.tsx) â”€â”€
 
@@ -664,7 +664,7 @@ function promoFactorFor(p: PromoInfo): number {
   return pct > 0 ? Math.max(0, 1 - pct / 100) : 1;
 }
 
-/** "R1.00" → "R0.10" at the given factor. Display only — the SERVER applies
+/** "R5.00" → "R0.50" at the given factor. Display only — the SERVER applies
  *  the real discount to the charged fare when the ride is requested. */
 function promoPrice(price: string, factor: number): string {
   const n = Number(String(price).replace(/[^0-9.]/g, ""));
@@ -1664,7 +1664,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
             // driver's route and fare cover the whole trip, not just the endpoints.
             waypoints: stops && stops.length ? stops : undefined,
             tier: tier || 'go',
-            // Flat R1.00: the server charges the saved card this real amount
+            // Flat R5.00: the server charges the saved card this real amount
             // (previously no fare was sent, so nothing was ever taken).
             fare: RIDE_FARE,
             promoId,
