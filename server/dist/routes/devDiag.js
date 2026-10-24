@@ -215,6 +215,20 @@ router.get("/", async (req, res) => {
     catch (err) {
         out.carDb = { source: (0, vehicleImages_1.vehicleImageSource)(), error: String(err?.message || err) };
     }
+    // Did the category backfill actually run? A missing row here means 021 was
+    // never applied (RUN_MIGRATIONS_ON_BOOT was off), so the Car DB will still
+    // show unclassified photos.
+    try {
+        out.migrations = {
+            enabled: process.env.RUN_MIGRATIONS_ON_BOOT === "true",
+            expected: ["021_assign_categories.sql", "022_ride_tier_default.sql"],
+            applied: await (0, database_1.query)(`SELECT filename, applied_at FROM schema_migrations
+          WHERE filename = ANY($1::text[]) ORDER BY filename`, [["021_assign_categories.sql", "022_ride_tier_default.sql"]]),
+        };
+    }
+    catch (err) {
+        out.migrations = { error: String(err?.message || err) };
+    }
     // Rides still looking for a driver, and whether an offer is actually out. A rider
     // who is waiting with zero pending offers means dispatch never found a candidate
     // (a driver problem); a pending offer means a driver is being asked (a phone
