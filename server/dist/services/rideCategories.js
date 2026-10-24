@@ -21,6 +21,7 @@ exports.deriveVehicleCategories = deriveVehicleCategories;
 exports.effectiveCategories = effectiveCategories;
 exports.hasExplicitCategories = hasExplicitCategories;
 exports.tierAcceptsCategory = tierAcceptsCategory;
+exports.rideTiersForCategories = rideTiersForCategories;
 /**
  * Which categories serve which RIDER tier.
  *
@@ -45,6 +46,14 @@ const TIER_ACCEPTS = {
 /** Booking payloads may carry anything; normalise to a known tier id. */
 function canonicalTier(raw) {
     const t = String(raw ?? "go").trim().toLowerCase();
+    // Rider-app aliases. The Figma booking screen has a Van option with id
+    // "van"; before this it fell through to "go" and a 7-seater request landed in
+    // the economy pool. It is an XL-class request. Wait & Save is an economy ride
+    // with a countdown, so it shares the "go" class.
+    if (t === "van")
+        return "xl";
+    if (t === "wait_save" || t === "wait-save" || t === "waitsave")
+        return "go";
     return Object.prototype.hasOwnProperty.call(TIER_ACCEPTS, t) ? t : "go";
 }
 /**
@@ -143,5 +152,16 @@ function hasExplicitCategories(p) {
 function tierAcceptsCategory(tier, cats) {
     const accepts = TIER_ACCEPTS[canonicalTier(tier)] ?? TIER_ACCEPTS.go;
     return cats.some((c) => accepts.includes(c));
+}
+/**
+ * Every ride tier a car with these categories may serve, in canonical form.
+ *
+ * The driver app's 2-second polling fallback lists waiting rides from
+ * `GET /api/rides/available`; that list must obey the SAME contract dispatch
+ * enforces, otherwise an Economy driver is shown (and can claim) a Black ride
+ * just because it is nearby. Includes the legacy "x" id so old rows match too.
+ */
+function rideTiersForCategories(cats) {
+    return Object.keys(TIER_ACCEPTS).filter((t) => TIER_ACCEPTS[t].some((c) => cats.includes(c)));
 }
 //# sourceMappingURL=rideCategories.js.map

@@ -32,4 +32,13 @@ export declare function effectiveCategories(p?: CategoryProfileLike | null): Rid
 export declare function hasExplicitCategories(p?: CategoryProfileLike | null): boolean;
 /** Does this driver's car belong to the tier the rider asked for? */
 export declare function tierAcceptsCategory(tier: string, cats: readonly RideCategory[]): boolean;
+/**
+ * Every ride tier a car with these categories may serve, in canonical form.
+ *
+ * The driver app's 2-second polling fallback lists waiting rides from
+ * `GET /api/rides/available`; that list must obey the SAME contract dispatch
+ * enforces, otherwise an Economy driver is shown (and can claim) a Black ride
+ * just because it is nearby. Includes the legacy "x" id so old rows match too.
+ */
+export declare function rideTiersForCategories(cats: readonly RideCategory[]): string[];
 //# sourceMappingURL=rideCategories.d.ts.map

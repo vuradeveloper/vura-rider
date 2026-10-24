@@ -525,8 +525,17 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         //     so hiding them here would only hide the diagnosis.
         const me = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [_req.userId]);
         const dp = me
-            ? await (0, database_1.queryOne)("SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1", [me.id]).catch(() => null)
+            ? await (0, database_1.queryOne)(`SELECT current_lat, current_lng, vehicle_categories, vehicle_seats, body_type
+             FROM driver_profiles WHERE user_id = $1`, [me.id]).catch(async () => 
+            // Pre-013 database: no category columns yet — position still works.
+            (0, database_1.queryOne)("SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1", [me.id]).catch(() => null))
             : null;
+        // The ride classes this car may serve. The list below is what the driver
+        // app auto-opens every 2 seconds, so it must obey exactly the same class
+        // contract dispatch does — otherwise an Economy car is shown (and can
+        // claim) a Black or XL request just because it happens to be nearby.
+        // Unclassified profiles derive economy, which is the pre-013 behaviour.
+        const allowedTiers = (0, rideCategories_1.rideTiersForCategories)((0, rideCategories_1.effectiveCategories)(dp));
         const hasCoords = dp?.current_lat != null && dp?.current_lng != null;
         // Default 3 km, overridable per deployment. Generous enough that a driver
         // who is genuinely close is never left out; tight enough to stop a city-wide
@@ -572,6 +581,11 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
          LEFT JOIN users u ON u.id = r.passenger_id
         WHERE ((r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
            OR (r.status = 'scheduled' AND r.scheduled_at > NOW()))
+          -- RIDE CLASS: only requests this car's recorded categories can serve.
+          -- Before this line the 2-second poll returned every nearby ride,
+          -- including Black/XL, and the app auto-opened the first one — the
+          -- "random rides" drivers saw. The legacy native XL id is 'x'.
+          AND COALESCE(r.tier, 'go') = ANY($5::text[])
           -- Keep rides whose pickup coords are missing: dispatch cannot match
           -- them either, so hiding them here would only hide the diagnosis.
           AND (NOT $3::boolean
@@ -594,6 +608,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
             hasCoords ? Number(dp.current_lat) : 0,
             hasCoords,
             radiusKm,
+            allowedTiers,
         ]);
         res.json({
             // The app reads distance_km (nearest-ride card, offer sheet): publish

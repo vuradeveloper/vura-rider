@@ -426,7 +426,7 @@ async function start() {
           payment_status VARCHAR(20),
           payment_method VARCHAR(20),
           scheduled_at TIMESTAMPTZ,
-          tier VARCHAR(20) DEFAULT 'x',
+          tier VARCHAR(20) DEFAULT 'go',
           announced BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMPTZ DEFAULT NOW(),
           updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -589,7 +589,7 @@ async function start() {
             await (0, database_2.execute)(`
         ALTER TABLE rides
         ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
-        ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'x',
+        ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'go',
         ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE,
         ADD COLUMN IF NOT EXISTS device_id VARCHAR(100),
         ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,

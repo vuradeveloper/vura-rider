@@ -144,19 +144,6 @@ export interface AcceptResult {
      */
     losers?: string[];
 }
-/**
- * Atomically claim a ride for a driver.
- *
- * THE POINT: the old code read the ride, then ran an UPDATE with no status guard,
- * so two drivers accepting at once both "won" (last write wins) and a stale accept
- * could overwrite an accepted/cancelled ride. Here everything happens in ONE
- * transaction: the ride row is locked FOR UPDATE, the driver's pending offer (if
- * any) must still be inside its 15s window, and the UPDATE itself is guarded by
- * `AND status IN (...)`. Zero rows affected => "ride no longer available".
- *
- * Idempotent: calling it twice for the same driver returns ok + duplicate instead
- * of erroring, so a retry after a network blip is safe.
- */
 export declare function acceptRide(io: SocketIOServer, params: {
     rideId: string;
     driverId: string;

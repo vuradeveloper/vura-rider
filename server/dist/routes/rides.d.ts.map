@@ -1,1 +1,1 @@
-{"version":3,"file":"rides.d.ts","sourceRoot":"","sources":["../../src/routes/rides.ts"],"names":[],"mappings":"AAuBA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAifxB,wBAAsB,iBAAiB,IAAI,OAAO,CAAC,MAAM,CAAC,CAoBzD;AAo5BD,eAAe,MAAM,CAAC"}
+{"version":3,"file":"rides.d.ts","sourceRoot":"","sources":["../../src/routes/rides.ts"],"names":[],"mappings":"AAuBA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAifxB,wBAAsB,iBAAiB,IAAI,OAAO,CAAC,MAAM,CAAC,CAoBzD;AAo7BD,eAAe,MAAM,CAAC"}
