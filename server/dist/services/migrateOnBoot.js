@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.DUPLICATE_PENDING_PRECHECK_SQL = exports.MIGRATION_ORDER = void 0;
 exports.migrationsDir = migrationsDir;
 exports.splitStatements = splitStatements;
+exports.getLastMigrationSummary = getLastMigrationSummary;
 exports.runMigrationsOnBoot = runMigrationsOnBoot;
 // ─────────────────────────────────────────────────────────────────────────────
 // MIGRATE ON BOOT — the server applies its own additive migrations.
@@ -58,6 +59,7 @@ exports.MIGRATION_ORDER = [
     "020_remove_picanto.sql",
     "021_assign_categories.sql",
     "022_ride_tier_default.sql",
+    "023_backfill_categories.sql",
 ];
 /** Arbitrary app-wide advisory key — one constant so all boots serialise. */
 const ADVISORY_KEY = 726401001;
@@ -189,12 +191,18 @@ async function apply001b(client, file, sql, summary) {
     summary.results.push({ file, outcome: "applied" });
     console.log(`[migrate] applied ${file} (outside transaction, index valid)`);
 }
+/** Last boot-time migration result, kept in memory for the read-only diag. */
+let lastMigrationSummary = null;
+function getLastMigrationSummary() {
+    return lastMigrationSummary;
+}
 /**
  * Never throws. Returns a summary even on total failure so boot always has
  * exactly one summary line to read.
  */
 async function runMigrationsOnBoot() {
     const summary = { enabled: false, applied: 0, skipped: 0, failed: 0, results: [] };
+    lastMigrationSummary = summary;
     const enabled = process.env.RUN_MIGRATIONS_ON_BOOT === "true";
     summary.enabled = enabled;
     if (!enabled) {

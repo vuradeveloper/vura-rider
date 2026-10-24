@@ -40,6 +40,7 @@ const database_1 = require("../config/database");
 const s3_1 = require("../lib/s3");
 const devLogs_1 = require("./devLogs");
 const vehicleImages_1 = require("../services/vehicleImages");
+const migrateOnBoot_1 = require("../services/migrateOnBoot");
 // ── Environment diagnostics ────────────────────────────────────────────────────
 //   GET /api/dev/diag?key=…        what the live instance is actually running
 //   GET /api/dev/diag?key=…&s3=1   also do a real S3 write + delete round trip
@@ -60,7 +61,14 @@ function buildStamp() {
     try {
         // This file is dist/routes/devDiag.js, so the entrypoint is one level up.
         const entry = (0, path_1.join)(__dirname, "..", "index.js");
-        return { entry, builtAt: (0, fs_1.statSync)(entry).mtime.toISOString() };
+        let commit = null;
+        try {
+            commit = (0, fs_1.readFileSync)((0, path_1.join)(__dirname, "..", "build-commit.txt"), "utf8").trim() || null;
+        }
+        catch {
+            /* old dist without the stamp */
+        }
+        return { entry, builtAt: (0, fs_1.statSync)(entry).mtime.toISOString(), commit };
     }
     catch (err) {
         return { error: String(err?.message || err) };
@@ -221,9 +229,18 @@ router.get("/", async (req, res) => {
     try {
         out.migrations = {
             enabled: process.env.RUN_MIGRATIONS_ON_BOOT === "true",
-            expected: ["021_assign_categories.sql", "022_ride_tier_default.sql"],
+            expected: [
+                "021_assign_categories.sql",
+                "022_ride_tier_default.sql",
+                "023_backfill_categories.sql",
+            ],
             applied: await (0, database_1.query)(`SELECT filename, applied_at FROM schema_migrations
-          WHERE filename = ANY($1::text[]) ORDER BY filename`, [["021_assign_categories.sql", "022_ride_tier_default.sql"]]),
+          WHERE filename = ANY($1::text[]) ORDER BY filename`, [[
+                    "021_assign_categories.sql",
+                    "022_ride_tier_default.sql",
+                    "023_backfill_categories.sql",
+                ]]),
+            lastRun: (0, migrateOnBoot_1.getLastMigrationSummary)(),
         };
     }
     catch (err) {

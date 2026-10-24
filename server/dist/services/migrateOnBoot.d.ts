@@ -1,4 +1,4 @@
-export declare const MIGRATION_ORDER: readonly ["001_h3_driver_index.sql", "001b_offer_unique_index.sql", "002_destination_mode.sql", "003_performance_tier.sql", "004_admin_v2.sql", "005_admin_drivers.sql", "006_admin_riders.sql", "007_admin_trips.sql", "008_admin_messaging.sql", "009_admin_vehicle_requests.sql", "010_doc_verification.sql", "011_doc_type_check.sql", "012_promos.sql", "013_vehicle_categories.sql", "014_ride_preauthorization.sql", "015_pay_later_upgrade.sql", "016_promos_v2.sql", "017_safety.sql", "018_wallet.sql", "019_affiliate_credit.sql", "020_remove_picanto.sql", "021_assign_categories.sql", "022_ride_tier_default.sql"];
+export declare const MIGRATION_ORDER: readonly ["001_h3_driver_index.sql", "001b_offer_unique_index.sql", "002_destination_mode.sql", "003_performance_tier.sql", "004_admin_v2.sql", "005_admin_drivers.sql", "006_admin_riders.sql", "007_admin_trips.sql", "008_admin_messaging.sql", "009_admin_vehicle_requests.sql", "010_doc_verification.sql", "011_doc_type_check.sql", "012_promos.sql", "013_vehicle_categories.sql", "014_ride_preauthorization.sql", "015_pay_later_upgrade.sql", "016_promos_v2.sql", "017_safety.sql", "018_wallet.sql", "019_affiliate_credit.sql", "020_remove_picanto.sql", "021_assign_categories.sql", "022_ride_tier_default.sql", "023_backfill_categories.sql"];
 export type MigrationOutcome = "applied" | "skipped" | "failed";
 export interface MigrationResult {
     file: string;
@@ -21,6 +21,7 @@ export declare function migrationsDir(): string;
 //  migration files, which contain no nested dollar tags.
  */
 export declare function splitStatements(sql: string): string[];
+export declare function getLastMigrationSummary(): MigrateSummary | null;
 /**
  * Never throws. Returns a summary even on total failure so boot always has
  * exactly one summary line to read.
