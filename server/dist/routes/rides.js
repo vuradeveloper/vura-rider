@@ -906,6 +906,41 @@ router.patch("/:id/status", auth_1.requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
+        // SECURITY: this endpoint used to move ANY ride to ANY status for any
+        // logged-in user. It is the simulation/completion path, so lock it to the
+        // assigned driver and to legal in-trip transitions. A rider cancels through
+        // POST /:id/cancel (which releases the hold); a third party can do neither.
+        const { user, ride, party } = await loadRideForParty(String(id), req.userId);
+        if (!user || !ride) {
+            res.status(404).json({ error: "Ride not found" });
+            return;
+        }
+        if (!party) {
+            res.status(403).json({ error: "This ride does not belong to you" });
+            return;
+        }
+        if (party !== "driver") {
+            res.status(403).json({ error: "Only the assigned driver can change trip status" });
+            return;
+        }
+        if (!["driver_arrived", "in_progress", "completed"].includes(String(status))) {
+            res.status(400).json({
+                error: "Unsupported status. Use POST /api/rides/:id/cancel to cancel a ride.",
+            });
+            return;
+        }
+        if (status === "completed" && ride.status !== "in_progress") {
+            res.status(409).json({ error: "The trip must be in progress before it can be completed" });
+            return;
+        }
+        if (status === "in_progress" && !["accepted", "driver_arrived"].includes(ride.status)) {
+            res.status(409).json({ error: "The trip cannot start from its current state" });
+            return;
+        }
+        if (status === "driver_arrived" && ride.status !== "accepted") {
+            res.status(409).json({ error: "The driver must accept the ride before arriving" });
+            return;
+        }
         const updates = ["status = $1", "updated_at = NOW()"];
         const params = [status, id];
         if (status === "completed") {
@@ -1111,8 +1146,10 @@ router.post("/book", auth_1.requireAuth, async (req, res) => {
 // the sim PATCH below); this settles the money. Sets CAPTURE_PENDING and stops
 // — PAID is ONLY ever set by the preauthorization.capture.success webhook, so
 // an optimistic response can never claim money that later fails to settle.
-// Allowed for the ride's rider or driver; idempotent while a capture is
-// already pending/paid.
+// Allowed only for the assigned driver, and only once the ride is completed;
+// idempotent while a capture is already pending/paid. Without both checks a
+// rider could capture their own hold before the trip (and the capture webhook
+// would arrive before the driver's pending wallet credit existed).
 router.post("/:id/complete", auth_1.requireAuth, async (req, res) => {
     try {
         const { user, ride, party } = await loadRideForParty(String(req.params.id), req.userId);
@@ -1122,6 +1159,14 @@ router.post("/:id/complete", auth_1.requireAuth, async (req, res) => {
         }
         if (!party) {
             res.status(403).json({ error: "This ride does not belong to you" });
+            return;
+        }
+        if (party !== "driver") {
+            res.status(403).json({ error: "Only the assigned driver can complete the fare" });
+            return;
+        }
+        if (String(ride.status) !== "completed") {
+            res.status(409).json({ error: "The trip must be completed before the fare can be captured" });
             return;
         }
         const result = await (0, preauthorization_1.captureRideHold)(String(req.params.id));
@@ -1204,13 +1249,25 @@ router.post("/:id/cancel", auth_1.requireAuth, async (req, res) => {
             if ((Date.now() - acceptedAt) / 60000 > 2)
                 fee = 15.0;
         }
+        // SECURITY: a rider must never be able to cancel a trip that is already
+        // under way. That would release the card hold after the driver has done the
+        // work (free ride). Drivers keep their own mid-trip emergency cancel path.
+        if (party === "rider" && String(ride.status) === "in_progress") {
+            res.status(409).json({
+                error: "A trip in progress cannot be cancelled. Please contact support.",
+            });
+            return;
+        }
+        const cancellableStatuses = party === "rider"
+            ? "'scheduled','searching','no_drivers','accepted','driver_arrived'"
+            : "'scheduled','searching','no_drivers','accepted','driver_arrived','in_progress'";
         const alreadyCancelled = String(ride.status) === "cancelled";
         const reason = String(req.body?.reason || "Ride cancelled by user").slice(0, 200);
         const result = await (0, database_1.execute)(`UPDATE rides
           SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2,
               cancelled_at = NOW(), cancellation_fee = $3, updated_at = NOW()
         WHERE id = $4
-          AND status IN ('scheduled','searching','no_drivers','accepted','driver_arrived','in_progress')`, [user.id, reason, fee, rideId]);
+          AND status IN (${cancellableStatuses})`, [user.id, reason, fee, rideId]);
         const cancelled = (result?.rowCount ?? 0) > 0 || alreadyCancelled;
         if (!cancelled) {
             res.status(404).json({ error: "Ride not found or no longer active" });
