@@ -1584,6 +1584,19 @@ export function setupSocketHandlers(io: SocketIOServer) {
           );
           return;
         }
+        // SECURITY: only a trip that actually started (rider PIN verified via
+        // driver:ride:begin) can be completed and capture the rider's hold. A
+        // driver who merely accepted/arrived must not be able to end the trip.
+        if (String(ride.status) !== "in_progress") {
+          console.warn(
+            `[complete] ride=${rideId} status=${ride.status} - completion ignored (trip not started)`
+          );
+          socket.emit("ride:complete:error", {
+            rideId,
+            error: "Start the trip before completing it.",
+          });
+          return;
+        }
         await execute(
           "UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2",
           [ride.fare, rideId]
