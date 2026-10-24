@@ -49,9 +49,13 @@ function ensureTable() {
         coords JSONB NOT NULL,
         distance DOUBLE PRECISION DEFAULT 0,
         duration DOUBLE PRECISION DEFAULT 0,
+        legs JSONB DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
-    `).then(() => undefined).catch((err) => {
+    `).then(async () => {
+            // Existing deployments created the table before turn-by-turn existed.
+            await (0, database_1.execute)(`ALTER TABLE route_cache ADD COLUMN IF NOT EXISTS legs JSONB DEFAULT '[]'::jsonb`);
+        }).catch((err) => {
             console.warn("⚠ route_cache table init failed (routing still works in-memory):", err.message);
             tableEnsured = null;
         });
@@ -61,10 +65,17 @@ function ensureTable() {
 async function loadFromDb(key) {
     try {
         await ensureTable();
-        const row = await (0, database_1.queryOne)(`SELECT coords, distance, duration FROM route_cache
+        const row = await (0, database_1.queryOne)(`SELECT coords, distance, duration, legs FROM route_cache
        WHERE cache_key = $1 AND created_at > NOW() - ($2 || ' milliseconds')::interval`, [key, ROUTE_CACHE_TTL_MS]);
         if (row) {
-            return { coords: JSON.parse(row.coords), distance: row.distance, duration: row.duration };
+            // pg returns JSONB as an object, but be tolerant of a stringified column.
+            const legs = typeof row.legs === "string" ? JSON.parse(row.legs) : row.legs;
+            return {
+                coords: JSON.parse(row.coords),
+                distance: row.distance,
+                duration: row.duration,
+                legs: Array.isArray(legs) ? legs : [],
+            };
         }
     }
     catch (err) {
@@ -75,13 +86,14 @@ async function loadFromDb(key) {
 async function saveToDb(key, value) {
     try {
         await ensureTable();
-        await (0, database_1.execute)(`INSERT INTO route_cache (cache_key, coords, distance, duration)
-       VALUES ($1, $2, $3, $4)
+        await (0, database_1.execute)(`INSERT INTO route_cache (cache_key, coords, distance, duration, legs)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (cache_key) DO UPDATE
          SET coords = EXCLUDED.coords,
              distance = EXCLUDED.distance,
              duration = EXCLUDED.duration,
-             created_at = NOW()`, [key, JSON.stringify(value.coords), value.distance, value.duration]);
+             legs = EXCLUDED.legs,
+             created_at = NOW()`, [key, JSON.stringify(value.coords), value.distance, value.duration, JSON.stringify(value.legs)]);
     }
     catch {
         // Best effort — in-memory cache still covers this request.
@@ -95,7 +107,9 @@ async function fetchUpstream(points, overview) {
         // Production without ROUTE_PROVIDER_URL: honest failure, never the demo.
         throw new Error("Routing provider not configured (set ROUTE_PROVIDER_URL)");
     }
-    const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}`;
+    // steps=true is what makes turn-by-turn possible: OSRM then returns
+    // legs[].steps with the street name, manoeuvre type/modifier and distance.
+    const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}&steps=true`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
     try {
@@ -113,6 +127,7 @@ async function fetchUpstream(points, overview) {
             coords: (route.geometry?.coordinates ?? []),
             distance: route.distance ?? 0,
             duration: route.duration ?? 0,
+            legs: Array.isArray(route.legs) ? route.legs : [],
         };
     }
     finally {
@@ -127,6 +142,8 @@ function respond(res, value, cached) {
                 geometry: { coordinates: value.coords },
                 distance: value.distance,
                 duration: value.duration,
+                // Manoeuvres for the driver HUD (and any rider preview that wants them).
+                legs: value.legs,
             },
         ],
     });
@@ -142,7 +159,10 @@ router.get("/", async (req, res) => {
             res.status(400).json({ error: "points must be in 'lng,lat;lng,lat' format" });
             return;
         }
-        const key = `${points}|${overview}`;
+        // `v2steps` busts cache rows written before manoeuvres were included, so the
+        // first request after this deploy returns street names instead of waiting
+        // out the 7-day TTL.
+        const key = `${points}|${overview}|v2steps`;
         // 1. In-memory cache
         const mem = cacheGet(key);
         if (mem) {
