@@ -234,7 +234,7 @@ function sharePageHtml(token) {
         if(!coords || !coords.length) return;
         var latlngs = coords.map(function(c){ return [c[1],c[0]]; });
         if(routeLine){ map.removeLayer(routeLine); }
-        routeLine = L.polyline(latlngs,{color:'#e04e2f',weight:5,opacity:.85,lineCap:'round',lineJoin:'round'}).addTo(map);
+        routeLine = L.polyline(latlngs,{color:'#2563EB',weight:5,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(map);
       })
       .catch(function(){});
   }
