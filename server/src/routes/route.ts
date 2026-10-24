@@ -18,12 +18,21 @@ const ROUTE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MEMORY_CACHE_MAX = 500;
 const UPSTREAM_TIMEOUT_MS = 8000;
 
+interface CachedRoute {
+  coords: number[][];
+  distance: number;
+  duration: number;
+  /**
+   * OSRM `legs` (each with `steps`: maneuver, street name, distance). The apps
+   * need these for turn-by-turn ("Turn left onto Baker St"). Older cache rows
+   * have no legs — they simply answer without manoeuvres.
+   */
+  legs: any[];
+}
+
 // ── In-memory LRU cache (fastest path, survives nothing but serves the
 //    hot routes like the repeated pickup→destination lookups) ──
-const memoryCache = new Map<
-  string,
-  { coords: number[][]; distance: number; duration: number }
->();
+const memoryCache = new Map<string, CachedRoute>();
 
 function cacheGet(key: string) {
   const hit = memoryCache.get(key);
@@ -35,7 +44,7 @@ function cacheGet(key: string) {
   return hit;
 }
 
-function cacheSet(key: string, value: { coords: number[][]; distance: number; duration: number }) {
+function cacheSet(key: string, value: CachedRoute) {
   memoryCache.set(key, value);
   if (memoryCache.size > MEMORY_CACHE_MAX) {
     const oldest = memoryCache.keys().next().value;
@@ -57,9 +66,13 @@ function ensureTable(): Promise<void> {
         coords JSONB NOT NULL,
         distance DOUBLE PRECISION DEFAULT 0,
         duration DOUBLE PRECISION DEFAULT 0,
+        legs JSONB DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
-    `).then(() => undefined).catch((err) => {
+    `).then(async () => {
+      // Existing deployments created the table before turn-by-turn existed.
+      await execute(`ALTER TABLE route_cache ADD COLUMN IF NOT EXISTS legs JSONB DEFAULT '[]'::jsonb`);
+    }).catch((err) => {
       console.warn("⚠ route_cache table init failed (routing still works in-memory):", err.message);
       tableEnsured = null;
     });
@@ -67,16 +80,23 @@ function ensureTable(): Promise<void> {
   return tableEnsured;
 }
 
-async function loadFromDb(key: string) {
+async function loadFromDb(key: string): Promise<CachedRoute | null> {
   try {
     await ensureTable();
-    const row = await queryOne<{ coords: string; distance: number; duration: number }>(
-      `SELECT coords, distance, duration FROM route_cache
+    const row = await queryOne<{ coords: string; distance: number; duration: number; legs: any }>(
+      `SELECT coords, distance, duration, legs FROM route_cache
        WHERE cache_key = $1 AND created_at > NOW() - ($2 || ' milliseconds')::interval`,
       [key, ROUTE_CACHE_TTL_MS]
     );
     if (row) {
-      return { coords: JSON.parse(row.coords) as number[][], distance: row.distance, duration: row.duration };
+      // pg returns JSONB as an object, but be tolerant of a stringified column.
+      const legs = typeof row.legs === "string" ? JSON.parse(row.legs) : row.legs;
+      return {
+        coords: JSON.parse(row.coords) as number[][],
+        distance: row.distance,
+        duration: row.duration,
+        legs: Array.isArray(legs) ? legs : [],
+      };
     }
   } catch (err: any) {
     console.warn("⚠ route_cache read failed:", err.message);
@@ -84,25 +104,26 @@ async function loadFromDb(key: string) {
   return null;
 }
 
-async function saveToDb(key: string, value: { coords: number[][]; distance: number; duration: number }) {
+async function saveToDb(key: string, value: CachedRoute) {
   try {
     await ensureTable();
     await execute(
-      `INSERT INTO route_cache (cache_key, coords, distance, duration)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO route_cache (cache_key, coords, distance, duration, legs)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (cache_key) DO UPDATE
          SET coords = EXCLUDED.coords,
              distance = EXCLUDED.distance,
              duration = EXCLUDED.duration,
+             legs = EXCLUDED.legs,
              created_at = NOW()`,
-      [key, JSON.stringify(value.coords), value.distance, value.duration]
+      [key, JSON.stringify(value.coords), value.distance, value.duration, JSON.stringify(value.legs)]
     );
   } catch {
     // Best effort — in-memory cache still covers this request.
   }
 }
 
-async function fetchUpstream(points: string, overview: string) {
+async function fetchUpstream(points: string, overview: string): Promise<CachedRoute | null> {
   // OSRM routing provider (free, keyless, same OSRM-style shape the app
   // parses: geometry.coordinates as [lng,lat], distance, duration).
   const seam = routeProvider();
@@ -110,7 +131,9 @@ async function fetchUpstream(points: string, overview: string) {
     // Production without ROUTE_PROVIDER_URL: honest failure, never the demo.
     throw new Error("Routing provider not configured (set ROUTE_PROVIDER_URL)");
   }
-  const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}`;
+  // steps=true is what makes turn-by-turn possible: OSRM then returns
+  // legs[].steps with the street name, manoeuvre type/modifier and distance.
+  const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}&steps=true`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   try {
@@ -119,20 +142,28 @@ async function fetchUpstream(points: string, overview: string) {
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`Upstream routing failed: ${res.status}`);
-    const data = (await res.json()) as { routes?: Array<{ geometry?: { coordinates?: number[][] }; distance?: number; duration?: number }> };
+    const data = (await res.json()) as {
+      routes?: Array<{
+        geometry?: { coordinates?: number[][] };
+        distance?: number;
+        duration?: number;
+        legs?: any[];
+      }>;
+    };
     const route = data?.routes?.[0];
     if (!route) return null;
     return {
       coords: (route.geometry?.coordinates ?? []) as number[][],
       distance: route.distance ?? 0,
       duration: route.duration ?? 0,
+      legs: Array.isArray(route.legs) ? route.legs : [],
     };
   } finally {
     clearTimeout(timer);
   }
 }
 
-function respond(res: Response, value: { coords: number[][]; distance: number; duration: number }, cached: boolean) {
+function respond(res: Response, value: CachedRoute, cached: boolean) {
   res.json({
     cached,
     routes: [
@@ -140,6 +171,8 @@ function respond(res: Response, value: { coords: number[][]; distance: number; d
         geometry: { coordinates: value.coords },
         distance: value.distance,
         duration: value.duration,
+        // Manoeuvres for the driver HUD (and any rider preview that wants them).
+        legs: value.legs,
       },
     ],
   });
@@ -157,7 +190,10 @@ router.get("/", async (req, res) => {
       return;
     }
 
-    const key = `${points}|${overview}`;
+    // `v2steps` busts cache rows written before manoeuvres were included, so the
+    // first request after this deploy returns street names instead of waiting
+    // out the 7-day TTL.
+    const key = `${points}|${overview}|v2steps`;
 
     // 1. In-memory cache
     const mem = cacheGet(key);
