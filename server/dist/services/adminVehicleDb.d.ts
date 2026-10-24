@@ -33,21 +33,11 @@ export declare function addCarDbImage(input: {
     image: any;
     resolvedRequests: number;
 }>;
-/** Trigger the web (CarsXE) search for a car — the worker + approval finish it. */
-export declare function searchCarsXe(v: {
-    make: string;
-    model: string;
-    year?: number | null;
-    colour?: string | null;
-}, actor: AdminActor): Promise<{
-    queued: boolean;
-}>;
-/** Approve a pending image (from search or upload) → resolves matching requests. */
+/** Approve a pending image (from upload) → resolves matching requests. */
 export declare function approveImage(id: string, candidateIndex: number, actor: AdminActor): Promise<{
     approval: any;
     resolvedRequests: number;
 }>;
-export declare function refetchImage(id: string, actor: AdminActor): Promise<any>;
 export declare function rejectImage(id: string, actor: AdminActor): Promise<any>;
 export declare function listImages(status?: string): Promise<any[]>;
 /**

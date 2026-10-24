@@ -108,6 +108,8 @@ export interface WhiteRow {
     colour?: string | null;
     image_url: string | null;
     approved_at: string | null;
+    /** Admin-assigned ride classes for this car photo. */
+    categories?: string[] | null;
 }
 export interface WhitePick {
     row: WhiteRow;
@@ -136,6 +138,8 @@ export interface ResolvedVehicleImage {
     url: string | null;
     cacheKey: string;
     matched: "exact" | "model-colour" | "model" | "none";
+    /** Ride classes attached to the resolved Car DB row, if the admin set them. */
+    categories?: string[] | null;
 }
 /**
  * Fallback order, resolved server-side so every client agrees.
@@ -151,6 +155,11 @@ export interface ResolvedVehicleImage {
  * different photographs of the same car, not two names for one row.
  */
 export declare function resolveVehicleImage(v?: VehicleLike | null): Promise<ResolvedVehicleImage>;
+/**
+ * Merge admin-assigned Car DB categories into a driver's dispatch categories.
+ * Additive: a driver never loses a category another source (CarScan) granted.
+ */
+export declare function mergeDriverVehicleCategories(driverId: string, categories: string[] | null | undefined): Promise<number>;
 /**
  * Every make|model the approved library can ACTUALLY serve.
  *

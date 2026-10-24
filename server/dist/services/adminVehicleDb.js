@@ -37,9 +37,7 @@ exports.resolveRequestsForCacheKey = exports.recordCarDbMiss = exports.ensureReq
 exports.listVehicleRequests = listVehicleRequests;
 exports.resolveVehicleRequest = resolveVehicleRequest;
 exports.addCarDbImage = addCarDbImage;
-exports.searchCarsXe = searchCarsXe;
 exports.approveImage = approveImage;
-exports.refetchImage = refetchImage;
 exports.rejectImage = rejectImage;
 exports.listImages = listImages;
 exports.purgeCarDb = purgeCarDb;
@@ -50,10 +48,10 @@ exports.catalogue = catalogue;
 // adminVehicleDb — ADMIN V2 Phase 7: Car DB console + vehicle photo requests.
 //
 // The image pipeline itself lives in services/vehicleImages (Car DB files,
-// CarsXE search, S3, approval). This module adds the CONSOLE layer:
+// S3, approval). This module adds the CONSOLE layer:
 //   • a request queue: when a driver's car has no photo in the Car DB, the
 //     gap is recorded here and the driver is alerted ONCE,
-//   • filling a gap: upload a photo (importSeedImage) or trigger a web search,
+//   • filling a gap: upload a photo (importSeedImage),
 //   • AUTO-RESOLVE: the moment an image for that cache_key is approved, every
 //     open request for it resolves and the driver is pushed "photo ready" —
 //     the driver does nothing; the next app load shows the image.
@@ -158,17 +156,7 @@ async function addCarDbImage(input, actor) {
     });
     return { image: seed, resolvedRequests: resolved };
 }
-/** Trigger the web (CarsXE) search for a car — the worker + approval finish it. */
-async function searchCarsXe(v, actor) {
-    const queued = await (0, vehicleImages_1.claimVehicleImageFetch)(v);
-    await (0, adminAuth_1.writeAudit)(actor, {
-        action: "car_db.search",
-        entityType: "vehicle_images",
-        newValue: { make: v.make, model: v.model, year: v.year, colour: v.colour, queued },
-    });
-    return { queued };
-}
-/** Approve a pending image (from search or upload) → resolves matching requests. */
+/** Approve a pending image (from upload) → resolves matching requests. */
 async function approveImage(id, candidateIndex, actor) {
     const approval = await (0, vehicleImages_1.approveVehicleImage)(id, candidateIndex);
     if (!approval)
@@ -182,15 +170,6 @@ async function approveImage(id, candidateIndex, actor) {
         newValue: { candidateIndex, resolvedRequests: resolved },
     });
     return { approval, resolvedRequests: resolved };
-}
-async function refetchImage(id, actor) {
-    const r = await (0, vehicleImages_1.refetchVehicleImage)(id);
-    await (0, adminAuth_1.writeAudit)(actor, {
-        action: "car_db.image_refetch",
-        entityType: "vehicle_images",
-        entityId: id,
-    });
-    return r;
 }
 async function rejectImage(id, actor) {
     const r = await (0, vehicleImages_1.rejectVehicleImage)(id);

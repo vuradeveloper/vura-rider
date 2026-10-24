@@ -1166,23 +1166,49 @@ router.patch("/photo-requests/:id/category", (0, adminAuth_1.requireAdmin)("cata
             return;
         }
         const id = String(req.params.id);
-        const { categories } = req.body || {};
-        if (!Array.isArray(categories) || categories.length === 0) {
+        const raw = req.body?.categories;
+        const categories = Array.from(new Set((Array.isArray(raw) ? raw : [])
+            .map((c) => String(c || "").trim().toLowerCase())
+            .filter(Boolean)));
+        if (categories.length === 0) {
             res.status(400).json({ error: "categories must be a non-empty array" });
             return;
         }
+        const image = await (0, database_1.queryOne)(`SELECT cache_key, make, model FROM vehicle_images WHERE id = $1`, [id]);
+        if (!image) {
+            res.status(404).json({ error: "Photo not found" });
+            return;
+        }
         await (0, database_1.execute)(`UPDATE vehicle_images SET categories = $1::text[], updated_at = NOW() WHERE id = $2`, [categories, id]);
-        // Resolve any open vehicle request tied to this cache_key
-        await (0, database_1.execute)(`UPDATE admin_vehicle_requests
-          SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
-        WHERE status = 'open' AND cache_key = (SELECT cache_key FROM vehicle_images WHERE id = $1)`, [id]);
+        // The category is only real if dispatch can see it. Merge it into every
+        // driver profile with the same make+model (additive, never removes a
+        // CarScan grant).
+        if (image.make && image.model) {
+            await (0, database_1.execute)(`UPDATE driver_profiles dp
+            SET vehicle_categories = COALESCE((
+                  SELECT jsonb_agg(DISTINCT c)
+                    FROM unnest(
+                      ARRAY(SELECT jsonb_array_elements_text(
+                        COALESCE(dp.vehicle_categories, '[]'::jsonb)
+                      )) || $3::text[]
+                    ) AS c
+                ), '[]'::jsonb),
+                updated_at = NOW()
+          WHERE dp.vehicle_make IS NOT NULL
+            AND dp.vehicle_model IS NOT NULL
+            AND lower(trim(dp.vehicle_make)) = lower(trim($1))
+            AND lower(trim(dp.vehicle_model)) = lower(trim($2))`, [image.make, image.model, categories]).catch((err) => console.error("[adminV2] driver category sync failed:", err?.message || err));
+        }
+        // Resolve any open vehicle request tied to this cache_key (also pushes the
+        // driver and syncs their profile categories).
+        const resolvedRequests = await (0, adminVehicleDb_1.resolveRequestsForCacheKey)(image.cache_key, id);
         await (0, adminAuth_1.writeAudit)(actor, {
             action: "photo_request.category_set",
             entityType: "vehicle_images",
             entityId: id,
-            newValue: { categories },
+            newValue: { categories, resolvedRequests },
         });
-        res.json({ ok: true });
+        res.json({ ok: true, categories, resolvedRequests });
     }
     catch (err) {
         sendError(res, err);
