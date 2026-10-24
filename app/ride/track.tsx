@@ -1687,7 +1687,7 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
               />
               <Polyline
                 coordinates={staticRoute}
-                strokeColor="#22c55e"
+                strokeColor="#2563EB"
                 strokeWidth={4}
               />
             </>
@@ -1702,7 +1702,7 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
           {denseRoute.length > 1 && (
             <Polyline
               coordinates={denseRoute}
-              strokeColor="#22c55e"
+              strokeColor="#2563EB"
               strokeWidth={4}
             />
           )}

@@ -13,12 +13,14 @@ const RIDE_IMAGE: Record<string, string> = {
   xl: rideXl,
   black: rideBlack,
   van: rideXl, // Van uses the same icon as XL
+  // Wait & Save must use EXACTLY the Vura Go artwork, not a clock icon.
+  wait_save: rideGo,
 }
 import { colourNameOf } from './components/vehicle/palette'
 
 import DriverVehicleCard from './components/DriverVehicleCard'
 import CountrySelect from './components/CountrySelect'
-import type { LatLng } from './components/LeafletMap'
+import type { LatLng, MapCar } from './components/LeafletMap'
 import LeafletMap from './components/LeafletMap'
 import { HelpCenter, ReportIssue, SettingsScreen } from './components/SettingsScreen'
 import PaymentMethods from './components/PaymentMethods'
@@ -216,6 +218,14 @@ function coordsOf(lat: any, lng: any): LatLng | null {
   return Number.isFinite(a) && Number.isFinite(b) ? { lat: a, lng: b } : null
 }
 
+/** The driver's live position + heading from a ride row or socket payload. */
+function carOf(row: any): MapCar | null {
+  const p = coordsOf(row?.driver_lat ?? row?.lat, row?.driver_lng ?? row?.lng)
+  if (!p) return null
+  const h = Number(row?.driver_heading ?? row?.heading)
+  return { ...p, heading: Number.isFinite(h) ? h : null }
+}
+
 /**
  * Waypoints in the order the driver will visit them. The server ignores
  * `waypoints` on a ride request (see the probe notes in lib/backend.ts), so on a
@@ -338,6 +348,7 @@ const PANEL_RISE = 20
 
 function MapCanvas({
   dark = false, marker, zoom = 16, follow = true, controls = false, controlsBottom = 12, route,
+  car, pickup, destination, fitRoute = false, showSelf = true, pickupLabel, destinationLabel,
 }: {
   dark?: boolean
   /**
@@ -350,10 +361,19 @@ function MapCanvas({
   route?: LatLng[]
   /** Real coordinates to pin. Omit to follow the device's live GPS fix. */
   marker?: LatLng
+  /** The driver's live car marker (rider tracking screens only). */
+  car?: MapCar | null
+  /** Pickup + drop-off markers for the rider tracking layout. */
+  pickup?: LatLng | null
+  destination?: LatLng | null
+  pickupLabel?: string
+  destinationLabel?: string
   zoom?: number
   follow?: boolean
   controls?: boolean
   controlsBottom?: number
+  fitRoute?: boolean
+  showSelf?: boolean
 }) {
   // Real OpenStreetMap tiles via Leaflet ??? the same mapping stack the React
   // Native driver app uses (it renders Leaflet inside a WebView), so both apps
@@ -376,7 +396,22 @@ function MapCanvas({
       {/* The pin is drawn by Leaflet at the driver's REAL coordinates. The old
           hard-coded centre pin that sat here is gone â€” it always pointed at the
           middle of the screen no matter where the driver actually was. */}
-      <LeafletMap dark={dark} marker={marker} zoom={zoom} follow={follow} controls={controls} controlsBottom={controlsBottom} route={route} />
+      <LeafletMap
+        dark={dark}
+        marker={marker}
+        zoom={zoom}
+        follow={follow}
+        controls={controls}
+        controlsBottom={controlsBottom}
+        route={route}
+        car={car}
+        pickup={pickup}
+        destination={destination}
+        pickupLabel={pickupLabel}
+        destinationLabel={destinationLabel}
+        fitRoute={fitRoute}
+        showSelf={showSelf}
+      />
     </div>
   )
 }
@@ -2084,6 +2119,9 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState('')
   const [cancelMsg, setCancelMsg] = useState('')
+  // The hired driver's live car, independent of the ride row so a socket ping
+  // that lands before the first fetch is not dropped.
+  const [driverPos, setDriverPos] = useState<MapCar | null>(null)
 
   /**
    * The live route to draw. It prefers the coordinates the SERVER holds for this
@@ -2102,13 +2140,23 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
     stopsOf(ride),
     coordsOf(ride?.destination_lat, ride?.destination_lng) ?? destCoords(destination),
   ))
+  // The reference map's two fixed pins. Same coordinates the route is built
+  // from, so the pins and the blue line can never disagree.
+  const ridePickup = coordsOf(ride?.pickup_lat, ride?.pickup_lng) ?? myFix
+  const rideDropoff = coordsOf(ride?.destination_lat, ride?.destination_lng) ?? destCoords(destination)
 
   // Pull the ride so the driver's REAL name / vehicle / plate are shown.
   useEffect(() => {
     if (!rideId) return
     let alive = true
     getActiveRide()
-      .then((r) => { if (alive && r) { setRide(r); setStatus(String(r.status || 'accepted')) } })
+      .then((r) => {
+        if (alive && r) {
+          setRide(r)
+          setStatus(String(r.status || 'accepted'))
+          setDriverPos(carOf(r))
+        }
+      })
       .catch(() => { })
     return () => { alive = false }
   }, [rideId])
@@ -2185,9 +2233,16 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
         void notifyRide('Driver cancelled', d?.reason || 'Your driver cancelled the trip.')
         onDone()
       }),
-      on('ride:driver:location', (d: any) =>
-        setRide((r: any) => (r ? { ...r, driver_lat: d.lat, driver_lng: d.lng } : r))
-      ),
+      on('ride:driver:location', (d: any) => {
+        const c = carOf(d)
+        if (c) setDriverPos(c)
+        setRide((r: any) => (r ? {
+          ...r,
+          driver_lat: d?.lat ?? r.driver_lat,
+          driver_lng: d?.lng ?? r.driver_lng,
+          driver_heading: d?.heading ?? r.driver_heading,
+        } : r))
+      }),
       on('safety:ridecheck:alert', () => setToast('RideCheck: are you okay?')),
       // §1: the anomaly check-in prompt — "Is everything okay?" with I'm-safe
       // and SOS answers; silence lets the server escalate to the admin team.
@@ -2230,6 +2285,8 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
         .then((r: any) => {
           if (!alive || !r?.id) return
           const st = String(r.status || '')
+          const c = carOf(r)
+          if (c) setDriverPos(c)
           if (['accepted', 'driver_arrived', 'in_progress'].includes(st)) {
             setStatus(st)
             return
@@ -2321,6 +2378,9 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   }
   const progress = done ? 100 : status === 'in_progress' ? 60 : status === 'driver_arrived' ? 35 : 15
   const eta = status === 'accepted' ? Math.max(1, Number(ride?.duration_mins || 12)) : 0
+  // The reference map's dark bubble at the drop-off. The sheet below repeats the
+  // same ETA, so the map and the trip card always agree.
+  const mapEtaLabel = `${Math.max(1, Math.round(Number(ride?.duration_mins || 12)))} min`
   async function share() {
     if (!rideId) return
     await shareTrip(rideId).catch(() => { })
@@ -2374,7 +2434,19 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
       {/* rideRoute is the server's road route for this ride (pickup â†’ stops â†’
           drop-off). It replaces the old dead `showRoute` flag, which the map
           ignored â€” see MapCanvas above. */}
-      <div className="relative flex-1"><MapCanvas route={rideRoute} /></div>
+      <div className="relative flex-1">
+        <MapCanvas
+          route={rideRoute}
+          car={driverPos}
+          pickup={ridePickup}
+          destination={rideDropoff}
+          pickupLabel="Pickup"
+          destinationLabel={mapEtaLabel}
+          follow={false}
+          fitRoute
+          showSelf={false}
+        />
+      </div>
       <div className="bg-white rounded-t-3xl shadow-[0_-4px_24px_rgba(0,0,0,0.08)] px-5 pt-5 pb-8 z-10">
         <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
 

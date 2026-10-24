@@ -77,7 +77,7 @@ const tiers = [
     id: "wait-save",
     name: "Wait & Save",
     desc: "Get a cheaper ride by waiting a little longer",
-    icon: "time-outline" as const,
+    icon: "people" as const,
     multiplier: 0.8,
     etaOffset: 4,
     category: "popular",
@@ -313,7 +313,7 @@ export default function RideOptions() {
             {routeCoords.length > 1 && (
               <Polyline
                 coordinates={routeCoords}
-                strokeColor="#22c55e"
+                strokeColor="#2563EB"
                 strokeWidth={4}
               />
             )}
