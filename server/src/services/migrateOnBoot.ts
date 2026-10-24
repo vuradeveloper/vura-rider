@@ -51,6 +51,7 @@ export const MIGRATION_ORDER = [
   "020_remove_picanto.sql",
   "021_assign_categories.sql",
   "022_ride_tier_default.sql",
+  "023_backfill_categories.sql",
 ] as const;
 
 export type MigrationOutcome = "applied" | "skipped" | "failed";
@@ -208,12 +209,20 @@ async function apply001b(
   console.log(`[migrate] applied ${file} (outside transaction, index valid)`);
 }
 
+/** Last boot-time migration result, kept in memory for the read-only diag. */
+let lastMigrationSummary: MigrateSummary | null = null;
+
+export function getLastMigrationSummary(): MigrateSummary | null {
+  return lastMigrationSummary;
+}
+
 /**
  * Never throws. Returns a summary even on total failure so boot always has
  * exactly one summary line to read.
  */
 export async function runMigrationsOnBoot(): Promise<MigrateSummary> {
   const summary: MigrateSummary = { enabled: false, applied: 0, skipped: 0, failed: 0, results: [] };
+  lastMigrationSummary = summary;
   const enabled = process.env.RUN_MIGRATIONS_ON_BOOT === "true";
   summary.enabled = enabled;
   if (!enabled) {

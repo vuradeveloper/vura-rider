@@ -1,10 +1,11 @@
 import { Router, Request, Response } from "express";
-import { statSync } from "fs";
+import { readFileSync, statSync } from "fs";
 import { join } from "path";
 import { query, queryOne } from "../config/database";
 import { uploadToS3, deleteFromS3 } from "../lib/s3";
 import { READ_KEY } from "./devLogs";
 import { carsxeUsage, vehicleImageSource } from "../services/vehicleImages";
+import { getLastMigrationSummary } from "../services/migrateOnBoot";
 
 // ── Environment diagnostics ────────────────────────────────────────────────────
 //   GET /api/dev/diag?key=…        what the live instance is actually running
@@ -28,7 +29,13 @@ function buildStamp(): Record<string, unknown> {
   try {
     // This file is dist/routes/devDiag.js, so the entrypoint is one level up.
     const entry = join(__dirname, "..", "index.js");
-    return { entry, builtAt: statSync(entry).mtime.toISOString() };
+    let commit: string | null = null;
+    try {
+      commit = readFileSync(join(__dirname, "..", "build-commit.txt"), "utf8").trim() || null;
+    } catch {
+      /* old dist without the stamp */
+    }
+    return { entry, builtAt: statSync(entry).mtime.toISOString(), commit };
   } catch (err: any) {
     return { error: String(err?.message || err) };
   }
@@ -202,12 +209,21 @@ router.get("/", async (req: Request, res: Response) => {
   try {
     out.migrations = {
       enabled: process.env.RUN_MIGRATIONS_ON_BOOT === "true",
-      expected: ["021_assign_categories.sql", "022_ride_tier_default.sql"],
+      expected: [
+        "021_assign_categories.sql",
+        "022_ride_tier_default.sql",
+        "023_backfill_categories.sql",
+      ],
       applied: await query<any>(
         `SELECT filename, applied_at FROM schema_migrations
           WHERE filename = ANY($1::text[]) ORDER BY filename`,
-        [["021_assign_categories.sql", "022_ride_tier_default.sql"]]
+        [[
+          "021_assign_categories.sql",
+          "022_ride_tier_default.sql",
+          "023_backfill_categories.sql",
+        ]]
       ),
+      lastRun: getLastMigrationSummary(),
     };
   } catch (err: any) {
     out.migrations = { error: String(err?.message || err) };

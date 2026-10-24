@@ -8,18 +8,11 @@
 -- The migrator already wraps each file in a transaction, so this file must not
 -- open its own.
 
--- Static catalogue as a CTE: (make, model, category)
-WITH model_catalogue AS (
-  SELECT * FROM (SELECT NULL) t(make VARCHAR, model VARCHAR, category TEXT[])
-  WHERE false
-),
-
 -- Perform the update: join vehicle_images to the catalogue by make+model
 -- and assign the category for all approved cars missing one.
-update_categories AS (
-  UPDATE vehicle_images v
-  SET categories = m.category
-  FROM (VALUES
+UPDATE vehicle_images v
+SET categories = m.category
+FROM (VALUES
     -- Economy / standard cars (sedans & hatchbacks, ~4-5 seats)
     ('Volkswagen', 'Polo', ARRAY['economy', 'standard']::text[]),
     ('Volkswagen', 'Polo Vivo', ARRAY['economy', 'standard']::text[]),
@@ -95,15 +88,11 @@ update_categories AS (
     ('MG', 'ZS EV', ARRAY['electric', 'economy', 'xl']::text[]),
     ('Tesla', 'Model 3', ARRAY['electric', 'economy']::text[]),
     ('Tesla', 'Model S', ARRAY['electric', 'premium', 'business']::text[]),
-    ('Tesla', 'Model Y', ARRAY['electric', 'economy', 'xl']::text[]),
-  ) AS m(make VARCHAR, model VARCHAR, category TEXT[])
+    ('Tesla', 'Model Y', ARRAY['electric', 'economy', 'xl']::text[])
+) AS m(make, model, category)
   WHERE v.status = 'approved'
     AND v.make IS NOT NULL
     AND v.model IS NOT NULL
     AND (v.categories IS NULL OR v.categories = '{}')
     AND lower(trim(v.make)) = lower(trim(m.make))
-    AND lower(trim(v.model)) = lower(trim(m.model))
-)
-
--- Report summary
-SELECT 'rows updated' AS status, COUNT(*) AS count FROM vehicle_images WHERE categories IS NOT NULL AND categories != '{}';
+    AND lower(trim(v.model)) = lower(trim(m.model));
