@@ -166,9 +166,12 @@ function captureAmountCents(fareRands) {
 }
 /** Docs: unique, case-sensitive, only -, ., = and alphanumeric. */
 function newPreauthReference(prefix = "VURA") {
+    // 48 bits of CSPRNG entropy on top of the millisecond clock. The unique DB
+    // index remains the final guard, but 500 bookings must never depend on a
+    // birthday-collision claim failing halfway through the booking.
     return (prefix +
         Date.now().toString(36).toUpperCase() +
-        Math.random().toString(36).slice(2, 10).toUpperCase());
+        (0, crypto_1.randomBytes)(6).toString("hex").toUpperCase());
 }
 /** Days until expire_action runs. Docs: min 1, default 5 — we default to 1. */
 function preauthExpireDays() {
@@ -528,6 +531,22 @@ async function captureRideHold(rideId, opts = {}) {
         console.error(`[preauth] capture EXCEEDS hold ride=${rideId} final=${cents}c > held=${held}c`);
         throw new PreauthError("capture_exceeds_hold", `Final fare (R${(cents / 100).toFixed(2)}) exceeds the held amount (R${(held / 100).toFixed(2)}).`, 409);
     }
+    // Claim the transition BEFORE calling Paystack. The socket and REST completion
+    // paths (or a retry) can fire at the same time; without this guard both would
+    // call /preauthorization/capture, and the loser could mark a successfully
+    // captured ride PAYMENT_FAILED. Exactly one caller may talk to Paystack.
+    const claim = await (0, database_1.execute)(`UPDATE rides SET payment_status = 'CAPTURE_PENDING', updated_at = NOW()
+      WHERE id = $1 AND payment_status = 'HOLD_ACTIVE'`, [ride.id]);
+    if (!claim || claim.rowCount === 0) {
+        const after = await loadRide(ride.id);
+        const st = normalizePaymentStatus(after?.payment_status);
+        return {
+            paymentStatus: st,
+            captured: false,
+            alreadyProcessed: true,
+            capturedAmount: Number(after?.captured_amount ?? 0) || undefined,
+        };
+    }
     try {
         await capturePreauthorization({
             reference: ride.preauth_reference,
@@ -536,13 +555,11 @@ async function captureRideHold(rideId, opts = {}) {
     }
     catch (err) {
         await (0, database_1.execute)(`UPDATE rides SET payment_status = 'PAYMENT_FAILED', updated_at = NOW()
-        WHERE id = $1 AND payment_status = 'HOLD_ACTIVE'`, [ride.id]).catch(() => { });
+        WHERE id = $1 AND payment_status = 'CAPTURE_PENDING'`, [ride.id]).catch(() => { });
         if (err instanceof PreauthError)
             throw err;
         throw new PreauthError("capture_failed", `Could not capture the fare: ${err?.message || "Paystack error"}`, 502);
     }
-    await (0, database_1.execute)(`UPDATE rides SET payment_status = 'CAPTURE_PENDING', updated_at = NOW()
-      WHERE id = $1 AND payment_status = 'HOLD_ACTIVE'`, [ride.id]);
     return {
         paymentStatus: "CAPTURE_PENDING",
         captured: true,
@@ -569,6 +586,22 @@ async function releaseRideHold(rideId, reason = "cancelled") {
     if (!ride.preauth_reference || current === "NONE") {
         return { paymentStatus: "NONE", released: false };
     }
+    // Claim the transition BEFORE calling Paystack, for the same reason capture
+    // claims first: a cancel and a completion (or two cancel taps) must not both
+    // hit the same reference. If Paystack rejects a real hold we put the status
+    // back to what it was, so the money remains visibly held.
+    const claim = await (0, database_1.execute)(`UPDATE rides
+        SET payment_status = 'RELEASED', hold_checkout_url = NULL, updated_at = NOW()
+      WHERE id = $1 AND payment_status IN ('HOLD_PENDING', 'HOLD_ACTIVE', 'HOLD_EXPIRED')`, [ride.id]);
+    if (!claim || claim.rowCount === 0) {
+        const after = await loadRide(ride.id);
+        const st = normalizePaymentStatus(after?.payment_status);
+        return {
+            paymentStatus: st,
+            released: false,
+            alreadyReleased: st === "RELEASED",
+        };
+    }
     try {
         await releasePreauthorization({ reference: ride.preauth_reference });
     }
@@ -582,12 +615,11 @@ async function releaseRideHold(rideId, reason = "cancelled") {
         else {
             // HOLD_ACTIVE and Paystack said no: the money is still held. Keep the
             // status honest — expiry (expire_action=release) or a retry will free it.
+            await (0, database_1.execute)(`UPDATE rides SET payment_status = $2, updated_at = NOW()
+          WHERE id = $1 AND payment_status = 'RELEASED'`, [ride.id, current]).catch(() => { });
             throw new PreauthError("release_failed", `Could not release the hold: ${err?.message || "Paystack error"}`, 502);
         }
     }
-    await (0, database_1.execute)(`UPDATE rides
-        SET payment_status = 'RELEASED', hold_checkout_url = NULL, updated_at = NOW()
-      WHERE id = $1 AND payment_status IN ('HOLD_PENDING', 'HOLD_ACTIVE', 'HOLD_EXPIRED')`, [ride.id]).catch(() => { });
     const after = await loadRide(ride.id);
     const st = normalizePaymentStatus(after?.payment_status);
     if (st === "RELEASED") {
