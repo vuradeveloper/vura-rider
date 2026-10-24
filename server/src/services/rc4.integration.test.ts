@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS rides (
   payment_status VARCHAR(20),
   payment_method VARCHAR(20),
   scheduled_at TIMESTAMPTZ,
-  tier VARCHAR(20) DEFAULT 'x',
+  tier VARCHAR(20) DEFAULT 'go',
   announced BOOLEAN DEFAULT FALSE,
   no_drivers_at TIMESTAMPTZ,
   offer_round INT DEFAULT 0,
@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS driver_blocks (
  */
 const PROD_ALTERS = `
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
-ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'x';
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'go';
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS announced BOOLEAN DEFAULT FALSE;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS distance_km NUMERIC(10,2);
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS duration_mins NUMERIC(10,2);
@@ -521,6 +521,29 @@ describe.skipIf(!enabled)("GET /api/rides/available (real router, real SQL, all 
 
     expect(status).toBe(200);
     expect(body.rides.map((r: any) => r.id)).toContain(ride.rideId);
+  });
+
+  it("lists ONLY rides this car's class may serve (no random Black/XL offers)", async () => {
+    // Economy profile (no explicit CarScan grant -> derived economy).
+    const driverId = await seedDriver({ lat: SANDTON.lat, lng: SANDTON.lng });
+    authUid.value = await bindAuthUid(driverId);
+
+    const go = await seedRide({ lat: -26.11, lng: 28.057 });
+    const black = await seedRide({ lat: -26.11, lng: 28.057 });
+    await execute(`UPDATE rides SET tier = 'black' WHERE id = $1`, [black.rideId]);
+    const xl = await seedRide({ lat: -26.11, lng: 28.057 });
+    await execute(`UPDATE rides SET tier = 'xl' WHERE id = $1`, [xl.rideId]);
+
+    await startRidesServer();
+    const { status, body } = await getAvailable();
+
+    expect(status).toBe(200);
+    const ids = body.rides.map((r: any) => r.id);
+    // The economy ride reaches the economy car...
+    expect(ids).toContain(go.rideId);
+    // ...and the premium/large ones never appear on its phone.
+    expect(ids).not.toContain(black.rideId);
+    expect(ids).not.toContain(xl.rideId);
   });
 
   it("returns 200 (unfiltered, scoped:false) for a driver with no GPS fix", async () => {

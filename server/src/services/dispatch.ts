@@ -38,7 +38,6 @@ import { bump } from "./metrics";
 import {
   canonicalTier,
   effectiveCategories,
-  hasExplicitCategories,
   tierAcceptsCategory,
 } from "./rideCategories";
 import type { AppConfig } from "./config";
@@ -711,14 +710,14 @@ export async function loadRide(rideId: string): Promise<DispatchRide | null> {
 // Runs AFTER findCandidates() in offerToNextDriver, i.e. on BOTH candidate
 // paths: the legacy haversine body is hash-guarded (_legacycheck.mjs) and must
 // stay byte-identical, and the H3 path already narrowed by status/radius —
-// this is the single place both converge. It can only narrow, never widen:
-//   1. strict     — eligible drivers for this tier…
+// this is the single place both converge. It only narrows, never widens:
+//   1. strict     — ONLY drivers whose recorded car class serves this tier.
+//                   There is deliberately no degrade-to-everyone step: a ride
+//                   that nobody is eligible for parks as `no_drivers` and waits
+//                   for a matching car instead of being pushed to the wrong one.
 //   2. within 3km — …and if any of them is inside the first ladder rung
 //                   (match_radius_km [3,5,7]), ONLY those: the request goes to
 //                   the RIGHT car NEAR the rider.
-//   3. degrade    — nobody eligible? unclassified drivers may take any tier,
-//                   then everyone: a delivered ride beats a starved dispatch
-//                   while the fleet is still uploading reports. Traced either way.
 // The destination-mode module (Module 2) runs BEFORE this inside findCandidates
 // and is untouched: destination sessions keep their own accept/reject rules —
 // the class filter only decides whose session may be offered THIS tier's ride.
@@ -752,22 +751,15 @@ async function filterCandidatesForTier(
     }
     const byId = new Map(rows.map((r) => [r.user_id, r]));
 
+    // STRICT: offer this ride only to cars whose recorded class serves the tier
+    // the rider booked. No degrade-to-everyone fallback — an Economy request must
+    // never pop on a Premium car, and a Black request must never pop on an
+    // Economy car. If no eligible car is nearby the ride parks as `no_drivers`.
     const eligible = candidates.filter((c) =>
       tierAcceptsCategory(tier, effectiveCategories(byId.get(c.id)))
     );
     let pool = eligible;
-    let mode = "strict";
-    // BLACK is premium-only: never degrade to economy/unclassified cars.
-    // A Picanto (economy/comfort) must never receive a black ride.
-    const canDegrade = tier !== "black";
-    if (pool.length === 0 && canDegrade) {
-      pool = candidates.filter((c) => !hasExplicitCategories(byId.get(c.id)));
-      mode = "degraded_unclassified";
-      if (pool.length === 0) {
-        pool = candidates;
-        mode = "degraded_all";
-      }
-    }
+    const mode = "strict";
     const near3km = pool.filter((c) => Number(c.distance_km) <= 3);
     if (near3km.length > 0) pool = near3km;
 
@@ -1232,11 +1224,46 @@ export interface AcceptResult {
  * Idempotent: calling it twice for the same driver returns ok + duplicate instead
  * of erroring, so a retry after a network blip is safe.
  */
+/** Human name for a ride tier, used in driver-facing refusal messages. */
+function tierLabel(tier?: string | null): string {
+  switch (canonicalTier(tier)) {
+    case "black":
+      return "Black";
+    case "comfort":
+      return "Comfort";
+    case "xl":
+    case "x":
+      return "XL";
+    default:
+      return "Economy";
+  }
+}
+
 export async function acceptRide(
   io: SocketIOServer,
   params: { rideId: string; driverId: string }
 ): Promise<AcceptResult> {
   const { rideId, driverId } = params;
+
+  // The driver's recorded car classes: explicit CarScan grant first, then a
+  // derivation from seats/body, then economy. Read BEFORE the transaction so a
+  // pre-013 database (no vehicle_categories column) can fall back cleanly — a
+  // failed statement inside the transaction would abort it.
+  let driverCategories: ReturnType<typeof effectiveCategories>;
+  try {
+    const dp = await queryOne<{
+      vehicle_categories: unknown;
+      vehicle_seats: number | null;
+      body_type: string | null;
+    }>(
+      `SELECT vehicle_categories, vehicle_seats, body_type
+         FROM driver_profiles WHERE user_id = $1`,
+      [driverId]
+    );
+    driverCategories = effectiveCategories(dp);
+  } catch {
+    driverCategories = effectiveCategories(null);
+  }
 
   const result = await withTransaction<AcceptResult>(async (client) => {
     const rideRes = await client.query<{
@@ -1247,9 +1274,10 @@ export async function acceptRide(
       version: number | null;
       driver_id: string | null;
       payment_method: string | null;
+      tier: string | null;
     }>(
       `SELECT id, status, passenger_id, estimated_fare, COALESCE(version, 0) AS version, driver_id,
-              payment_method
+              payment_method, COALESCE(tier, 'go') AS tier
          FROM rides WHERE id = $1 FOR UPDATE`,
       [rideId]
     );
@@ -1265,6 +1293,20 @@ export async function acceptRide(
     }
     if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
       return { ok: false, error: `Ride is ${ride.status}` };
+    }
+
+    // RIDE CLASS is enforced HERE too, not only in dispatch. The driver app has
+    // a 2-second polling fallback (GET /api/rides/available) and any client can
+    // call accept directly, so the offer filter cannot be the only line of
+    // defence: an Economy car must never be able to claim a Black ride (and a
+    // Premium car must never take an Economy request by mistake).
+    if (!tierAcceptsCategory(ride.tier || "go", driverCategories)) {
+      return {
+        ok: false,
+        error:
+          `This is a ${tierLabel(ride.tier)} ride. Your car is not registered ` +
+          `for that ride class, so it cannot be accepted.`,
+      };
     }
 
     // ── Commission spec: ACCEPT-TIME CASH BLOCK ────────────────────────────

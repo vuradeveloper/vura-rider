@@ -531,11 +531,17 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
 
-        // THE RIDER'S TIER (013, ride-class matching). The column's default is
-        // 'go', so only a non-default tier needs writing; a DB without the
+        // THE RIDER'S TIER (013, ride-class matching). ALWAYS written below —
+        // never trust the column default (it was 'x' = XL in production); a DB
+        // without the
         // column simply keeps the default — booking never breaks over it.
         const rideTier = canonicalTier(tier);
-        if (ride?.id && rideTier !== "go") {
+        if (ride?.id) {
+          // ALWAYS write the tier — including 'go'. The old "only if non-default"
+          // shortcut assumed the column default was 'go', but the live column
+          // carried the bootstrap default 'x' (XL), so every ordinary booking
+          // was stored as an XL request and offered to the wrong cars. Writing
+          // it unconditionally makes the row independent of any schema default.
           await execute(`UPDATE rides SET tier = $2 WHERE id = $1`, [ride.id, rideTier]).catch(
             () => {}
           );

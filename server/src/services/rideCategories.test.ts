@@ -16,6 +16,7 @@ import {
   effectiveCategories,
   hasExplicitCategories,
   normaliseVehicleCategories,
+  rideTiersForCategories,
   tierAcceptsCategory,
 } from "./rideCategories";
 
@@ -139,5 +140,24 @@ describe("tierAcceptsCategory — rider tier → eligible cars", () => {
     expect(canonicalTier(undefined)).toBe("go");
     expect(canonicalTier("nonsense")).toBe("go");
     expect(canonicalTier("black")).toBe("black");
+    // The Figma booking screen's ids: Van is an XL request (it used to fall
+    // through to go), Wait & Save is an economy Go ride.
+    expect(canonicalTier("van")).toBe("xl");
+    expect(canonicalTier("wait_save")).toBe("go");
+    expect(canonicalTier("wait-save")).toBe("go");
+  });
+
+  it("rideTiersForCategories mirrors dispatch: only classes the car may serve", () => {
+    // A plain economy car: Go only.
+    expect(rideTiersForCategories(["economy"])).toEqual(["go"]);
+    // The Datsun Go grant (Economy, XL, Send): Go and XL (both ids).
+    expect(rideTiersForCategories(["economy", "xl", "send"]).sort()).toEqual(
+      ["go", "x", "xl"].sort()
+    );
+    // Premium cars: Comfort (business) and Black.
+    expect(rideTiersForCategories(["business"]).sort()).toEqual(["black", "comfort"].sort());
+    expect(rideTiersForCategories(["premium"])).toEqual(["black"]);
+    // Unclassified defaults to economy, never black.
+    expect(rideTiersForCategories(effectiveCategories(undefined))).toEqual(["go"]);
   });
 });
