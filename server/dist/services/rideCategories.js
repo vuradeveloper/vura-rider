@@ -27,7 +27,7 @@ exports.tierAcceptsCategory = tierAcceptsCategory;
  *   go      — the affordable class: Bolt Economy / Bolt (standard) / Wait & Save /
  *             electric cars (an EV is still an economy car for matching).
  *   comfort — Comfort and Business.
- *   xl      — XL and Van (6+ seats), plus electric.
+ *   xl      — XL and Van (6+ seats), plus standard and electric.
  *   x       — the native app's legacy VuraX id; same class as xl.
  *   black   — Premium and Business (the premium end).
  *
@@ -38,8 +38,8 @@ exports.tierAcceptsCategory = tierAcceptsCategory;
 const TIER_ACCEPTS = {
     go: ["economy", "standard", "wait_save", "electric"],
     comfort: ["comfort", "business", "electric"],
-    xl: ["xl", "van", "electric"],
-    x: ["xl", "van", "electric"],
+    xl: ["xl", "van", "electric", "standard"],
+    x: ["xl", "van", "electric", "standard"],
     black: ["premium", "business"],
 };
 /** Booking payloads may carry anything; normalise to a known tier id. */

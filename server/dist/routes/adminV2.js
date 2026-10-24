@@ -1135,6 +1135,59 @@ router.post("/vehicle-requests/:id/resolve", (0, adminAuth_1.requireAdmin)("cata
         sendError(res, err);
     }
 });
+// GET /api/admin/v2/photo-requests — vehicle images missing a ride-class
+// category. The admin reviews the photo and assigns a category (or rejects).
+router.get("/photo-requests", (0, adminAuth_1.requireAdmin)("catalogue.read"), async (_req, res) => {
+    try {
+        const rows = await (0, database_1.query)(`SELECT vi.id, vi.cache_key, vi.make, vi.model, vi.year, vi.colour,
+              vi.image_url, vi.status, vi.categories, vi.body_type,
+              vi.created_at,
+              r.driver_id, u.full_name AS driver_name, u.email AS driver_email
+         FROM vehicle_images vi
+         LEFT JOIN admin_vehicle_requests r ON r.cache_key = vi.cache_key
+         LEFT JOIN users u ON u.id = r.driver_id
+        WHERE (vi.categories IS NULL OR array_length(vi.categories, 1) = 0)
+          AND vi.image_url IS NOT NULL
+        ORDER BY vi.created_at DESC
+        LIMIT 300`);
+        res.json({ requests: rows });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// PATCH /api/admin/v2/photo-requests/:id/category — assign a ride-class category
+// to a photo that was missing one. Resolves any open vehicle request for it.
+router.patch("/photo-requests/:id/category", (0, adminAuth_1.requireAdmin)("catalogue.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const id = String(req.params.id);
+        const { categories } = req.body || {};
+        if (!Array.isArray(categories) || categories.length === 0) {
+            res.status(400).json({ error: "categories must be a non-empty array" });
+            return;
+        }
+        await (0, database_1.execute)(`UPDATE vehicle_images SET categories = $1::text[], updated_at = NOW() WHERE id = $2`, [categories, id]);
+        // Resolve any open vehicle request tied to this cache_key
+        await (0, database_1.execute)(`UPDATE admin_vehicle_requests
+          SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+        WHERE status = 'open' AND cache_key = (SELECT cache_key FROM vehicle_images WHERE id = $1)`, [id]);
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "photo_request.category_set",
+            entityType: "vehicle_images",
+            entityId: id,
+            newValue: { categories },
+        });
+        res.json({ ok: true });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
 // GET /api/admin/v2/car-db/catalogue — static makes/models for the pickers.
 router.get("/car-db/catalogue", (0, adminAuth_1.requireAdmin)("catalogue.read"), async (_req, res) => {
     try {
