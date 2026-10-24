@@ -10,7 +10,11 @@
 //   POST /preauthorization/release                cancel / no-driver / stuck search
 //
 // Doc facts this file encodes:
-//   • amount is in the CENTS of the currency; ZAR minimum on initialize is 100.
+//   • amount is in the CENTS of the currency. Paystack's docs still say 100,
+//     but the LIVE API rejects anything under ZAR 5.00 ("The preauthorization
+//     amount must be at least ZAR 5.00", seen 2026-10-24), so MIN_HOLD_CENTS
+//     below is 500. A smaller fare is still held at R5 and only the real fare
+//     is captured (the balance auto-releases).
 //   • currency must be "ZAR" (registered-SA-business feature).
 //   • expire_after_days: 1..7, default 5; expire_action: "capture" | "release",
 //     default "release" — we always ask for "release" so an abandoned hold frees
@@ -112,15 +116,23 @@ export class PreauthError extends Error {
 // ── Amounts & references (docs-exact) ────────────────────────────────────────
 
 /**
- * Amount to HOLD, in cents. Paystack's documented floor for
- * /preauthorization/initialize is 100 (cents), so sub-R1 demo fares (the app
- * books R0.20 test rides) are held at R1.00 — a later capture of the real,
- * lower fare auto-releases the balance ("If the amount is lower than the
- * initial preauthorized amount, the balance is automatically released").
+ * Paystack's LIVE minimum for /preauthorization/initialize is ZAR 5.00
+ * (500 cents). Their documentation still says 100, and support email said R1,
+ * but the API answered on 2026-10-24:
+ *   "The preauthorization amount must be at least ZAR 5.00"
+ * Keep one constant so a future policy change is a one-line edit.
+ */
+export const MIN_HOLD_CENTS = 500;
+
+/**
+ * Amount to HOLD, in cents. Paystack's live floor is R5, so the R1 test fare is
+ * held at R5; a later capture of the real, lower fare auto-releases the balance
+ * ("If the amount is lower than the initial preauthorized amount, the balance is
+ * automatically released").
  */
 export function holdAmountCents(fareRands: number): number {
   const cents = Math.round(Number(fareRands) * 100);
-  return Number.isFinite(cents) && cents > 0 ? Math.max(100, cents) : 100;
+  return Number.isFinite(cents) && cents > 0 ? Math.max(MIN_HOLD_CENTS, cents) : MIN_HOLD_CENTS;
 }
 
 /** Amount to CAPTURE, in cents — the final fare, exact (never rounded up). */
@@ -316,7 +328,7 @@ export async function reservePreauthorization(input: {
     body: JSON.stringify({
       email: input.email,
       currency: "ZAR",
-      amount: Math.max(100, Math.round(input.amountRands * 100)),
+      amount: Math.max(MIN_HOLD_CENTS, Math.round(input.amountRands * 100)),
       authorization_code: input.authorizationCode,
       ...(input.reference ? { reference: input.reference } : {}),
       expire_after_days: input.expireAfterDays ?? preauthExpireDays(),
@@ -568,7 +580,10 @@ export async function createRideHold(input: {
     throw new PreauthError(
       "hold_failed",
       `Could not hold funds on your card: ${err?.message || "Paystack error"}`,
-      502
+      // 422, not 502: Cloudflare replaces an origin 502 with its own HTML error
+      // page, which hides Paystack's real reason from the rider app. A rejected
+      // hold is an upstream-validation answer, so pass it through intact.
+      422
     );
   }
 }

@@ -1309,7 +1309,7 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
         // ride:driver:arrived. No charge is taken at booking time.
         const paymentMethodRef = await AsyncStorage.getItem("vura.ride.payment");
         const fareStr = await AsyncStorage.getItem("vura.ride.fare");
-        const fare = parseFloat(fareStr || "0.2") || 0.2;
+        const fare = parseFloat(fareStr || "1") || 1;
 
         const fireRequest = async (paymentReference?: string) => {
           const deviceId = await getDeviceId().catch(() => "");
@@ -1533,7 +1533,7 @@ driverLocRef.current = { lat: data.lat, lng: data.lng, bearing };
     }
     chargeFiredRef.current = true;
     const fareStr = await AsyncStorage.getItem("vura.ride.fare");
-    const fare = parseFloat(fareStr || "0.2") || 0.2;
+    const fare = parseFloat(fareStr || "1") || 1;
     try {
       const result = await initiatePaystackPayment(fare, rideId ?? undefined);
       if (result.mock || result.status === "success") {

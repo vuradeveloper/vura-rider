@@ -247,8 +247,8 @@ export default function RideOptions() {
       tiers.map((t) => {
         const eta =
           totalKm != null ? estimateEtaMins(totalKm) + t.etaOffset : null;
-        // All fares fixed at R0.20 for now (demo pricing).
-        return { ...t, fare: 0.2, eta };
+        // All fares fixed at R1.00 for now (demo pricing).
+        return { ...t, fare: 1, eta };
       }),
     [totalKm]
   );
@@ -266,7 +266,7 @@ export default function RideOptions() {
       "vura.ride.payment",
       payChoice.type === "cash" ? "cash" : payChoice.type === "affiliate" ? "affiliate" : "card"
     );
-    await AsyncStorage.setItem("vura.ride.fare", String(selectedFare || 0.2));
+    await AsyncStorage.setItem("vura.ride.fare", String(selectedFare || 1));
     await AsyncStorage.setItem("vura.ride.waypoints", JSON.stringify(waypoints));
     if (scheduleMode) {
       router.push("/ride/schedule");

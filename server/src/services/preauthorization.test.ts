@@ -3,7 +3,7 @@
 //
 // The point of these: every Paystack call must match the OFFICIAL docs
 // (https://paystack.com/docs/payments/card-preauthorization/) exactly —
-// endpoint path, parameter names, cent amounts (ZAR floor 100), expire_after_days
+// endpoint path, parameter names, cent amounts (live ZAR floor 500), expire_after_days
 // / expire_action, reference charset — and the webhook signature must be HMAC
 // SHA512 of the raw body. fetch is stubbed, so nothing here touches the network.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,9 +102,9 @@ describe("initializePreauthorization (docs-exact)", () => {
     expect(res.reference).toBe("VURAABC123");
   });
 
-  it("enforces the documented ZAR minimum of 100 cents for sub-R1 fares", async () => {
-    await initializePreauthorization({ email: "a@b.c", amountRands: 0.2 });
-    expect(lastCall().body.amount).toBe("100");
+  it("enforces Paystack LIVE minimum of ZAR 5.00 for smaller fares", async () => {
+    await initializePreauthorization({ email: "a@b.c", amountRands: 1 });
+    expect(lastCall().body.amount).toBe("500");
   });
 });
 
@@ -150,8 +150,9 @@ describe("releasePreauthorization (docs-exact)", () => {
 });
 
 describe("amounts, references, status enum", () => {
-  it("holdAmountCents applies the docs floor of 100 and rounds correctly", () => {
-    expect(holdAmountCents(0.2)).toBe(100); // R0.20 demo fare → R1.00 hold
+  it("holdAmountCents applies the live ZAR 5.00 floor and rounds correctly", () => {
+    expect(holdAmountCents(1)).toBe(500); // R1 demo fare -> R5 hold (API floor)
+    expect(holdAmountCents(0.2)).toBe(500);
     expect(holdAmountCents(12.345)).toBe(1235);
     expect(holdAmountCents(25)).toBe(2500);
   });

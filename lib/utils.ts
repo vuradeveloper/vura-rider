@@ -57,10 +57,10 @@ export function haversineKm(
 }
 
 // Mirrors backend base fare (R2 + R1.5/km) with per-tier multipliers.
-// TEMPORARY: flat R0.20 for testing the payment flow.
+// TEMPORARY: flat R1.00 for testing the payment flow.
 export function estimateFare(distanceKm: number, multiplier = 1): number {
   void distanceKm; void multiplier;
-  return 0.2;
+  return 1;
 }
 
 export function estimateEtaMins(distanceKm: number): number {
