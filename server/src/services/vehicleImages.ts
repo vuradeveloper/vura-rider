@@ -1475,10 +1475,8 @@ export async function attachVehicleImages<R = any>(rows: R | R[] | null): Promis
  *   "cardb" (the default) — the curated local Car DB, imported by
  *        scripts/import-car-db.js. A lookup miss means the car is simply not in
  *        the DB yet; there is nothing to fetch and nothing to pay for.
- *   "carsxe" — the previous behaviour: queue a paid CarsXE search on a miss.
- *
- * The switch exists so the CarsXE path stays intact and auditable rather than
- * deleted: flipping VEHICLE_IMAGES_SOURCE=carsxe restores it exactly.
+ *   "carsxe" — the retired paid search. Kept only as a type/legacy branch so
+ *        old imports still compile; this function never returns it again.
  */
 export function vehicleImageSource(): "cardb" | "carsxe" {
   // CarsXE has been removed from the product. Keep the union type for the

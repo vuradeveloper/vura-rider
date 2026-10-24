@@ -101,8 +101,8 @@ update_categories AS (
     AND v.make IS NOT NULL
     AND v.model IS NOT NULL
     AND (v.categories IS NULL OR v.categories = '{}')
-    AND lower(trim(v.make)) = m.make
-    AND lower(trim(v.model)) = m.model
+    AND lower(trim(v.make)) = lower(trim(m.make))
+    AND lower(trim(v.model)) = lower(trim(m.model))
 )
 
 -- Report summary
