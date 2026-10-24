@@ -1061,9 +1061,11 @@ router.post("/book", auth_1.requireAuth, async (req, res) => {
             res.status(409).json({ error: `Ride is ${ride.status} — no hold can be placed.` });
             return;
         }
-        // Only card rides get card holds — cash/pay-later rides answer honestly and
-        // the client keeps going (payment must never gate dispatch).
-        if (String(ride.payment_method || "") === "pay_later") {
+        // Only CARD rides get card holds. Cash and pay-later rides answer honestly
+        // and the client keeps going (payment must never gate dispatch). Checking
+        // for `!== "card"` (not just `=== "pay_later"`) matters: an old ride with no
+        // payment_method, or any future method, must never put a hold on a card.
+        if (String(ride.payment_method || "").toLowerCase() !== "card") {
             res.json({
                 rideId,
                 paymentStatus: "NONE",

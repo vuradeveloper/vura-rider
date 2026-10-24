@@ -9,11 +9,18 @@ export declare class PreauthError extends Error {
     constructor(code: PreauthError["code"], message: string, httpStatus: number);
 }
 /**
- * Amount to HOLD, in cents. Paystack's documented floor for
- * /preauthorization/initialize is 100 (cents), so sub-R1 demo fares (the app
- * books R0.20 test rides) are held at R1.00 — a later capture of the real,
- * lower fare auto-releases the balance ("If the amount is lower than the
- * initial preauthorized amount, the balance is automatically released").
+ * Paystack's LIVE minimum for /preauthorization/initialize is ZAR 5.00
+ * (500 cents). Their documentation still says 100, and support email said R1,
+ * but the API answered on 2026-10-24:
+ *   "The preauthorization amount must be at least ZAR 5.00"
+ * Keep one constant so a future policy change is a one-line edit.
+ */
+export declare const MIN_HOLD_CENTS = 500;
+/**
+ * Amount to HOLD, in cents. Paystack's live floor is R5, so the R1 test fare is
+ * held at R5; a later capture of the real, lower fare auto-releases the balance
+ * ("If the amount is lower than the initial preauthorized amount, the balance is
+ * automatically released").
  */
 export declare function holdAmountCents(fareRands: number): number;
 /** Amount to CAPTURE, in cents — the final fare, exact (never rounded up). */
