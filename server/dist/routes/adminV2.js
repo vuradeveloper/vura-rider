@@ -143,25 +143,52 @@ router.post("/admins", (0, adminAuth_1.requireAdmin)("admins.manage"), async (re
         try {
             const auth = (0, firebase_1.getAuth)();
             let created = false;
+            let uid = null;
             try {
-                await auth.getUserByEmail(email);
+                const u = await auth.getUserByEmail(email);
+                uid = u.uid;
             }
             catch (e) {
                 if (e?.code !== "auth/user-not-found")
                     throw e;
                 tempPassword = (0, adminInvite_1.randomTempPassword)();
-                await auth.createUser({
+                const u = await auth.createUser({
                     email,
                     password: tempPassword,
                     displayName: email.split("@")[0],
                 });
+                uid = u.uid;
                 created = true;
             }
-            const resetLink = created
-                ? null
-                : await auth
+            // Existing account → try a "set your password" link first. If Firebase
+            // can't mint one (console URL not an authorized domain, or the Admin SDK
+            // call fails), fall back to a temporary password so the invite ALWAYS
+            // carries sign-in details instead of the "contact the person who invited
+            // you" dead-end. The user's password is only overwritten in that fallback.
+            let resetLink = null;
+            if (!created) {
+                resetLink = await auth
                     .generatePasswordResetLink(email, { url: adminInvite_1.CONSOLE_URL })
                     .catch(() => null);
+                if (!resetLink) {
+                    resetLink = await auth.generatePasswordResetLink(email).catch(() => null);
+                }
+                if (!resetLink) {
+                    tempPassword = (0, adminInvite_1.randomTempPassword)();
+                    if (uid) {
+                        await auth.updateUser(uid, { password: tempPassword }).catch(() => { });
+                    }
+                    else {
+                        try {
+                            const u = await auth.getUserByEmail(email);
+                            await auth.updateUser(u.uid, { password: tempPassword });
+                        }
+                        catch {
+                            /* ignore — temp password still surfaced to inviter */
+                        }
+                    }
+                }
+            }
             const sent = await (0, adminInvite_1.sendAdminInviteEmail)({ email, role, tempPassword, resetLink });
             emailSent = sent.ok;
             if (!sent.ok)
