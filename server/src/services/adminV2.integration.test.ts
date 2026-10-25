@@ -486,7 +486,9 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       const res = await request("GET", "/api/admin/v2/me");
       expect(res.status).toBe(200);
       expect(res.json.role).toBe("super_admin");
-      expect(res.json.permissions).toEqual(ROLE_PERMISSIONS.super_admin);
+      expect(res.json.permissions).toEqual(
+      ROLE_PERMISSIONS.super_admin.filter((p) => p !== "admins.manage")
+    );
       expect(res.json.email).toBe("boss@vura.test");
     } finally {
       delete process.env.ADMIN_EMAILS;
@@ -513,8 +515,8 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect((await request("GET", "/api/admin/v2/audit")).status).toBe(200);
       expect((await request("GET", "/api/admin/v2/admins")).status).toBe(403);
 
-      await seedAdmin("root@vura.test", "super_admin");
-      authUser.email = "root@vura.test";
+      await seedAdmin("ridevura@gmail.com", "super_admin");
+      authUser.email = "ridevura@gmail.com";
       expect((await request("GET", "/api/admin/v2/admins")).status).toBe(200);
       expect((await request("GET", "/api/admin/v2/audit")).status).toBe(200);
 
@@ -528,9 +530,9 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
   });
 
   it("invite + role change + disable, each writing an audit row with old/new", async () => {
-    process.env.ADMIN_EMAILS = "boss@vura.test";
+     process.env.ADMIN_EMAILS = "ridevura@gmail.com";
     try {
-      authUser.email = "boss@vura.test";
+       authUser.email = "ridevura@gmail.com";
       const inv = await request("POST", "/api/admin/v2/admins", {
         email: "Ops@Vura.test",
         role: "operations",
@@ -538,13 +540,13 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(inv.status).toBe(201);
       expect(inv.json.admin.email).toBe("ops@vura.test"); // normalized
       expect(inv.json.admin.role).toBe("operations");
-      expect(inv.json.admin.invited_by).toBe("boss@vura.test");
+       expect(inv.json.admin.invited_by).toBe("ridevura@gmail.com");
 
       const inviteAudit = await queryOne<any>(
         `SELECT * FROM admin_audit_log WHERE action = 'admin.invite'`
       );
       expect(inviteAudit).toBeTruthy();
-      expect(inviteAudit.actor_email).toBe("boss@vura.test");
+       expect(inviteAudit.actor_email).toBe("ridevura@gmail.com");
       expect(inviteAudit.entity_type).toBe("admin_user");
       expect(inviteAudit.new_value).toMatchObject({ role: "operations", disabled: false });
       expect(inviteAudit.old_value).toBeNull();
@@ -566,7 +568,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect((await request("GET", "/api/admin/v2/me")).status).toBe(403);
 
       // Validation: bad email, bad role.
-      authUser.email = "boss@vura.test";
+       authUser.email = "ridevura@gmail.com";
       expect((await request("POST", "/api/admin/v2/admins", { email: "nope", role: "operations" })).status).toBe(400);
       expect((await request("POST", "/api/admin/v2/admins", { email: "x@y.co", role: "wizard" })).status).toBe(400);
       expect((await request("PATCH", `/api/admin/v2/admins/${inv.json.admin.id}`, { role: "finance" })).status).toBe(200);

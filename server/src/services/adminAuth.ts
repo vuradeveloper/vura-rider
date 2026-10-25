@@ -1,24 +1,24 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// adminAuth — ADMIN V2 (Phase 0): roles, permissions, audit log.
+﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// adminAuth â€” ADMIN V2 (Phase 0): roles, permissions, audit log.
 //
 // WHO:  an admin is a Firebase-authenticated user whose VERIFIED email
 //       resolves to a role. Resolution order:
-//         1. email listed in the ADMIN_EMAILS env  → super_admin (the
+//         1. email listed in the ADMIN_EMAILS env  â†’ super_admin (the
 //            fallback that cannot be locked out by a broken table),
-//         2. a non-disabled row in admin_users      → its role,
-//         3. otherwise → null (403).
+//         2. a non-disabled row in admin_users      â†’ its role,
+//         3. otherwise â†’ null (403).
 //
 // WHAT: each role carries a fixed permission set (no per-permission editing in
 // Phase 0). Routes call requireAdmin("perm") and the server is the ONLY
-// authority — the UI mirrors the same matrix to hide what a role cannot do.
+// authority â€” the UI mirrors the same matrix to hide what a role cannot do.
 //
-// AUDIT: every admin ACTION calls writeAudit(...) — who, when, what, the old
+// AUDIT: every admin ACTION calls writeAudit(...) â€” who, when, what, the old
 // and new value and (where required) the reason. The table is append-only;
 // there is no update or delete path.
 //
 // MISSING TABLES: a database without migration 004 answers 503 "feature off"
-// — never a throw, and these routes are not on any ride/driver/location path.
-// ─────────────────────────────────────────────────────────────────────────────
+// â€” never a throw, and these routes are not on any ride/driver/location path.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { Response, NextFunction } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { queryOne, execute, isMissingRelation } from "../config/database";
@@ -31,6 +31,13 @@ export const ADMIN_ROLES = [
   "finance",
 ] as const;
 export type AdminRole = (typeof ADMIN_ROLES)[number];
+
+/** The single account that owns governance (admin user management). */
+export const GOVERNANCE_EMAIL = "ridevura@gmail.com";
+
+export function isGovernanceEmail(email: string | undefined | null): boolean {
+  return (email || "").trim().toLowerCase() === GOVERNANCE_EMAIL;
+}
 
 export function isAdminRole(v: unknown): v is AdminRole {
   return typeof v === "string" && (ADMIN_ROLES as readonly string[]).includes(v);
@@ -62,7 +69,7 @@ export const ADMIN_PERMISSIONS = [
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
 
 /**
- * The role → permission matrix. Finance is READ-ONLY on money (Phase 6 adds
+ * The role â†’ permission matrix. Finance is READ-ONLY on money (Phase 6 adds
  * nothing writable there either; the brief keeps all money actions off).
  */
 export const ROLE_PERMISSIONS: Record<AdminRole, readonly AdminPermission[]> = {
@@ -121,7 +128,7 @@ export function superAdminFallbackEmails(): string[] {
 
 /**
  * Resolve the caller's admin role. Returns null for non-admins.
- * A disabled admin_users row loses to nothing — it simply does not resolve
+ * A disabled admin_users row loses to nothing â€” it simply does not resolve
  * (unless the email is in the ADMIN_EMAILS fallback).
  */
 export async function resolveAdminRole(email: string | undefined | null): Promise<AdminRole | null> {
@@ -129,6 +136,8 @@ export async function resolveAdminRole(email: string | undefined | null): Promis
   const normalized = email.trim().toLowerCase();
   if (!normalized) return null;
   if (superAdminFallbackEmails().includes(normalized)) return "super_admin";
+  // Governance owner is always a super_admin, even if not listed in env or table.
+  if (normalized === GOVERNANCE_EMAIL) return "super_admin";
   try {
     const row = await queryOne<{ role: string }>(
       `SELECT role FROM admin_users WHERE LOWER(email) = $1 AND disabled = FALSE`,
@@ -136,7 +145,7 @@ export async function resolveAdminRole(email: string | undefined | null): Promis
     );
     return isAdminRole(row?.role) ? row.role : null;
   } catch (err) {
-    // Table missing (migration 004 not applied) → feature off, not a crash.
+    // Table missing (migration 004 not applied) â†’ feature off, not a crash.
     if (isMissingRelation(err)) return null;
     throw err;
   }
@@ -179,6 +188,15 @@ export function requireAdmin(perm: AdminPermission) {
         });
         return;
       }
+      // Governance (admin user management) is owned by a single account only.
+      if (perm === "admins.manage" && !isGovernanceEmail(actor.email)) {
+        res.status(403).json({
+          error: "Governance access is restricted to the account owner",
+          required: perm,
+          role: actor.role,
+        });
+        return;
+      }
       next();
     } catch (err: any) {
       if (isMissingRelation(err)) {
@@ -201,7 +219,7 @@ export interface AuditInput {
 
 /**
  * Append one audit row. Call this INSIDE the same request as the action, right
- * after it succeeds. Never throws into the caller — an audit failure is
+ * after it succeeds. Never throws into the caller â€” an audit failure is
  * logged loudly but does not undo the operator's action (the action itself is
  * the source of truth; the log is the record of it).
  */

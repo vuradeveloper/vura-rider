@@ -21,6 +21,7 @@ import {
   ROLE_PERMISSIONS,
   requireAdmin,
   resolveAdminActor,
+  isGovernanceEmail,
   writeAudit,
 } from "../services/adminAuth";
 import {
@@ -151,10 +152,13 @@ router.get("/me", requireAdmin("dashboard.read"), async (req: AuthRequest, res: 
   try {
     const actor = await resolveAdminActor(req);
     if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+    const permissions = isGovernanceEmail(actor.email)
+      ? ROLE_PERMISSIONS[actor.role]
+      : ROLE_PERMISSIONS[actor.role].filter((p) => p !== "admins.manage");
     res.json({
       email: actor.email,
       role: actor.role,
-      permissions: ROLE_PERMISSIONS[actor.role],
+      permissions,
     });
   } catch (err) {
     sendError(res, err);
