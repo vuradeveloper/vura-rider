@@ -79,10 +79,13 @@ router.get("/me", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (req, r
             res.status(403).json({ error: "Admin only" });
             return;
         }
+        const permissions = (0, adminAuth_1.isGovernanceEmail)(actor.email)
+            ? adminAuth_1.ROLE_PERMISSIONS[actor.role]
+            : adminAuth_1.ROLE_PERMISSIONS[actor.role].filter((p) => p !== "admins.manage");
         res.json({
             email: actor.email,
             role: actor.role,
-            permissions: adminAuth_1.ROLE_PERMISSIONS[actor.role],
+            permissions,
         });
     }
     catch (err) {
