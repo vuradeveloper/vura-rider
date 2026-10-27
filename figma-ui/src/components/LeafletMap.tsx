@@ -183,6 +183,7 @@ export default function LeafletMap({
   route,
   car,
   pickup,
+  stops,
   destination,
   dark = false,
   zoom = 16,
@@ -203,6 +204,8 @@ export default function LeafletMap({
   car?: MapCar | null
   /** Pickup marker from the reference layout. */
   pickup?: LatLng | null
+  /** Intermediate stops, in visiting order. Drawn as numbered yellow pins. */
+  stops?: LatLng[]
   /** Drop-off pin from the reference layout. */
   destination?: LatLng | null
   /** Text on the pickup bubble, e.g. "Pickup". */
@@ -238,6 +241,7 @@ export default function LeafletMap({
   const casingRef = useRef<any>(null)
   const accuracyRef = useRef<any>(null)
   const pickupRef = useRef<any>(null)
+  const stopsRef = useRef<any[]>([])
   const destRef = useRef<any>(null)
   const carRef = useRef<any>(null)
   const carAnim = useRef({ lat: 0, lng: 0, heading: null as number | null, raf: 0 })
@@ -416,6 +420,7 @@ export default function LeafletMap({
       const bounds = L.latLngBounds(latlngs)
       if (pickup) bounds.extend([pickup.lat, pickup.lng])
       if (destination) bounds.extend([destination.lat, destination.lng])
+      for (const s of stops ?? []) bounds.extend([s.lat, s.lng])
       if (car) bounds.extend([car.lat, car.lng])
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [48, 48], maxZoom: 16, animate: true })
@@ -488,6 +493,36 @@ export default function LeafletMap({
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, pinKey, pickupLabel, destinationLabel])
+
+  // Numbered yellow pins for intermediate stops, in visiting order. The rider
+  // must be able to see every stop on the map, not just the two endpoints.
+  const stopsKey = (stops ?? []).map((s) => `${s.lat.toFixed(5)},${s.lng.toFixed(5)}`).join('|')
+  useEffect(() => {
+    if (!ready) return
+    const L = LRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+    const list = stops ?? []
+    // Drop pins for stops that were removed or reordered away.
+    while (stopsRef.current.length > list.length) {
+      const gone = stopsRef.current.pop()
+      if (gone) map.removeLayer(gone)
+    }
+    list.forEach((s, i) => {
+      const html = `<div style="width:26px;height:26px;border-radius:9999px;background:#FBBC04;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font:700 12px/1 system-ui,sans-serif;color:#1A1A1A">${i + 1}</div>`
+      const icon = L.divIcon({ className: 'vura-route-pin', html, iconSize: [26, 26], iconAnchor: [13, 13] })
+      const existing = stopsRef.current[i]
+      if (existing) {
+        existing.setLatLng([s.lat, s.lng])
+        existing.setIcon(icon)
+      } else {
+        stopsRef.current[i] = L.marker([s.lat, s.lng], {
+          icon, interactive: false, keyboard: false, zIndexOffset: 645,
+        }).addTo(map)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, stopsKey])
 
   // The driver's roaming car. Each socket ping animates the marker from where it
   // already is to the new fix, so the rider sees the SAME movement the driver's
