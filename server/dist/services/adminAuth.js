@@ -51,7 +51,7 @@ exports.ADMIN_PERMISSIONS = [
     "catalogue.write",
 ];
 /**
- * The role â†’ permission matrix. Finance is READ-ONLY on money (Phase 6 adds
+ * The role → permission matrix. Finance is READ-ONLY on money (Phase 6 adds
  * nothing writable there either; the brief keeps all money actions off).
  */
 exports.ROLE_PERMISSIONS = {
@@ -102,7 +102,7 @@ function superAdminFallbackEmails() {
 }
 /**
  * Resolve the caller's admin role. Returns null for non-admins.
- * A disabled admin_users row loses to nothing â€” it simply does not resolve
+ * A disabled admin_users row loses to nothing — it simply does not resolve
  * (unless the email is in the ADMIN_EMAILS fallback).
  */
 async function resolveAdminRole(email) {
@@ -121,7 +121,7 @@ async function resolveAdminRole(email) {
         return isAdminRole(row?.role) ? row.role : null;
     }
     catch (err) {
-        // Table missing (migration 004 not applied) â†’ feature off, not a crash.
+        // Table missing (migration 004 not applied) → feature off, not a crash.
         if ((0, database_1.isMissingRelation)(err))
             return null;
         throw err;
@@ -186,7 +186,7 @@ function requireAdmin(perm) {
 }
 /**
  * Append one audit row. Call this INSIDE the same request as the action, right
- * after it succeeds. Never throws into the caller â€” an audit failure is
+ * after it succeeds. Never throws into the caller — an audit failure is
  * logged loudly but does not undo the operator's action (the action itself is
  * the source of truth; the log is the record of it).
  */

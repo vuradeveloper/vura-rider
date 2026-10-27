@@ -113,6 +113,7 @@ export interface DispatchRide {
     /** Real rider identity for the offer card — the driver can call them (§: chat/call). */
     passenger_name: string | null;
     passenger_phone: string | null;
+    passenger_photo_url: string | null;
 }
 export declare function loadRide(rideId: string): Promise<DispatchRide | null>;
 /**
@@ -121,7 +122,7 @@ export declare function loadRide(rideId: string): Promise<DispatchRide | null>;
  * Emits BOTH events to that driver only: `ride:offer` (new, carries offerId and
  * the deadline so the offer screen can count down) and `ride:request` (the event
  * today's driver app already listens to, so nothing regresses). A high-priority
- * push always goes out too â€” that is the only thing that works when the app is
+ * push always goes out too — that is the only thing that works when the app is
  * closed, which is what made rides "never arrive".
  */
 export declare function offerToNextDriver(io: SocketIOServer, rideId: string, round?: number, opts?: {
@@ -161,7 +162,7 @@ export declare function declineOffer(io: SocketIOServer, params: {
     status?: string | null;
 }>;
 /**
- * Durable offer expiry â€” called by the worker every couple of seconds.
+ * Durable offer expiry — called by the worker every couple of seconds.
  *
  * This is deliberately DB-driven (like SchedulingService) instead of an in-memory
  * setTimeout: a deploy/restart mid-dispatch must not strand a rider waiting for a
@@ -171,7 +172,7 @@ export declare function expireOffers(io: SocketIOServer): Promise<number>;
 /**
  * Heartbeat sweep: a driver who stopped reporting location/socket for too long
  * stops being a candidate. Without this, a force-quit driver kept absorbing
- * offers nobody could answer â€” one of the reasons riders waited forever.
+ * offers nobody could answer — one of the reasons riders waited forever.
  */
 export declare function sweepStaleDrivers(io: SocketIOServer): Promise<number>;
 /**
@@ -195,7 +196,7 @@ export declare function cancelPendingOffers(io: SocketIOServer, rideId: string, 
  * Retry rides that are still waiting for a driver.
  *
  * WHY: a ride used to be dispatched exactly once. If nobody was eligible in that
- * instant the ride was parked as 'no_drivers' and NOTHING ever offered it again â€”
+ * instant the ride was parked as 'no_drivers' and NOTHING ever offered it again —
  * the rider waited forever and the next driver to come online never saw it (this
  * is what a live field report looked like: `candidates_found {"count":0}` then a
  * parked ride). The worker calls this every few seconds, so a driver who comes

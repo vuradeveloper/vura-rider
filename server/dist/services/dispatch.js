@@ -1,6 +1,6 @@
 "use strict";
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Dispatch service â€” status-driven ride matching.
+// ─────────────────────────────────────────────────────────────────────────────
+// Dispatch service — status-driven ride matching.
 //
 // The database is the single source of truth; sockets and push are only delivery
 // channels. Every step is logged to ride_events so you can see exactly where a
@@ -19,7 +19,7 @@
 // The ride stays in 'searching' while an offer is out (the rider-facing apps and
 // their notification labels already treat 'searching' as "finding your driver");
 // the per-driver offer lifecycle lives in ride_offers.status.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -575,7 +575,8 @@ async function loadRide(rideId) {
             r.estimated_fare, r.payment_method, r.waypoints,
             COALESCE(r.offer_round, 0) AS offer_round, COALESCE(r.version, 0) AS version,
             u.firebase_uid AS passenger_fb,
-            u.full_name AS passenger_name, u.phone AS passenger_phone
+            u.full_name AS passenger_name, u.phone AS passenger_phone,
+            u.profile_photo_url AS passenger_photo_url
        FROM rides r
        LEFT JOIN users u ON u.id = r.passenger_id
       WHERE r.id = $1`, [rideId]
@@ -682,7 +683,7 @@ async function filterCandidatesForTier(rideId, rideTier, candidates) {
  * Emits BOTH events to that driver only: `ride:offer` (new, carries offerId and
  * the deadline so the offer screen can count down) and `ride:request` (the event
  * today's driver app already listens to, so nothing regresses). A high-priority
- * push always goes out too â€” that is the only thing that works when the app is
+ * push always goes out too — that is the only thing that works when the app is
  * closed, which is what made rides "never arrive".
  */
 async function offerToNextDriver(io, rideId, round, opts) {
@@ -690,7 +691,7 @@ async function offerToNextDriver(io, rideId, round, opts) {
     if (!ride)
         return { offered: false, reason: "ride_not_found" };
     const reviving = opts?.revive === true;
-    // A parked ('no_drivers') ride may be retried when a driver comes back online â€”
+    // A parked ('no_drivers') ride may be retried when a driver comes back online —
     // that is the whole point of revival: a rider must not wait forever just because
     // nobody was available at the moment they booked.
     if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
@@ -878,6 +879,7 @@ async function offerToNextDriver(io, rideId, round, opts) {
             // Real rider identity: the driver's card can call/message them directly.
             riderName: ride.passenger_name || "Rider",
             riderPhone: ride.passenger_phone || null,
+            riderPhoto: ride.passenger_photo_url || null,
             distanceToPickupKm: Number(candidate.distance_km?.toFixed?.(2) ?? candidate.distance_km),
         };
         if (room) {
@@ -1182,7 +1184,7 @@ async function emitRideAccepted(io, rideId, driverId, version) {
     // the rider's 3s active-ride poll never hammers S3).
     const photoUrl = await (0, driverPhoto_1.resolveDriverPhotoUrl)(driverId, driver?.profile_photo_url || null);
     // STAMP the car onto the ride at accept time: trip history must keep showing the
-    // car that did THAT trip even after the driver changes cars. Best-effort â€” a
+    // car that did THAT trip even after the driver changes cars. Best-effort — a
     // failure here must never block an accept that already succeeded.
     await (0, database_1.execute)(`UPDATE rides
         SET vehicle_make = $2, vehicle_model = $3, vehicle_color = $4,
@@ -1254,7 +1256,7 @@ async function declineOffer(io, params) {
     return { ok: true };
 }
 /**
- * Durable offer expiry â€” called by the worker every couple of seconds.
+ * Durable offer expiry — called by the worker every couple of seconds.
  *
  * This is deliberately DB-driven (like SchedulingService) instead of an in-memory
  * setTimeout: a deploy/restart mid-dispatch must not strand a rider waiting for a
@@ -1316,11 +1318,11 @@ async function expireOffers(io) {
 /**
  * Heartbeat sweep: a driver who stopped reporting location/socket for too long
  * stops being a candidate. Without this, a force-quit driver kept absorbing
- * offers nobody could answer â€” one of the reasons riders waited forever.
+ * offers nobody could answer — one of the reasons riders waited forever.
  */
 async function sweepStaleDrivers(io) {
     // SAFETY TIMEOUT: 15 minutes of total silence means the driver really is gone
-    // (phone off, app force-stopped, uninstalled), so the INTENT is turned off â€” and
+    // (phone off, app force-stopped, uninstalled), so the INTENT is turned off — and
     // we tell them why, otherwise they sit waiting for offers that will never come.
     const gone = await (0, database_1.query)(`UPDATE driver_profiles
         SET is_online = FALSE, status = 'offline', updated_at = NOW()
@@ -1456,7 +1458,7 @@ async function cancelPendingOffers(io, rideId, reason = "cancelled") {
  * Retry rides that are still waiting for a driver.
  *
  * WHY: a ride used to be dispatched exactly once. If nobody was eligible in that
- * instant the ride was parked as 'no_drivers' and NOTHING ever offered it again â€”
+ * instant the ride was parked as 'no_drivers' and NOTHING ever offered it again —
  * the rider waited forever and the next driver to come online never saw it (this
  * is what a live field report looked like: `candidates_found {"count":0}` then a
  * parked ride). The worker calls this every few seconds, so a driver who comes
