@@ -937,8 +937,9 @@ function extractSqlLiterals(src: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(src))) {
     let sql = m[1]
-      // rides.ts interpolates a numeric const into INTERVAL '… minutes'.
+      // rides.ts interpolates numeric consts into INTERVAL '… minutes'.
       .replace(/\$\{ACTIVE_RIDE_MAX_AGE_MINUTES\}/g, "240")
+      .replace(/\$\{IN_PROGRESS_MAX_AGE_MINUTES\}/g, "720")
       .trim();
     if (/^\s*--[^\n]*\n/i.test(sql)) sql = sql.replace(/^\s*--[^\n]*\n/gm, "").trim();
     if (!/^(SELECT|INSERT|UPDATE|DELETE|WITH|ALTER|CREATE)\b/i.test(sql)) continue;

@@ -230,7 +230,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
            LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
            WHERE r.passenger_id = $1
              AND r.status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
-             AND r.created_at > NOW() - INTERVAL '240 minutes'
+             AND (r.created_at > NOW() - INTERVAL '240 minutes' OR r.status = 'in_progress')
            ORDER BY r.created_at DESC LIMIT 1`,
           [dbUserId]
         );

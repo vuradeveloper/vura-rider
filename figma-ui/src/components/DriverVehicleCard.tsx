@@ -127,7 +127,7 @@ export default function DriverVehicleCard({
       </p>
       {driver?.rating ? (
         <p className="text-center text-[12px] text-[#6B6B6B] mt-0.5">
-          â˜… {Number(driver.rating).toFixed(2)}
+          ★ {Number(driver.rating).toFixed(2)}
         </p>
       ) : null}
 
@@ -150,7 +150,7 @@ export default function DriverVehicleCard({
             aria-label="More options"
             className="w-12 border border-[#EBEBEB] rounded-2xl py-3 text-[13px] font-semibold text-[#1A1A1A] active:bg-[#F7F7F7]"
           >
-            â‹¯
+            ⋯
           </button>
         </div>
       )}

@@ -1,18 +1,18 @@
-﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// ADMIN V2 (Phase 0) â€” REAL POSTGRES integration suite.
+﻿// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN V2 (Phase 0) — REAL POSTGRES integration suite.
 //
-// WHY REAL DB (the two production bugs â€” make_interval 42883, ambiguous
-// column 42702 â€” were both invisible to mocks):
-//   â€¢ migration 004 (admin_users + admin_audit_log) applied TWICE (idempotent),
-//   â€¢ every new SQL statement executed for real (insert/upsert/update/select),
-//   â€¢ the role â†’ permission matrix enforced per role (each allowed AND denied),
-//   â€¢ audit rows written for every action, with old/new values,
-//   â€¢ missing-table behaviour: the routes answer 503, never throw.
+// WHY REAL DB (the two production bugs — make_interval 42883, ambiguous
+// column 42702 — were both invisible to mocks):
+//   • migration 004 (admin_users + admin_audit_log) applied TWICE (idempotent),
+//   • every new SQL statement executed for real (insert/upsert/update/select),
+//   • the role → permission matrix enforced per role (each allowed AND denied),
+//   • audit rows written for every action, with old/new values,
+//   • missing-table behaviour: the routes answer 503, never throw.
 //
 // GATING (same as the other suites): skipped unless VURA_TEST_DB_PORT is set,
 // and the guard refuses anything but the scratch container.
 //   $env:VURA_TEST_DB_PORT='55432'; npx vitest run src/services/adminV2.integration.test.ts
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -65,7 +65,7 @@ vi.mock("../lib/s3", () => ({
 }));
 
 // Point the pool at the scratch container FIRST (the pool reads env lazily on
-// first query), then assert it â€” same contract as rc4.integration.test.ts.
+// first query), then assert it — same contract as rc4.integration.test.ts.
 const enabled = !!process.env.VURA_TEST_DB_PORT;
 process.env.DB_HOST = process.env.DB_HOST || "127.0.0.1";
 process.env.DB_PORT = process.env.VURA_TEST_DB_PORT || "";
@@ -82,9 +82,9 @@ if (enabled) {
 }
 
 /**
- * Minimal base schema â€” the scratch container is shared, so the base tables
+ * Minimal base schema — the scratch container is shared, so the base tables
  * must exist before migrations 004/005 (which ALTER users/driver_profiles/
- * driver_documents and FK driver_tiers â†’ users). Same shapes as the rc4
+ * driver_documents and FK driver_tiers → users). Same shapes as the rc4
  * PROD_SCHEMA, only the columns this suite reads.
  */
 const BASE_SCHEMA = `
@@ -308,7 +308,7 @@ ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMP
 ALTER TABLE driver_documents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 `;
 
-// â”€â”€ HTTP harness (same pattern as rc4.integration.test.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── HTTP harness (same pattern as rc4.integration.test.ts) ──────────────────
 let server: HttpServer;
 let base: string;
 
@@ -472,7 +472,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
 
   it("role matrix: finance is read-only; every permission is a dotted string", () => {
     for (const [role, perms] of Object.entries(ROLE_PERMISSIONS)) {
-      for (const p of perms) expect(typeof p, `${role} â†’ ${p}`).toBe("string");
+      for (const p of perms) expect(typeof p, `${role} → ${p}`).toBe("string");
       if (role === "finance") {
         expect(perms.some((p) => p.endsWith(".write") || p === "admins.manage")).toBe(false);
       }
@@ -562,7 +562,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(chgAudit.old_value).toMatchObject({ role: "operations", disabled: false });
       expect(chgAudit.new_value).toMatchObject({ role: "support_agent" });
 
-      // Disable â†’ the row no longer resolves.
+      // Disable → the row no longer resolves.
       await request("PATCH", `/api/admin/v2/admins/${inv.json.admin.id}`, { disabled: true });
       authUser.email = "ops@vura.test";
       expect((await request("GET", "/api/admin/v2/me")).status).toBe(403);
@@ -623,7 +623,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     process.env.ADMIN_EMAILS = "always@vura.test";
     try {
       await seedAdmin("always@vura.test", "support_agent", true); // disabled row
-      // Env fallback wins â€” the table cannot lock out operators.
+      // Env fallback wins — the table cannot lock out operators.
       expect(await resolveAdminRole("always@vura.test")).toBe("super_admin");
       await seedAdmin("half@vura.test", "operations", true);
       expect(await resolveAdminRole("half@vura.test")).toBeNull();
@@ -644,7 +644,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     }
   });
 
-  // â”€â”€ Phase 1: drivers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Phase 1: drivers ──────────────────────────────────────────────────────
 
   async function seedDriver(lifecycle = "ACTIVE"): Promise<string> {
     const u = await queryOne<{ id: string }>(
@@ -696,7 +696,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(ok1.status).toBe(200);
       expect(ok1.json).toEqual({ from: "UNDER_REVIEW", to: "CHANGES_REQUESTED" });
 
-      // To APPROVED needs all required docs â€” seed them first
+      // To APPROVED needs all required docs — seed them first
       await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "DOCUMENTS_SUBMITTED" });
       await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "UNDER_REVIEW" });
       const required = await query<{ doc_type: string }>(
@@ -712,7 +712,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "APPROVED" })).status).toBe(200);
       expect((await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "ACTIVE" })).status).toBe(200);
 
-      // Illegal: ACTIVE â†’ DOCUMENTS_SUBMITTED
+      // Illegal: ACTIVE → DOCUMENTS_SUBMITTED
       const bad = await request("POST", `/api/admin/v2/drivers/${id}/lifecycle`, { to: "DOCUMENTS_SUBMITTED" });
       expect(bad.status).toBe(409);
       expect(bad.json.allowed).toContain("SUSPENDED");
@@ -1007,7 +1007,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     }
   });
 
-  // â”€â”€ Phase 2: riders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Phase 2: riders ─────────────────────────────────────────────────────────
 
   async function seedRider(): Promise<string> {
     const u = await queryOne<{ id: string }>(
@@ -1089,7 +1089,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
       expect(ban.status).toBe(200);
       expect(ban.json).toMatchObject({ from: "suspended", to: "banned" });
 
-      // banned â†’ suspended is illegal (only unban is allowed from banned)
+      // banned → suspended is illegal (only unban is allowed from banned)
       const illegal = await request("POST", `/api/admin/v2/riders/${id}/moderation`, {
         status: "suspended",
         reason: "cannot suspend a banned rider",
@@ -1156,7 +1156,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     }
   });
 
-  it("rider_gate: seeded OFF (book allowed); armed â†’ suspended/banned blocked, until honoured", async () => {
+  it("rider_gate: seeded OFF (book allowed); armed → suspended/banned blocked, until honoured", async () => {
     const { assertRiderCanBook, riderGateEnabled } = await import("./adminRiders");
     const id = await seedRider();
 
@@ -1168,7 +1168,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     await riderGateEnabled(true); // refresh cache from DB
     await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
 
-    // Arm the gate, suspend the rider â†’ booking blocked.
+    // Arm the gate, suspend the rider → booking blocked.
     await execute(`UPDATE app_config SET value = '{"enabled": true}'::jsonb WHERE key = 'rider_gate'`);
     await riderGateEnabled(true);
     await execute(
@@ -1178,7 +1178,7 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     );
     await expect(assertRiderCanBook(id)).rejects.toThrow(/suspended/i);
 
-    // Suspension with a FUTURE `until` is still serving â†’ blocked.
+    // Suspension with a FUTURE `until` is still serving → blocked.
     await execute(
       `UPDATE rider_moderation SET until = NOW() + INTERVAL '2 days' WHERE rider_id = $1`,
       [id]
@@ -1192,21 +1192,21 @@ describe.skipIf(!enabled)("ADMIN V2 against real Postgres", () => {
     );
     await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
 
-    // Banned is absolute (until is only informational) â†’ still blocked.
+    // Banned is absolute (until is only informational) → still blocked.
     await execute(
       `UPDATE rider_moderation SET status = 'banned', until = NOW() + INTERVAL '9 days' WHERE rider_id = $1`,
       [id]
     );
     await expect(assertRiderCanBook(id)).rejects.toThrow(/banned/i);
 
-    // Disarm â†’ everyone books again (default posture restored).
+    // Disarm → everyone books again (default posture restored).
     await execute(`UPDATE app_config SET value = '{"enabled": false}'::jsonb WHERE key = 'rider_gate'`);
     await riderGateEnabled(true);
     await expect(assertRiderCanBook(id)).resolves.toBeUndefined();
   });
 
 
-  // â”€â”€ Phase 3: trips + support inbox â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Phase 3: trips + support inbox ──────────────────────────────────────────
 
   async function seedTrip(status = "completed"): Promise<string> {
     const u = await queryOne<{ id: string }>(

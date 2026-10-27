@@ -1,5 +1,5 @@
-﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// DRIVER INDEX â€” where every online driver is, in one H3 cell.
+﻿// ─────────────────────────────────────────────────────────────────────────────
+// DRIVER INDEX — where every online driver is, in one H3 cell.
 //
 // WHY AN INTERFACE
 //
@@ -28,7 +28,7 @@
 // decides whether a driver is still here. The threshold lives in app_config
 // (stale_seconds), NOT here, because it must change when the app's heartbeat
 // changes without a deploy.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 import { query, queryOne, execute } from "../config/database";
 import { toCell, DEFAULT_MATCH_RES, DEFAULT_HEATMAP_RES } from "../lib/h3";
@@ -84,7 +84,7 @@ export function isMatchableStatus(status: string | null | undefined): boolean {
   return (MATCHABLE_STATUSES as readonly string[]).includes(status);
 }
 
-// â”€â”€ Postgres implementation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Postgres implementation ────────────────────────────────────────────────
 
 class PostgresDriverIndex implements DriverIndex {
   /**

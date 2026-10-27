@@ -30,6 +30,7 @@ import PromosScreen from './components/PromosScreen'
 import RiderProfile from './components/RiderProfile'
 import RiderSettings, { Guidelines } from './components/RiderSettings'
 import { SafetyScreen } from './components/SafetyScreen'
+import ShareTripSheet from './components/ShareTripSheet'
 import VehicleLinkScreen from './components/VehicleLinkScreen'
 // `getRoute` is what useRouteLine() calls to turn pickups/stops/drop-offs into a
 // road-following polyline. It existed in the backend lib all along but was never
@@ -101,7 +102,6 @@ import {
   saveSearch,
   searchPlaces,
   sendVerificationEmail,
-  shareTrip,
   sosRest,
   getRideStartPin,
   respondCheckin,
@@ -2235,6 +2235,8 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   const [ride, setRide] = useState<any>(null)
   const [status, setStatus] = useState<string>('accepted')
   const [toast, setToast] = useState('')
+  // Share Trip: the button opens a real share sheet with the live trip link.
+  const [shareOpen, setShareOpen] = useState(false)
   // End-of-trip sheet: rating + tip, then Next takes the rider home.
   const [sheet, setSheet] = useState(false)
   const [stars, setStars] = useState(5)
@@ -2512,10 +2514,9 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   // The reference map's dark bubble at the drop-off. The sheet below repeats the
   // same ETA, so the map and the trip card always agree.
   const mapEtaLabel = `${Math.max(1, Math.round(Number(ride?.duration_mins || 12)))} min`
-  async function share() {
+  function share() {
     if (!rideId) return
-    await shareTrip(rideId).catch(() => { })
-    setToast('Trip link shared')
+    setShareOpen(true)
   }
   // The Cancel button opens the "are you sure?" sheet instead of cancelling
   // straight away.
@@ -2732,6 +2733,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
             </button>
           )}
         </div>
+        <ShareTripSheet open={shareOpen} rideId={rideId} onClose={() => setShareOpen(false)} />
         {confirmCancel && (
           <div
             className="fixed inset-0 z-50 bg-black/40 flex items-end"
