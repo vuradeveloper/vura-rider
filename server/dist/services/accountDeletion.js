@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteAccountData = deleteAccountData;
 const database_1 = require("../config/database");
@@ -68,6 +101,19 @@ async function sweepNoActionRefs(client, parent, userId) {
  */
 async function deleteAccountData(userId) {
     const rideScope = "(SELECT id FROM rides WHERE passenger_id = $1 OR driver_id = $1)";
+    // Document bytes live in S3; the rows are deleted below. Collect the keys
+    // first (the table may be missing on an old deployment) and remove the
+    // objects after the transaction commits. Best-effort: a storage failure must
+    // not leave the account half-deleted, but it is logged for cleanup.
+    let documentKeys = [];
+    try {
+        const docs = await (0, database_1.query)("SELECT s3_key FROM driver_documents WHERE driver_id = $1", [userId]);
+        documentKeys = docs.map((d) => d.s3_key).filter(Boolean);
+    }
+    catch (err) {
+        if (!(0, database_1.isMissingRelation)(err))
+            throw err;
+    }
     await (0, database_1.withTransaction)(async (client) => {
         // 1. Rows that point at this user's rides. These FKs have no cascade and
         //    must be gone before the rides themselves. Rows created by the other
@@ -108,5 +154,18 @@ async function deleteAccountData(userId) {
         await sweepNoActionRefs(client, "users", userId);
         await deleteStep(client, "DELETE FROM users WHERE id = $1", [userId]);
     });
+    // The database is committed; now remove the document bytes. Imported lazily
+    // so the AWS SDK is not loaded for deletions with no documents (and in tests).
+    if (documentKeys.length > 0) {
+        const { deleteFromS3 } = await Promise.resolve().then(() => __importStar(require("../lib/s3")));
+        for (const key of documentKeys) {
+            try {
+                await deleteFromS3(key);
+            }
+            catch (err) {
+                console.error(`[account-delete] S3 cleanup failed for ${key}:`, err);
+            }
+        }
+    }
 }
 //# sourceMappingURL=accountDeletion.js.map
