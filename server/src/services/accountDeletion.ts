@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { withTransaction, isMissingRelation } from "../config/database";
+import { query, withTransaction, isMissingRelation } from "../config/database";
 
 // Account deletion for POST /api/users/delete.
 //
@@ -83,6 +83,21 @@ export async function deleteAccountData(userId: string): Promise<void> {
   const rideScope =
     "(SELECT id FROM rides WHERE passenger_id = $1 OR driver_id = $1)";
 
+  // Document bytes live in S3; the rows are deleted below. Collect the keys
+  // first (the table may be missing on an old deployment) and remove the
+  // objects after the transaction commits. Best-effort: a storage failure must
+  // not leave the account half-deleted, but it is logged for cleanup.
+  let documentKeys: string[] = [];
+  try {
+    const docs = await query<{ s3_key: string }>(
+      "SELECT s3_key FROM driver_documents WHERE driver_id = $1",
+      [userId]
+    );
+    documentKeys = docs.map((d) => d.s3_key).filter(Boolean);
+  } catch (err) {
+    if (!isMissingRelation(err)) throw err;
+  }
+
   await withTransaction(async (client) => {
     // 1. Rows that point at this user's rides. These FKs have no cascade and
     //    must be gone before the rides themselves. Rows created by the other
@@ -131,4 +146,17 @@ export async function deleteAccountData(userId: string): Promise<void> {
     await sweepNoActionRefs(client, "users", userId);
     await deleteStep(client, "DELETE FROM users WHERE id = $1", [userId]);
   });
+
+  // The database is committed; now remove the document bytes. Imported lazily
+  // so the AWS SDK is not loaded for deletions with no documents (and in tests).
+  if (documentKeys.length > 0) {
+    const { deleteFromS3 } = await import("../lib/s3");
+    for (const key of documentKeys) {
+      try {
+        await deleteFromS3(key);
+      } catch (err) {
+        console.error(`[account-delete] S3 cleanup failed for ${key}:`, err);
+      }
+    }
+  }
 }
