@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
+import { deleteAccountData } from "../services/accountDeletion";
 import { claimReferral, ensureAffiliateTables } from "../services/AffiliateService";
 import { getAuth } from "../config/firebase";
 import { CONSOLE_URL, sendPasswordResetEmail } from "../services/adminInvite";
@@ -182,7 +183,10 @@ router.post("/photo", requireAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// POST /api/users/delete — Delete user account
+// POST /api/users/delete — Delete user account and everything linked to it.
+// The FK-safe ordering lives in services/accountDeletion.ts so it can be
+// exercised against a real Postgres schema; this route only resolves the
+// Firebase uid to a user row and reports the result.
 router.post("/delete", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
@@ -192,13 +196,23 @@ router.post("/delete", requireAuth, async (req: AuthRequest, res: Response) => {
       [firebaseUid]
     );
 
+    // A Firebase login can exist without a Postgres row (signup abandoned
+    // before the profile insert); there is simply no data to delete.
     if (user) {
-      await execute("DELETE FROM rides WHERE passenger_id = $1 OR driver_id = $1", [user.id]);
-      await execute("DELETE FROM driver_profiles WHERE user_id = $1", [user.id]);
-      await execute("DELETE FROM driver_earnings WHERE driver_id = $1", [user.id]);
-      await execute("DELETE FROM chat_messages WHERE sender_id = $1", [user.id]);
-      await execute("DELETE FROM ratings WHERE passenger_id = $1 OR driver_id = $1", [user.id]);
-      await execute("DELETE FROM users WHERE id = $1", [user.id]);
+      await deleteAccountData(user.id);
+    }
+
+    // Remove the Firebase identity too. The client cannot always do this:
+    // accounts:delete needs a RECENT sign-in, and a driver logged in for months
+    // gets CREDENTIAL_TOO_OLD_LOGIN_AGAIN. The Admin SDK has no such limit.
+    // The DB rows are already gone, so a cleanup failure must not turn a
+    // successful deletion into an error — log it for ops instead.
+    try {
+      await getAuth().deleteUser(firebaseUid);
+    } catch (err: any) {
+      if (err?.code !== "auth/user-not-found") {
+        console.error(`[account-delete] Firebase cleanup failed for ${firebaseUid}:`, err);
+      }
     }
 
     res.json({ success: true });
