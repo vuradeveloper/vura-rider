@@ -474,7 +474,22 @@ the payment option, the screen, the eligibility call and all credit copy. The Pl
 Financial features declaration is "My app doesn't provide any financial features".
 The iOS manifest does not declare `Other Financial Info`. **Caveat:** the screen is
 also where an existing rider repays an outstanding balance, so only ship this build
-if no rider has an open Pay Later balance, or clear those balances first.
+if no rider has an open Pay Later balance, or clear those balances first. Run this
+against production before uploading:
+
+```sql
+SELECT a.user_id, u.email, a.outstanding, a.status, a.updated_at
+FROM pay_later_accounts a
+JOIN users u ON u.id = a.user_id
+WHERE a.outstanding > 0
+ORDER BY a.outstanding DESC;
+```
+
+The gate passes only when it returns zero rows. If it returns rows, collect or
+clear the balances first (repayment on the previous build, or an admin
+adjustment), or postpone v1.5. Do not hide an amount a rider still owes. The
+ledger (`pay_later_ledger`) is the source of truth; `pay_later_accounts.outstanding`
+is a mirror, so investigate any account that looks inconsistent before clearing it.
 
 **Option B - keep Pay Later and make the terms compliant.**
 - Show "0% interest, no fees" and the exact due date on the Pay Later screen and
@@ -553,8 +568,8 @@ it and can support the disclosure. "Pay for your ride at month-end" is accurate.
 - **On-device smoke test:** install the signed APK and test login, booking, live
   trip, Settings, legal links and account deletion.
 - **Open Pay Later balances:** v1.5 hides the screen where a rider repays an
-  outstanding balance. Before shipping, confirm no production rider has an open
-  balance, or collect/clear those balances first.
+  outstanding balance. Before shipping, run the gate query in §9 and confirm it
+  returns zero rows, or collect/clear those balances first.
 - **Future Pay Later release:** see §9. v1.5 is not blocked by this, but do not
   re-enable Pay Later for real riders until the NCR position and the Apple
   60-day issue are resolved.
