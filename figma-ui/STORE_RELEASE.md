@@ -148,8 +148,9 @@ powershell -ExecutionPolicy Bypass -File scripts\make-brand-assets.ps1
    - **Data safety:** use the answers in §4.
    - **Data deletion:** in-app deletion is at **Account -> Support & settings ->
      Settings -> Account removal -> Delete account**. Web deletion link:
-     `https://www.ridevura.com/delete-account` once the prepared page in §6 is
-     published; use `https://www.ridevura.com/contact` as the interim link.
+     `https://vura-account-deletion.pages.dev/` (live, verified 1 November 2026).
+     Use that in Play Console; swap it to
+     `https://www.ridevura.com/delete-account` once the marketing site serves it.
    - **Financial features:** v1.5 has **no** Pay Later or other credit feature.
      Answer "My app doesn't provide any financial features." Paying for a ride
      with cash or a saved card is not a separate financial product. If you later
@@ -282,24 +283,36 @@ or JavaScript) and covers **both** Vura Rider and Vura Driver. It explains the
 in-app path, lists what is deleted and what may be retained, and gives the
 `info@ridevura.com` request route with a 30-day service level.
 
-Publish it at:
+It is live at:
+
+```
+https://vura-account-deletion.pages.dev/
+```
+
+That URL returned 200 on 1 November 2026 and is the link to use in Play Console.
+It is a standalone Cloudflare Pages project (`vura-account-deletion`), deployed
+from this file with:
+
+```powershell
+# from a folder containing dist/index.html (a copy of delete-account.html)
+npx wrangler pages deploy dist --project-name=vura-account-deletion --branch=main --commit-dirty=true
+```
+
+The preferred branded URL is:
 
 ```
 https://www.ridevura.com/delete-account
 ```
 
 The marketing site is a separate Vercel project and its source is not in this
-repository, so the page has to be added to that project and deployed. Until it is
-live, use `https://www.ridevura.com/contact` in Play Console and add this sentence
-to the review notes:
+repository. When the page is added there, swap the Play Console link to the
+branded URL. Keep this sentence in the review notes either way:
 
 > Riders can delete their account inside the app at Account -> Support & settings
 > -> Settings -> Account removal -> Delete account. Users who cannot access the app can request deletion
-> through this contact form or by emailing info@ridevura.com; requests are
-> actioned within 30 days.
+> through this page or by emailing info@ridevura.com; requests are actioned within 30 days.
 
-Once `/delete-account` returns 200, swap the Play Console URL to it. This is a
-website change, not an app change.
+This is a website change, not an app change.
 
 The in-app flow calls the existing server endpoint `POST /api/users/delete`. It
 clears the local session and returns to the login screen after success. Verify it
@@ -386,7 +399,7 @@ On a Mac:
 > background location. Riders can delete their account in the app at Account ->
 > Support & settings -> Settings -> Account removal -> Delete account, and the
 > same instructions are at
-> https://www.ridevura.com/delete-account.
+> https://vura-account-deletion.pages.dev/.
 >
 > v1.5 does not offer Pay Later, credit, loans or any other financial product.
 > Riders pay with cash or a saved card.
@@ -525,9 +538,10 @@ it and can support the disclosure. "Pay for your ride at month-end" is accurate.
 - **Firebase registration:** `app.vura.rider` is not in the Firebase console. The
   current Android client is a clone and should be replaced, then the AAB rebuilt.
   The iOS `GoogleService-Info.plist` and APNs key are also missing.
-- **Publish the deletion page:** `store-assets/delete-account.html` is ready but
-  `https://www.ridevura.com/delete-account` is not live yet. Until it is, use
-  `/contact` in Play Console.
+- **Branded deletion page:** the page is live at
+  `https://vura-account-deletion.pages.dev/` and is ready for Play Console.
+  Moving it to `https://www.ridevura.com/delete-account` is still a
+  marketing-site change.
 - **Demo account and screenshots:** still to be created/captured on a real device.
 - **iOS archive:** requires macOS/Xcode; the project is prepared but has not been
   archived or uploaded.
@@ -567,7 +581,8 @@ it and can support the disclosure. "Pay for your ride at month-end" is accurate.
 [ ] Register app.vura.rider in Firebase (Android + iOS)
 [ ] Replace android/app/google-services.json with the real client
 [ ] Add ios/App/App/GoogleService-Info.plist and APNs key
-[ ] Publish https://www.ridevura.com/delete-account
+[x] Publish the deletion page (https://vura-account-deletion.pages.dev/)
+[ ] Move the deletion page to https://www.ridevura.com/delete-account
 [x] Decide Pay Later: hidden for v1.5
 [x] Build with VITE_PAY_LATER_ENABLED=false and re-run cap sync
 [ ] Confirm no rider has an open Pay Later balance before release
