@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import VehicleImage, { resolveVehicleImage } from './components/vehicle/VehicleImage'
 
+import vuraWordmark from './assets/vura-wordmark.png'
 import rideGo from './assets/ride-go.png'
 import rideComfort from './assets/ride-comfort.png'
 import rideXl from './assets/ride-xl.png'
@@ -28,13 +29,13 @@ import PayLaterScreen from './components/PayLaterScreen'
 import RidePaymentStatus from './components/RidePaymentStatus'
 import PromosScreen from './components/PromosScreen'
 import RiderProfile from './components/RiderProfile'
-import RiderSettings, { Guidelines } from './components/RiderSettings'
+import RiderSettings, { DeleteAccount, Guidelines } from './components/RiderSettings'
 import { SafetyScreen } from './components/SafetyScreen'
 import VehicleLinkScreen from './components/VehicleLinkScreen'
 // `getRoute` is what useRouteLine() calls to turn pickups/stops/drop-offs into a
 // road-following polyline. It existed in the backend lib all along but was never
 // imported here, so the map's route effect threw `getRoute is not defined` the
-// moment a screen rendered with two or more points â€” one of the white screens.
+// moment a screen rendered with two or more points — one of the white screens.
 import { getRoute } from './lib/backend'
 import WalletScreen from './components/WalletScreen'
 import { initPushNotifications, notifyRide } from './lib/notify'
@@ -44,7 +45,7 @@ import {
   AuthUser,
   BookRideHoldResult,
   bookRideHold,
-  // â”€â”€ rider â”€â”€
+  // ── rider ──
   cancelRide,
   completeTrip,
   declineRide,
@@ -83,15 +84,16 @@ import {
   on,
   openExternalUrl,
   openWaze,
-  // â”€â”€ payment methods (booking screen) â”€â”€
+  // ── payment methods (booking screen) ──
   PaymentMethod,
   PayLaterEligibility,
   PayLaterTakeResult,
-  // (getStoredProfileInfo is already imported above â€” listed once only)
+  // (getStoredProfileInfo is already imported above — listed once only)
   Place,
   publishLocation,
   RecentSearch,
   registerPaystackCard,
+  requestPasswordReset,
   requestRide,
   resyncOnlineState,
   reverseGeocode,
@@ -121,7 +123,7 @@ import {
 } from './lib/backend'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
-  | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater'
+  | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater' | 'deleteAccount'
 type DriverScreen = 'driverHome' | 'request' | 'pickup' | 'dropoff' | 'complete' | 'earnings' | 'driverAccount' | 'vehicle' | 'tripHistory' | 'settings' | 'help' | 'report' | 'wallet'
 type AppMode = 'rider' | 'driver'
 
@@ -137,8 +139,21 @@ const PAY_CASH = 'cash'
 // (server stores payment_method='pay_later' and books the ledger debit when the
 // ride completes). `payTag` is what every driver screen prints for it.
 const PAY_LATER = 'pay_later'
+
+// Store-review switch for the Pay Later credit feature. Pay Later is a
+// deferred-payment / line-of-credit product, so a review build can ship
+// without it until the credit disclosures and licence position are signed
+// off: `VITE_PAY_LATER_ENABLED=false npm run build`. Default: on.
+const PAY_LATER_ENABLED = (import.meta as any).env?.VITE_PAY_LATER_ENABLED !== 'false'
 const payTag = (m?: string | null) =>
-  m === 'cash' ? 'Cash' : m === PAY_LATER ? 'Pay Later' : 'Card'
+  m === 'cash' ? 'Cash' : PAY_LATER_ENABLED && m === PAY_LATER ? 'Pay Later' : 'Card'
+
+/**
+ * Public legal pages. Both are live on www.ridevura.com (verified 200).
+ * They open in the system browser / Custom Tab so they work inside the APK.
+ */
+const TERMS_URL = 'https://www.ridevura.com/terms'
+const PRIVACY_URL = 'https://www.ridevura.com/privacy'
 
 // ????????? Data ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 /** JS Sun=0..Sat=6 shifted to Mon=0..Sun=6, so the bars start on Monday. */
@@ -166,14 +181,14 @@ const RIDE_GROUPS: { label: string; ids: string[] }[] = [
 // sees are all the same number.
 const RIDE_FARE = 5
 
-// â”€â”€ Date helpers, copied from the React Native app (earnings.tsx / trips.tsx) â”€â”€
+// ── Date helpers, copied from the React Native app (earnings.tsx / trips.tsx) ──
 
 /** JS Sun=0..Sat=6 shifted to Mon=0..Sun=6, so the bars start on Monday. */
 function dayIndex(d: Date) {
   return (d.getDay() + 6) % 7
 }
 
-/** "Today Â· 14:32", "Yesterday Â· 09:05", or "12 Aug Â· 18:40". */
+/** "Today · 14:32", "Yesterday · 09:05", or "12 Aug · 18:40". */
 function fmtTripTime(iso: string | null) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -182,9 +197,9 @@ function fmtTripTime(iso: string | null) {
   const yest = new Date(now)
   yest.setDate(now.getDate() - 1)
   const time = d.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })
-  if (d.toDateString() === now.toDateString()) return `Today Â· ${time}`
-  if (d.toDateString() === yest.toDateString()) return `Yesterday Â· ${time}`
-  return `${d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })} Â· ${time}`
+  if (d.toDateString() === now.toDateString()) return `Today · ${time}`
+  if (d.toDateString() === yest.toDateString()) return `Yesterday · ${time}`
+  return `${d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })} · ${time}`
 }
 
 /**
@@ -229,7 +244,7 @@ function carOf(row: any): MapCar | null {
 /**
  * Waypoints in the order the driver will visit them. The server ignores
  * `waypoints` on a ride request (see the probe notes in lib/backend.ts), so on a
- * live ride these come back only if the row carries them â€” hence the several
+ * live ride these come back only if the row carries them — hence the several
  * spellings, and the empty array when there are none.
  */
 function stopsOf(row: any): LatLng[] {
@@ -241,7 +256,7 @@ function stopsOf(row: any): LatLng[] {
 }
 
 /**
- * Every leg of a trip, in order: pickup â†’ stops â†’ drop-off. Anything missing is
+ * Every leg of a trip, in order: pickup → stops → drop-off. Anything missing is
  * dropped rather than guessed, so the drawn line can never contradict the
  * addresses printed beside it.
  */
@@ -262,7 +277,7 @@ function tripPoints(pickup: LatLng | null, stops: LatLng[], dropoff: LatLng | nu
 function useRouteLine(points: LatLng[]): LatLng[] {
   const [line, setLine] = useState<LatLng[]>([])
   // A fresh array identity arrives on every render, so the effect keys off the
-  // coordinates instead â€” otherwise it would re-request the route forever.
+  // coordinates instead — otherwise it would re-request the route forever.
   const key = points.map((p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`).join('|')
   useEffect(() => {
     if (points.length < 2) { setLine([]); return }
@@ -276,7 +291,7 @@ function useRouteLine(points: LatLng[]): LatLng[] {
   return line
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ????????? Icons ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 const IC = {
@@ -294,6 +309,7 @@ const IC = {
   map: (c = '#9E9E9E') => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" /><line x1="8" y1="2" x2="8" y2="18" /><line x1="16" y1="6" x2="16" y2="22" /></svg>,
   shield: (c = '#4A4A4A') => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>,
   wallet: (c = '#1A1A1A') => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M2 10h20" /></svg>,
+  cash: (c = '#1A1A1A') => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" /><path d="M6 10v4M18 10v4" /></svg>,
   check: (c = '#fff') => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>,
   menu: (c = '#1A1A1A') => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></svg>,
   trend: (c = '#34A853') => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" /><polyline points="17 6 23 6 23 12" /></svg>,
@@ -308,7 +324,7 @@ const IC = {
  * Opens a URL for card checkout.
  *
  * Capacitor's Browser plugin renders the page in a Custom Tab ON TOP of the app,
- * so the rider never gets thrown out to a separate browser app â€” that in-app
+ * so the rider never gets thrown out to a separate browser app — that in-app
  * feeling is what the old React Native app had (it used an in-app WebView).
  *
  * An iframe cannot be used instead: the Paystack checkout returns
@@ -322,7 +338,7 @@ async function openExternal(url: string) {
     await Browser.open({ url })
     return
   } catch {
-    /* plugin missing (e.g. running as a plain web build) â€” fall through */
+    /* plugin missing (e.g. running as a plain web build) — fall through */
   }
   const w = window.open(url, '_system')
   if (w) return
@@ -348,14 +364,14 @@ const PANEL_RISE = 20
 
 function MapCanvas({
   dark = false, marker, zoom = 16, follow = true, controls = false, controlsBottom = 12, route,
-  car, pickup, destination, fitRoute = false, showSelf = true, pickupLabel, destinationLabel,
+  car, pickup, stops, destination, fitRoute = false, showSelf = true, pickupLabel, destinationLabel,
 }: {
   dark?: boolean
   /**
-   * Polyline to draw (pickup â†’ stops â†’ drop-off), normally from getRoute().
+   * Polyline to draw (pickup → stops → drop-off), normally from getRoute().
    *
    * This REPLACES the old `showRoute?: boolean` prop, which was declared and passed
-   * by three screens but never destructured or forwarded â€” so `showRoute` did
+   * by three screens but never destructured or forwarded — so `showRoute` did
    * nothing at all and no map in the app ever drew a route.
    */
   route?: LatLng[]
@@ -365,6 +381,8 @@ function MapCanvas({
   car?: MapCar | null
   /** Pickup + drop-off markers for the rider tracking layout. */
   pickup?: LatLng | null
+  /** Intermediate stops, in visiting order (numbered pins on the map). */
+  stops?: LatLng[]
   destination?: LatLng | null
   pickupLabel?: string
   destinationLabel?: string
@@ -383,10 +401,10 @@ function MapCanvas({
     // `isolate` (CSS `isolation: isolate`) is REQUIRED here, not cosmetic: it makes
     // this wrapper a stacking context, which traps Leaflet's internal panes inside it.
     //
-    // Leaflet ships `.leaflet-tile-pane{z-index:200}` â€¦ `.leaflet-popup-pane{z-index:700}`
-    // â€¦ `.leaflet-control{z-index:800}`, and with no stacking context above them those
+    // Leaflet ships `.leaflet-tile-pane{z-index:200}` … `.leaflet-popup-pane{z-index:700}`
+    // … `.leaflet-control{z-index:800}`, and with no stacking context above them those
     // raw values leak into the app's ROOT stacking order. That painted the map over
-    // every overlay (all z-10 â€” the search bar, the Online/Offline pill, the riderâ†”driver
+    // every overlay (all z-10 — the search bar, the Online/Offline pill, the rider↔driver
     // switch, the back buttons) and over the bottom nav (z-50), which is exactly why
     // those controls stopped showing once real tiles started loading.
     //
@@ -394,7 +412,7 @@ function MapCanvas({
     // document order, so the overlays beside it stack normally again.
     <div className="absolute inset-0 overflow-hidden bg-[#EEF2F7] isolate">
       {/* The pin is drawn by Leaflet at the driver's REAL coordinates. The old
-          hard-coded centre pin that sat here is gone â€” it always pointed at the
+          hard-coded centre pin that sat here is gone — it always pointed at the
           middle of the screen no matter where the driver actually was. */}
       <LeafletMap
         dark={dark}
@@ -406,6 +424,7 @@ function MapCanvas({
         route={route}
         car={car}
         pickup={pickup}
+        stops={stops}
         destination={destination}
         pickupLabel={pickupLabel}
         destinationLabel={destinationLabel}
@@ -416,8 +435,8 @@ function MapCanvas({
   )
 }
 
-// The riderâ†”driver mode pill used to live here. It has been REMOVED: these are two
-// separate apps â€” this one is rider-only â€” and the switch only added a way to land
+// The rider↔driver mode pill used to live here. It has been REMOVED: these are two
+// separate apps — this one is rider-only — and the switch only added a way to land
 // in screens that cannot do the job of the other app.
 
 // ????????? RIDER ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
@@ -446,7 +465,7 @@ function PlaceIcon({ type }: { type: string }) {
 
 function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode: AppMode; onMode: (m: AppMode) => void }) {
   const [me, setMe] = useState<LatLng | null>(null)
-  const [placeLabel, setPlaceLabel] = useState('Locating youâ€¦')
+  const [placeLabel, setPlaceLabel] = useState('Locating you…')
   const [places, setPlaces] = useState<SavedPlace[]>(() => getSavedPlaces())
   const [adding, setAdding] = useState(false)
   const [newLabel, setNewLabel] = useState('')
@@ -455,7 +474,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
   const [searching, setSearching] = useState(false)
   const [recents, setRecents] = useState<RecentSearch[]>([])
 
-  // Real GPS fix â€” the rider's actual position, used for the pickup point and
+  // Real GPS fix — the rider's actual position, used for the pickup point and
   // the map centre (the same geolocation the native app uses via expo-location).
   useEffect(() => {
     getMyLocation()
@@ -469,10 +488,10 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
         const real = r?.address || r?.name
         setPlaceLabel(real ? String(real) : 'My Current Location')
       })
-      .catch(() => setPlaceLabel('Location unavailable â€” check permissions'))
+      .catch(() => setPlaceLabel('Location unavailable — check permissions'))
   }, [])
 
-  // Real destination search, with the SAME ranking parameters the old app used â€”
+  // Real destination search, with the SAME ranking parameters the old app used —
   // biased to the rider's position, closest-first, South Africa only. This is what
   // made the old search accurate; sending only ?q= gave vaguer, farther results.
   useEffect(() => {
@@ -489,7 +508,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
     return () => { alive = false; clearTimeout(t) }
   }, [query, me])
 
-  // Recent searches â€” GET /api/searches, with the device as a fallback
+  // Recent searches — GET /api/searches, with the device as a fallback
   // (exactly the old SearchService behaviour).
   useEffect(() => {
     getRecentSearches()
@@ -551,11 +570,11 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
               className="flex-1 bg-transparent text-[14px] text-[#1A1A1A] outline-none placeholder:text-[#ADADAD]"
             />
             {query ? (
-              <button onClick={() => setQuery('')} className="text-[#ADADAD] text-[16px] leading-none">Ã—</button>
+              <button onClick={() => setQuery('')} className="text-[#ADADAD] text-[16px] leading-none">×</button>
             ) : null}
           </div>
 
-          {searching && <p className="text-[12px] text-[#ADADAD] mb-3 px-1">Searchingâ€¦</p>}
+          {searching && <p className="text-[12px] text-[#ADADAD] mb-3 px-1">Searching…</p>}
 
           {results.length > 0 && (
             <div className="mb-5 rounded-2xl border border-[#F0F0F0] overflow-hidden">
@@ -570,7 +589,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
                     <p className="text-[14px] text-[#1A1A1A] font-semibold truncate">{r.name}</p>
                     <p className="text-[12px] text-[#ADADAD] truncate mt-0.5">{r.address}</p>
                   </div>
-                  {/* Distance badge â€” the provider returns metres from the rider,
+                  {/* Distance badge — the provider returns metres from the rider,
                       which is what makes "closest first" visible. */}
                   {Number.isFinite(Number(r.distance)) && Number(r.distance) > 0 && (
                     <span className="text-[11px] text-[#ADADAD] shrink-0 font-medium">
@@ -584,7 +603,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
             </div>
           )}
 
-          {/* Recent searches â€” GET /api/searches, the old app's behaviour. */}
+          {/* Recent searches — GET /api/searches, the old app's behaviour. */}
           {query.trim().length === 0 && recents.length > 0 && (
             <div className="mb-5">
               <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold mb-2">Recent</p>
@@ -607,7 +626,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
           )}
           {/* __SAVED__ */}
 
-          {/* Quick picks â€” Home / Work / Airport, backed by saved places */}
+          {/* Quick picks — Home / Work / Airport, backed by saved places */}
           <div className="flex gap-2.5 mb-6">
             {[{ label: 'Home', type: 'home' }, { label: 'Work', type: 'work' }, { label: 'Airport', type: 'airport' }].map(q => {
               const saved = places.find((p) => p.label.toLowerCase() === q.label.toLowerCase())
@@ -660,7 +679,7 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
                       <p className="text-[12px] text-[#ADADAD] truncate mt-0.5">{p.label}</p>
                     </div>
                   </button>
-                  <button onClick={() => removePlace(p.id)} className="text-[#C4C4C4] text-[16px] px-2 active:text-[#EA4335]">Ã—</button>
+                  <button onClick={() => removePlace(p.id)} className="text-[#C4C4C4] text-[16px] px-2 active:text-[#EA4335]">×</button>
                 </div>
               ))}
             </div>
@@ -711,20 +730,51 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   destination: string
   onBack: () => void
   onTier?: (t: string) => void
-  /** tier, payment method ('cash' | 'card' | 'pay_later'), stops and the
-   *  checkbox-selected promo id (null = the rider unchecked it → no promo). */
-  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[], promoId: string | null, useInviteCredit: boolean, manualPickup?: { lat: number; lng: number; label: string } | null) => void
+  /** tier, payment method ('cash' | 'card' | 'pay_later'), stops, the
+   *  checkbox-selected promo id (null = the rider unchecked it → no promo),
+   *  the edited pickup and the edited destination (with coordinates when the
+   *  rider chose one). */
+  onConfirm: (tier: string, paymentMethod: string, stops: Waypoint[], promoId: string | null, useInviteCredit: boolean, manualPickup: { lat: number; lng: number; label: string } | null, destination: string) => void
 }) {
   const [sel, setSel] = useState('go')
   const destName = destLabel(destination)
   const ride = rideOptions.find(r => r.id === sel)!
-  // Manual pickup override — when the rider taps "From" or "To" and types an
-  // address, this is sent with the booking so MatchingScreen uses it instead of GPS.
-  const [manualPickup, setManualPickup] = useState<{ lat: number; lng: number; label: string } | null>(null)
-  const [showPickupInput, setShowPickupInput] = useState(false)
-  const [pickupQ, setPickupQ] = useState('')
-  const [pickupRes, setPickupRes] = useState<Place[]>([])
-  const [pickupBusy, setPickupBusy] = useState(false)
+
+  /**
+   * ONE ordered place list: From → Stops… → To.
+   *
+   * Every box is the same kind of row, so every box can be tapped to search,
+   * dragged, or moved with the arrows. The first row is always the pickup and
+   * the last row is always the drop-off; the rows in between are stops. This is
+   * deliberately positional: reordering the boxes reorders the route, which is
+   * what a rider dragging "To" above a stop expects to happen.
+   */
+  type BookingPlace = {
+    id: string
+    label: string
+    lat: number | null
+    lng: number | null
+    /** True only for the untouched "Current Location" pickup. */
+    current?: boolean
+  }
+  const [places, setPlaces] = useState<BookingPlace[]>(() => {
+    const dc = destCoords(destination)
+    return [
+      { id: 'pickup', label: 'Current Location', lat: null, lng: null, current: true },
+      { id: 'dropoff', label: destName, lat: dc?.lat ?? null, lng: dc?.lng ?? null },
+    ]
+  })
+  // Which row the search sheet is editing. insert=true appends a new stop
+  // before the drop-off; otherwise it replaces that row in place.
+  const [editor, setEditor] = useState<{ index: number; insert: boolean } | null>(null)
+  const [placeQ, setPlaceQ] = useState('')
+  const [placeRes, setPlaceRes] = useState<Place[]>([])
+  const [placeBusy, setPlaceBusy] = useState(false)
+  // Pointer drag state for reordering. rowRefs are measured live so a drag can
+  // cross more than one row without the list jumping around.
+  const rowRefs = useRef<Array<HTMLDivElement | null>>([])
+  const dragRef = useRef<{ from: number; pointerId: number } | null>(null)
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
 
   // ── Promo: TELL the rider first ("Promo applied"), then count the prices
   // down ONCE. Fixed-amount promos show the banner only — their discount is
@@ -761,7 +811,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     return () => window.clearInterval(t)
   }, [promo])
 
-  // â”€â”€ Payment method â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Payment method ─────────────────────────────────────────────────────────
   // `pay` is PAY_CASH or a saved card's id. Only 'cash' vs 'card' is sent with
   // the ride (that is what the server stores and the driver screen shows); the
   // card id is kept so the chosen card can be shown back to the rider.
@@ -795,22 +845,26 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   }
   useEffect(() => {
     loadCards()
-    getPayLaterEligibility().then(setPl).catch(() => setPl(null))
+    if (PAY_LATER_ENABLED) getPayLaterEligibility().then(setPl).catch(() => setPl(null))
   }, [])
 
-  // Manual pickup search â€” same geocoder as MatchingScreen's needPickup.
+  // Location search for the row currently being edited. Same geocoder and
+  // bias-to-current-location ordering as the home screen, so results match.
   useEffect(() => {
-    if (!showPickupInput) return
-    const q = pickupQ.trim()
-    if (q.length < 2) { setPickupRes([]); return }
+    if (!editor) return
+    const q = placeQ.trim()
+    if (q.length < 2) { setPlaceRes([]); setPlaceBusy(false); return }
     let alive = true
-    setPickupBusy(true)
-    searchPlaces(q)
-      .then((rows) => { if (alive) setPickupRes(rows || []) })
-      .catch(() => { if (alive) setPickupRes([]) })
-      .finally(() => { if (alive) setPickupBusy(false) })
-    return () => { alive = false }
-  }, [pickupQ, showPickupInput])
+    setPlaceBusy(true)
+    const t = setTimeout(async () => {
+      const here = await getMyLocation().catch(() => null)
+      const rows = await searchPlaces(q, here ?? undefined).catch(() => [] as Place[])
+      if (!alive) return
+      setPlaceRes(rows.slice(0, 8))
+      setPlaceBusy(false)
+    }, 300)
+    return () => { alive = false; clearTimeout(t) }
+  }, [placeQ, editor])
 
   async function removeCard(id: string) {
     setCards((rows) => rows.filter((c) => c.id !== id))
@@ -822,13 +876,13 @@ function BookingScreen({ destination, onBack, onConfirm }: {
    * Adds a card through Paystack's hosted checkout.
    *
    * The checkout is opened in the OS browser (3-D Secure / OTP cannot complete in
-   * an in-app view), then the card is confirmed by polling the server â€” the same
+   * an in-app view), then the card is confirmed by polling the server — the same
    * two-step flow as the native app (app/add-payment-method.tsx).
    */
   async function addCard() {
     if (addingCard) return
     setAddingCard(true)
-    setCardMsg('Opening the secure payment pageâ€¦')
+    setCardMsg('Opening the secure payment page…')
     try {
       const reg = await registerPaystackCard()
       if (!reg?.reference || !reg?.authorizationUrl) {
@@ -836,7 +890,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
         return
       }
       await openExternal(reg.authorizationUrl)
-      setCardMsg('Waiting for your bank to confirmâ€¦')
+      setCardMsg('Waiting for your bank to confirm…')
       const saved = await pollCardSaved(reg.reference)
       if (saved) {
         // Close the checkout tab so the rider lands back on the booking screen.
@@ -859,7 +913,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
    * 3s for up to 5 minutes.
    *
    * `abandoned` is Paystack's RESTING status for a checkout that has not been paid
-   * yet, so it only counts as final after a 2-minute grace â€” treating it as an
+   * yet, so it only counts as final after a 2-minute grace — treating it as an
    * immediate failure ends the flow seconds after opening, before the rider could
    * possibly have typed anything. `failed` is a genuine decline and is immediate.
    */
@@ -893,13 +947,6 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     }
   }
 
-  // â”€â”€ Stops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const [stops, setStops] = useState<Waypoint[]>([])
-  const [pickStop, setPickStop] = useState(false)
-  const [stopQ, setStopQ] = useState('')
-  const [stopRes, setStopRes] = useState<Place[]>([])
-  const [stopBusy, setStopBusy] = useState(false)
-
   // The rider's own fix, for the first leg of the drawn route. Read once: this
   // screen is about the destination, not about tracking movement.
   const [me, setMe] = useState<LatLng | null>(null)
@@ -909,76 +956,165 @@ function BookingScreen({ destination, onBack, onConfirm }: {
       .catch(() => { })
   }, [])
 
-  // The real road route for the map: current location â†’ stops â†’ destination.
-  // Missing pieces are simply skipped, so adding a stop redraws the line through
-  // it and the map never shows a route to nowhere.
-  const mapRoute = useRouteLine(tripPoints(
-    me,
-    stops.map((s) => ({ lat: s.lat, lng: s.lng })),
-    destCoords(destination),
-  ))
-
-  // Search as the rider types, biased to where they are â€” the same helper and
-  // ordering the home screen uses, so results match.
+  // Fill the untouched "Current Location" row once the fix arrives. A pickup
+  // the rider searched for is never overwritten.
   useEffect(() => {
-    if (!pickStop) return
-    const q = stopQ.trim()
-    if (q.length < 2) { setStopRes([]); setStopBusy(false); return }
-    let alive = true
-    setStopBusy(true)
-    const t = setTimeout(async () => {
-      const me = await getMyLocation().catch(() => null)
-      const rows = await searchPlaces(q, me ?? undefined).catch(() => [] as Place[])
-      if (!alive) return
-      setStopRes(rows.slice(0, 8))
-      setStopBusy(false)
-    }, 300)
-    return () => { alive = false; clearTimeout(t) }
-  }, [stopQ, pickStop])
+    if (!me) return
+    setPlaces((rows) => rows.map((r, i) =>
+      i === 0 && r.current && (r.lat == null || r.lng == null)
+        ? { ...r, lat: me.lat, lng: me.lng }
+        : r))
+  }, [me])
 
-  function chooseStop(p: Place) {
-    setStops((s) => [...s, { address: p.address || p.name, lat: p.lat, lng: p.lng }])
-    setPickStop(false)
-    setStopQ('')
-    setStopRes([])
+  const pickupPt = coordsOf(places[0]?.lat, places[0]?.lng) ?? me
+  const stopPts = places.slice(1, -1)
+    .map((p) => coordsOf(p.lat, p.lng))
+    .filter(Boolean) as LatLng[]
+  const dropPt = coordsOf(places[places.length - 1]?.lat, places[places.length - 1]?.lng)
+
+  // The real road route for the map: pickup → every stop → drop-off. Any row
+  // without coordinates is skipped, so the line never points at (0, 0).
+  const mapRoute = useRouteLine(tripPoints(pickupPt, stopPts, dropPt))
+
+  function openEditor(index: number, insert = false) {
+    setEditor({ index, insert })
+    setPlaceQ('')
+    setPlaceRes([])
+    setPlaceBusy(false)
   }
 
-  /**
-   * Moves a stop one place earlier or later.
-   *
-   * Order matters: the driver visits the stops in the order given, so which one
-   * comes first is a real decision, not a cosmetic one. The server is sent the
-   * array in this order.
-   */
-  function moveStop(index: number, dir: -1 | 1) {
-    setStops((rows) => {
-      const to = index + dir
-      if (to < 0 || to >= rows.length) return rows
+  function closeEditor() {
+    setEditor(null)
+    setPlaceQ('')
+    setPlaceRes([])
+    setPlaceBusy(false)
+  }
+
+  function choosePlace(p: Place) {
+    if (!editor) return
+    const label = p.address || p.name || 'Location'
+    const lat = Number(p.lat)
+    const lng = Number(p.lng)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+    setPlaces((rows) => {
+      if (editor.insert) {
+        const next = rows.slice()
+        next.splice(Math.max(1, next.length - 1), 0, {
+          id: `stop-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          label,
+          lat,
+          lng,
+        })
+        return next
+      }
+      return rows.map((r, i) => (i === editor.index ? { ...r, label, lat, lng, current: false } : r))
+    })
+    closeEditor()
+  }
+
+  async function chooseCurrentLocation() {
+    if (!editor) return
+    const p = me ?? await getMyLocation().catch(() => null)
+    if (!p) return
+    const at = { lat: p.lat, lng: p.lng }
+    setMe(at)
+    setPlaces((rows) => {
+      const row = { label: 'Current Location', lat: at.lat, lng: at.lng, current: true }
+      if (editor.insert) {
+        const next = rows.slice()
+        next.splice(Math.max(1, next.length - 1), 0, {
+          id: `stop-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          ...row,
+        })
+        return next
+      }
+      return rows.map((r, i) => (i === editor.index ? { ...r, ...row, id: r.id } : r))
+    })
+    closeEditor()
+  }
+
+  function removePlace(index: number) {
+    setPlaces((rows) => (index <= 0 || index >= rows.length - 1
+      ? rows
+      : rows.filter((_, i) => i !== index)))
+  }
+
+  /** Move a row to another position. The route follows this exact order. */
+  function movePlace(from: number, to: number) {
+    setPlaces((rows) => {
+      if (from === to || to < 0 || to >= rows.length) return rows
       const next = rows.slice()
-      const a = next[index]
-      next[index] = next[to]
-      next[to] = a
+      const [row] = next.splice(from, 1)
+      next.splice(to, 0, row)
       return next
     })
   }
 
+  function startDrag(e: ReactPointerEvent<HTMLButtonElement>, index: number) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* older WebView */ }
+    dragRef.current = { from: index, pointerId: e.pointerId }
+    setDragIndex(index)
+  }
+
+  function moveDrag(e: ReactPointerEvent<HTMLButtonElement>) {
+    const d = dragRef.current
+    if (!d) return
+    e.preventDefault()
+    const y = e.clientY
+    let target = d.from
+    rowRefs.current.forEach((el, idx) => {
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      if (y >= r.top && y <= r.bottom) target = idx
+    })
+    if (target !== d.from) {
+      movePlace(d.from, target)
+      d.from = target
+      setDragIndex(target)
+    }
+  }
+
+  function endDrag(e: ReactPointerEvent<HTMLButtonElement>) {
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* already released */ }
+    dragRef.current = null
+    setDragIndex(null)
+  }
+
   const payLabel = pay === PAY_CASH
     ? 'Cash'
-    : pay === PAY_LATER
+    : PAY_LATER_ENABLED && pay === PAY_LATER
       ? 'Ride now, pay later'
       : (() => {
         const c = cards.find((x) => x.id === pay)
-        return c ? `${(c.card_type || 'Card').toUpperCase()} â€¢â€¢â€¢â€¢ ${c.last4 || 'Â·Â·Â·Â·'}` : 'Card'
+        return c ? `${(c.card_type || 'Card').toUpperCase()} •••• ${c.last4 || '····'}` : 'Card'
       })()
   // Pay Later is bookable only when enrolled + terms accepted + not past due —
   // the same three checks the socket booking guard runs server-side.
-  const plReady = !!pl?.unlocked && !!pl?.enrolled && !!pl?.terms_accepted_at && !pl?.past_due
+  const plReady = PAY_LATER_ENABLED && !!pl?.unlocked && !!pl?.enrolled && !!pl?.terms_accepted_at && !pl?.past_due
   // Compact footer caption under the payment label.
   const paySubtitle = pay === PAY_CASH
     ? 'Pay the driver directly'
-    : pay === PAY_LATER
+    : PAY_LATER_ENABLED && pay === PAY_LATER
       ? (pl ? `${formatRand(pl.available_r)} credit available` : 'Ride now, pay later')
       : (cards.find((x) => x.id === pay)?.bank || 'Saved card')
+
+  // What the ordered list means for the booking. The first row is the pickup,
+  // the last is the drop-off, and every row between them is a stop.
+  const stopRows: Waypoint[] = places.slice(1, -1)
+    .filter((p) => p.lat != null && p.lng != null)
+    .map((p) => ({ address: p.label, lat: p.lat as number, lng: p.lng as number }))
+  const lastPlace = places[places.length - 1]
+  const destinationOut = lastPlace
+    ? (lastPlace.lat != null && lastPlace.lng != null
+      ? `${lastPlace.label}||${lastPlace.lat}||${lastPlace.lng}`
+      : lastPlace.label)
+    : destName
+  const pickupOverride = places[0] && places[0].lat != null && places[0].lng != null && !places[0].current
+    ? { lat: places[0].lat, lng: places[0].lng, label: places[0].label }
+    : null
 
   return (
     <div className="flex flex-col h-screen">
@@ -986,7 +1122,15 @@ function BookingScreen({ destination, onBack, onConfirm }: {
           scrolling the list shrinks the map, so browsing covers a bit more of
           it instead of nothing happening. */}
       <div className="relative" style={{ height: scrolled ? '24%' : '38%', transition: 'height 260ms ease' }}>
-        <MapCanvas route={mapRoute} />
+        <MapCanvas
+          route={mapRoute}
+          pickup={pickupPt}
+          stops={stopPts}
+          destination={dropPt}
+          fitRoute
+          follow={false}
+          showSelf={false}
+        />
         <button onClick={onBack} className="absolute top-12 left-5 z-10 w-10 h-10 rounded-full bg-white shadow-md flex items-center justify-center">
           {IC.chevLeft()}
         </button>
@@ -1002,141 +1146,102 @@ function BookingScreen({ destination, onBack, onConfirm }: {
           className="flex-1 min-h-0 overflow-y-auto"
           onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 12)}
         >
-        {/* Route: from -> any stops -> destination. The connector line and the dot
-            column grow with the number of stops so the diagram stays honest about
-            how many legs the trip has. */}
+        {/* One ordered list: From → stops → To. Every row opens the same search
+            sheet, and every row can be dragged or nudged with the arrows. */}
         <div className="px-5 pt-5 pb-4 border-b border-[#F2F2F2]">
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col items-center gap-1 shrink-0">
-              <div className="w-2.5 h-2.5 rounded-full bg-[#1A1A1A] border-2 border-white shadow" />
-              {stops.map((_, i) => (
-                <div key={i} className="flex flex-col items-center gap-1">
-                  <div className="w-px h-7 bg-[#E0E0E0]" />
-                  <div className="w-2.5 h-2.5 rounded-full bg-[#FBBC04] border-2 border-white shadow" />
-                </div>
-              ))}
-              <div className="w-px h-7 bg-[#E0E0E0]" />
-              <div className="w-2.5 h-2.5 rounded-full bg-[#EA4335] border-2 border-white shadow" />
-            </div>
-            <div className="flex flex-col gap-3 flex-1">
-              <div
-                className="bg-[#F7F7F7] rounded-xl px-3 py-2 cursor-pointer"
-                onClick={() => setShowPickupInput(true)}
-              >
-                <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">
-                  From
-                </p>
-                <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
-                  Current Location
-                </p>
-              </div>
-              {stops.map((s, i) => (
-                <div
-                  key={i}
-                  className="bg-[#F7F7F7] rounded-xl px-3 py-2 flex items-center gap-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">
-                      Stop {i + 1}
-                    </p>
-                    <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
-                      {destLabel(s.address)}
-                    </p>
+          <div className="flex flex-col gap-2">
+            {places.map((p, i) => {
+              const first = i === 0
+              const last = i === places.length - 1
+              const role = first ? 'From' : last ? 'To' : `Stop ${i}`
+              const dot = first ? '#1A1A1A' : last ? '#EA4335' : '#FBBC04'
+              return (
+                <div key={p.id} className="flex items-stretch gap-2.5">
+                  <div className="flex flex-col items-center shrink-0 w-3">
+                    <div className="w-2.5 h-2.5 rounded-full border-2 border-white shadow mt-3" style={{ background: dot }} />
+                    {!last && <div className="w-px flex-1 bg-[#E0E0E0] my-1" />}
                   </div>
-                  {/* Drag handle + reorder â€” the driver visits stops in this order. */}
-                  <div className="shrink-0 flex flex-col gap-1">
-                    <button
-                      onClick={() => moveStop(i, -1)}
-                      disabled={i === 0}
-                      aria-label={`Move stop ${i + 1} earlier`}
-                      className={`w-8 h-8 flex items-center justify-center text-[11px] font-bold rounded-md ${i === 0 ? 'text-[#DADADA]' : 'text-[#1A1A1A] active:bg-[#EDEDED]'}`}
-                    >
-                      ⠇↑
-                    </button>
-                    <button
-                      onClick={() => moveStop(i, 1)}
-                      disabled={i === stops.length - 1}
-                      aria-label={`Move stop ${i + 1} later`}
-                      className={`w-8 h-8 flex items-center justify-center text-[11px] font-bold rounded-md ${i === stops.length - 1 ? 'text-[#DADADA]' : 'text-[#1A1A1A] active:bg-[#EDEDED]'}`}
-                    >
-                      ⠇↓
-                    </button>
-                  </div>
-                  <button
-                    onClick={() => setStops((rows) => rows.filter((_, x) => x !== i))}
-                    aria-label={`Remove stop ${i + 1}`}
-                    className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[#9E9E9E] text-[16px] leading-none active:bg-[#EDEDED]"
+                  <div
+                    ref={(el) => { rowRefs.current[i] = el }}
+                    className={`flex-1 min-w-0 bg-[#F7F7F7] rounded-xl px-3 py-2 flex items-center gap-1.5 transition-opacity ${dragIndex === i ? 'opacity-60' : ''}`}
                   >
-                    ×
-                  </button>
+                    <button type="button" onClick={() => openEditor(i)} className="min-w-0 flex-1 text-left py-0.5">
+                      <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">
+                        {role}
+                      </p>
+                      <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
+                        {p.label}
+                      </p>
+                    </button>
+
+                    {/* Drag handle — pointer-based so it works in the Android
+                        WebView (HTML5 drag events do not). */}
+                    <button
+                      type="button"
+                      aria-label={`Drag ${role}`}
+                      onPointerDown={(e) => startDrag(e, i)}
+                      onPointerMove={moveDrag}
+                      onPointerUp={endDrag}
+                      onPointerCancel={endDrag}
+                      style={{ touchAction: 'none' }}
+                      className="shrink-0 w-6 h-9 flex items-center justify-center text-[#9E9E9E] active:bg-[#EDEDED] rounded-md"
+                    >
+                      <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor" aria-hidden="true">
+                        <circle cx="3" cy="3" r="1.4" /><circle cx="9" cy="3" r="1.4" />
+                        <circle cx="3" cy="8" r="1.4" /><circle cx="9" cy="8" r="1.4" />
+                        <circle cx="3" cy="13" r="1.4" /><circle cx="9" cy="13" r="1.4" />
+                      </svg>
+                    </button>
+
+                    {/* Keep the existing up/down arrows, now on every row. */}
+                    <div className="shrink-0 flex flex-col">
+                      <button
+                        type="button"
+                        onClick={() => movePlace(i, i - 1)}
+                        disabled={first}
+                        aria-label={`Move ${role} earlier`}
+                        className={`w-7 h-5 flex items-center justify-center rounded-md ${first ? 'text-[#DADADA]' : 'text-[#1A1A1A] active:bg-[#EDEDED]'}`}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => movePlace(i, i + 1)}
+                        disabled={last}
+                        aria-label={`Move ${role} later`}
+                        className={`w-7 h-5 flex items-center justify-center rounded-md ${last ? 'text-[#DADADA]' : 'text-[#1A1A1A] active:bg-[#EDEDED]'}`}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+                      </button>
+                    </div>
+
+                    {!first && !last && (
+                      <button
+                        type="button"
+                        onClick={() => removePlace(i)}
+                        aria-label={`Remove ${role}`}
+                        className="shrink-0 w-6 h-7 rounded-full flex items-center justify-center text-[#9E9E9E] active:bg-[#EDEDED]"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                      </button>
+                    )}
+                  </div>
                 </div>
-              ))}
-              <div
-                className="bg-[#F7F7F7] rounded-xl px-3 py-2 cursor-pointer"
-                onClick={() => setShowPickupInput(true)}
-              >
-                <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">
-                  To
-                </p>
-                <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
-                  {destName}
-                </p>
-              </div>
-            </div>
+              )
+            })}
           </div>
 
-          {/* Add stop â€” sits with the route, since a stop is part of the trip. */}
-          <button onClick={() => setPickStop(true)}
+          <button onClick={() => openEditor(-1, true)}
             className="mt-3 w-full flex items-center gap-2.5 py-2.5 px-1 rounded-xl active:bg-[#F7F7F7] transition-colors">
             <span className="w-6 h-6 rounded-full bg-[#1A1A1A] text-white text-[15px] font-bold flex items-center justify-center leading-none">+</span>
             <span className="text-[13px] text-[#1A1A1A] font-semibold">Add stop</span>
-            {stops.length > 0 && (
+            {places.length > 2 && (
               <span className="ml-auto text-[11px] text-[#ADADAD] font-semibold">
-                {stops.length} stop{stops.length > 1 ? 's' : ''}
+                {places.length - 2} stop{places.length - 2 > 1 ? 's' : ''}
               </span>
             )}
           </button>
         </div>
-
-        {/* Manual pickup entry â€” tap From/To to type a custom pickup address */}
-        {showPickupInput && (
-          <div className="mt-5 border border-[#EBEBEB] rounded-2xl p-4 text-left">
-            <p className="text-[13px] font-semibold text-[#1A1A1A] mb-2">
-              Pick your pickup location
-            </p>
-            <input
-              value={pickupQ}
-              onChange={(e) => setPickupQ(e.target.value)}
-              placeholder="Search a street, place or landmark"
-              className="w-full border border-[#EBEBEB] rounded-xl px-3.5 py-3 text-[13px] outline-none focus:border-[#EA4335]"
-            />
-            {pickupBusy && <p className="text-[12px] text-[#ADADAD] mt-2">Searching...</p>}
-            <div className="mt-2 max-h-56 overflow-y-auto">
-              {pickupRes.map((p, i) => (
-                <button
-                  key={`${p.lat}-${p.lng}-${i}`}
-                  onClick={() => {
-                    setManualPickup({ lat: p.lat, lng: p.lng, label: p.address || p.name })
-                    setShowPickupInput(false)
-                    setPickupQ('')
-                    setPickupRes([])
-                  }}
-                  className="w-full text-left px-1 py-2.5 border-b border-[#F2F2F2] last:border-0 active:bg-[#F7F7F7]"
-                >
-                  <span className="block text-[13px] font-semibold text-[#1A1A1A]">{p.name}</span>
-                  <span className="block text-[12px] text-[#ADADAD]">{p.address}</span>
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => { setShowPickupInput(false); setPickupQ(''); setPickupRes([]) }}
-              className="mt-3 w-full text-[12px] text-[#ADADAD] text-center"
-            >
-              Use current location
-            </button>
-          </div>
-        )}
-
 
         {/* Promo applied — announced BEFORE the prices, exactly as requested. */}
         <div className="px-5 py-4">
@@ -1277,7 +1382,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
           <button onClick={() => setPayPicker(true)}
             className="w-full flex items-center gap-3 py-2 active:opacity-70">
             <div className="w-9 h-9 rounded-xl bg-[#F7F7F7] flex items-center justify-center shrink-0 text-[15px]">
-              {pay === PAY_CASH ? <span>ðŸ’µ</span> : pay === PAY_LATER ? <span>ðŸ•’</span> : IC.wallet()}
+              {pay === PAY_CASH ? IC.cash() : PAY_LATER_ENABLED && pay === PAY_LATER ? IC.clock() : IC.wallet()}
             </div>
             <div className="min-w-0 flex-1 text-left">
               <p className="text-[14px] text-[#1A1A1A] font-semibold truncate">{payLabel}</p>
@@ -1285,13 +1390,21 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
             {IC.chevRight()}
           </button>
-          <button onClick={() => onConfirm(sel, pay === PAY_CASH ? 'cash' : pay === PAY_LATER ? PAY_LATER : 'card', stops, promoOn && promo && promo.usable !== false ? promo.id : null, inviteOn && inviteBalance > 0, manualPickup)}
+          <button onClick={() => onConfirm(
+            sel,
+            pay === PAY_CASH ? 'cash' : PAY_LATER_ENABLED && pay === PAY_LATER ? PAY_LATER : 'card',
+            stopRows,
+            promoOn && promo && promo.usable !== false ? promo.id : null,
+            inviteOn && inviteBalance > 0,
+            pickupOverride,
+            destinationOut,
+          )}
             className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-3.5 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
             Confirm {ride.name}
           </button>
-          {stops.length > 0 && (
+          {stopRows.length > 0 && (
             <p className="text-[11px] text-[#ADADAD] text-center mt-2">
-              {stops.length} stop{stops.length > 1 ? 's' : ''}
+              {stopRows.length} stop{stopRows.length > 1 ? 's' : ''} · driver visits them in this order
             </p>
           )}
         </div>
@@ -1319,24 +1432,24 @@ function BookingScreen({ destination, onBack, onConfirm }: {
               onSelect={() => setPay(PAY_CASH)}
               title="Cash"
               subtitle="Pay the driver directly"
-              icon={<span className="text-[16px]">ðŸ’µ</span>}
+              icon={IC.cash()}
             />
 
             {/* Ride Now, Pay Later — selectable only when bookable (enrolled +
                 terms accepted, not past due); otherwise a hint row that tells the
                 rider exactly what to do, never a dead button. */}
-            {pl?.unlocked && plReady && (
+            {PAY_LATER_ENABLED && pl?.unlocked && plReady && (
               <PayRow
                 selected={pay === PAY_LATER}
                 onSelect={() => setPay(PAY_LATER)}
                 title="Ride Now, Pay Later"
                 subtitle={`Ride now, settle at month-end · ${formatRand(pl.available_r)} credit available`}
-                icon={<span className="text-[16px]">ðŸ•’</span>}
+                icon={IC.clock()}
               />
             )}
-            {pl?.unlocked && !plReady && (
+            {PAY_LATER_ENABLED && pl?.unlocked && !plReady && (
               <div className="flex items-center gap-3 px-4 py-3.5 rounded-2xl border-2 border-dashed border-[#E8E8E8] bg-[#FAFAFA]">
-                <div className="w-9 h-9 rounded-xl bg-white border border-[#F0F0F0] flex items-center justify-center shrink-0 text-[15px]">ðŸ•’</div>
+                <div className="w-9 h-9 rounded-xl bg-white border border-[#F0F0F0] flex items-center justify-center shrink-0 text-[15px]">{IC.clock()}</div>
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px] text-[#6B6B6B] font-semibold truncate">Ride Now, Pay Later</p>
                   <p className="text-[11px] text-[#ADADAD] truncate">
@@ -1355,7 +1468,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                 key={c.id}
                 selected={pay === c.id}
                 onSelect={() => setPay(c.id)}
-                title={`${(c.card_type || 'Card').toUpperCase()} â€¢â€¢â€¢â€¢ ${c.last4 || 'Â·Â·Â·Â·'}`}
+                title={`${(c.card_type || 'Card').toUpperCase()} •••• ${c.last4 || '····'}`}
                 subtitle={c.bank || 'Saved card'}
                 icon={IC.wallet()}
                 onRemove={() => removeCard(c.id)}
@@ -1368,7 +1481,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                 ? <div className="w-4 h-4 rounded-full border-2 border-[#D0D0D0] border-t-[#EA4335] animate-spin" />
                 : <span className="w-6 h-6 rounded-full bg-[#1A1A1A] text-white text-[15px] font-bold flex items-center justify-center leading-none">+</span>}
               <span className="text-[13px] text-[#1A1A1A] font-semibold">
-                {addingCard ? 'Waiting for your bankâ€¦' : 'Add card'}
+                {addingCard ? 'Waiting for your bank…' : 'Add card'}
               </span>
             </button>
           </div>
@@ -1381,42 +1494,64 @@ function BookingScreen({ destination, onBack, onConfirm }: {
         </div>
       )}
 
-      {/* Stop picker. A sheet rather than a new screen, so the rider never loses
-          the booking they were in the middle of. */}
-      {pickStop && (
+      {/* Place search. One sheet for every box: From, each Stop, and To.
+          Tapping a row opens this in "replace" mode; "Add stop" opens it in
+          insert mode. A sheet rather than a new screen, so the rider never
+          loses the booking they were in the middle of. */}
+      {editor && (
         <div className="absolute inset-0 z-50 flex flex-col justify-end">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setPickStop(false)} />
+          <div className="absolute inset-0 bg-black/30" onClick={closeEditor} />
           <div className="relative bg-white rounded-t-3xl max-h-[80%] flex flex-col shadow-[0_-4px_24px_rgba(0,0,0,0.18)]">
             <div className="px-5 pt-4 pb-3 border-b border-[#F2F2F2]">
               <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
               <div className="flex items-center gap-3">
                 <span className="text-[16px] font-bold text-[#1A1A1A] flex-1" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-                  Add a stop
+                  {editor.insert
+                    ? 'Add a stop'
+                    : editor.index === 0
+                      ? 'Pickup'
+                      : editor.index === places.length - 1
+                        ? 'Destination'
+                        : `Stop ${editor.index}`}
                 </span>
-                <button onClick={() => setPickStop(false)}
+                <button onClick={closeEditor}
                   className="text-[13px] text-[#6B6B6B] font-semibold px-2 py-1">Done</button>
               </div>
               <div className="mt-3 flex items-center gap-3 bg-[#F7F7F7] rounded-2xl px-4 py-3">
                 {IC.search()}
                 <input
                   autoFocus
-                  value={stopQ}
-                  onChange={(e) => setStopQ(e.target.value)}
-                  placeholder="Search for a stop"
+                  value={placeQ}
+                  onChange={(e) => setPlaceQ(e.target.value)}
+                  placeholder={editor.insert ? 'Search for a stop' : 'Search a street, place or landmark'}
                   className="flex-1 bg-transparent outline-none text-[14px] text-[#1A1A1A] placeholder:text-[#ADADAD]"
                 />
-                {stopBusy && <div className="w-4 h-4 rounded-full border-2 border-[#E0E0E0] border-t-[#EA4335] animate-spin" />}
+                {placeBusy && <div className="w-4 h-4 rounded-full border-2 border-[#E0E0E0] border-t-[#EA4335] animate-spin" />}
               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-3">
-              {stopQ.trim().length < 2 ? (
+              {/* Current location is always one tap away, and only for the pickup. */}
+              {!editor.insert && editor.index === 0 && (
+                <button onClick={() => void chooseCurrentLocation()}
+                  className="w-full flex items-center gap-3 py-3.5 border-b border-[#F5F5F5] text-left active:bg-[#F7F7F7]">
+                  <div className="w-9 h-9 rounded-full bg-[#E8F0FE] flex items-center justify-center shrink-0">
+                    {IC.place()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] text-[#1A1A1A] font-semibold">Current Location</p>
+                    <p className="text-[11px] text-[#ADADAD] mt-0.5">Use my GPS position</p>
+                  </div>
+                </button>
+              )}
+
+              {placeQ.trim().length < 2 ? (
                 <p className="text-[12px] text-[#ADADAD] py-4">Type at least two letters to search.</p>
-              ) : stopRes.length === 0 && !stopBusy ? (
-                <p className="text-[12px] text-[#ADADAD] py-4">No places found for â€œ{stopQ.trim()}â€.</p>
+              ) : placeRes.length === 0 && !placeBusy ? (
+                <p className="text-[12px] text-[#ADADAD] py-4">No places found for “{placeQ.trim()}”.</p>
               ) : (
-                stopRes.map((p) => (
-                  <button key={String(p.id ?? p.name)} onClick={() => chooseStop(p)}
+                placeRes.map((p, i) => (
+                  <button key={String(p.id ?? `${p.lat}-${p.lng}-${i}`)} onClick={() => choosePlace(p)}
                     className="w-full flex items-center gap-3 py-3.5 border-b border-[#F5F5F5] last:border-0 text-left active:bg-[#F7F7F7]">
                     <div className="w-9 h-9 rounded-full bg-[#F2F2F2] flex items-center justify-center shrink-0">
                       {IC.place()}
@@ -1427,6 +1562,15 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                     </div>
                   </button>
                 ))
+              )}
+
+              {!editor.insert && editor.index > 0 && editor.index < places.length - 1 && (
+                <button
+                  onClick={() => { removePlace(editor.index); closeEditor() }}
+                  className="w-full mt-3 py-3 rounded-xl text-[13px] font-semibold text-[#C5221F] bg-[#FCE8E6] active:bg-[#F8D7D3]"
+                >
+                  Remove this stop
+                </button>
               )}
             </div>
           </div>
@@ -1467,17 +1611,17 @@ function PayRow({
       {onRemove && (
         <button onClick={onRemove} aria-label={`Remove ${title}`}
           className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[#9E9E9E] text-[16px] leading-none active:bg-[#EDEDED]">
-          Ã—
+          ×
         </button>
       )}
     </div>
   )
 }
 
-function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId, useInviteCredit, onCancel, onMatched }: {
+function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId, useInviteCredit, initialPickup, initialRideId, onCancel, onMatched }: {
   destination: string
   tier?: string
-  /** 'cash' | 'card' | 'pay_later' â€” chosen on the booking screen and sent with the request. */
+  /** 'cash' | 'card' | 'pay_later' — chosen on the booking screen and sent with the request. */
   paymentMethod?: string
   /** Stops added on the booking screen, sent as the ride's waypoints. */
   stops?: Waypoint[]
@@ -1487,19 +1631,28 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   /** The booking screen's "Use invite credit" switch — the SERVER takes
    *  min(balance, fare) off the trip and debits the referral balance. */
   useInviteCredit?: boolean
+  /** Pickup the rider chose on the booking screen. Overrides the GPS fix. */
+  initialPickup?: { lat: number; lng: number; label: string } | null
+  /**
+   * A ride this rider ALREADY booked, restored after the app was backgrounded,
+   * killed or force-quit. The screen must attach to that ride and keep waiting
+   * for a driver instead of calling bookRide() again (which would create a
+   * second chargeable ride).
+   */
+  initialRideId?: string | null
   onCancel: () => void
   onMatched: (rideId: string) => void
 }) {
   const [tick, setTick] = useState(0)
-  const [phase, setPhase] = useState<'booking' | 'waiting'>('booking')
+  const [phase, setPhase] = useState<'booking' | 'waiting'>(initialRideId ? 'waiting' : 'booking')
   const [error, setError] = useState('')
-  const sent = useRef(false)
-  const rideIdRef = useRef<string | null>(null)
+  const sent = useRef(!!initialRideId)
+  const rideIdRef = useRef<string | null>(initialRideId ?? null)
   // When Wait & Save timer expires, this flag lets bookRide proceed to dispatch.
   const waitSaveDispatched = useRef(false)
   // Where the pickup will be. When the phone cannot give us a GPS fix we ask
   // the rider to choose it rather than inventing one (see the booking effect).
-  const [manualPickup, setManualPickup] = useState<{ lat: number; lng: number; label: string } | null>(null)
+  const [manualPickup, setManualPickup] = useState<{ lat: number; lng: number; label: string } | null>(initialPickup ?? null)
   const [needPickup, setNeedPickup] = useState(false)
   const [pickQ, setPickQ] = useState('')
   const [pickRes, setPickRes] = useState<Place[]>([])
@@ -1658,7 +1811,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
           }
           const from = mine
           // The driver's trip card and Earnings show the ride's pickup_address, so
-          // it has to be the rider's REAL address â€” the literal words "Current
+          // it has to be the rider's REAL address — the literal words "Current
           // location" told the driver nothing. Resolve the fix to a street address
           // (GET /api/search/reverse) and only fall back to a coordinate pin if the
           // lookup fails, so the ride is never blocked by a geocoder problem.
@@ -1683,7 +1836,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
           // booking never goes out (the socket booking guard re-checks all of
           // it again anyway — the client is never trusted).
           let plOk: PayLaterTakeResult | null = null
-          if ((paymentMethod || 'cash') === PAY_LATER) {
+          if (PAY_LATER_ENABLED && (paymentMethod || 'cash') === PAY_LATER) {
             plOk = await takePayLaterRide(RIDE_FARE)
             if (!alive) return
             setPlInfo(plOk)
@@ -1732,15 +1885,17 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
       }
 
     useEffect(() => {
+      // A restored ride already exists on the server: do not book a duplicate.
+      if (initialRideId) return
       bookRide()
       return () => { /* no-op: alive flag scoped inside bookRide */ }
-    }, [destination, tier, manualPickup])
+    }, [destination, tier, manualPickup, initialRideId])
 
   // The driver accepting arrives over the socket.
   useEffect(() => {
     const off = on('ride:accepted', (d: any) => {
       if (d?.id) {
-        void notifyRide('Driver accepted', 'Your driver is on the way â€” tap to see the trip.')
+        void notifyRide('Driver accepted', 'Your driver is on the way — tap to see the trip.')
         onMatched(String(d.id))
       }
     })
@@ -1757,6 +1912,11 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   // 3 seconds, plus on every foreground resume and socket reconnect.
   useEffect(() => {
     let alive = true
+    // A restored search can be cancelled while the app is in the background.
+    // The socket event is gone by then, so require three consecutive "no active
+    // ride" answers before leaving the screen (a transient network blip must not
+    // cancel the rider's search).
+    let misses = 0
 
     const check = async () => {
       try {
@@ -1766,6 +1926,19 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
         if ((active as any)?.id && ['accepted', 'driver_arrived', 'in_progress'].includes(st)) {
           console.log('[rider] matching: recovered from server, status =', st)
           onMatched(String((active as any).id))
+          return
+        }
+        if (initialRideId) {
+          const same = (active as any)?.id && String((active as any).id) === String(initialRideId)
+          if (same && ['searching', 'no_drivers'].includes(st)) {
+            misses = 0
+            return
+          }
+          misses += 1
+          if (misses >= 3) {
+            console.log('[rider] matching: restored ride is gone, returning home')
+            onCancel()
+          }
         }
       } catch {
         /* keep waiting */
@@ -1791,7 +1964,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
       offConnect()
       offCancel()
     }
-  }, [onMatched])
+  }, [onMatched, initialRideId])
 
   // Cancelling asks first, then takes the rider home (the sheet is below).
   function cancel() {
@@ -1869,10 +2042,10 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
             </h2>
             <p className="text-[13px] text-[#ADADAD] mt-1.5">{destName}</p>
             <p className="text-[12px] text-[#ADADAD] mt-1">
-              Paying by {paymentMethod === PAY_LATER ? 'Pay Later' : paymentMethod === 'cash' ? 'cash' : 'card'}
-              {stops && stops.length > 0 ? ` Â· ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
+              Paying by {PAY_LATER_ENABLED && paymentMethod === PAY_LATER ? 'Pay Later' : paymentMethod === 'cash' ? 'cash' : 'card'}
+              {stops && stops.length > 0 ? ` · ${stops.length} stop${stops.length > 1 ? 's' : ''}` : ''}
             </p>
-            {paymentMethod === PAY_LATER && plInfo && (
+            {PAY_LATER_ENABLED && paymentMethod === PAY_LATER && plInfo && (
               <p className="text-[11px] text-[#6B6B6B] mt-1 leading-snug">
                 Balance {formatRand(plInfo.outstanding_r)} · {formatRand(plInfo.available_r)} available
                 {plInfo.due_date
@@ -2125,7 +2298,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
   /**
    * The live route to draw. It prefers the coordinates the SERVER holds for this
-   * ride (pickup â†’ stops â†’ drop-off) and falls back to the rider's own fix â†’
+   * ride (pickup → stops → drop-off) and falls back to the rider's own fix →
    * the destination they picked, so the map always has a first and last point
    * even before the driver accepts.
    */
@@ -2210,7 +2383,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   }
 
   // Follow the ride's REAL status and the driver's live position over the socket
-  // â€” the same events the native track screen listens to (lib/socket.ts).
+  // — the same events the native track screen listens to (lib/socket.ts).
   useEffect(() => {
     const offs = [
       on('ride:driver:arrived', () => {
@@ -2267,7 +2440,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   }, [])
 
   // Same safety net as the matching screen (3s + foreground resume + reconnect):
-  // if an event was missed â€” or the phone was locked when the driver arrived â€” the
+  // if an event was missed — or the phone was locked when the driver arrived — the
   // server still knows the truth, so the rider's screen catches up regardless.
   // WHY getRide(rideId) and NOT getActiveRide(): /me/active only returns ACTIVE
   // rides by design, so a COMPLETED ride answers `null` and this check could
@@ -2327,7 +2500,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
   const driverName = ride?.driver_name || 'Your driver'
   const vehicle = [ride?.vehicle_make, ride?.vehicle_model].filter(Boolean).join(' ') || 'Vehicle'
-  const plate = ride?.driver_plate || ride?.license_plate || 'â€”'
+  const plate = ride?.driver_plate || ride?.license_plate || '—'
   const rating = Number(ride?.driver_rating || 0)
   const done = status === 'completed'
   const cancelled = status === 'cancelled'
@@ -2354,14 +2527,14 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   async function finishTrip() {
     if (!rideId) { setSheet(false); onDone(); return }
     setBusy(true)
-    // Rating first (POST /api/ratings), then the tip (POST /api/tips) â€” the tip is
+    // Rating first (POST /api/ratings), then the tip (POST /api/tips) — the tip is
     // best-effort so a rider without a saved card still leaves this screen.
     await submitRating(rideId, stars).catch((e: any) =>
       setToast(`Rating not saved: ${e?.message || 'error'}`)
     )
     if (tip > 0) {
       await sendTip(rideId, tip).catch(() =>
-        setToast('Tip not saved â€” add a card in Account â†’ Wallet')
+        setToast('Tip not saved — add a card in Account → Wallet')
       )
     }
     setBusy(false)
@@ -2431,14 +2604,15 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
   return (
     <div className="flex flex-col h-screen">
-      {/* rideRoute is the server's road route for this ride (pickup â†’ stops â†’
+      {/* rideRoute is the server's road route for this ride (pickup → stops →
           drop-off). It replaces the old dead `showRoute` flag, which the map
-          ignored â€” see MapCanvas above. */}
+          ignored — see MapCanvas above. */}
       <div className="relative flex-1">
         <MapCanvas
           route={rideRoute}
           car={driverPos}
           pickup={ridePickup}
+          stops={stopsOf(ride)}
           destination={rideDropoff}
           pickupLabel="Pickup"
           destinationLabel={mapEtaLabel}
@@ -2455,7 +2629,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-[#ADADAD]">{done ? 'Arrived' : STATUS_TEXT[status] || 'Driver on the way'}</p>
             <p className="text-[28px] font-bold text-[#1A1A1A] leading-none mt-0.5" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              {done ? 'âœ“' : eta > 0 ? `${eta} min` : STATUS_TEXT[status] || ''}
+              {done ? '✓' : eta > 0 ? `${eta} min` : STATUS_TEXT[status] || ''}
             </p>
           </div>
           <div className="text-right">
@@ -2469,7 +2643,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           <div className="h-full bg-[#EA4335] rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
         </div>
 
-        {/* Driver â€” real name, rating, vehicle and plate from the ride row, plus
+        {/* Driver — real name, rating, vehicle and plate from the ride row, plus
             working call / message / emergency actions. */}
         <div className="flex items-center gap-3 mb-4">
           <DriverAvatar name={driverName} photo={ride?.driver_photo_url} size={44} />
@@ -2478,7 +2652,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
             <div className="flex items-center gap-1 mt-0.5">
               {IC.star()}
               <span className="text-[12px] text-[#6B6B6B] font-medium truncate">
-                {rating > 0 ? `${rating.toFixed(2)} Â· ` : ''}{vehicle}
+                {rating > 0 ? `${rating.toFixed(2)} · ` : ''}{vehicle}
               </span>
             </div>
           </div>
@@ -2509,7 +2683,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           </div>
         </div>
 
-        {/* The car, the plate and who is driving â€” one shared card on every stage
+        {/* The car, the plate and who is driving — one shared card on every stage
             (Uber-style), rebuilt from the ride row so a relaunch mid-trip redraws it. */}
         <DriverVehicleCard
           driver={{ name: driverName, photo_url: ride?.driver_photo_url, rating }}
@@ -2694,7 +2868,7 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
 
               <button disabled={busy} onClick={() => void finishTrip()}
                 className="w-full mt-5 bg-[#1A1A1A] text-white font-bold text-[15px] py-4 rounded-2xl disabled:opacity-50">
-                {busy ? 'Savingâ€¦' : 'Next'}
+                {busy ? 'Saving…' : 'Next'}
               </button>
             </div>
           </div>
@@ -2817,7 +2991,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
   const [error, setError] = useState('')
   const [rating, setRating] = useState<{ rideId: string; score: number } | null>(null)
 
-  // Real history â€” GET /api/rides/history (the native app's RideService
+  // Real history — GET /api/rides/history (the native app's RideService
   // getRideHistory). Shows exactly the trips this rider has taken.
   useEffect(() => {
     let alive = true
@@ -2830,7 +3004,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
 
   async function rate(rideId: string, score: number) {
     setRating({ rideId, score })
-    // POST /api/ratings â€” the same call the native app makes after a trip.
+    // POST /api/ratings — the same call the native app makes after a trip.
     await submitRating(rideId, score).catch((e: any) =>
       setError(`Could not save your rating: ${e?.message || 'unknown error'}`)
     )
@@ -2846,7 +3020,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
           <div className="rounded-xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-3 text-[12px] font-semibold text-[#C5221F]">{error}</div>
         )}
         {loading ? (
-          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your tripsâ€¦</p>
+          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your trips…</p>
         ) : rides.length === 0 ? (
           <div className="bg-white rounded-2xl border border-[#F0F0F0] px-4 py-8 text-center shadow-sm">
             <p className="text-[14px] font-bold text-[#1A1A1A]">No trips yet</p>
@@ -2873,7 +3047,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                     <p className="text-[15px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{formatRand(fare)}</p>
                   </div>
                 </div>
-                {/* The car that did THIS trip â€” drawn from the snapshot stamped on
+                {/* The car that did THIS trip — drawn from the snapshot stamped on
                     the ride at accept time, so it stays correct even after the driver
                     changes cars later. */}
                 <div className="flex items-center gap-3 pt-3">
@@ -2881,7 +3055,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                   <div className="min-w-0">
                     <p className="text-[14px] font-bold text-[#1A1A1A] tracking-[0.18em]"
                       style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-                      {t.license_plate || 'â€”'}
+                      {t.license_plate || '—'}
                     </p>
                     <p className="text-[11px] text-[#6B6B6B] font-semibold truncate capitalize">
                       {[colourNameOf(t.vehicle_color), t.vehicle_make, t.vehicle_model].filter(Boolean).join(' ') || 'Vehicle details pending'}
@@ -2897,7 +3071,7 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
                   </div>
                 </div>
 
-                {/* Rate the driver â€” real POST /api/ratings, only for completed trips
+                {/* Rate the driver — real POST /api/ratings, only for completed trips
                     that the rider hasn't already rated. */}
                 {String(t.status) === 'completed' && (
                   <div className="flex items-center gap-1.5 pt-3 mt-3 border-t border-[#F5F5F5]">
@@ -2923,7 +3097,7 @@ function RiderNotifications({ onBack }: { onBack: () => void }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  // GET /api/notifications/history â€” verified live (_flow.mjs).
+  // GET /api/notifications/history — verified live (_flow.mjs).
   useEffect(() => {
     let alive = true
     getNotifications()
@@ -2949,7 +3123,7 @@ function RiderNotifications({ onBack }: { onBack: () => void }) {
           <div className="rounded-xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-3 text-[12px] font-semibold text-[#C5221F] mb-3">{error}</div>
         )}
         {loading ? (
-          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loadingâ€¦</p>
+          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading…</p>
         ) : rows.length === 0 ? (
           <div className="bg-white rounded-2xl border border-[#F0F0F0] px-4 py-8 text-center shadow-sm">
             <p className="text-[14px] font-bold text-[#1A1A1A]">No notifications</p>
@@ -2989,7 +3163,7 @@ function RiderAccount({ mode, onMode, onSignOut, onNotifications, open }: {
 
   // Real history drives the stats. The rider app has no stats endpoint of its
   // own (the live server's /api/drivers/stats is driver-only), so trips and
-  // spend are computed from GET /api/rides/history â€” the same source the
+  // spend are computed from GET /api/rides/history — the same source the
   // Activity screen lists.
   useEffect(() => {
     getRideHistory(1, 50)
@@ -3022,13 +3196,13 @@ function RiderAccount({ mode, onMode, onSignOut, onNotifications, open }: {
             <p className="text-[16px] font-semibold text-[#1A1A1A] capitalize truncate">{name}</p>
             <p className="text-[13px] text-[#ADADAD] truncate">{email}</p>
           </div>
-          <button className="ml-auto shrink-0">{IC.chevRight()}</button>
+          <button onClick={() => open('profile')} aria-label="Open your profile" className="ml-auto shrink-0">{IC.chevRight()}</button>
         </div>
         <div className="mx-4 mt-3 grid grid-cols-3 gap-2.5">
           {[
-            { l: 'Trips', v: trips == null ? 'â€”' : String(trips) },
-            { l: 'Spent', v: spent == null ? 'â€”' : formatRand(spent) },
-            { l: 'Rating', v: 'â€”' },
+            { l: 'Trips', v: trips == null ? '—' : String(trips) },
+            { l: 'Spent', v: spent == null ? '—' : formatRand(spent) },
+            { l: 'Rating', v: '—' },
           ].map(s => (
             <div key={s.l} className="bg-white rounded-2xl border border-[#F0F0F0] p-3.5 text-center shadow-sm">
               <p className="text-[21px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{s.v}</p>
@@ -3036,7 +3210,7 @@ function RiderAccount({ mode, onMode, onSignOut, onNotifications, open }: {
             </div>
           ))}
         </div>
-        {[{ t: 'Account', items: [['Your Details', () => open('profile')], ['Payment Methods', () => open('payments')], ['Ride Now, Pay Later', () => open('paylater')], ['Promos & Invites', () => open('promos')]] }, { t: 'Preferences', items: [['Notifications', onNotifications]] }, { t: 'Settings', items: [['Emergency Contacts', () => open('safety')], ['Share Trip Status', () => open('safety')], ['Community Guidelines', () => open('guidelines')], ['Help Center', () => open('help')], ['Report an Issue', () => open('report')]] }].map(sec => (
+        {[{ t: 'Account', items: [['Your Details', () => open('profile')], ['Payment Methods', () => open('payments')], ...(PAY_LATER_ENABLED ? [['Ride Now, Pay Later', () => open('paylater')] as [string, () => void]] : []), ['Promos & Invites', () => open('promos')]] }, { t: 'Preferences', items: [['Notifications', onNotifications]] }, { t: 'Support & settings', items: [['Settings', () => open('settings')], ['Emergency Contacts', () => open('safety')], ['Share Trip Status', () => open('safety')], ['Community Guidelines', () => open('guidelines')], ['Help Center', () => open('help')], ['Report an Issue', () => open('report')]] }].map(sec => (
           <div key={sec.t} className="bg-white mx-4 mt-3 rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
             <p className="text-[10px] uppercase tracking-widest text-[#ADADAD] font-semibold px-4 pt-3.5 pb-1">{sec.t}</p>
             {sec.items.map((item, i) => {
@@ -3100,7 +3274,7 @@ const ONLINE_CARD_HEIGHT = 145
 
 function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestData) => void; mode: AppMode; onMode: (m: AppMode) => void }) {
   // Restored from local storage, exactly like the native app
-  // (AsyncStorage "vura.driver.online") â€” so leaving and reopening the APK keeps
+  // (AsyncStorage "vura.driver.online") — so leaving and reopening the APK keeps
   // the driver online instead of silently resetting to Offline.
   const [online, setOnline] = useState(() => getStoredOnline())
   const [stats, setStats] = useState<DriverStats | null>(null)
@@ -3273,7 +3447,7 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
     <div className="flex flex-col h-screen bg-[#F7F7F7]">
       {/* Map */}
       <div className="relative" style={{ height: online ? '55%' : '42%' }}>
-        {/* Map â€” no explicit marker: it locks onto the device's REAL GPS fix and keeps
+        {/* Map — no explicit marker: it locks onto the device's REAL GPS fix and keeps
             following it as the driver moves (watchPosition), zoomed to street level.
             When online, the "Waiting for requests" card is pinned to the bottom of
             this area, so the map's own zoom/locate buttons are lifted to clear it. */}
@@ -3445,8 +3619,8 @@ function RideRequest({ request, onAccept, onDecline }: { request: RideRequestDat
               <h2 className="text-[26px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{formatRand(request?.fare ?? 0)}</h2>
               <p className="text-[13px] text-[#ADADAD] mt-0.5">
                 {payTag(request?.paymentMethod)}
-                {request?.riderName ? ` ?? ${request.riderName}` : ''}
-                {request?.scheduledAt ? ` ?? ${new Date(request.scheduledAt).toLocaleString('en-ZA', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}` : ''}
+                {request?.riderName ? ` · ${request.riderName}` : ''}
+                {request?.scheduledAt ? ` · ${new Date(request.scheduledAt).toLocaleString('en-ZA', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}` : ''}
               </p>
             </div>
             <div className="relative w-14 h-14 shrink-0">
@@ -3487,7 +3661,7 @@ function RideRequest({ request, onAccept, onDecline }: { request: RideRequestDat
                   {IC.star('#FBBC04')}
                   <span className="text-[11px] text-[#6B6B6B]">
                     {request?.riderRating ? Number(request.riderRating).toFixed(2) : 'New'}
-                    {' ?? '}
+                    {' · '}
                     {payTag(request?.paymentMethod)}
                   </span>
                 </div>
@@ -3554,7 +3728,7 @@ function DriverPickup({ request, onArrived }: { request: RideRequestData | null;
                 {IC.star('#FBBC04')}
                 <span className="text-[12px] text-[#6B6B6B]">
                   {request?.riderRating ? Number(request.riderRating).toFixed(2) : 'New'}
-                  {' ?? '}
+                  {' · '}
                   {payTag(request?.paymentMethod)}
                 </span>
               </div>
@@ -3579,7 +3753,7 @@ function DriverPickup({ request, onArrived }: { request: RideRequestData | null;
           <button onClick={onArrived} disabled={!done}
             className={`w-full font-bold text-[15px] py-4 rounded-2xl transition-all ${done ? 'bg-[#EA4335] text-white active:bg-[#C5221F]' : 'bg-[#F7F7F7] text-[#C4C4C4] cursor-not-allowed border border-[#EBEBEB]'}`}
             style={done ? { boxShadow: '0 4px 16px rgba(234,67,53,0.28)' } : {}}>
-            {done ? 'Start trip' : 'Navigating to pickup???'}
+            {done ? 'Start trip' : 'Navigating to pickup…'}
           </button>
         </div>
       </div>
@@ -3601,7 +3775,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
 
   // The line the map draws. On this prototype screen the driver's own GPS fix is
   // not carried in the request, so the route comes from the request's own
-  // pickup/drop-off coordinates â€” the same source the rider's screen uses.
+  // pickup/drop-off coordinates — the same source the rider's screen uses.
   const dropRoute = useRouteLine(tripPoints(
     coordsOf(request?.pickupLat, request?.pickupLng),
     [],
@@ -3626,7 +3800,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
               <p className="text-[12px] text-[#ADADAD]">Destination</p>
               <p className="text-[14px] text-[#1A1A1A] font-semibold truncate">{request?.destinationAddress || 'Destination'}</p>
               <p className="text-[13px] text-[#ADADAD] mt-0.5" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-                {done ? '???' : `${eta} min left`}
+                {done ? '✓' : `${eta} min left`}
               </p>
             </div>
           </div>
@@ -3639,7 +3813,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
             <Avatar name={request?.riderName || 'Rider'} size={38} bg="#EBEBEB" />
             <div className="flex-1">
               <p className="text-[14px] text-[#1A1A1A] font-semibold capitalize truncate">{request?.riderName || 'Rider'}</p>
-              <p className="text-[12px] text-[#ADADAD] mt-0.5">{request?.paymentMethod ? `${request.paymentMethod} Â· ` : ''}{formatRand(fare)}</p>
+              <p className="text-[12px] text-[#ADADAD] mt-0.5">{request?.paymentMethod ? `${request.paymentMethod} · ` : ''}{formatRand(fare)}</p>
             </div>
             <div className="flex gap-2">
               <button className="w-9 h-9 rounded-full bg-white border border-[#EBEBEB] flex items-center justify-center">{IC.phone()}</button>
@@ -3650,11 +3824,11 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
           {done
             ? <button onClick={onComplete} className="w-full bg-[#EA4335] text-white font-bold text-[15px] py-4 rounded-2xl active:bg-[#C5221F]"
               style={{ boxShadow: '0 4px 16px rgba(234,67,53,0.28)' }}>
-              Complete trip Â· {formatRand(fare)}
+              Complete trip · {formatRand(fare)}
             </button>
             : <div className="flex items-center justify-center gap-2 py-3">
               <div className="w-1.5 h-1.5 rounded-full bg-[#EA4335] animate-pulse" />
-              <p className="text-[13px] text-[#ADADAD] font-medium">In progress ?? Focus on the road</p>
+              <p className="text-[13px] text-[#ADADAD] font-medium">In progress · Focus on the road</p>
             </div>}
         </div>
       </div>
@@ -3664,7 +3838,7 @@ function DriverDropoff({ request, onComplete }: { request: RideRequestData | nul
 
 function TripComplete({ request, onDone }: { request: RideRequestData | null; onDone: () => void }) {
   // Pull the completed ride straight from the DB so the money shown here is the
-  // real actual_fare / platform_fee / driver_earned â€” not the old prototype's
+  // real actual_fare / platform_fee / driver_earned — not the old prototype's
   // hard-coded 38.40.
   const [ride, setRide] = useState<any>(null)
   useEffect(() => {
@@ -3684,7 +3858,7 @@ function TripComplete({ request, onDone }: { request: RideRequestData | null; on
           {IC.check('#34A853')}
         </div>
         <h2 className="text-[28px] font-bold text-[#1A1A1A] text-center" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Trip complete</h2>
-        <p className="text-[14px] text-[#ADADAD] mt-2 capitalize">{rider} Â· {destination}</p>
+        <p className="text-[14px] text-[#ADADAD] mt-2 capitalize">{rider} · {destination}</p>
         <div className="mt-6 flex items-baseline gap-1.5">
           <span className="text-[15px] text-[#ADADAD] font-medium">You earned</span>
           <span className="text-[44px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{formatRand(earned)}</span>
@@ -3781,7 +3955,7 @@ function Earnings() {
   const weekRides = Number(week?.totals?.rides ?? 0)
   const todayTotal = Number(stats?.today?.earned ?? 0)
   const perTrip = weekRides > 0 ? weekNet / weekRides : 0
-  // "% vs last week" â€” the same calculation the native earnings screen runs.
+  // "% vs last week" — the same calculation the native earnings screen runs.
   const prevNet = Number(week?.totals?.lastWeekNet ?? 0)
   const pct = weekNet > 0 && prevNet > 0 ? Math.round(((weekNet - prevNet) / prevNet) * 100) : null
   return (
@@ -3851,7 +4025,7 @@ function Earnings() {
           <p className="text-[11px] text-[#ADADAD] uppercase tracking-widest font-semibold mb-3">Trip history</p>
           <div className="bg-white rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
             {loading ? (
-              <p className="px-4 py-6 text-[12px] text-[#ADADAD] text-center">Loading your tripsâ€¦</p>
+              <p className="px-4 py-6 text-[12px] text-[#ADADAD] text-center">Loading your trips…</p>
             ) : trips.length === 0 ? (
               <p className="px-4 py-6 text-[12px] text-[#ADADAD] text-center">No completed trips yet.</p>
             ) : (
@@ -3877,8 +4051,8 @@ function Earnings() {
                   </div>
                   <p className="text-[11px] text-[#C4C4C4] mt-2.5" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
                     {fmtTripTime(trip.date)}
-                    {trip.distanceKm > 0 ? ` Â· ${trip.distanceKm.toFixed(1)} km` : ''}
-                    {trip.durationMins > 0 ? ` Â· ${Math.round(trip.durationMins)} min` : ''}
+                    {trip.distanceKm > 0 ? ` · ${trip.distanceKm.toFixed(1)} km` : ''}
+                    {trip.durationMins > 0 ? ` · ${Math.round(trip.durationMins)} min` : ''}
                   </p>
                 </div>
               ))
@@ -3891,7 +4065,7 @@ function Earnings() {
 }
 
 /**
- * Trip history â€” the port of the native app/driver/trips.tsx screen. Same two
+ * Trip history — the port of the native app/driver/trips.tsx screen. Same two
  * calls (GET /api/rides/history?limit=50 and GET /api/drivers/stats), so the
  * completed count and average rating come straight from the database.
  */
@@ -3932,7 +4106,7 @@ function TripHistory({ onBack }: { onBack: () => void }) {
         <div className="flex-1">
           <h1 className="text-[22px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Trips</h1>
           <p className="text-[11px] text-[#ADADAD] mt-0.5">
-            {completed} completed Â· {avg > 0 ? `${avg.toFixed(2)} avg rating` : 'no ratings yet'}
+            {completed} completed · {avg > 0 ? `${avg.toFixed(2)} avg rating` : 'no ratings yet'}
           </p>
         </div>
       </div>
@@ -3944,7 +4118,7 @@ function TripHistory({ onBack }: { onBack: () => void }) {
           </div>
         )}
         {loading ? (
-          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your tripsâ€¦</p>
+          <p className="text-[12px] text-[#ADADAD] text-center py-8">Loading your trips…</p>
         ) : trips.length === 0 ? (
           <div className="bg-white rounded-2xl border border-[#F0F0F0] px-4 py-8 text-center shadow-sm">
             <p className="text-[14px] font-bold text-[#1A1A1A]">No trips yet</p>
@@ -3958,11 +4132,11 @@ function TripHistory({ onBack }: { onBack: () => void }) {
                   <Avatar name={t.partner} size={38} bg="#F2F2F2" />
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-bold text-[#1A1A1A] capitalize truncate">{t.partner}</p>
-                    <p className="text-[12px] text-[#ADADAD] mt-0.5 truncate">{t.pickup} â†’ {t.destination}</p>
+                    <p className="text-[12px] text-[#ADADAD] mt-0.5 truncate">{t.pickup} → {t.destination}</p>
                     <div className="flex items-center gap-1 mt-1">
                       {IC.star('#FBBC04')}
                       <span className="text-[11px] text-[#ADADAD]">
-                        {Number(t.rating) > 0 ? `${Number(t.rating).toFixed(1)} Â· ` : ''}{fmtTripTime(t.date)}
+                        {Number(t.rating) > 0 ? `${Number(t.rating).toFixed(1)} · ` : ''}{fmtTripTime(t.date)}
                       </span>
                     </div>
                   </div>
@@ -4002,7 +4176,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
     getMyProfile()
       .then((p) => setVehicle(p))
       .catch(() => { })
-    // Money available â€” the week's net, from /api/earnings.
+    // Money available — the week's net, from /api/earnings.
     getWalletBalance().then((d) => setBalance(Number(d?.total_earnings) || 0)).catch(() => { })
     // Pull every document already on file for this driver (same endpoint the
     // native app uses, so anything uploaded there shows up here).
@@ -4017,7 +4191,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
   const isVerified = ['verified', 'approved', 'active', 'complete'].includes(verifiedStatus)
 
   // Name from the sync row cached at login (the live server has no /api/users/me),
-  // falling back to the email prefix â€” the same fallback the native app uses.
+  // falling back to the email prefix — the same fallback the native app uses.
   const displayName = profile?.full_name
     ? String(profile.full_name)
     : (user?.email || 'Driver').split('@')[0].replace(/[._]/g, ' ')
@@ -4041,7 +4215,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
         </div>
 
         {/* Stats */}
-        {/* Stats â€” Rating, Trips and Money, all from the DB:
+        {/* Stats — Rating, Trips and Money, all from the DB:
             Rating -> /api/drivers/stats rating.average
             Trips  -> /api/drivers/stats allTime.rides (opens trip history)
             Money  -> /api/earnings week net (opening balance) */}
@@ -4094,13 +4268,13 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-[#34A853] font-semibold">???</span>
+              <span className="flex items-center">{IC.check('#34A853')}</span>
               {IC.chevRight()}
             </div>
           </button>
           {showDocs && (
             <div className="border-t border-[#F5F5F5]">
-              {/* Link your car â€” opens the vehicle + document upload screen. */}
+              {/* Link your car — opens the vehicle + document upload screen. */}
               <button
                 onClick={onLinkCar}
                 className="w-full flex items-center justify-between px-4 py-3 border-b border-[#F5F5F5] active:bg-[#F7F7F7]"
@@ -4114,7 +4288,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
                 {IC.chevRight()}
               </button>
 
-              {/* Real documents pulled from GET /api/documents/mine â€” anything
+              {/* Real documents pulled from GET /api/documents/mine — anything
                   uploaded in the native app appears here with its real file name
                   and review status. */}
               {docs.length === 0 ? (
@@ -4129,7 +4303,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
                       <p className="text-[11px] text-[#ADADAD] mt-0.5" style={{ wordBreak: 'break-all' }}>{d.file_name}</p>
                     </div>
                     <span className={`text-[11px] font-semibold ${d.status === 'approved' ? 'text-[#34A853]' : d.status === 'rejected' ? 'text-[#EA4335]' : 'text-[#FBBC04]'}`}>
-                      {d.status === 'approved' ? 'âœ“ Verified' : d.status}
+                      {d.status === 'approved' ? '✓ Verified' : d.status}
                     </span>
                   </div>
                 ))
@@ -4147,7 +4321,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
           )}
         </div>
 
-        {/* Payments and Withdrawals â€” card earnings, payout account, history. */}
+        {/* Payments and Withdrawals — card earnings, payout account, history. */}
         <div className="bg-white mx-4 mt-3 rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
           <button onClick={onWallet} className="w-full flex items-center justify-between px-4 py-3.5 active:bg-[#F7F7F7]">
             <div className="text-left">
@@ -4158,7 +4332,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
           </button>
         </div>
 
-        {/* Settings â€” Waze Navigation, Bank Account, Help Center, Report an Issue
+        {/* Settings — Waze Navigation, Bank Account, Help Center, Report an Issue
           all live behind this one button, as requested. */}
         <div className="bg-white mx-4 mt-3 rounded-2xl border border-[#F0F0F0] overflow-hidden shadow-sm">
           <button onClick={onSettings} className="w-full flex items-center justify-between px-4 py-3.5 active:bg-[#F7F7F7]">
@@ -4197,11 +4371,8 @@ function Splash({ onLogin, onSignup }: { onLogin: () => void; onSignup: () => vo
 
       <div className="px-6 pb-12 flex flex-col gap-4 -mt-8 relative z-10">
         {/* Logo */}
-        <div className="flex items-center gap-2.5 mb-2">
-          <div className="w-9 h-9 rounded-xl bg-[#EA4335] flex items-center justify-center shadow-md shadow-[#EA4335]/30">
-            {IC.car('#fff')}
-          </div>
-          <span className="text-[22px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Ridely</span>
+        <div className="flex items-center mb-2">
+          <img src={vuraWordmark} alt="Vura" className="h-9 w-auto" draggable={false} />
         </div>
 
         <h1 className="text-[30px] font-bold text-[#1A1A1A] leading-tight" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
@@ -4223,21 +4394,11 @@ function Splash({ onLogin, onSignup }: { onLogin: () => void; onSignup: () => vo
 
         <p className="text-center text-[12px] text-[#C4C4C4] mt-1">
           By continuing you agree to our{' '}
-          <span className="text-[#6B6B6B] underline underline-offset-2">Terms</span>{' '}and{' '}
-          <span className="text-[#6B6B6B] underline underline-offset-2">Privacy Policy</span>
+          <button type="button" onClick={() => openExternalUrl(TERMS_URL)} className="text-[#6B6B6B] underline underline-offset-2">Terms</button>{' '}and{' '}
+          <button type="button" onClick={() => openExternalUrl(PRIVACY_URL)} className="text-[#6B6B6B] underline underline-offset-2">Privacy Policy</button>
         </p>
       </div>
     </div>
-  )
-}
-
-function SocialBtn({ icon, label, onClick }: { icon: string; label: string; onClick?: () => void }) {
-  return (
-    <button onClick={onClick}
-      className="flex-1 flex items-center justify-center gap-2.5 bg-[#F7F7F7] border border-[#EBEBEB] rounded-2xl py-3.5 active:bg-[#F0F0F0] transition-colors">
-      <span className="text-[18px]">{icon}</span>
-      <span className="text-[13px] font-semibold text-[#1A1A1A]">{label}</span>
-    </button>
   )
 }
 
@@ -4278,6 +4439,30 @@ function LoginScreen({ onBack, onSuccess, onSignup }: { onBack: () => void; onSu
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // Real password reset: Firebase generates the link, the server emails it via
+  // Resend. The panel always confirms neutrally (no account enumeration).
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetSending, setResetSending] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
+  const [resetError, setResetError] = useState('')
+
+  async function handleReset() {
+    if (!resetEmail.includes('@')) {
+      setResetError('Enter the email address on your account.')
+      return
+    }
+    setResetSending(true)
+    setResetError('')
+    try {
+      await requestPasswordReset(resetEmail)
+      setResetSent(true)
+    } catch (e: any) {
+      setResetError(e?.message || 'Could not send the reset email')
+    } finally {
+      setResetSending(false)
+    }
+  }
 
   // Real Firebase sign-in (same project the React Native driver app uses).
   // On success the idToken is stored and every apiFetch call is authenticated
@@ -4310,26 +4495,57 @@ function LoginScreen({ onBack, onSuccess, onSignup }: { onBack: () => void; onSu
       </div>
 
       <div className="flex-1 px-5 flex flex-col gap-5">
-        {/* Social logins */}
-        <div className="flex gap-3">
-          <SocialBtn icon="G" label="Google" onClick={onSuccess} />
-          <SocialBtn icon="f" label="Facebook" onClick={onSuccess} />
-          <SocialBtn icon="????" label="Apple" onClick={onSuccess} />
-        </div>
-
-        {/* Divider */}
-        <div className="flex items-center gap-3">
-          <div className="flex-1 h-px bg-[#F0F0F0]" />
-          <span className="text-[12px] text-[#C4C4C4] font-medium">or continue with email</span>
-          <div className="flex-1 h-px bg-[#F0F0F0]" />
-        </div>
-
         {/* Fields */}
         <InputField label="Email address" type="email" placeholder="you@example.com" value={email} onChange={setEmail} />
         <div>
           <InputField label="Password" type="password" placeholder="Your password" value={password} onChange={setPassword} />
-          <button className="mt-2 text-[12px] text-[#EA4335] font-semibold ml-1">Forgot password?</button>
+          <button
+            type="button"
+            onClick={() => {
+              setResetOpen(o => !o)
+              setResetEmail(email)
+              setResetSent(false)
+              setResetError('')
+            }}
+            className="mt-2 text-[12px] text-[#EA4335] font-semibold ml-1">
+            Forgot password?
+          </button>
         </div>
+
+        {resetOpen && (
+          <div className="rounded-2xl bg-[#F7F7F7] border border-[#EBEBEB] px-4 py-4">
+            {resetSent ? (
+              <>
+                <p className="text-[13px] font-semibold text-[#1A1A1A]">Check your inbox</p>
+                <p className="text-[12px] text-[#6B6B6B] mt-1 leading-relaxed">
+                  If an account exists for {resetEmail.trim()}, we've emailed a link to reset your password.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[13px] font-semibold text-[#1A1A1A]">Reset your password</p>
+                <p className="text-[12px] text-[#6B6B6B] mt-1 mb-3 leading-relaxed">
+                  Enter the email on your account and we'll send you a reset link.
+                </p>
+                <InputField
+                  label="Email address"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={resetEmail}
+                  onChange={setResetEmail}
+                />
+                {resetError && <p className="text-[12px] text-[#C5221F] font-semibold mt-2">{resetError}</p>}
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  disabled={resetSending || !resetEmail}
+                  className={`w-full font-bold text-[14px] py-3 rounded-xl mt-3 ${resetEmail ? 'bg-[#EA4335] text-white active:bg-[#C5221F]' : 'bg-[#EBEBEB] text-[#C4C4C4]'}`}>
+                  {resetSending ? 'Sending…' : 'Send reset link'}
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="rounded-2xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-3">
@@ -4341,7 +4557,7 @@ function LoginScreen({ onBack, onSuccess, onSignup }: { onBack: () => void; onSu
         <button onClick={handleSubmit} disabled={loading || !email || !password}
           className={`w-full font-bold text-[16px] py-4 rounded-2xl transition-all mt-1 ${email && password ? 'bg-[#EA4335] text-white active:bg-[#C5221F]' : 'bg-[#F7F7F7] text-[#C4C4C4] border border-[#EBEBEB]'}`}
           style={email && password ? { boxShadow: '0 4px 16px rgba(234,67,53,0.24)' } : {}}>
-          {loading ? 'Logging in???' : 'Log in'}
+          {loading ? 'Logging in…' : 'Log in'}
         </button>
       </div>
 
@@ -4384,8 +4600,10 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
   const [emailFailed, setEmailFailed] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // Store policy: consent must be an explicit, unticked-by-default action.
+  const [agreed, setAgreed] = useState(false)
 
-  // Country code selector â€” the native signup defaults to +27 (South Africa)
+  // Country code selector — the native signup defaults to +27 (South Africa)
   // and lets the driver choose any country from the full ~240-country list.
   const [countryCode, setCountryCode] = useState('+27')
 
@@ -4407,7 +4625,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
       setOtp('')
       setError('')
       // Email the code via the same Resend endpoint the native signup uses. If
-      // delivery fails we fall back to showing the code on screen â€” exactly the
+      // delivery fails we fall back to showing the code on screen — exactly the
       // native app's behaviour.
       setSendingEmail(true)
       const sent = await sendVerificationEmail(email.trim(), newCode)
@@ -4426,7 +4644,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
     try {
       // Identical to the native app's register() call:
       //   full_name as ONE string, phone as countryCode + digits (spaces removed),
-      //   role "driver" â€” all sent to POST /api/users/sync by signUp().
+      //   role "driver" — all sent to POST /api/users/sync by signUp().
       await signUp(email.trim(), password, {
         fullName: `${firstName.trim()} ${lastName.trim()}`,
         phone: `${countryCode}${phone.replace(/\s/g, '')}`,
@@ -4447,7 +4665,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
     step === 1
       ? (firstName.length > 0 && email.includes('@'))
       : step === 2
-        ? (phone.length >= 8 && password.length >= 6)
+        ? (phone.length >= 8 && password.length >= 6 && agreed)
         : otp.length === 6
 
   return (
@@ -4474,17 +4692,6 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
 
       <div className="flex-1 px-5 flex flex-col gap-5">
         {step === 1 ? (<>
-          {/* Social quick signup */}
-          <div className="flex gap-3">
-            <SocialBtn icon="G" label="Google" onClick={onSuccess} />
-            <SocialBtn icon="f" label="Facebook" onClick={onSuccess} />
-            <SocialBtn icon="????" label="Apple" onClick={onSuccess} />
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-[#F0F0F0]" />
-            <span className="text-[12px] text-[#C4C4C4] font-medium">or with email</span>
-            <div className="flex-1 h-px bg-[#F0F0F0]" />
-          </div>
           <InputField label="First name" placeholder="Alex" value={firstName} onChange={setFirstName} />
           <InputField label="Last name" placeholder="Johnson" value={lastName} onChange={setLastName} />
           <InputField label="Email address" type="email" placeholder="you@example.com" value={email} onChange={setEmail} />
@@ -4537,25 +4744,33 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
             </div>
           )}
 
-          {/* T&C */}
+          {/* Consent — an explicit unticked checkbox, required to continue. */}
           <div className="flex items-start gap-3 bg-[#F7F7F7] rounded-2xl px-4 py-3.5 border border-[#EBEBEB]">
-            <div className="w-4 h-4 rounded-[5px] bg-[#EA4335] flex items-center justify-center shrink-0 mt-0.5">
-              <svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-            </div>
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={agreed}
+              aria-label="I agree to the Terms of Service and Privacy Policy"
+              onClick={() => setAgreed(a => !a)}
+              className={`w-5 h-5 rounded-[6px] flex items-center justify-center shrink-0 mt-0.5 border transition-colors ${agreed ? 'bg-[#EA4335] border-[#EA4335]' : 'bg-white border-[#C4C4C4]'}`}>
+              {agreed && (
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              )}
+            </button>
             <p className="text-[12px] text-[#6B6B6B] leading-relaxed">
               I agree to the{' '}
-              <span className="text-[#EA4335] font-semibold">Terms of Service</span>{' '}and{' '}
-              <span className="text-[#EA4335] font-semibold">Privacy Policy</span>
+              <button type="button" onClick={() => openExternalUrl(TERMS_URL)} className="text-[#EA4335] font-semibold underline underline-offset-2">Terms of Service</button>{' '}and{' '}
+              <button type="button" onClick={() => openExternalUrl(PRIVACY_URL)} className="text-[#EA4335] font-semibold underline underline-offset-2">Privacy Policy</button>
             </p>
           </div>
         </>) : (
           <>
-            {/* The code is only shown on screen when email delivery failed â€” the
+            {/* The code is only shown on screen when email delivery failed — the
                 native app does the same. Otherwise the rider reads it from their
                 inbox. */}
             {emailFailed ? (
               <div className="rounded-2xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-4">
-                <p className="text-[11px] uppercase tracking-widest text-[#C5221F] font-semibold mb-2">Email unavailable â€” your code</p>
+                <p className="text-[11px] uppercase tracking-widest text-[#C5221F] font-semibold mb-2">Email unavailable — your code</p>
                 <p className="text-[24px] font-bold text-[#1A1A1A] tracking-[0.3em]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>{code}</p>
                 <button onClick={() => setOtp(code)} className="mt-2 w-full rounded-xl bg-[#FCE8E6] py-2 text-[12px] font-semibold text-[#C5221F]">
                   Tap to auto-fill code
@@ -4566,7 +4781,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
                 <p className="text-[16px] font-semibold text-[#1A1A1A]">Check your email</p>
                 <p className="text-[12px] text-[#ADADAD] mt-1">
                   We sent a 6-digit code to {email.trim()}. Enter it below.
-                  {sendingEmail ? ' Sendingâ€¦' : ''}
+                  {sendingEmail ? ' Sending…' : ''}
                 </p>
               </div>
             )}
@@ -4602,7 +4817,7 @@ export default function App() {
   // every launch ??? lib/backend persists the idToken in localStorage.
   const [authed, setAuthed] = useState(() => !!getStoredUser())
   // A stored session is NOT the same as a working one. Verify it on launch and,
-  // if it can't be renewed, drop it and send the driver to the login screen â€”
+  // if it can't be renewed, drop it and send the driver to the login screen —
   // otherwise every list (documents, earnings, trips) silently comes back empty.
   const [checkingSession, setCheckingSession] = useState(() => !!getStoredUser())
 
@@ -4639,25 +4854,55 @@ export default function App() {
   const [rideId, setRideId] = useState<string | null>(null)
   const [rScreen, setRScreen] = useState<RiderScreen>('home')
 
-    // â”€â”€ Trip continuity: launch, resume and reconnect all rebuild from the DB â”€â”€
+    // ── Trip continuity: launch, resume and reconnect all rebuild from the DB ──
     // The server is the source of truth, not the screen we happened to be on.
-    // Swiping the app away â€” or Android killing it â€” mid-trip must never dump the
+    // Swiping the app away — or Android killing it — mid-trip must never dump the
     // rider back on Home while a ride is still running, so on every cold start,
     // every return to the foreground and every reconnect we ask what this rider is
     // actually doing and jump straight to that ride.
     useEffect(() => {
       if (!authed) return
       let alive = true
-      const ACTIVE = ['searching', 'accepted', 'driver_arrived', 'in_progress']
+      const ACTIVE = ['searching', 'no_drivers', 'accepted', 'driver_arrived', 'in_progress']
       const restore = async () => {
         try {
           const active: any = await getActiveRide()
           if (!alive || !active?.id) return
-          if (!ACTIVE.includes(String(active.status || ''))) return
-          setRideId(String(active.id))
+          const status = String(active.status || '')
+          if (!ACTIVE.includes(status)) return
+          const id = String(active.id)
+          setRideId(id)
           if (active.destination_address) setDest(String(active.destination_address))
+          if (status === 'searching' || status === 'no_drivers') {
+            // The ride already exists: rebuild the MATCHING screen around it and
+            // let MatchingScreen poll for the acceptance. Never mount RideScreen
+            // for a ride with no driver yet (it looks like the search was lost),
+            // and never re-book (MatchingScreen skips bookRide when given an id).
+            setTier(String(active.tier || 'go'))
+            setPayMethod(String(active.payment_method || 'cash'))
+            const wp = Array.isArray(active.waypoints) ? active.waypoints : []
+            setRideStops(
+              wp
+                .map((s: any) => {
+                  const lat = Number(s?.lat ?? s?.latitude)
+                  const lng = Number(s?.lng ?? s?.longitude)
+                  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+                  return { address: String(s?.address ?? s?.label ?? 'Stop'), lat, lng }
+                })
+                .filter(Boolean) as Waypoint[]
+            )
+            const plat = Number(active.pickup_lat)
+            const plng = Number(active.pickup_lng)
+            setManualPickupState(
+              Number.isFinite(plat) && Number.isFinite(plng)
+                ? { lat: plat, lng: plng, label: String(active.pickup_address || 'Pickup') }
+                : null
+            )
+            setRScreen('matching')
+            return
+          }
           setRScreen('ride') // RideScreen re-reads the whole ride from this id
-        } catch { /* offline â€” stay wherever we are */ }
+        } catch { /* offline — stay wherever we are */ }
       }
       void restore()
       const onVisible = () => { if (document.visibilityState === 'visible') void restore() }
@@ -4790,7 +5035,7 @@ export default function App() {
         {checkingSession ? (
           <div className="h-screen flex flex-col items-center justify-center bg-white gap-3">
             <div className="w-9 h-9 rounded-full border-[3px] border-[#F0F0F0] border-t-[#EA4335] animate-spin" />
-            <p className="text-[13px] text-[#ADADAD]">Restoring your sessionâ€¦</p>
+            <p className="text-[13px] text-[#ADADAD]">Restoring your session…</p>
           </div>
         ) : auth === 'splash' && (
           <Splash
@@ -4823,12 +5068,15 @@ export default function App() {
               destination={dest}
               onBack={() => setRScreen('home')}
               onTier={setTier}
-              onConfirm={(t, pm, st, promoId, useInvite) => {
+              onConfirm={(t, pm, st, promoId, useInvite, pickup, destOut) => {
                 setTier(t)
                 setPayMethod(pm)
                 setRideStops(st)
                 setBookPromoId(promoId)
-  setBookInvite(useInvite)
+                setBookInvite(useInvite)
+                setManualPickupState(pickup ?? null)
+                if (destOut) setDest(destOut)
+                setRideId(null) // this is a NEW booking, not a restored ride
                 setRScreen('matching')
               }}
             />
@@ -4840,7 +5088,9 @@ export default function App() {
               paymentMethod={payMethod}
               stops={rideStops}
               chosenPromoId={bookPromoId}
-  useInviteCredit={bookInvite}
+              useInviteCredit={bookInvite}
+              initialPickup={manualPickup}
+              initialRideId={rideId}
               onCancel={() => { setRideId(null); setRScreen('home') }}
               onMatched={(id) => { setRideId(id); setRScreen('ride') }}
             />
@@ -4866,11 +5116,18 @@ export default function App() {
               onHelp={() => setRScreen('help')}
               onReport={() => setRScreen('report')}
               onGuidelines={() => setRScreen('guidelines')}
+              onDelete={() => setRScreen('deleteAccount')}
+            />
+          )}
+          {rScreen === 'deleteAccount' && (
+            <DeleteAccount
+              onBack={() => setRScreen('settings')}
+              onDeleted={() => { setRideId(null); setAuthed(false); setAuth('login'); setRScreen('home') }}
             />
           )}
           {rScreen === 'profile' && <RiderProfile onBack={() => setRScreen('account')} />}
           {rScreen === 'payments' && <PaymentMethods onBack={() => setRScreen('account')} />}
-          {rScreen === 'paylater' && <PayLaterScreen onBack={() => setRScreen('account')} />}
+          {PAY_LATER_ENABLED && rScreen === 'paylater' && <PayLaterScreen onBack={() => setRScreen('account')} />}
           {rScreen === 'promos' && <PromosScreen onBack={() => setRScreen('account')} />}
           {rScreen === 'safety' && <SafetyScreen onBack={() => setRScreen('account')} onReportIssue={() => setRScreen('report')} />}
           {rScreen === 'guidelines' && <Guidelines onBack={() => setRScreen('account')} />}

@@ -1,19 +1,16 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wraps the Figma Make UI in a native Android shell so it can ship as an APK.
+// Wraps the Figma Make rider UI in a native shell so it can ship to the Play
+// Store and the App Store.
 //
-// appId is `app.vura.driver.figma` — deliberately NOT the existing driver app's
-// `app.vura.driver`, so this installs SIDE BY SIDE with the current driver app
-// while it is being brought up to feature parity. Once it matches, change appId
-// to `app.vura.driver` and sign with the same debug.keystore and it will install
-// as an update over the React Native driver app.
+// appId is `app.vura.rider` — a fresh, production package. The old Expo rider
+// app used `com.nhlanhlanb.vurarider`; the two are separate listings.
 //
-// It talks to the SAME backend as the current driver app
-// (https://api.ridevura.com) — nothing on the server changes.
+// It talks to the same backend as the driver app (https://api.ridevura.com).
 // ─────────────────────────────────────────────────────────────────────────────
 const config: CapacitorConfig = {
-  appId: 'app.vura.rider.figma',
+  appId: 'app.vura.rider',
   appName: 'Vura',
   webDir: 'dist',
   server: {
@@ -25,11 +22,11 @@ const config: CapacitorConfig = {
     allowMixedContent: true,
   },
   plugins: {
-    // ───────────────────────────────────────────────────────────────────────
-    // CapacitorHttp — THIS IS REQUIRED FOR THE API TO WORK AT ALL in the APK.
+    // ─────────────────────────────────────────────────────────────────────────
+    // CapacitorHttp — REQUIRED FOR THE API TO WORK AT ALL in the APK.
     //
     // The WebView runs the page at origin `https://localhost`, and the API's
-    // CORS policy only allows the real website origins. Proven with a live
+    // CORS policy only allows the real website origins. Verified with a live
     // preflight against https://api.ridevura.com:
     //
     //   Origin: https://localhost      -> NO Access-Control-Allow-Origin
@@ -37,17 +34,10 @@ const config: CapacitorConfig = {
     //   Origin: capacitor://localhost  -> NO Access-Control-Allow-Origin
     //   Origin: https://ridevura.com   -> Access-Control-Allow-Origin: (allowed)
     //
-    // So every browser fetch() was blocked before a status could be read, which
-    // surfaces as "TypeError: Failed to fetch" — the exact error the driver saw
-    // on Earnings, Documents and Link-your-car.
-    //
-    // The old React Native app never hit this because it made NATIVE http
-    // calls, where CORS does not apply. Enabling CapacitorHttp patches
-    // window.fetch/XMLHttpRequest to use the same native HTTP stack, which
-    // removes CORS from the equation and restores identical behaviour.
-    // (backend.ts also routes its calls through CapacitorHttp explicitly, so it
-    // works even if the global patch is ever unavailable.)
-    // ───────────────────────────────────────────────────────────────────────
+    // Enabling CapacitorHttp patches window.fetch/XMLHttpRequest to use the
+    // native HTTP stack, which removes CORS from the equation. backend.ts also
+    // routes its calls through CapacitorHttp explicitly.
+    // ─────────────────────────────────────────────────────────────────────────
     CapacitorHttp: {
       enabled: true,
     },

@@ -1,4 +1,4 @@
-package app.vura.rider.figma;
+package app.vura.rider;
 
 import com.getcapacitor.BridgeActivity;
 

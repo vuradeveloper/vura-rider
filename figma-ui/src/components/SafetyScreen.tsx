@@ -15,7 +15,7 @@ import {
 } from '../lib/backend'
 
 /**
- * Safety Center â€” the port of the native app/safety.tsx page.
+ * Safety Center — the port of the native app/safety.tsx page.
  *
  * Everything here is a real call, wired to contracts verified against the live
  * server in figma-ui/_safety2.mjs:

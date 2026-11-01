@@ -1,4 +1,4 @@
-# Using Android gitignore template: https://github.com/github/gitignore/blob/HEAD/Android.gitignore
+﻿# Using Android gitignore template: https://github.com/github/gitignore/blob/HEAD/Android.gitignore
 
 # Built application files
 *.apk
@@ -99,3 +99,7 @@ app/src/main/assets/public
 app/src/main/assets/capacitor.config.json
 app/src/main/assets/capacitor.plugins.json
 app/src/main/res/xml/config.xml
+
+# Vura release signing - never commit
+keystore.properties
+keystore/

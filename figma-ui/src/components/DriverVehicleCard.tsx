@@ -1,5 +1,5 @@
-﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// <DriverVehicleCard /> â€” ONE component for every rider-facing driver/car card, so
+﻿// ─────────────────────────────────────────────────────────────────────────────
+// <DriverVehicleCard /> — ONE component for every rider-facing driver/car card, so
 // the accepted, arriving, arrived, in-progress, completed and history screens can
 // never drift apart.
 //
@@ -9,7 +9,7 @@
 //
 // The plate is the real identifier and stays the most prominent text: the placeholder
 // shows the right SHAPE, and a real photo is used whenever one exists.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 import { useState } from 'react'
 import VehicleImage, { resolveVehicleImage } from './vehicle/VehicleImage'
 import { colourNameOf } from './vehicle/palette'
@@ -119,11 +119,11 @@ export default function DriverVehicleCard({
         className={`text-center font-bold text-[#1A1A1A] tracking-[0.28em] ${compact ? 'text-[18px] mt-1' : 'text-[24px] mt-2'}`}
         style={{ fontFamily: 'JetBrains Mono, monospace' }}
       >
-        {plate || 'â€”'}
+        {plate || '—'}
       </p>
 
       <p className="text-center text-[13px] text-[#4A4A4A] font-semibold mt-1 capitalize">
-        {first} Â· {desc}
+        {first} · {desc}
       </p>
       {driver?.rating ? (
         <p className="text-center text-[12px] text-[#6B6B6B] mt-0.5">

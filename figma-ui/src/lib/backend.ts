@@ -376,6 +376,40 @@ export function signOut() {
   storeUser(null);
 }
 
+/**
+ * Emails a Firebase password-reset link through the production endpoint.
+ *
+ * The server answers success even for unknown addresses, so the UI can show
+ * the same neutral confirmation either way (no account enumeration).
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  await apiFetch("/api/users/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email: email.trim().toLowerCase() }),
+  });
+}
+
+/**
+ * Permanently deletes the signed-in rider's account.
+ *
+ * POST /api/users/delete removes the DB row and its dependent records (rides,
+ * profile, payment methods, emergency contacts, messages, ratings) and deletes
+ * the Firebase identity with the Admin SDK, so the same email cannot simply
+ * sign in again and recreate an empty account.
+ *
+ * Required by Google Play and App Store policy (in-app account deletion).
+ */
+export async function deleteAccount(): Promise<void> {
+  await apiFetch("/api/users/delete", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  // The server normally removed the identity already. If it could not, the
+  // local session is still cleared — support can finish the Firebase cleanup
+  // and the user must not see an error after their data is gone.
+  storeUser(null);
+}
+
 export function getToken(): string | null {
   return currentUser?.idToken ?? getStoredUser()?.idToken ?? null;
 }
