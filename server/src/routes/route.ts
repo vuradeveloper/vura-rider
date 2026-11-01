@@ -133,7 +133,10 @@ async function fetchUpstream(points: string, overview: string): Promise<CachedRo
   }
   // steps=true is what makes turn-by-turn possible: OSRM then returns
   // legs[].steps with the street name, manoeuvre type/modifier and distance.
-  const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}&steps=true`;
+  // continue_straight=false stops OSRM forcing a U-turn/loop at via points:
+  // with true (its default) a stop behind the car can add a little loop at the
+  // start or end of the line, which looked like a drawing bug on the rider map.
+  const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}&steps=true&continue_straight=false`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   try {
@@ -190,10 +193,10 @@ router.get("/", async (req, res) => {
       return;
     }
 
-    // `v2steps` busts cache rows written before manoeuvres were included, so the
-    // first request after this deploy returns street names instead of waiting
-    // out the 7-day TTL.
-    const key = `${points}|${overview}|v2steps`;
+    // `v3nostraight` busts cache rows written before continue_straight=false,
+    // so the first request after this deploy returns the clean line instead of
+    // waiting out the 7-day TTL.
+    const key = `${points}|${overview}|v3nostraight`;
 
     // 1. In-memory cache
     const mem = cacheGet(key);
