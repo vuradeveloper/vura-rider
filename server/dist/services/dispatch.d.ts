@@ -107,6 +107,8 @@ export interface DispatchRide {
     estimated_fare: number | null;
     payment_method: string | null;
     waypoints: unknown;
+    /** Ride creation time, sent with the offer so the client can reject stale rows. */
+    created_at: string | null;
     offer_round: number | null;
     version: number | null;
     passenger_fb: string | null;
