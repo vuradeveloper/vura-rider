@@ -222,6 +222,9 @@ describe("4. delivery hardening: truthful channel + instant skip", () => {
     db.queryOne
       .mockImplementationOnce(async () => ({ ...RIDE })) // loadRide
       .mockImplementationOnce(async () => ({ id: "offer-1", expires_at: "2026-01-01T00:00:15Z" }))
+      // pre-emit cancel guard: the ride is still live when driver-1's offer
+      // is about to go out (push then proves undeliverable)
+      .mockImplementationOnce(async () => ({ status: "searching" }))
       .mockImplementationOnce(async () => ({ id: "offer-2", expires_at: "2026-01-01T00:00:15Z" }));
 
     const res = await offerToNextDriver(io, "ride-1");
@@ -289,16 +292,20 @@ describe("4. delivery hardening: truthful channel + instant skip", () => {
     const { io } = makeIo(false);
     db.query.mockResolvedValueOnce([{ ...DRIVER_NEAR, firebase_uid: "fb-d1" }]);
     db.queryOne
-      .mockImplementationOnce(async () => ({ ...RIDE }))
-      .mockImplementationOnce(async () => ({ id: "offer-1", expires_at: "2026-01-01T00:00:15Z" }));
+      .mockImplementationOnce(async () => ({ ...RIDE })) // loadRide
+      .mockImplementationOnce(async () => ({ id: "offer-1", expires_at: "2026-01-01T00:00:15Z" }))
+      // pre-emit guard sees a live ride...
+      .mockImplementationOnce(async () => ({ status: "searching" }))
+      // ...but by the time the undeliverable offer is closed the rider has been
+      // matched elsewhere, so the advance decision must NOT recurse.
+      .mockImplementationOnce(async () => ({ status: "accepted" }));
 
     const res = await offerToNextDriver(io, "ride-1");
 
     expect(res).toMatchObject({ offered: false, reason: "offer_undeliverable" });
     expect(traceStage("offer_undeliverable")).toHaveLength(1);
     expect(getCounters().offer_undeliverable).toBe(1);
-    // The advance decision ran (status read). mockRide answers null for this
-    // query shape, so no recursion happens inside the test.
+    // The advance decision ran (a fresh status read after the failed delivery).
     const adv = db.queryOne.mock.calls.find((c: any[]) =>
       String(c[0]).includes("SELECT status FROM rides")
     );
