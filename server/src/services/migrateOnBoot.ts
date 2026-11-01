@@ -52,6 +52,7 @@ export const MIGRATION_ORDER = [
   "021_assign_categories.sql",
   "022_ride_tier_default.sql",
   "023_backfill_categories.sql",
+  "024_admin_multi_role.sql",
 ] as const;
 
 export type MigrationOutcome = "applied" | "skipped" | "failed";

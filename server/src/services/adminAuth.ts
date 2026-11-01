@@ -113,9 +113,14 @@ export function roleHasPermission(role: AdminRole, perm: AdminPermission): boole
   return ROLE_PERMISSIONS[role].includes(perm);
 }
 
+export function rolesHavePermission(roles: AdminRole[], perm: AdminPermission): boolean {
+  return roles.some((r) => roleHasPermission(r, perm));
+}
+
 export interface AdminActor {
   email: string;
   role: AdminRole;
+  roles: AdminRole[];
 }
 
 /** Emails from the env, lowercased and trimmed. Empty list = fallback unused. */
@@ -131,31 +136,46 @@ export function superAdminFallbackEmails(): string[] {
  * A disabled admin_users row loses to nothing â€” it simply does not resolve
  * (unless the email is in the ADMIN_EMAILS fallback).
  */
-export async function resolveAdminRole(email: string | undefined | null): Promise<AdminRole | null> {
-  if (!email) return null;
+export async function resolveAdminRoles(email: string | undefined | null): Promise<AdminRole[]> {
+  if (!email) return [];
   const normalized = email.trim().toLowerCase();
-  if (!normalized) return null;
-  if (superAdminFallbackEmails().includes(normalized)) return "super_admin";
+  if (!normalized) return [];
+  if (superAdminFallbackEmails().includes(normalized)) return ["super_admin"];
   // Governance owner is always a super_admin, even if not listed in env or table.
-  if (normalized === GOVERNANCE_EMAIL) return "super_admin";
+  if (normalized === GOVERNANCE_EMAIL) return ["super_admin"];
   try {
-    const row = await queryOne<{ role: string }>(
-      `SELECT role FROM admin_users WHERE LOWER(email) = $1 AND disabled = FALSE`,
-      [normalized]
-    );
-    return isAdminRole(row?.role) ? row.role : null;
+    let row: { role: string; extra_roles: string[] | null } | null = null;
+    try {
+      row = await queryOne<{ role: string; extra_roles: string[] | null }>(
+        `SELECT role, extra_roles FROM admin_users WHERE LOWER(email) = $1 AND disabled = FALSE`,
+        [normalized]
+      );
+    } catch (e: any) {
+      const r = await queryOne<{ role: string }>(
+        `SELECT role FROM admin_users WHERE LOWER(email) = $1 AND disabled = FALSE`,
+        [normalized]
+      );
+      row = r ? { role: r.role, extra_roles: [] } : null;
+    }
+    if (!row) return [];
+    const roles: AdminRole[] = [];
+    if (isAdminRole(row.role) && !roles.includes(row.role)) roles.push(row.role);
+    for (const r of row.extra_roles || []) {
+      if (isAdminRole(r) && !roles.includes(r)) roles.push(r);
+    }
+    return roles;
   } catch (err) {
     // Table missing (migration 004 not applied) â†’ feature off, not a crash.
-    if (isMissingRelation(err)) return null;
+    if (isMissingRelation(err)) return [];
     throw err;
   }
 }
 
 /** Resolve the actor for ACTION code (audit + permission checks). */
 export async function resolveAdminActor(req: AuthRequest): Promise<AdminActor | null> {
-  const role = await resolveAdminRole(req.user?.email);
-  if (!role) return null;
-  return { email: (req.user!.email || "").trim().toLowerCase(), role };
+  const roles = await resolveAdminRoles(req.user?.email);
+  if (!roles.length) return null;
+  return { email: (req.user!.email || "").trim().toLowerCase(), role: roles[0], roles };
 }
 
 /** Attach the resolved actor (or null) to the request. Never throws. */
@@ -180,7 +200,7 @@ export function requireAdmin(perm: AdminPermission) {
         res.status(403).json({ error: "Admin only" });
         return;
       }
-      if (!roleHasPermission(actor.role, perm)) {
+      if (!rolesHavePermission(actor.roles, perm)) {
         res.status(403).json({
           error: "Insufficient permissions",
           required: perm,
@@ -237,6 +257,8 @@ export async function writeAudit(actor: AdminActor, input: AuditInput): Promise<
         input.entityId ?? null,
         input.oldValue === undefined ? null : JSON.stringify(input.oldValue),
         input.newValue === undefined ? null : JSON.stringify(input.newValue),
+
+
         input.reason?.trim() || null,
       ]
     );
@@ -246,4 +268,9 @@ export async function writeAudit(actor: AdminActor, input: AuditInput): Promise<
         `entity=${input.entityType}/${input.entityId ?? "-"}: ${err?.message}`
     );
   }
+}
+
+export async function resolveAdminRole(email: string | undefined | null): Promise<AdminRole | null> {
+  const roles = await resolveAdminRoles(email);
+  return roles.length ? roles[0] : null;
 }
