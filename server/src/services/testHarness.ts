@@ -208,7 +208,14 @@ export const DRIVER_NEAR = {
 /** Point loadRide() at a ride row. */
 export function mockRide(overrides: Partial<typeof RIDE> = {}) {
   db.queryOne.mockImplementation(async (sql: string) => {
-    if (String(sql).includes("FROM rides r")) return { ...RIDE, ...overrides };
+    const text = String(sql);
+    // The pre-emit cancel guard re-reads ONLY the status immediately before the
+    // socket frame goes out. It must answer with the ride the test set up,
+    // otherwise every offer would die with ride_not_searching.
+    if (text.includes("SELECT status FROM rides")) {
+      return { status: overrides.status ?? RIDE.status };
+    }
+    if (text.includes("FROM rides r")) return { ...RIDE, ...overrides };
     return null;
   });
 }

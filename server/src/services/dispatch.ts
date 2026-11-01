@@ -670,6 +670,8 @@ export interface DispatchRide {
   estimated_fare: number | null;
   payment_method: string | null;
   waypoints: unknown;
+  /** Ride creation time, sent with the offer so the client can reject stale rows. */
+  created_at: string | null;
   offer_round: number | null;
   version: number | null;
   passenger_fb: string | null;
@@ -684,7 +686,7 @@ export async function loadRide(rideId: string): Promise<DispatchRide | null> {
     `SELECT r.id, r.status, r.passenger_id, COALESCE(r.tier, 'go') AS tier,
             r.pickup_address, r.pickup_lat, r.pickup_lng,
             r.destination_address, r.destination_lat, r.destination_lng,
-            r.estimated_fare, r.payment_method, r.waypoints,
+            r.estimated_fare, r.payment_method, r.waypoints, r.created_at,
             COALESCE(r.offer_round, 0) AS offer_round, COALESCE(r.version, 0) AS version,
             u.firebase_uid AS passenger_fb,
             u.full_name AS passenger_name, u.phone AS passenger_phone,
@@ -1044,6 +1046,11 @@ export async function offerToNextDriver(
       destinationAddress: ride.destination_address,
       destinationLat: ride.destination_lat,
       destinationLng: ride.destination_lng,
+      // The ride's REAL state at emit time. The driver app uses these to reject
+      // a payload that was already obsolete when it arrived (in-flight poll or a
+      // socket frame queued behind a cancellation).
+      status: ride.status,
+      createdAt: ride.created_at,
       fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
       paymentMethod: ride.payment_method || "cash",
       waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
@@ -1054,6 +1061,26 @@ export async function offerToNextDriver(
       riderPhoto: ride.passenger_photo_url || null,
       distanceToPickupKm: Number(candidate.distance_km?.toFixed?.(2) ?? candidate.distance_km),
     };
+
+    // FINAL CANCEL GUARD: the INSERT above checked the ride, but the rider can
+    // still cancel in the milliseconds before this emit. Without this second
+    // read the socket frame is already in flight and the driver's screen opens
+    // a request that no longer exists (the classic "it keeps showing cancelled
+    // rides" report). Closing the offer first means the cancellation handler's
+    // sweep and this emit can never disagree.
+    const live = await queryOne<{ status: string }>(
+      `SELECT status FROM rides WHERE id = $1`,
+      [rideId]
+    ).catch(() => null);
+    if (!live || !["searching", "scheduled", "no_drivers"].includes(live.status)) {
+      await execute(
+        `UPDATE ride_offers SET status = 'expired', decline_reason = 'ride_not_searching', updated_at = NOW()
+          WHERE id = $1 AND status = 'pending'`,
+        [res.id]
+      ).catch(() => undefined);
+      trace(rideId, "offer_cancelled_before_emit", { driver_id: candidate.id, status: live?.status ?? null });
+      return { offered: false, reason: "ride_not_searching" };
+    }
 
     if (room) {
       io.to(room).emit("ride:offer", payload);
