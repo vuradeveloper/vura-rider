@@ -60,6 +60,7 @@ exports.MIGRATION_ORDER = [
     "021_assign_categories.sql",
     "022_ride_tier_default.sql",
     "023_backfill_categories.sql",
+    "024_admin_multi_role.sql",
 ];
 /** Arbitrary app-wide advisory key — one constant so all boots serialise. */
 const ADVISORY_KEY = 726401001;

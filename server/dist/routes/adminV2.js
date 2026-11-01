@@ -79,12 +79,15 @@ router.get("/me", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (req, r
             res.status(403).json({ error: "Admin only" });
             return;
         }
+        const effectiveRoles = actor.roles && actor.roles.length ? actor.roles : [actor.role];
+        const basePerms = Array.from(new Set(effectiveRoles.flatMap((r) => adminAuth_1.ROLE_PERMISSIONS[r] || [])));
         const permissions = (0, adminAuth_1.isGovernanceEmail)(actor.email)
-            ? adminAuth_1.ROLE_PERMISSIONS[actor.role]
-            : adminAuth_1.ROLE_PERMISSIONS[actor.role].filter((p) => p !== "admins.manage");
+            ? basePerms
+            : basePerms.filter((p) => p !== "admins.manage");
         res.json({
             email: actor.email,
             role: actor.role,
+            roles: effectiveRoles,
             permissions,
         });
     }
@@ -96,7 +99,7 @@ router.get("/me", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (req, r
 // GET /api/admin/v2/admins — list every admin row (fallback emails noted).
 router.get("/admins", (0, adminAuth_1.requireAdmin)("admins.manage"), async (_req, res) => {
     try {
-        const admins = await (0, database_1.query)(`SELECT id, email, role, disabled, invited_by, created_at, updated_at
+        const admins = await (0, database_1.query)(`SELECT id, email, role, extra_roles, disabled, invited_by, created_at, updated_at
          FROM admin_users ORDER BY LOWER(email)`);
         res.json({ admins });
     }
@@ -114,26 +117,37 @@ router.post("/admins", (0, adminAuth_1.requireAdmin)("admins.manage"), async (re
             return;
         }
         const email = String(req.body?.email || "").trim().toLowerCase();
-        const role = req.body?.role;
+        const requestedRoles = Array.isArray(req.body?.roles)
+            ? req.body.roles
+            : req.body?.role !== undefined
+                ? [req.body.role]
+                : [];
+        const roles = Array.from(new Set(requestedRoles.filter((r) => typeof r === "string")));
+        if (!roles.length || !roles.every((r) => adminAuth_1.ADMIN_ROLES.includes(r))) {
+            res.status(400).json({ error: `role(s) must be one of: ${adminAuth_1.ADMIN_ROLES.join(", ")}` });
+            return;
+        }
+        const primaryRole = roles[0];
+        const extraRoles = roles.slice(1);
+        if (!adminAuth_1.ADMIN_ROLES.includes(primaryRole)) {
+            res.status(400).json({ error: `role must be one of: ${adminAuth_1.ADMIN_ROLES.join(", ")}` });
+            return;
+        }
         if (!EMAIL_RE.test(email)) {
             res.status(400).json({ error: "A valid email is required" });
             return;
         }
-        if (!adminAuth_1.ADMIN_ROLES.includes(role)) {
-            res.status(400).json({ error: `role must be one of: ${adminAuth_1.ADMIN_ROLES.join(", ")}` });
-            return;
-        }
         // The env fallback cannot be shadowed or disabled from the UI.
-        if (email === actor.email && role !== "super_admin") {
+        if (email === actor.email && !roles.includes("super_admin")) {
             res.status(400).json({ error: "You cannot change your own role" });
             return;
         }
-        const existing = await (0, database_1.queryOne)(`SELECT id, role, disabled FROM admin_users WHERE LOWER(email) = $1`, [email]);
-        const row = await (0, database_1.queryOne)(`INSERT INTO admin_users (email, role, disabled, invited_by)
-       VALUES ($1, $2, FALSE, $3)
+        const existing = await (0, database_1.queryOne)(`SELECT id, role, extra_roles, disabled FROM admin_users WHERE LOWER(email) = $1`, [email]);
+        const row = await (0, database_1.queryOne)(`INSERT INTO admin_users (email, role, extra_roles, disabled, invited_by)
+       VALUES ($1, $2, $3, FALSE, $4)
        ON CONFLICT (LOWER(email)) DO UPDATE
-         SET role = EXCLUDED.role, disabled = FALSE, updated_at = NOW()
-       RETURNING id, email, role, disabled, invited_by, created_at`, [email, role, actor.email]);
+         SET role = EXCLUDED.role, extra_roles = EXCLUDED.extra_roles, disabled = FALSE, updated_at = NOW()
+       RETURNING id, email, role, extra_roles, disabled, invited_by, created_at`, [email, primaryRole, extraRoles, actor.email]);
         // ── Deliver the invitation — the row alone never told anyone. ──────────
         // Existing Firebase account → email carries a "set your password" link
         // (their rider/driver password is theirs to change); no account → created
@@ -192,7 +206,7 @@ router.post("/admins", (0, adminAuth_1.requireAdmin)("admins.manage"), async (re
                     }
                 }
             }
-            const sent = await (0, adminInvite_1.sendAdminInviteEmail)({ email, role, tempPassword, resetLink });
+            const sent = await (0, adminInvite_1.sendAdminInviteEmail)({ email, role: primaryRole, tempPassword, resetLink });
             emailSent = sent.ok;
             if (!sent.ok)
                 emailError = sent.error || "Email failed";
@@ -204,8 +218,8 @@ router.post("/admins", (0, adminAuth_1.requireAdmin)("admins.manage"), async (re
             action: existing ? "admin.role_change" : "admin.invite",
             entityType: "admin_user",
             entityId: row?.id ?? null,
-            oldValue: existing ? { role: existing.role, disabled: existing.disabled } : undefined,
-            newValue: { role, disabled: false, email_sent: emailSent },
+            oldValue: existing ? { role: existing.role, extra_roles: existing.extra_roles, disabled: existing.disabled } : undefined,
+            newValue: { role: primaryRole, extra_roles: extraRoles, disabled: false, email_sent: emailSent },
         });
         res.status(existing ? 200 : 201).json({
             admin: row,
@@ -229,7 +243,7 @@ router.patch("/admins/:id", (0, adminAuth_1.requireAdmin)("admins.manage"), asyn
             return;
         }
         const id = String(req.params.id || "");
-        const existing = await (0, database_1.queryOne)(`SELECT id, email, role, disabled FROM admin_users WHERE id = $1`, [id]);
+        const existing = await (0, database_1.queryOne)(`SELECT id, email, role, extra_roles, disabled FROM admin_users WHERE id = $1`, [id]);
         if (!existing) {
             res.status(404).json({ error: "Admin not found" });
             return;
@@ -238,11 +252,22 @@ router.patch("/admins/:id", (0, adminAuth_1.requireAdmin)("admins.manage"), asyn
             res.status(400).json({ error: "You cannot change your own row" });
             return;
         }
-        const role = req.body?.role;
         const disabled = req.body?.disabled;
-        if (role !== undefined && !adminAuth_1.ADMIN_ROLES.includes(role)) {
-            res.status(400).json({ error: `role must be one of: ${adminAuth_1.ADMIN_ROLES.join(", ")}` });
-            return;
+        const requestedRoles = Array.isArray(req.body?.roles)
+            ? req.body.roles
+            : req.body?.role !== undefined
+                ? [req.body.role]
+                : undefined;
+        let primaryRole;
+        let extraRoles;
+        if (requestedRoles !== undefined) {
+            const roles = Array.from(new Set(requestedRoles.filter((r) => typeof r === "string")));
+            if (!roles.length || !roles.every((r) => adminAuth_1.ADMIN_ROLES.includes(r))) {
+                res.status(400).json({ error: `role(s) must be one of: ${adminAuth_1.ADMIN_ROLES.join(", ")}` });
+                return;
+            }
+            primaryRole = roles[0];
+            extraRoles = roles.slice(1);
         }
         if (disabled !== undefined && typeof disabled !== "boolean") {
             res.status(400).json({ error: "disabled must be a boolean" });
@@ -250,16 +275,17 @@ router.patch("/admins/:id", (0, adminAuth_1.requireAdmin)("admins.manage"), asyn
         }
         const row = await (0, database_1.queryOne)(`UPDATE admin_users
           SET role = COALESCE($2, role),
+              extra_roles = COALESCE($5, extra_roles),
               disabled = COALESCE($3, disabled),
               updated_at = NOW()
         WHERE id = $1
-        RETURNING id, email, role, disabled, invited_by, created_at, updated_at`, [id, role ?? null, disabled ?? null]);
+        RETURNING id, email, role, extra_roles, disabled, invited_by, created_at, updated_at`, [id, primaryRole ?? null, disabled ?? null, null, extraRoles ?? null]);
         await (0, adminAuth_1.writeAudit)(actor, {
             action: "admin.role_change",
             entityType: "admin_user",
             entityId: id,
-            oldValue: { role: existing.role, disabled: existing.disabled },
-            newValue: { role: row?.role, disabled: row?.disabled },
+            oldValue: { role: existing.role, extra_roles: existing.extra_roles, disabled: existing.disabled },
+            newValue: { role: row?.role, extra_roles: row?.extra_roles, disabled: row?.disabled },
         });
         res.json({ admin: row });
     }

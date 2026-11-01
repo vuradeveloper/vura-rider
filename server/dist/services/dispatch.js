@@ -572,7 +572,7 @@ async function loadRide(rideId) {
     return (0, database_1.queryOne)(`SELECT r.id, r.status, r.passenger_id, COALESCE(r.tier, 'go') AS tier,
             r.pickup_address, r.pickup_lat, r.pickup_lng,
             r.destination_address, r.destination_lat, r.destination_lng,
-            r.estimated_fare, r.payment_method, r.waypoints,
+            r.estimated_fare, r.payment_method, r.waypoints, r.created_at,
             COALESCE(r.offer_round, 0) AS offer_round, COALESCE(r.version, 0) AS version,
             u.firebase_uid AS passenger_fb,
             u.full_name AS passenger_name, u.phone AS passenger_phone
@@ -871,6 +871,11 @@ async function offerToNextDriver(io, rideId, round, opts) {
             destinationAddress: ride.destination_address,
             destinationLat: ride.destination_lat,
             destinationLng: ride.destination_lng,
+            // The ride's REAL state at emit time. The driver app uses these to reject
+            // a payload that was already obsolete when it arrived (in-flight poll or a
+            // socket frame queued behind a cancellation).
+            status: ride.status,
+            createdAt: ride.created_at,
             fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
             paymentMethod: ride.payment_method || "cash",
             waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
@@ -880,6 +885,19 @@ async function offerToNextDriver(io, rideId, round, opts) {
             riderPhone: ride.passenger_phone || null,
             distanceToPickupKm: Number(candidate.distance_km?.toFixed?.(2) ?? candidate.distance_km),
         };
+        // FINAL CANCEL GUARD: the INSERT above checked the ride, but the rider can
+        // still cancel in the milliseconds before this emit. Without this second
+        // read the socket frame is already in flight and the driver's screen opens
+        // a request that no longer exists (the classic "it keeps showing cancelled
+        // rides" report). Closing the offer first means the cancellation handler's
+        // sweep and this emit can never disagree.
+        const live = await (0, database_1.queryOne)(`SELECT status FROM rides WHERE id = $1`, [rideId]).catch(() => null);
+        if (!live || !["searching", "scheduled", "no_drivers"].includes(live.status)) {
+            await (0, database_1.execute)(`UPDATE ride_offers SET status = 'expired', decline_reason = 'ride_not_searching', updated_at = NOW()
+          WHERE id = $1 AND status = 'pending'`, [res.id]).catch(() => undefined);
+            (0, trace_1.trace)(rideId, "offer_cancelled_before_emit", { driver_id: candidate.id, status: live?.status ?? null });
+            return { offered: false, reason: "ride_not_searching" };
+        }
         if (room) {
             io.to(room).emit("ride:offer", payload);
             io.to(room).emit("ride:request", payload);

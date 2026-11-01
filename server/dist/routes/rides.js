@@ -31,14 +31,25 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
             return;
         }
         // Driver: a pending, unexpired offer with a countdown.
+        //
+        // The RIDE must still be looking for a driver. A pending offer row can
+        // outlive its ride (a cancellation path that missed the offer sweep, a
+        // worker restart, or an old build's race), and without this filter the
+        // driver app's restore path re-opened offers for rides the rider cancelled
+        // long ago. Never resurrect a dead ride.
         const offer = await (0, database_1.queryOne)(`SELECT ro.id AS offer_id, ro.round, ro.expires_at,
               GREATEST(0, EXTRACT(EPOCH FROM (ro.expires_at - NOW()))::int) AS seconds_remaining,
               r.id AS ride_id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
               r.destination_address, r.destination_lat, r.destination_lng,
-              r.estimated_fare, r.payment_method, r.waypoints
+              r.estimated_fare, r.payment_method, r.waypoints, r.created_at
          FROM ride_offers ro
          JOIN rides r ON r.id = ro.ride_id
         WHERE ro.driver_id = $1 AND ro.status = 'pending' AND ro.expires_at > NOW()
+          AND (
+            (r.status IN ('searching', 'no_drivers')
+              AND r.created_at > NOW() - INTERVAL '30 minutes')
+            OR (r.status = 'scheduled' AND r.scheduled_at > NOW())
+          )
         ORDER BY ro.created_at DESC
         LIMIT 1`, [user.id]).catch(() => null);
         // Either role: the ride this user is currently on (rider or driver side).
@@ -54,8 +65,16 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
          LEFT JOIN users d ON d.id = r.driver_id
          LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
         WHERE (r.passenger_id = $1 OR r.driver_id = $1)
-          AND r.status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
-          AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
+          AND r.status IN ('searching', 'no_drivers', 'accepted', 'driver_arrived', 'in_progress')
+          AND (
+            (r.status IN ('searching', 'no_drivers')
+              AND r.created_at > NOW() - INTERVAL '30 minutes')
+            OR (r.status IN ('accepted', 'driver_arrived')
+              AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes')
+            -- A started trip is never dropped by the search window: a long drive
+            -- must still restore (the cleanup reaper handles truly dead rows).
+            OR r.status = 'in_progress'
+          )
         ORDER BY r.created_at DESC
         LIMIT 1`, [user.id]).catch(() => null);
         // The rider's photo next to the car: users.profile_photo_url, else the
@@ -427,8 +446,18 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
        LEFT JOIN ratings rat ON rat.ride_id = r.id AND rat.passenger_id = $2
        WHERE (r.passenger_id = $1 OR r.driver_id = $1)
-         AND r.status IN ('searching', 'accepted', 'driver_arrived', 'in_progress')
-         AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes'
+         AND r.status IN ('searching', 'no_drivers', 'accepted', 'driver_arrived', 'in_progress')
+         AND (
+           -- A ride still looking for a driver stays recoverable while dispatch
+           -- may still revive it. 'no_drivers' is deliberately included: parking
+           -- a search is NOT cancellation, and excluding it here is why a rider
+           -- who backgrounded the app came back to an empty home screen.
+           (r.status IN ('searching', 'no_drivers')
+             AND r.created_at > NOW() - INTERVAL '30 minutes')
+           OR (r.status IN ('accepted', 'driver_arrived')
+             AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes')
+           OR r.status = 'in_progress'
+         )
        ORDER BY r.created_at DESC LIMIT 1`, [user.id, user.id]);
         // Same single source of truth as /me/active-state: the rider's live trip card
         // is fed by THIS endpoint, so the approved photo must be attached here too.

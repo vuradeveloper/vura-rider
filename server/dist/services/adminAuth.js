@@ -4,12 +4,14 @@ exports.ROLE_PERMISSIONS = exports.ADMIN_PERMISSIONS = exports.GOVERNANCE_EMAIL 
 exports.isGovernanceEmail = isGovernanceEmail;
 exports.isAdminRole = isAdminRole;
 exports.roleHasPermission = roleHasPermission;
+exports.rolesHavePermission = rolesHavePermission;
 exports.superAdminFallbackEmails = superAdminFallbackEmails;
-exports.resolveAdminRole = resolveAdminRole;
+exports.resolveAdminRoles = resolveAdminRoles;
 exports.resolveAdminActor = resolveAdminActor;
 exports.loadAdminActor = loadAdminActor;
 exports.requireAdmin = requireAdmin;
 exports.writeAudit = writeAudit;
+exports.resolveAdminRole = resolveAdminRole;
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 exports.ADMIN_ROLES = [
@@ -93,6 +95,9 @@ exports.ROLE_PERMISSIONS = {
 function roleHasPermission(role, perm) {
     return exports.ROLE_PERMISSIONS[role].includes(perm);
 }
+function rolesHavePermission(roles, perm) {
+    return roles.some((r) => roleHasPermission(r, perm));
+}
 /** Emails from the env, lowercased and trimmed. Empty list = fallback unused. */
 function superAdminFallbackEmails() {
     return (process.env.ADMIN_EMAILS || "")
@@ -105,34 +110,50 @@ function superAdminFallbackEmails() {
  * A disabled admin_users row loses to nothing â€” it simply does not resolve
  * (unless the email is in the ADMIN_EMAILS fallback).
  */
-async function resolveAdminRole(email) {
+async function resolveAdminRoles(email) {
     if (!email)
-        return null;
+        return [];
     const normalized = email.trim().toLowerCase();
     if (!normalized)
-        return null;
+        return [];
     if (superAdminFallbackEmails().includes(normalized))
-        return "super_admin";
+        return ["super_admin"];
     // Governance owner is always a super_admin, even if not listed in env or table.
     if (normalized === exports.GOVERNANCE_EMAIL)
-        return "super_admin";
+        return ["super_admin"];
     try {
-        const row = await (0, database_1.queryOne)(`SELECT role FROM admin_users WHERE LOWER(email) = $1 AND disabled = FALSE`, [normalized]);
-        return isAdminRole(row?.role) ? row.role : null;
+        let row = null;
+        try {
+            row = await (0, database_1.queryOne)(`SELECT role, extra_roles FROM admin_users WHERE LOWER(email) = $1 AND disabled = FALSE`, [normalized]);
+        }
+        catch (e) {
+            const r = await (0, database_1.queryOne)(`SELECT role FROM admin_users WHERE LOWER(email) = $1 AND disabled = FALSE`, [normalized]);
+            row = r ? { role: r.role, extra_roles: [] } : null;
+        }
+        if (!row)
+            return [];
+        const roles = [];
+        if (isAdminRole(row.role) && !roles.includes(row.role))
+            roles.push(row.role);
+        for (const r of row.extra_roles || []) {
+            if (isAdminRole(r) && !roles.includes(r))
+                roles.push(r);
+        }
+        return roles;
     }
     catch (err) {
         // Table missing (migration 004 not applied) â†’ feature off, not a crash.
         if ((0, database_1.isMissingRelation)(err))
-            return null;
+            return [];
         throw err;
     }
 }
 /** Resolve the actor for ACTION code (audit + permission checks). */
 async function resolveAdminActor(req) {
-    const role = await resolveAdminRole(req.user?.email);
-    if (!role)
+    const roles = await resolveAdminRoles(req.user?.email);
+    if (!roles.length)
         return null;
-    return { email: (req.user.email || "").trim().toLowerCase(), role };
+    return { email: (req.user.email || "").trim().toLowerCase(), role: roles[0], roles };
 }
 /** Attach the resolved actor (or null) to the request. Never throws. */
 async function loadAdminActor(req) {
@@ -156,7 +177,7 @@ function requireAdmin(perm) {
                 res.status(403).json({ error: "Admin only" });
                 return;
             }
-            if (!roleHasPermission(actor.role, perm)) {
+            if (!rolesHavePermission(actor.roles, perm)) {
                 res.status(403).json({
                     error: "Insufficient permissions",
                     required: perm,
@@ -209,5 +230,9 @@ async function writeAudit(actor, input) {
         console.error(`[admin/audit] WRITE FAILED actor=${actor.email} action=${input.action} ` +
             `entity=${input.entityType}/${input.entityId ?? "-"}: ${err?.message}`);
     }
+}
+async function resolveAdminRole(email) {
+    const roles = await resolveAdminRoles(email);
+    return roles.length ? roles[0] : null;
 }
 //# sourceMappingURL=adminAuth.js.map

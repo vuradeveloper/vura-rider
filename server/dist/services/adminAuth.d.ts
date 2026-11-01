@@ -15,9 +15,11 @@ export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
  */
 export declare const ROLE_PERMISSIONS: Record<AdminRole, readonly AdminPermission[]>;
 export declare function roleHasPermission(role: AdminRole, perm: AdminPermission): boolean;
+export declare function rolesHavePermission(roles: AdminRole[], perm: AdminPermission): boolean;
 export interface AdminActor {
     email: string;
     role: AdminRole;
+    roles: AdminRole[];
 }
 /** Emails from the env, lowercased and trimmed. Empty list = fallback unused. */
 export declare function superAdminFallbackEmails(): string[];
@@ -26,7 +28,7 @@ export declare function superAdminFallbackEmails(): string[];
  * A disabled admin_users row loses to nothing â€” it simply does not resolve
  * (unless the email is in the ADMIN_EMAILS fallback).
  */
-export declare function resolveAdminRole(email: string | undefined | null): Promise<AdminRole | null>;
+export declare function resolveAdminRoles(email: string | undefined | null): Promise<AdminRole[]>;
 /** Resolve the actor for ACTION code (audit + permission checks). */
 export declare function resolveAdminActor(req: AuthRequest): Promise<AdminActor | null>;
 /** Attach the resolved actor (or null) to the request. Never throws. */
@@ -51,4 +53,5 @@ export interface AuditInput {
  * the source of truth; the log is the record of it).
  */
 export declare function writeAudit(actor: AdminActor, input: AuditInput): Promise<void>;
+export declare function resolveAdminRole(email: string | undefined | null): Promise<AdminRole | null>;
 //# sourceMappingURL=adminAuth.d.ts.map
