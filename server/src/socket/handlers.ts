@@ -1149,10 +1149,16 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const { rideId, deviceId } = data;
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
-        // Allow accepting both live 'searching' rides AND upcoming 'scheduled'
-        // rides so a driver can pre-claim a booking BEFORE the pickup time.
+        // Allow accepting live 'searching' rides, upcoming 'scheduled' rides,
+        // and 'no_drivers' rides. The driver's 2-second poll
+        // (GET /api/rides/available) deliberately lists parked 'no_drivers'
+        // rides, and services/dispatch.acceptRide deliberately allows a direct
+        // claim on them when no other driver holds a live offer. Rejecting them
+        // HERE was the gap: the offer screen showed the ride, the tap failed
+        // with "Ride no longer available", and a rider whose app was closed
+        // (so no re-dispatch) could never be picked up.
         const ride = await queryOne<{ id: string; passenger_id: string; status: string; estimated_fare: number | null; device_id?: string | null; scheduled_at?: Date }>(
-          "SELECT id, passenger_id, status, estimated_fare, device_id, scheduled_at FROM rides WHERE id = $1 AND status IN ('searching','scheduled')",
+          "SELECT id, passenger_id, status, estimated_fare, device_id, scheduled_at FROM rides WHERE id = $1 AND status IN ('searching','scheduled','no_drivers')",
           [rideId]
         );
         // Stops live in their own column, which an older database may not have —
