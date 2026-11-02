@@ -5,7 +5,7 @@ needed. Run every block from the CloudShell prompt in **af-south-1**.
 
 The deploy ships the code in `server/dist`, and `deploy/deploy.sh` refuses to
 run unless `server/dist/build-commit.txt` matches the last commit that touched
-the server. For the ride-continuity/stale-offer fix that value is `051b402`.
+the server. For the driver-accept fix that value is `9aa298d`.
 
 ## 1. Install the EB CLI (once per CloudShell home)
 
@@ -47,11 +47,11 @@ git log --oneline -3
 Confirm the build stamp before going further:
 
 ```bash
-cat server/dist/build-commit.txt     # must print 051b402
+cat server/dist/build-commit.txt     # must print 9aa298d
 git log -1 --format=%h -- server/src server/migrations server/package.json server/tsconfig.json
 ```
 
-Both lines must be `051b402`. If not, stop and rebuild `server/dist` locally.
+Both lines must be `9aa298d`. If not, stop and rebuild `server/dist` locally.
 
 ## 3. Point the EB CLI at the app
 
@@ -115,7 +115,7 @@ curl -s "https://api.ridevura.com/api/dev/diag?key=$KEY" \
   | python3 -c 'import json,sys; b=json.load(sys.stdin)["build"]; print("commit", b.get("commit"), "builtAt", b.get("builtAt"))'
 ```
 
-Expected: `commit 051b402`. If it still shows an older hash, the deploy did not
+Expected: `commit 9aa298d`. If it still shows an older hash, the deploy did not
 land; check `eb events vura-rider-prod` before retrying.
 
 ## 6. Functional checks (after the deploy)

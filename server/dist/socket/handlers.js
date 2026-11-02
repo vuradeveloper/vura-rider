@@ -998,9 +998,13 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
-                // Allow accepting both live 'searching' rides AND upcoming 'scheduled'
-                // rides so a driver can pre-claim a booking BEFORE the pickup time.
-                const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status, estimated_fare, device_id, scheduled_at FROM rides WHERE id = $1 AND status IN ('searching','scheduled')", [rideId]);
+                // Allow accepting live 'searching' rides, upcoming 'scheduled' rides,
+                // and 'no_drivers' rides. GET /api/rides/available deliberately lists
+                // parked 'no_drivers' rides, and dispatch.acceptRide deliberately allows
+                // a direct claim on them when nobody else holds a live offer. Rejecting
+                // them HERE made the offer appear on the driver's phone and the tap fail
+                // with "Ride no longer available".
+                const ride = await (0, database_1.queryOne)("SELECT id, passenger_id, status, estimated_fare, device_id, scheduled_at FROM rides WHERE id = $1 AND status IN ('searching','scheduled','no_drivers')", [rideId]);
                 // Stops live in their own column, which an older database may not have —
                 // a missing column must never break accepting a ride, so this read is
                 // isolated and its failure is swallowed.
