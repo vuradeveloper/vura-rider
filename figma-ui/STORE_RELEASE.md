@@ -29,7 +29,7 @@ build switch `VITE_PAY_LATER_ENABLED=false`; it is not in the signed artifacts i
 | Backend | `https://api.ridevura.com` |
 | Firebase project | `vura-f667d` |
 | Launcher name | `Vura` |
-| Suggested store name | `Vura - Ride Hailing` |
+| Suggested store name | `Vura` |
 
 This is a **new production listing**. The old Expo rider app used
 `com.nhlanhlanb.vurarider`; it is a separate package and a separate Play/App Store
@@ -43,8 +43,8 @@ must increase for every App Store Connect upload. Both currently start at `6`.
 The current `android/app/google-services.json` contains a temporary client cloned
 from the old `app.vura.rider.figma` client (it reuses the same
 `mobilesdk_app_id`). It builds and runs, but it attributes auth/push to the wrong
-Firebase app. Register the real Android app before production and rebuild. The iOS
-`GoogleService-Info.plist` does not exist yet.
+Firebase app. Register the real Android app before production and rebuild. The iOS build does not need a Firebase plist: iOS push uses APNs directly
+(see section 8.1).
 
 ---
 
@@ -132,7 +132,7 @@ powershell -ExecutionPolicy Bypass -File scripts\make-brand-assets.ps1
 ## 3. Google Play - remaining steps
 
 1. **Create the app** in Play Console:
-   - Name: `Vura - Ride Hailing` (the launcher label is `Vura`)
+   - Name: `Vura` (fallback if the listing is rejected or taken: `Vura Ride`)
    - Default language: English (South Africa) or English (United States)
    - App or game: App
    - Free
@@ -357,7 +357,9 @@ The iOS project is prepared at `ios/App/App.xcodeproj` with:
 
 On a Mac:
 
-1. Install Xcode 16 or newer and command-line tools.
+1. Install **Xcode 26 or newer** and the command-line tools. App Store Connect
+   rejects uploads built with an older SDK (the iOS 26 SDK has been required
+   since 28 April 2026).
 2. `cd figma-ui && npm ci`. The iOS `public/` folder is already synced to the
    v1.5 flag-off bundle. If you rebuild, keep the flag off:
    `VITE_PAY_LATER_ENABLED=false npm run build && npx cap sync ios`
@@ -366,30 +368,44 @@ On a Mac:
 3. Open `ios/App/App.xcodeproj` (Capacitor 8 uses Swift Package Manager; there is
    no `.xcworkspace`).
 4. Select the **App** target -> Signing & Capabilities:
-   - Team: your Apple Developer team
+   - Team: your Apple Developer team (Team ID from Membership details)
    - Bundle Identifier: `app.vura.rider`
    - Confirm "Push Notifications" is on.
-5. **Push notifications:** download `GoogleService-Info.plist` from Firebase
-   Console -> project `vura-f667d` -> add an iOS app with bundle ID
-   `app.vura.rider`, then:
-   - Put the plist in `ios/App/App/` and add it to the App target (Copy Bundle
-     Resources).
-   - Upload your APNs auth key (`.p8`) to Firebase -> Cloud Messaging.
-   Without this, iOS push registration will not deliver ride updates; foreground
-   use still works through the socket.
+5. **Push notifications use direct APNs, not the Firebase iOS SDK.**
+   `@capacitor/push-notifications` returns an APNs device token, and the iOS
+   project has no Firebase iOS SDK and no `GoogleService-Info.plist` reference,
+   so adding the plist alone would not deliver anything. The server needs the
+   APNs `.p8`, Key ID, and Team ID from `APPLE_RELEASE.md` section 3. Until 8.1
+   ships, iOS push does not arrive; foreground use still works through the socket.
 6. Product -> Archive -> Distribute App -> App Store Connect -> Upload.
 7. In App Store Connect:
-   - Create the app with bundle ID `app.vura.rider`, name
-     `Vura - Ride Hailing`.
+   - Create the app with bundle ID `app.vura.rider`, name `Vura` (fallback
+     `Vura Ride` if the name is taken), SKU `vura-rider-1`.
    - Privacy policy: `https://www.ridevura.com/privacy`
    - Support URL: `https://www.ridevura.com/contact`
-   - App Privacy: use §4.
-   - Age rating: 18+ (the Terms require riders to be 18 or older).
+   - App Privacy: use section 4.
+   - Age rating: **4+** from the questionnaire. The 18+ rule in the Terms is an
+     eligibility condition, not an Apple content rating.
    - Export compliance: already declared exempt in Info.plist.
-   - App Review Information: demo account from §5.
+   - App Review Information: demo account from section 5.
    - Review notes: see below.
-   - Screenshots: §7.
+   - Screenshots: section 7.
 8. Submit for review.
+
+The full click-by-click website runbook (App IDs, APNs key, app records, App
+Privacy tables, TestFlight, review notes, blockers) is in `APPLE_RELEASE.md` in
+this folder.
+
+### 8.1 iOS push code gap (fix before upload)
+
+- `src/lib/notify.ts` posts `platform: 'android'`; it must post
+  `Capacitor.getPlatform()`.
+- `server/src/services/notify.ts` sends every `device_tokens` row through FCM.
+  Add a platform split: Android stays FCM, iOS goes to APNs (HTTP/2 + ES256 JWT
+  signed with the `.p8` key).
+- Add `APNS_KEY_ID`, `APNS_TEAM_ID`, and the `.p8` contents to the Elastic
+  Beanstalk environment, then redeploy and test with the app backgrounded and
+  closed on TestFlight.
 
 ### Review notes (copy into App Store Connect)
 
@@ -552,7 +568,8 @@ it and can support the disclosure. "Pay for your ride at month-end" is accurate.
 
 - **Firebase registration:** `app.vura.rider` is not in the Firebase console. The
   current Android client is a clone and should be replaced, then the AAB rebuilt.
-  The iOS `GoogleService-Info.plist` and APNs key are also missing.
+  iOS does not use Firebase: it needs the APNs key on the server instead (section
+  8.1).
 - **Branded deletion page:** the page is live at
   `https://vura-account-deletion.pages.dev/` and is ready for Play Console.
   Moving it to `https://www.ridevura.com/delete-account` is still a
@@ -573,9 +590,10 @@ it and can support the disclosure. "Pay for your ride at month-end" is accurate.
 - **Future Pay Later release:** see §9. v1.5 is not blocked by this, but do not
   re-enable Pay Later for real riders until the NCR position and the Apple
   60-day issue are resolved.
-- **Server deploy:** the FK-safe account-deletion work is on
-  `admin-v2-reconciled` and is not deployed to production yet. Verify
-  `POST /api/users/delete` with a throwaway account after deploy.
+- **Server deploy:** the FK-safe account-deletion work is live. `admin-v2-reconciled`
+  is at `4f5c83b`, the deployed code commit is `051b402`, and the Elastic
+  Beanstalk version is `vura-4f5c83b-20261101-035715`. Verify
+  `POST /api/users/delete` with one throwaway production account.
 - **Signup verification code:** the six-digit code is generated on-device and
   compared in the app; it is not server-verified. This does not block store
   review, but it should be moved server-side before scaling.
@@ -593,9 +611,9 @@ it and can support the disclosure. "Pay for your ride at month-end" is accurate.
 ## 12. Release checklist
 
 ```
-[ ] Register app.vura.rider in Firebase (Android + iOS)
+[ ] Register app.vura.rider in Firebase (Android only)
 [ ] Replace android/app/google-services.json with the real client
-[ ] Add ios/App/App/GoogleService-Info.plist and APNs key
+[ ] Add APNs .p8 + Key ID + Team ID to the server and implement the iOS branch
 [x] Publish the deletion page (https://vura-account-deletion.pages.dev/)
 [ ] Move the deletion page to https://www.ridevura.com/delete-account
 [x] Decide Pay Later: hidden for v1.5
@@ -604,7 +622,8 @@ it and can support the disclosure. "Pay for your ride at month-end" is accurate.
 [ ] Keep Pay Later out of the store listing and screenshots
 [ ] Create demo rider account; keep credentials for reviewers
 [ ] Capture phone screenshots (Play >=2, App Store >=3)
-[ ] Deploy admin-v2-reconciled and test account deletion end-to-end
+[x] Deploy admin-v2-reconciled (build 051b402, EB vura-4f5c83b-20261101-035715)
+[ ] Test account deletion end-to-end with a throwaway production account
 [ ] Upload AAB to Play internal testing; smoke-test the installed build
 [ ] Archive and upload the iOS build on macOS
 [ ] Complete Play Data safety, Financial features ("none") and content rating
