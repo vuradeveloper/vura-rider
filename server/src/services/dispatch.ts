@@ -1446,6 +1446,22 @@ export async function acceptRide(
       console.warn("[safety] PIN mint failed:", err?.message || err)
     );
     await emitRideAccepted(io, rideId, driverId, result.version ?? 0);
+    // Driver-facing confirmation on the driver's OWN user room. The socket ack
+    // is the primary signal, but it is lost if the driver's socket reconnects at
+    // the exact moment of the tap — and the app then sits on a dead offer (or a
+    // fake trip) with no way to tell. This is the same committed fact delivered
+    // through a second channel.
+    const drv = await queryOne<{ firebase_uid: string }>(
+      "SELECT firebase_uid FROM users WHERE id = $1",
+      [driverId]
+    ).catch(() => null);
+    if (drv?.firebase_uid) {
+      io.to(`user:${drv.firebase_uid}`).emit("driver:ride:accepted", {
+        rideId,
+        id: rideId,
+        version: result.version ?? 0,
+      });
+    }
     // Tell the drivers who were still looking at this ride that it is gone. The
     // database already refused their accept, but a row flipping to 'expired' is
     // invisible to a phone: without this their request screen keeps counting down
