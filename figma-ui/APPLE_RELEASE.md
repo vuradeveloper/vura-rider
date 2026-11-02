@@ -7,7 +7,7 @@ Apps covered:
 | App | Bundle ID | Version | Build | Display name |
 |---|---|---|---|---|
 | Vura (rider) | `app.vura.rider` | 1.5 | 6 | Vura |
-| Vura Driver | `app.vura.driver` | 1.7 | 8 | Vura Driver |
+| Vura Driver | `app.vura.driver` | 1.8 | 9 | Vura Driver |
 
 Both targets are iPhone-only (`TARGETED_DEVICE_FAMILY = 1`) and have a minimum
 deployment target of iOS 15.0.
@@ -386,7 +386,7 @@ npx cap open ios
      backgrounded; read section 14.2 before archiving.
 3. Set **Version** and **Build**:
    - Rider: Version `1.5`, Build `6`.
-   - Driver: Version `1.7`, Build `8`.
+   - Driver: Version `1.8`, Build `9`.
    - Increment the build number for every upload. Never reuse a build number.
 4. Select **Any iOS Device (arm64)** as the destination. Archive is greyed out
    if a simulator is selected.
@@ -623,7 +623,7 @@ Choose one before archiving:
 - Add a native background-geolocation Capacitor plugin and use it while the
   driver is online, or
 - Remove `location` from `UIBackgroundModes` and the Always permission strings
-  for v1.7, and ship the driver app as foreground-only. Apple may reject a
+  for v1.8, and ship the driver app as foreground-only. Apple may reject a
   background mode the app does not actually use.
 
 The review notes in section 12 must match whichever choice you make.
@@ -680,7 +680,7 @@ submitting.
 [ ] iOS push platform fix and APNs server support deployed
 [ ] Driver background-location decision applied
 [ ] Xcode 26 archive built for rider 1.5 (6)
-[ ] Xcode 26 archive built for driver 1.7 (8)
+[ ] Xcode 26 archive built for driver 1.8 (9)
 [ ] Both builds uploaded and processed in App Store Connect
 [ ] TestFlight internal testing passed on a real iPhone
 [ ] Review notes and demo credentials entered
