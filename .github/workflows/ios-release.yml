@@ -51,18 +51,45 @@ jobs:
           set -euo pipefail
           test -n "$ASC_KEY_ID"
           test -n "$ASC_PRIVATE_KEY"
-          mkdir -p "$HOME/.appstoreconnect/private_keys" "$HOME/private_keys"
-          KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s\n' "$ASC_PRIVATE_KEY" > "$KEY"
-          cp "$KEY" "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          chmod 600 "$KEY"
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Install distribution certificate
+        env:
+          IOS_DIST_CERT_P12: ${{ secrets.IOS_DIST_CERT_P12 }}
+          IOS_DIST_CERT_PASS: ${{ secrets.IOS_DIST_CERT_PASS }}
+        run: |
+          set -euo pipefail
+          test -n "$IOS_DIST_CERT_P12"
+          test -n "$IOS_DIST_CERT_PASS"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          echo "$IOS_DIST_CERT_P12" | base64 --decode > "$RUNNER_TEMP/distribution.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/distribution.p12" -k "$KEYCHAIN_PATH" -P "$IOS_DIST_CERT_PASS" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Install provisioning profile
+        env:
+          IOS_PROFILE: ${{ secrets.IOS_PROFILE }}
+          IOS_PROFILE_UUID: ${{ secrets.IOS_PROFILE_UUID }}
+        run: |
+          set -euo pipefail
+          test -n "$IOS_PROFILE"
+          test -n "$IOS_PROFILE_UUID"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$IOS_PROFILE" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/${IOS_PROFILE_UUID}.mobileprovision"
 
       - name: Archive
         working-directory: figma-ui/ios/App
         env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_PROFILE_NAME: ${{ secrets.IOS_PROFILE_NAME }}
         run: |
           set -euo pipefail
           xcodebuild \
@@ -72,28 +99,21 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_NAME" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             archive
 
       - name: Export IPA
         working-directory: figma-ui/ios/App
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           set -euo pipefail
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             -exportOptionsPlist ../ExportOptions.plist \
             -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
 
       - name: Upload to App Store Connect
         env:
