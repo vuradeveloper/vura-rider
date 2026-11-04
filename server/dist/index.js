@@ -83,6 +83,7 @@ const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
 const walletAdmin_1 = __importDefault(require("./routes/walletAdmin"));
 const SchedulingService_1 = require("./services/SchedulingService");
 const preauthorization_1 = require("./services/preauthorization");
+const creditReconciler_1 = require("./services/creditReconciler");
 const PayLaterService_1 = require("./services/PayLaterService");
 const paystackWebhook_1 = __importDefault(require("./routes/paystackWebhook"));
 const offerWorker_1 = require("./services/offerWorker");
@@ -279,6 +280,11 @@ global.__vuraIo = io;
 // searching/no_drivers past PREAUTH_STUCK_SEARCH_MINUTES (default 15), so a
 // cancelled/never-matched search can never leave money held on a rider's card.
 (0, preauthorization_1.startPreauthReaper)();
+// Card-credit reconciler: card rides whose capture webhook never arrived (or
+// whose booking hold was never created) used to show "Waiting for Paystack to
+// settle" forever. This settles or voids them every CREDIT_RECONCILE_INTERVAL_MS
+// (default 10 min) using the same idempotent functions the webhook uses.
+(0, creditReconciler_1.startCreditReconciler)();
 // Ride Now, Pay Later collector: auto-debit pass (due dates + optional
 // threshold) every PAY_LATER_WORKER_INTERVAL_MS (default 6h) + one catch-up
 // run ~2 min after boot. Only charges riders who opted in.
