@@ -508,8 +508,15 @@ function setupSocketHandlers(io) {
                             });
                             const held = await (0, database_1.queryOne)("SELECT payment_status FROM rides WHERE id = $1", [ride.id]).catch(() => null);
                             const st = String(held?.payment_status || "").toUpperCase();
-                            if (st !== "HOLD_ACTIVE" && st !== "HOLD_PENDING") {
-                                throw new Error(`hold not established (${st || "no status"})`);
+                            // createRideHold() ALWAYS leaves the ride in HOLD_PENDING first —
+                            // that state alone proves nothing. Only a SAVED CARD is expected
+                            // to reach HOLD_ACTIVE synchronously; without a saved card the
+                            // rider must finish the secure page, which is a different flow.
+                            const savedCard = await (0, database_1.queryOne)("SELECT id FROM saved_cards WHERE user_id = $1 LIMIT 1", [dbUserId]).catch(() => null);
+                            const mustBeHeld = !!savedCard;
+                            const ok = mustBeHeld ? st === "HOLD_ACTIVE" : st === "HOLD_ACTIVE" || st === "HOLD_PENDING";
+                            if (!ok) {
+                                throw new Error(`hold not established (${st || "no status"}, savedCard=${mustBeHeld})`);
                             }
                         }
                     }
