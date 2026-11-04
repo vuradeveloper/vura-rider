@@ -594,19 +594,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
               ).catch(() => null);
               const st = String(held?.payment_status || "").toUpperCase();
 
-              // createRideHold() ALWAYS leaves the ride in HOLD_PENDING first —
-              // that state alone proves nothing. Only a SAVED CARD is expected
-              // to reach HOLD_ACTIVE synchronously; without a saved card the
-              // rider must finish the secure page, which is a different flow.
-              const savedCard = await queryOne<{ id: string }>(
-                "SELECT id FROM saved_cards WHERE user_id = $1 LIMIT 1",
-                [dbUserId]
-              ).catch(() => null);
-              const mustBeHeld = !!savedCard;
-              const ok = mustBeHeld ? st === "HOLD_ACTIVE" : st === "HOLD_ACTIVE" || st === "HOLD_PENDING";
-              if (!ok) {
+              // ONLY HOLD_ACTIVE passes. HOLD_PENDING means "the rider has not
+              // paid yet" — dispatching on it put a driver on the way for money
+              // that might never arrive. A rider with no saved card must add one
+              // first (the add-card flow tokenises it), or pay cash.
+              if (st !== "HOLD_ACTIVE") {
                 throw new Error(
-                  `hold not established (${st || "no status"}, savedCard=${mustBeHeld})`
+                  `hold not established (${st || "no status"}) — add a saved card or pay cash`
                 );
               }
             }
