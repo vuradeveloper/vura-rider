@@ -199,25 +199,25 @@ function maskAccountNumber(accountNumber) {
  *     matching only the CURRENT token — the old rule — silently zeroed every
  *     ride from before a re-registration: a rider's own paid history must not
  *     be erased by removing and re-adding their card;
- *   • anti ride-farming — a (rider, driver) pair used ≥5 completed times is
- *     excluded entirely (kept from v1);
+ *   • anti ride-farming — each (rider, driver) pair contributes AT MOST 4
+ *     counted rides. Rides beyond the cap are ignored, not the whole pair, so
+ *     a rider who took 6 card rides with one driver still gets 4. This matches
+ *     what the app tells the rider ("each driver counts for at most 4 of your
+ *     rides together").
  *   • cash and pay_later rides never count (unproven / credit, not card).
  * Eligibility and the credit ladder both use this number.
  */
 async function countUnlockRides(dbUserId) {
-    const row = await (0, database_2.queryOne)(`SELECT COUNT(*)::text AS total
-       FROM rides r
-      WHERE r.passenger_id = $1
-        AND r.status = 'completed'
-        AND r.driver_id IS NOT NULL
-        AND (LOWER(COALESCE(r.payment_method, '')) = 'card' OR r.card_auth_code IS NOT NULL)
-        AND NOT EXISTS (
-          SELECT 1 FROM rides r2
-           WHERE r2.passenger_id = $1
-             AND r2.driver_id = r.driver_id
-             AND r2.status = 'completed'
-          HAVING COUNT(*) >= 5
-        )`, [dbUserId]);
+    const row = await (0, database_2.queryOne)(`SELECT COALESCE(SUM(LEAST(per_driver.c, 4)), 0)::text AS total
+       FROM (
+         SELECT r.driver_id, COUNT(*)::int AS c
+           FROM rides r
+          WHERE r.passenger_id = $1
+            AND r.status = 'completed'
+            AND r.driver_id IS NOT NULL
+            AND (LOWER(COALESCE(r.payment_method, '')) = 'card' OR r.card_auth_code IS NOT NULL)
+          GROUP BY r.driver_id
+       ) per_driver`, [dbUserId]);
     return parseInt(row?.total || "0", 10);
 }
 /** v1 counter (any completed ride, no card provenance) — kept exported for

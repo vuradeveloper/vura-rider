@@ -99,7 +99,24 @@ async function saveToDb(key, value) {
         // Best effort — in-memory cache still covers this request.
     }
 }
-async function fetchUpstream(points, overview) {
+/**
+ * OSRM `bearings` for the ORIGIN waypoint only.
+ *
+ * After a U-turn the car faces the opposite way; without this OSRM happily
+ * returns a route that starts by driving back past the car, so it looks like no
+ * reroute happened. ±45° keeps lane choice free but forces the new direction.
+ */
+function bearingsParam(points, bearing) {
+    if (bearing == null || !Number.isFinite(bearing))
+        return "";
+    const n = points.split(";").length;
+    if (n < 2)
+        return "";
+    const deg = Math.round((((bearing % 360) + 360) % 360) * 10) / 10;
+    const entries = [`${deg},45`, ...Array(n - 1).fill("")];
+    return `&bearings=${entries.join(";")}`;
+}
+async function fetchUpstream(points, overview, bearing) {
     // OSRM routing provider (free, keyless, same OSRM-style shape the app
     // parses: geometry.coordinates as [lng,lat], distance, duration).
     const seam = (0, providerSeams_1.routeProvider)();
@@ -112,7 +129,7 @@ async function fetchUpstream(points, overview) {
     // continue_straight=false stops OSRM forcing a U-turn/loop at via points:
     // with true (its default) a stop behind the car can add a little loop at the
     // start or end of the line, which looked like a drawing bug on the rider map.
-    const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}&steps=true&continue_straight=false`;
+    const url = `${seam.url}/route/v1/driving/${points}?geometries=geojson&overview=${overview}&steps=true&continue_straight=false${bearingsParam(points, bearing)}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
     try {
@@ -162,10 +179,15 @@ router.get("/", async (req, res) => {
             res.status(400).json({ error: "points must be in 'lng,lat;lng,lat' format" });
             return;
         }
+        // Departure direction at the origin (degrees). Optional: rider previews and
+        // older builds never send it, and the route is then unconstrained as before.
+        const rawBearing = Number(req.query.bearing);
+        const bearing = Number.isFinite(rawBearing) && rawBearing >= 0 && rawBearing <= 360 ? rawBearing : null;
         // `v3nostraight` busts cache rows written before continue_straight=false,
         // so the first request after this deploy returns the clean line instead of
-        // waiting out the 7-day TTL.
-        const key = `${points}|${overview}|v3nostraight`;
+        // waiting out the 7-day TTL. `b<deg>` keeps a forced-direction route from
+        // being served for an unconstrained request and vice versa.
+        const key = `${points}|${overview}|v3nostraight|b${bearing == null ? "-" : Math.round(bearing)}`;
         // 1. In-memory cache
         const mem = cacheGet(key);
         if (mem) {
@@ -181,7 +203,7 @@ router.get("/", async (req, res) => {
                     cacheSet(key, fromDb);
                     return fromDb;
                 }
-                const fromUpstream = await fetchUpstream(points, overview);
+                const fromUpstream = await fetchUpstream(points, overview, bearing);
                 if (!fromUpstream)
                     throw new Error("No route found");
                 cacheSet(key, fromUpstream);

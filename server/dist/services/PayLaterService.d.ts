@@ -23,8 +23,11 @@ export declare function ensurePayLaterTables(): Promise<void>;
  *     matching only the CURRENT token — the old rule — silently zeroed every
  *     ride from before a re-registration: a rider's own paid history must not
  *     be erased by removing and re-adding their card;
- *   • anti ride-farming — a (rider, driver) pair used ≥5 completed times is
- *     excluded entirely (kept from v1);
+ *   • anti ride-farming — each (rider, driver) pair contributes AT MOST 4
+ *     counted rides. Rides beyond the cap are ignored, not the whole pair, so
+ *     a rider who took 6 card rides with one driver still gets 4. This matches
+ *     what the app tells the rider ("each driver counts for at most 4 of your
+ *     rides together").
  *   • cash and pay_later rides never count (unproven / credit, not card).
  * Eligibility and the credit ladder both use this number.
  */
