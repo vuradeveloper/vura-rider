@@ -700,7 +700,7 @@ export async function takePayLaterRide(dbUserId: string, estimatedFareR: number)
   }
   if (fare > available) {
     throw new Error(
-      `This ride (R${fare.toFixed(2)}) exceeds your available Pay Later credit (R${available.toFixed(2)}) — repay some of your balance first.`
+      `This ride (R${fare.toFixed(2)}) exceeds your available Pay Later account limit (R${available.toFixed(2)}) — repay some of your balance first.`
     );
   }
   const due = await queryOne<{ due_at: Date | null }>(

@@ -1098,7 +1098,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   const paySubtitle = pay === PAY_CASH
     ? 'Pay the driver directly'
     : PAY_LATER_ENABLED && pay === PAY_LATER
-      ? (pl ? `${formatRand(pl.available_r)} credit available` : 'Ride now, pay later')
+      ? (pl ? `${formatRand(pl.available_r)} available to spend` : 'Ride now, pay later')
       : (cards.find((x) => x.id === pay)?.bank || 'Saved card')
 
   // What the ordered list means for the booking. The first row is the pickup,
@@ -1443,7 +1443,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                 selected={pay === PAY_LATER}
                 onSelect={() => setPay(PAY_LATER)}
                 title="Ride Now, Pay Later"
-                subtitle={`Ride now, settle at month-end · ${formatRand(pl.available_r)} credit available`}
+                subtitle={`Ride now, settle at month-end · ${formatRand(pl.available_r)} available to spend`}
                 icon={IC.clock()}
               />
             )}

@@ -222,11 +222,11 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
               </p>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className="bg-[#F7F7F7] rounded-xl px-3 py-2.5">
-                  <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">Limit</p>
+                  <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">Account limit</p>
                   <p className="text-[14px] font-semibold text-[#1A1A1A]">{fmtRand(elig.limit_r)}</p>
                 </div>
                 <div className="bg-[#F7F7F7] rounded-xl px-3 py-2.5">
-                  <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">Available</p>
+                  <p className="text-[10px] text-[#ADADAD] font-semibold uppercase tracking-wider">Available to spend</p>
                   <p className={`text-[14px] font-semibold ${elig.available_r <= 0 ? 'text-[#C5221F]' : 'text-[#1E8E3E]'}`}>
                     {fmtRand(elig.available_r)}
                   </p>
@@ -235,7 +235,7 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
               <p className="text-[11px] text-[#6B6B6B] mt-3 leading-snug">
                 {outstanding > 0
                   ? `Due ${fmtDate(elig.due_date) || 'at month-end'} · auto-collected only if auto-debit is on`
-                  : 'Nothing owed right now — your full limit is available.'}
+                  : 'Nothing owed right now — your full account limit is available.'}
                 {elig.has_card && elig.card_last4 ? ` · card •••• ${elig.card_last4}` : ''}
               </p>
             </div>
@@ -305,6 +305,14 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
                   You’ll owe the fare at month-end, or clear it faster with ride-to-repay.
                   Accept to book rides with Pay Later.
                 </p>
+                <a
+                  href="https://www.ridevura.com/terms#pay-later"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block text-[11px] font-semibold text-[#8A6D00] underline"
+                >
+                  Read the Pay Later terms
+                </a>
                 <button
                   onClick={acceptTerms}
                   disabled={busy !== null}
