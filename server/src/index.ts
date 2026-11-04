@@ -46,6 +46,7 @@ import safetyAdminRouter from "./routes/safetyAdmin";
 import walletAdminRouter from "./routes/walletAdmin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
 import { startPreauthReaper } from "./services/preauthorization";
+import { startCreditReconciler } from "./services/creditReconciler";
 import { startPayLaterWorker } from "./services/PayLaterService";
 import paystackWebhookRouter from "./routes/paystackWebhook";
 import { startOfferWorker, getBuildCommit } from "./services/offerWorker";
@@ -291,6 +292,12 @@ startScheduler(io);
 // searching/no_drivers past PREAUTH_STUCK_SEARCH_MINUTES (default 15), so a
 // cancelled/never-matched search can never leave money held on a rider's card.
 startPreauthReaper();
+
+// Card-credit reconciler: card rides whose capture webhook never arrived (or
+// whose booking hold was never created) used to show "Waiting for Paystack to
+// settle" forever. This settles or voids them every CREDIT_RECONCILE_INTERVAL_MS
+// (default 10 min) using the same idempotent functions the webhook uses.
+startCreditReconciler();
 
 // Ride Now, Pay Later collector: auto-debit pass (due dates + optional
 // threshold) every PAY_LATER_WORKER_INTERVAL_MS (default 6h) + one catch-up

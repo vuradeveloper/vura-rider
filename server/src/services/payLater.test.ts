@@ -208,7 +208,7 @@ describe("countUnlockRides — proven card-paid rides, anti-farm capped", () => 
       last4: "4242",
     } as any);
     vi.mocked(queryOne).mockImplementation(
-      oneMock([["SELECT COUNT(*)::text AS total", { total: "5" }]])
+      oneMock([["SUM(LEAST(per_driver.c, 4))", { total: "5" }]])
     );
     expect(await countUnlockRides("rider-1")).toBe(5);
     const [sql, params] = vi.mocked(queryOne).mock.calls[0];
@@ -216,7 +216,10 @@ describe("countUnlockRides — proven card-paid rides, anti-farm capped", () => 
     // every ride from before a card re-registration.
     expect(sql).toContain("OR r.card_auth_code IS NOT NULL");
     expect(sql).toContain("= 'card'");
-    expect(sql).toContain("HAVING COUNT(*) >= 5"); // anti ride-farming pair guard
+    // Anti ride-farming: each (rider, driver) pair contributes at most 4 rides.
+    // The old rule dropped the WHOLE pair at 5, which zeroed a rider's history.
+    expect(sql).toContain("LEAST(per_driver.c, 4)");
+    expect(sql).toContain("GROUP BY r.driver_id");
     expect(params).toEqual(["rider-1"]); // no token dependency any more
   });
 
@@ -423,7 +426,7 @@ describe("enrollPayLater — card-first (v1 upgrade)", () => {
       oneMock([
         ...userRows,
         ["FROM saved_cards", { id: "card-1" }],
-        ["SELECT COUNT(*)::text AS total", { total: "3" }],
+        ["SUM(LEAST(per_driver.c, 4))", { total: "3" }],
       ])
     );
     await expect(enrollPayLater("rider-1", {})).rejects.toThrow(
@@ -437,7 +440,7 @@ describe("enrollPayLater — card-first (v1 upgrade)", () => {
       oneMock([
         ...userRows,
         ["FROM saved_cards", { id: "card-1" }],
-        ["SELECT COUNT(*)::text AS total", { total: "5" }],
+        ["SUM(LEAST(per_driver.c, 4))", { total: "5" }],
         ["INSERT INTO pay_later_accounts", { ...ACTIVE_ACCOUNT, credit_limit: 100 }],
       ])
     );
@@ -804,7 +807,7 @@ describe("getPayLaterEligibility — locked rider progress", () => {
     vi.mocked(getDefaultCardToken).mockResolvedValue(null as any);
     vi.mocked(queryOne).mockImplementation(
       oneMock([
-        ["SELECT COUNT(*)::text AS total", { total: "3" }],
+        ["SUM(LEAST(per_driver.c, 4))", { total: "3" }],
         ["COALESCE(SUM(\n        CASE entry_type", { total: "0" }],
         ["FROM pay_later_accounts a", null],
       ])
@@ -847,7 +850,7 @@ describe("getPayLaterEligibility — locked rider progress", () => {
           "COUNT(*) FILTER",
           { total_completed: 9, paid_by_card: 6, same_card: 5 },
         ],
-        ["SELECT COUNT(*)::text AS total", { total: "3" }], // counted: 5 − farm cap
+        ["SUM(LEAST(per_driver.c, 4))", { total: "3" }], // counted after the per-driver cap
         ["COALESCE(SUM(\n        CASE entry_type", { total: "0" }],
         ["FROM pay_later_accounts a", null],
       ])
@@ -858,7 +861,7 @@ describe("getPayLaterEligibility — locked rider progress", () => {
       total_completed: 9, // what the rider sees in history
       paid_by_card: 6,    // …of which proven card-paid (cash excluded)
       same_card: 5,       // informational: stamped with a token on file now
-      excluded_by_farm: 3, // …minus rides with a driver used 5×+ (anti-farm)
+      excluded_by_farm: 3, // card rides beyond the 4-per-driver cap
     });
   });
 });
