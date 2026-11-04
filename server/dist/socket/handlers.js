@@ -1390,6 +1390,23 @@ function setupSocketHandlers(io) {
                     return;
                 }
                 await (0, database_1.execute)("UPDATE rides SET status = 'in_progress', trip_started_at = NOW() WHERE id = $1", [rideId]);
+                // ── Capture the fare the moment the trip starts ──
+                // The hold used to survive until completion, so a rider could cancel
+                // after the driver had already driven off and no money was ever taken.
+                // The PIN has now been verified and the car is moving, so the money is
+                // captured here. captureRideHold is idempotent: the completion path
+                // still calls it and simply returns alreadyProcessed.
+                void (async () => {
+                    try {
+                        const res = await (0, preauthorization_1.captureRideHold)(rideId);
+                        console.log(`[preauth] capture at start ride=${rideId} status=${res?.paymentStatus} captured=${res?.captured}`);
+                    }
+                    catch (e) {
+                        // Never block the trip on a payment failure — the reconciler and
+                        // the completion capture retry it. But log it loudly.
+                        console.warn(`[preauth] capture at start failed ride=${rideId}:`, e?.message || e);
+                    }
+                })();
                 io.to(`ride:${rideId}`).emit("ride:started");
                 // Redundant delivery to the rider's personal room — survives the rider's
                 // ride-room membership being lost (e.g. backgrounded socket reconnect).
