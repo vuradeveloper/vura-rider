@@ -44,7 +44,12 @@ async function requiredTypes() {
  */
 async function requiredDocsStatus(driverId) {
     const required = await requiredTypes();
-    const approved = await (0, database_1.query)(`SELECT DISTINCT doc_type FROM driver_documents WHERE driver_id = $1 AND status = 'approved'`, [driverId]);
+    const approved = await (0, database_1.query)(`SELECT doc_type FROM (
+        SELECT DISTINCT ON (doc_type) doc_type, status
+          FROM driver_documents
+         WHERE driver_id = $1
+         ORDER BY doc_type, created_at DESC
+     ) latest WHERE status = 'approved'`, [driverId]);
     const have = new Set(approved.map((r) => r.doc_type));
     const missing = required.filter((t) => !have.has(t));
     return { approved: missing.length === 0, missing, required };
@@ -52,7 +57,12 @@ async function requiredDocsStatus(driverId) {
 /** True when the driver has EVERY active required document approved. */
 async function allRequiredApproved(driverId) {
     const types = await requiredTypes();
-    const approved = await (0, database_1.query)(`SELECT DISTINCT doc_type FROM driver_documents WHERE driver_id = $1 AND status = 'approved'`, [driverId]);
+    const approved = await (0, database_1.query)(`SELECT doc_type FROM (
+        SELECT DISTINCT ON (doc_type) doc_type, status
+          FROM driver_documents
+         WHERE driver_id = $1
+         ORDER BY doc_type, created_at DESC
+     ) latest WHERE status = 'approved'`, [driverId]);
     const set = new Set(approved.map((r) => r.doc_type));
     return types.every((t) => set.has(t));
 }
