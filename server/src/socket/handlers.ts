@@ -564,41 +564,66 @@ export function setupSocketHandlers(io: SocketIOServer) {
             Number.isFinite(Number(pickupLat)) && Number.isFinite(Number(pickupLng)),
         });
         trace(ride?.id ?? null, "trip_saved", { payment_method: paymentMethod || "cash" });
-        socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
-        if (ride) socket.join(`ride:${ride.id}`);
-
-        // ── Card preauthorization (fire-and-forget, AFTER the ack) ──
-        // The hold must never delay booking: the ack is already out and dispatch
-        // starts below regardless. Saved card → instant HOLD_ACTIVE; no card →
-        // HOLD_PENDING + checkout URL, which the app reads (and opens) through
-        // POST /api/rides/book — idempotent, so the client call that follows
-        // this returns the SAME hold instead of creating a second one.
+        // ── Card preauthorization (BLOCKING, before the ack) ──
+        // This used to be fire-and-forget AFTER the ack: booking started and
+        // dispatch began whether or not the money could be held, so a rider with
+        // an empty card still got matched and the fare never came through.
+        // Now a card ride is only acknowledged once the hold exists — either
+        // HOLD_ACTIVE (funds reserved) or HOLD_PENDING (the rider is being sent
+        // to the secure page to finish it). Anything else cancels the ride.
         if (ride?.id && paymentMethod === "card" && Number(rideFare) > 0) {
-          void (async () => {
-            try {
-              const email = String(
-                (
-                  await queryOne<{ email: string | null }>(
-                    "SELECT email FROM users WHERE id = $1",
-                    [dbUserId]
-                  ).catch(() => null)
-                )?.email || ""
-              ).trim();
-              if (!email) return;
+          try {
+            const email = String(
+              (
+                await queryOne<{ email: string | null }>(
+                  "SELECT email FROM users WHERE id = $1",
+                  [dbUserId]
+                ).catch(() => null)
+              )?.email || ""
+            ).trim();
+            if (email) {
               await createRideHold({
                 rideId: String(ride.id),
                 userId: String(dbUserId),
                 amountRands: Number(rideFare),
                 email,
               });
-            } catch (e: any) {
-              console.warn(
-                `[preauth] booking hold failed ride=${ride.id}:`,
-                e?.message || e
-              );
+              const held = await queryOne<{ payment_status: string | null }>(
+                "SELECT payment_status FROM rides WHERE id = $1",
+                [ride.id]
+              ).catch(() => null);
+              const st = String(held?.payment_status || "").toUpperCase();
+              if (st !== "HOLD_ACTIVE" && st !== "HOLD_PENDING") {
+                throw new Error(`hold not established (${st || "no status"})`);
+              }
             }
-          })();
+          } catch (e: any) {
+            console.warn(`[preauth] booking hold refused ride=${ride.id}:`, e?.message || e);
+            await execute(
+              `UPDATE rides
+                  SET status = 'cancelled',
+                      cancelled_by = 'system',
+                      cancel_reason = 'payment_not_authorised',
+                      cancelled_at = NOW()
+                WHERE id = $1 AND status IN ('searching','scheduled','no_drivers')`,
+              [ride.id]
+            ).catch(() => {});
+            socket.emit("ride:requested:ack", {
+              success: false,
+              rideId: ride.id,
+              // `reason` is what the rider app renders (backend.requestRide
+              // reads d.reason first); `error` is kept for other clients.
+              reason:
+                "We could not hold the fare on your card. Top up or add another card, then try again.",
+              error:
+                "We could not hold the fare on your card. Top up or add another card, then try again.",
+            });
+            return;
+          }
         }
+
+        socket.emit("ride:requested:ack", { success: true, rideId: ride?.id });
+        if (ride) socket.join(`ride:${ride.id}`);
 
         // ── Notify nearby drivers about the new ride ──
         // Find all online drivers and emit ride:request to each one so the
@@ -708,10 +733,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
             : null,
         });
 
-        // Also broadcast to every online driver so pending Accept/Decline
-        // cards for this ride disappear immediately (drivers not yet joined
-        // to the ride room still see the request card).
-        io.to("drivers").emit("ride:cancelled", { rideId, reason });
+        // NOTE: there used to be a blanket `io.to("drivers").emit("ride:cancelled")`
+        // here "so pending cards disappear". It also told EVERY online driver
+        // that "the rider cancelled" — including drivers who were never offered
+        // the ride and never accepted it, which read as a phantom cancellation.
+        // cancelPendingOffers() above already notifies the one driver holding an
+        // offer, and the assigned driver is handled below, so no broadcast is
+        // needed.
 
         // Wallet: a cancelled ride must never leave money standing — void a
         // pending card credit, reverse any posted entry (once, idempotent).
