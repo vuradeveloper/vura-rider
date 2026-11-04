@@ -1862,7 +1862,10 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
           if (!alive) return
           if (!res.ok) {
             setError(res.message)
-            setPhase('waiting')
+            // Stay on the booking screen. A refused booking (e.g. the card hold
+            // failed) used to drop the rider onto the live-trip screen — map,
+            // car, driver search — for a ride that does not exist.
+            setPhase('booking')
           } else {
             rideIdRef.current = res.rideId
             setPhase('waiting')
@@ -2621,7 +2624,10 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           showSelf={false}
         />
       </div>
-      <div className="bg-white rounded-t-3xl shadow-[0_-4px_24px_rgba(0,0,0,0.08)] px-5 pt-5 pb-8 z-10">
+      <div
+        className="bg-white rounded-t-3xl shadow-[0_-4px_24px_rgba(0,0,0,0.08)] px-5 pt-5 z-10 max-h-[68vh] overflow-y-auto overscroll-contain"
+        style={{ paddingBottom: 'calc(2rem + env(safe-area-inset-bottom))' }}
+      >
         <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
 
         {/* ETA banner */}

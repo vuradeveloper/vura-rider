@@ -1332,7 +1332,7 @@ export async function requestRide(input: RideRequestInput): Promise<RideRequestR
       const a = on("ride:requested:ack", (d: any) =>
         d?.success
           ? done({ ok: true, rideId: String(d.rideId) })
-          : done({ ok: false, reason: "error", message: d?.reason || d?.message || "Could not book the ride" })
+          : done({ ok: false, reason: "error", message: d?.reason || d?.error || d?.message || "Could not book the ride" })
       );
       const b = on("ride:no:drivers", () =>
         done({ ok: false, reason: "no_drivers", message: "No drivers nearby right now. Try again shortly." })
