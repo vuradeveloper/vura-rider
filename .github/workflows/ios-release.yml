@@ -13,7 +13,7 @@ env:
   APP_APPLE_ID: "6830309972"
   APP_BUNDLE_ID: "app.vura.rider"
   APP_VERSION: "1.5.1"
-  APP_BUILD: "9"
+  APP_BUILD: "10"
 
 jobs:
   build:
