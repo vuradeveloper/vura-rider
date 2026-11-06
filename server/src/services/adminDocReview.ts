@@ -46,12 +46,11 @@ export async function requiredDocsStatus(driverId: string): Promise<{
 }> {
   const required = await requiredTypes();
   const approved = await query<{ doc_type: string }>(
-    `SELECT doc_type FROM (
-        SELECT DISTINCT ON (doc_type) doc_type, status
-          FROM driver_documents
-         WHERE driver_id = $1
-         ORDER BY doc_type, created_at DESC
-     ) latest WHERE status = 'approved'`,
+    // RENEWAL-SAFE: a type counts as approved while ANY approved document of
+    // that type exists. A driver who replaces a still-valid licence therefore
+    // keeps driving while the new copy waits for review. The gate only closes
+    // when nothing approved remains (missing, rejected, or expired-and-removed).
+    `SELECT DISTINCT doc_type FROM driver_documents WHERE driver_id = $1 AND status = 'approved'`,
     [driverId]
   );
   const have = new Set(approved.map((r) => r.doc_type));
@@ -63,12 +62,11 @@ export async function requiredDocsStatus(driverId: string): Promise<{
 export async function allRequiredApproved(driverId: string): Promise<boolean> {
   const types = await requiredTypes();
   const approved = await query<{ doc_type: string }>(
-    `SELECT doc_type FROM (
-        SELECT DISTINCT ON (doc_type) doc_type, status
-          FROM driver_documents
-         WHERE driver_id = $1
-         ORDER BY doc_type, created_at DESC
-     ) latest WHERE status = 'approved'`,
+    // RENEWAL-SAFE: a type counts as approved while ANY approved document of
+    // that type exists. A driver who replaces a still-valid licence therefore
+    // keeps driving while the new copy waits for review. The gate only closes
+    // when nothing approved remains (missing, rejected, or expired-and-removed).
+    `SELECT DISTINCT doc_type FROM driver_documents WHERE driver_id = $1 AND status = 'approved'`,
     [driverId]
   );
   const set = new Set(approved.map((r) => r.doc_type));
