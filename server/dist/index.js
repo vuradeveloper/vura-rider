@@ -77,6 +77,7 @@ const devDiag_1 = __importDefault(require("./routes/devDiag"));
 const debugTrace_1 = __importDefault(require("./routes/debugTrace"));
 const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmin"));
 const vehicleImages_1 = require("./services/vehicleImages");
+const vehicleReview_1 = require("./services/vehicleReview");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
@@ -171,6 +172,12 @@ app.use("/api", vehicleImagesAdmin_1.default);
 // here must not stop the API from booting.
 (0, vehicleImages_1.ensureVehicleImageTables)().catch((err) => console.error("[vehicleImages] table ensure failed:", err?.message || err));
 (0, vehicleImages_1.startVehicleImageWorker)();
+// Vehicle classification review columns. Same lazy pattern as the image
+// tables: production does not run migrations on boot, so the columns travel in
+// dist and are created idempotently here.
+(0, vehicleReview_1.ensureVehicleReviewSchema)()
+    .then(() => (0, vehicleReview_1.sweepVehicleClassification)())
+    .catch((err) => console.error("[vehicleReview] schema ensure/classification failed:", err?.message || err));
 function safeRateLimit(name, options) {
     try {
         return (0, express_rate_limit_1.default)(options);

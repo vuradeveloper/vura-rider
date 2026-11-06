@@ -572,11 +572,17 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         //     so hiding them here would only hide the diagnosis.
         const me = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [_req.userId]);
         const dp = me
-            ? await (0, database_1.queryOne)(`SELECT current_lat, current_lng, vehicle_categories, vehicle_seats, body_type
+            ? await (0, database_1.queryOne)(`SELECT current_lat, current_lng, vehicle_categories, vehicle_seats, body_type, vehicle_suspended
              FROM driver_profiles WHERE user_id = $1`, [me.id]).catch(async () => 
             // Pre-013 database: no category columns yet — position still works.
             (0, database_1.queryOne)("SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1", [me.id]).catch(() => null))
             : null;
+        // A suspended vehicle gets an empty offer feed. acceptRide enforces the
+        // same rule server-side, so a stale client cannot claim a ride either.
+        if (dp?.vehicle_suspended === true) {
+            res.json({ rides: [], scoped: false, radius_km: null, suspended: true });
+            return;
+        }
         // The ride classes this car may serve. The list below is what the driver
         // app auto-opens every 2 seconds, so it must obey exactly the same class
         // contract dispatch does — otherwise an Economy car is shown (and can
