@@ -1595,6 +1595,10 @@ router.post("/documents/:id/reject", (0, adminAuth_1.requireAdmin)("documents.re
         res.json(out);
     }
     catch (err) {
+        if (String(err?.message || "").includes("rejection reason")) {
+            res.status(400).json({ error: err.message });
+            return;
+        }
         sendError(res, err);
     }
 });

@@ -72,6 +72,11 @@ async function allRequiredApproved(driverId) {
  * complete), the driver gets the single "all verified" push.
  */
 async function reviewDocument(id, status, note, actorLabel) {
+    // A rejection must tell the driver what to fix. The admin UI already requires
+    // it; this is the server-side guarantee for every caller.
+    if (status === "rejected" && (!note || !note.trim())) {
+        throw new Error("A rejection reason is required");
+    }
     const before = await (0, database_1.queryOne)(`SELECT driver_id FROM driver_documents WHERE id = $1`, [id]);
     if (!before)
         return null;
