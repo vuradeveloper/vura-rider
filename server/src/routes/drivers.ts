@@ -22,6 +22,75 @@ import { computeTierStatus } from "../services/performanceTier";
 
 const router = Router();
 
+// ── Break mode ───────────────────────────────────────────────────────────────
+// Dispatch only offers rides to status='available', so setting 'break' stops
+// offers without touching the dispatch loop. break_until brings the driver back
+// automatically; expiry runs lazily on the next call, so a restart cannot strand
+// anyone on break.
+const BREAK_MINUTES = [15, 30, 45];
+
+async function driverUserId(firebaseUid: string): Promise<string | null> {
+  const row = await queryOne<{ id: string }>(
+    "SELECT id FROM users WHERE firebase_uid = $1",
+    [firebaseUid]
+  );
+  return row?.id ?? null;
+}
+
+async function expireBreak(userId: string): Promise<void> {
+  await execute(
+    `UPDATE driver_profiles
+        SET status = 'available', break_until = NULL, updated_at = NOW()
+      WHERE user_id = $1 AND status = 'break'
+        AND break_until IS NOT NULL AND break_until < NOW()`,
+    [userId]
+  ).catch(() => {});
+}
+
+// POST /api/drivers/break  { minutes: 15 | 30 | 45 }
+router.post("/break", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = await driverUserId(req.userId!);
+    if (!uid) { res.status(401).json({ error: "Driver not found" }); return; }
+    await expireBreak(uid);
+    const minutes = Number((req.body || {}).minutes);
+    if (!BREAK_MINUTES.includes(minutes)) {
+      res.status(400).json({ error: "minutes must be 15, 30 or 45" });
+      return;
+    }
+    const row = await queryOne<{ break_until: string }>(
+      `UPDATE driver_profiles
+          SET status = 'break',
+              break_until = NOW() + ($2::int * INTERVAL '1 minute'),
+              updated_at = NOW()
+        WHERE user_id = $1
+        RETURNING break_until`,
+      [uid, minutes]
+    );
+    if (!row) { res.status(404).json({ error: "No driver profile" }); return; }
+    res.json({ ok: true, status: "break", break_until: row.break_until });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Could not start break" });
+  }
+});
+
+// POST /api/drivers/break/end
+router.post("/break/end", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = await driverUserId(req.userId!);
+    if (!uid) { res.status(401).json({ error: "Driver not found" }); return; }
+    await execute(
+      `UPDATE driver_profiles
+          SET status = 'available', break_until = NULL, updated_at = NOW()
+        WHERE user_id = $1`,
+      [uid]
+    );
+    res.json({ ok: true, status: "available" });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Could not end break" });
+  }
+});
+
 // GET /api/drivers/stats — Get driver statistics
 router.get("/stats", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
