@@ -755,9 +755,9 @@ router.get(
       const rows = await query<any>(
         `SELECT id, actor_email, actor_role, action, old_value, new_value, reason, created_at
            FROM admin_audit_log
-          WHERE (entity_type = 'driver_profiles' AND entity_id = $1)
+          WHERE (entity_type = 'driver_profiles' AND entity_id = $1::text)
              OR (entity_type = 'driver_documents' AND entity_id IN (
-                   SELECT id::text FROM driver_documents WHERE driver_id = $1
+                   SELECT id::text FROM driver_documents WHERE driver_id = $1::uuid
                  ))
           ORDER BY created_at DESC
           LIMIT 30`,
