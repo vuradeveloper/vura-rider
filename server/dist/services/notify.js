@@ -92,6 +92,11 @@ async function sendPushToUsers(userIds, msg) {
         const users = await (0, database_1.query)(`SELECT id, firebase_uid FROM users WHERE id = ANY($1::uuid[])`, [ids]);
         const tokens = await (0, database_1.query)(`SELECT id, user_id, push_token, platform FROM device_tokens
         WHERE user_id = ANY($1::uuid[]) AND is_active = TRUE`, [ids]);
+        // One line that turns a silent no-op into a fact: how many active device
+        // tokens the target users actually have. If this prints tokens=0, the app
+        // never registered and Firebase was never contacted.
+        console.log(`[push] "${msg.title}" users=${ids.length} tokens=${tokens.length}` +
+            (tokens.length ? ` platforms=${tokens.map((t) => t.platform).join(",")}` : ""));
         if (tokens.length > 0) {
             const app = (0, firebase_1.getFirebaseApp)();
             const res = await app.messaging().sendEachForMulticast({
