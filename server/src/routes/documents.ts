@@ -307,6 +307,10 @@ router.patch("/:id/status", roleGuard(["admin"]), async (req, res) => {
     }
     res.json({ document: out.document, allApproved: out.allApproved });
   } catch (err: any) {
+    if (String(err?.message || "").includes("rejection reason")) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     res.status(500).json({ error: err?.message || "Failed to update document" });
   }
 });

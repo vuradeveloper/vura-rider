@@ -1688,7 +1688,11 @@ router.post("/documents/:id/reject", requireAdmin("documents.review"), async (re
       newValue: { status: "rejected", note: req.body?.note ?? req.body?.reason ?? null },
     });
     res.json(out);
-  } catch (err) {
+  } catch (err: any) {
+    if (String(err?.message || "").includes("rejection reason")) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     sendError(res, err);
   }
 });

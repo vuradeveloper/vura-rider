@@ -84,6 +84,12 @@ export async function reviewDocument(
   note: string | null,
   actorLabel: string
 ): Promise<{ document: any; allApproved: boolean } | null> {
+  // A rejection must tell the driver what to fix. The admin UI already requires
+  // it; this is the server-side guarantee for every caller.
+  if (status === "rejected" && (!note || !note.trim())) {
+    throw new Error("A rejection reason is required");
+  }
+
   const before = await queryOne<{ driver_id: string }>(
     `SELECT driver_id FROM driver_documents WHERE id = $1`,
     [id]
