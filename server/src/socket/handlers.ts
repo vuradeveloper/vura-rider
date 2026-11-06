@@ -1110,10 +1110,33 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
         // Auto-create driver_profiles if missing (first time going online).
-        const existing = await queryOne<{ id: string; verification_status: string | null }>(
-          "SELECT id, verification_status FROM driver_profiles WHERE user_id = $1",
+        let existing = await queryOne<{
+          id: string;
+          verification_status: string | null;
+          vehicle_suspended?: boolean | null;
+        }>(
+          "SELECT id, verification_status, vehicle_suspended FROM driver_profiles WHERE user_id = $1",
           [dbUserId]
         ).catch(() => null);
+        if (!existing) {
+          // Pre-025 database: the row may exist without the suspension column.
+          // Fall back rather than treating an existing driver as brand new.
+          existing = await queryOne<{
+            id: string;
+            verification_status: string | null;
+            vehicle_suspended?: boolean | null;
+          }>(
+            "SELECT id, verification_status FROM driver_profiles WHERE user_id = $1",
+            [dbUserId]
+          ).catch(() => null);
+        }
+        // A suspended vehicle must not be marked available, even through the
+        // socket path. Dispatch filters it too; this keeps the server's status
+        // honest for the driver app and the admin console.
+        if (online === true && existing?.vehicle_suspended === true) {
+          console.warn(`[dispatch] driver ${dbUserId} tried to go online with a suspended vehicle`);
+          return;
+        }
         if (!existing) {
           await execute(
             `INSERT INTO driver_profiles (user_id, is_online, verification_status, status, last_heartbeat_at)
