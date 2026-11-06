@@ -107,6 +107,16 @@ export async function reviewDocument(
       body: "Every required document has been approved — you're fully verified. Nothing else to do.",
       highPriority: true,
     }).catch(() => null);
+  } else if (status === "approved") {
+    // Every individual approval now notifies. Previously only the LAST one
+    // spoke, so a driver with 12 documents heard nothing for 11 of them.
+    const label = String(rows[0]?.doc_type || "document").replace(/_/g, " ");
+    await sendPushToUsers([before.driver_id], {
+      type: "document_approved",
+      title: "Document approved ✅",
+      body: `Your ${label} has been approved.`,
+      highPriority: false,
+    }).catch(() => null);
   } else if (status === "rejected") {
     await sendPushToUsers([before.driver_id], {
       type: "document_rejected",
