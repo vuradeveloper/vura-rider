@@ -161,7 +161,25 @@ async function reconcileOnce() {
     return stats;
 }
 let running = false;
+/**
+ * Break mode needs driver_profiles.break_until. The migration runner only ships
+ * an expected list that did not include 024, so the column is created lazily on
+ * boot instead — idempotent, and it travels inside dist where it cannot be
+ * missed. Failure is non-fatal: nothing reads the column until the break
+ * endpoints ship.
+ */
+async function ensureBreakColumn() {
+    try {
+        await (0, database_1.query)(`ALTER TABLE driver_profiles
+         ADD COLUMN IF NOT EXISTS break_until TIMESTAMPTZ`);
+        console.log('[schema] driver_profiles.break_until ready');
+    }
+    catch (e) {
+        console.warn('[schema] break_until ensure failed:', e?.message || e);
+    }
+}
 function startCreditReconciler() {
+    void ensureBreakColumn();
     const intervalMs = envInt("CREDIT_RECONCILE_INTERVAL_MS", DEFAULT_INTERVAL_MS, 60_000);
     const tick = async () => {
         if (running)
