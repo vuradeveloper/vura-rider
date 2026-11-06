@@ -740,10 +740,11 @@ async function filterCandidatesForTier(
       vehicle_categories: unknown;
       vehicle_seats: number | null;
       body_type: string | null;
+      vehicle_suspended?: boolean | null;
     }> = [];
     try {
       const res = await query(
-        `SELECT user_id, vehicle_categories, vehicle_seats, body_type
+        `SELECT user_id, vehicle_categories, vehicle_seats, body_type, vehicle_suspended
            FROM driver_profiles WHERE user_id = ANY($1::uuid[])`,
         [ids]
       );
@@ -759,9 +760,13 @@ async function filterCandidatesForTier(
     // the rider booked. No degrade-to-everyone fallback — an Economy request must
     // never pop on a Premium car, and a Black request must never pop on an
     // Economy car. If no eligible car is nearby the ride parks as `no_drivers`.
-    const eligible = candidates.filter((c) =>
-      tierAcceptsCategory(tier, effectiveCategories(byId.get(c.id)))
-    );
+    const eligible = candidates.filter((c) => {
+      const profile = byId.get(c.id);
+      // A suspended vehicle is never offered a ride. The driver account stays
+      // active so they can fix the car or link another one.
+      if (profile?.vehicle_suspended === true) return false;
+      return tierAcceptsCategory(tier, effectiveCategories(profile));
+    });
     let pool = eligible;
     const mode = "strict";
     const near3km = pool.filter((c) => Number(c.distance_km) <= 3);
@@ -1280,19 +1285,29 @@ export async function acceptRide(
   // pre-013 database (no vehicle_categories column) can fall back cleanly — a
   // failed statement inside the transaction would abort it.
   let driverCategories: ReturnType<typeof effectiveCategories>;
+  let driverVehicleSuspended = false;
   try {
     const dp = await queryOne<{
       vehicle_categories: unknown;
       vehicle_seats: number | null;
       body_type: string | null;
+      vehicle_suspended?: boolean | null;
     }>(
-      `SELECT vehicle_categories, vehicle_seats, body_type
+      `SELECT vehicle_categories, vehicle_seats, body_type, vehicle_suspended
          FROM driver_profiles WHERE user_id = $1`,
       [driverId]
     );
     driverCategories = effectiveCategories(dp);
+    driverVehicleSuspended = dp?.vehicle_suspended === true;
   } catch {
     driverCategories = effectiveCategories(null);
+  }
+
+  if (driverVehicleSuspended) {
+    return {
+      ok: false,
+      error: "This vehicle is suspended. Contact support or link another car before accepting rides.",
+    };
   }
 
   const result = await withTransaction<AcceptResult>(async (client) => {

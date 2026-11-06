@@ -16,7 +16,7 @@ import {
 } from "../data/vehicleCatalogue";
 import { noteDriverVehicle } from "../services/vehicleImages";
 import { deriveVehicleCategories, normaliseVehicleCategories } from "../services/rideCategories";
-import { classifyVehicle, primaryTier } from "../lib/tier-classifier";
+import { classifyDriverVehicle } from "../services/vehicleReview";
 import { activateDestination, clearDestination, getDestinationStatus, DESTINATION_ERROR_HTTP_STATUS } from "../services/destinationSession";
 import { computeTierStatus } from "../services/performanceTier";
 
@@ -185,7 +185,7 @@ router.get("/nearby", async (req: AuthRequest, res: Response) => {
 router.patch("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;
-    const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, vehicle_body_type, vehicle_fuel_type, vehicle_doors, vehicle_seats, vehicle_derivative, vehicle_categories } = req.body;
+    const { license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, vehicle_engine, odometer_km, carscan_report_name, vehicle_body_type, vehicle_fuel_type, vehicle_doors, vehicle_seats, vehicle_derivative, vehicle_categories } = req.body;
 
     // NORMALISE the car on the way in: plate uppercase without spaces, colour stored
     // as a palette NAME, and the body type + category DERIVED from make + model (a
@@ -209,6 +209,7 @@ router.patch("/profile", requireAuth, async (req: AuthRequest, res: Response) =>
     // Ensure the newer vehicle columns exist (safe on every call).
     await execute(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_type VARCHAR(50)`).catch(() => {});
     await execute(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_vin VARCHAR(50)`).catch(() => {});
+    await execute(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_engine VARCHAR(50)`).catch(() => {});
     await execute(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS odometer_km INTEGER`).catch(() => {});
     await execute(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS carscan_report_name VARCHAR(255)`).catch(() => {});
     // the vehicle-tier columns the driver app now fills in (additive, self-healing)
@@ -264,6 +265,7 @@ router.patch("/profile", requireAuth, async (req: AuthRequest, res: Response) =>
     if (derivedCategory !== undefined) { updates.push(`vehicle_category = $${idx}`); params.push(derivedCategory); idx++; }
       if (vehicle_type !== undefined) { updates.push(`vehicle_type = $${idx}`); params.push(vehicle_type); idx++; }
       if (vehicle_vin !== undefined) { updates.push(`vehicle_vin = $${idx}`); params.push(vehicle_vin); idx++; }
+      if (vehicle_engine !== undefined) { updates.push(`vehicle_engine = $${idx}`); params.push(vehicle_engine); idx++; }
       if (odometer_km !== undefined) { updates.push(`odometer_km = $${idx}`); params.push(odometer_km); idx++; }
       if (carscan_report_name !== undefined) { updates.push(`carscan_report_name = $${idx}`); params.push(carscan_report_name); idx++; }
       if (vehicle_fuel_type !== undefined) { updates.push(`vehicle_fuel_type = $${idx}`); params.push(vehicle_fuel_type); idx++; }
@@ -277,9 +279,9 @@ router.patch("/profile", requireAuth, async (req: AuthRequest, res: Response) =>
       await execute(`UPDATE driver_profiles SET ${updates.join(", ")} WHERE id = $${idx}`, params);
     } else {
       await execute(
-        `INSERT INTO driver_profiles (user_id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name, is_online)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)`,
-        [user.id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, odometer_km, carscan_report_name]
+        `INSERT INTO driver_profiles (user_id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, vehicle_engine, odometer_km, carscan_report_name, is_online)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true)`,
+        [user.id, license_number, vehicle_make, vehicle_model, vehicle_year, vehicle_color, license_plate, vehicle_type, vehicle_vin, vehicle_engine, odometer_km, carscan_report_name]
       );
       // A first-time save may already carry the ride classes (fresh scan):
       // write them right after the row exists. Best-effort, same posture as
@@ -291,6 +293,13 @@ router.patch("/profile", requireAuth, async (req: AuthRequest, res: Response) =>
         ).catch(() => {});
       }
     }
+
+    // Classify the car NOW, while the values we just saved are in the row. An
+    // unknown model used to fall back to an economy car silently; the service
+    // records vehicle_needs_review so the admin can set the ride classes.
+    await classifyDriverVehicle(user.id).catch((err) =>
+      console.error("[vehicleReview] classify on save failed:", err?.message || err)
+    );
 
     const profile = await queryOne("SELECT * FROM driver_profiles WHERE user_id = $1", [user.id]);
 
@@ -402,6 +411,21 @@ router.post("/online", requireAuth, async (req: AuthRequest, res: Response) => {
     // ACTIVE drivers are grandfathered (they passed the earlier staff flow),
     // and a rejected driver is never locked out — re-upload always works.
     if (online) {
+      // A suspended vehicle may not go online. Dispatch would skip it anyway;
+      // failing here gives the driver the real reason instead of an online
+      // toggle that never receives a ride.
+      const suspended = await queryOne<{ vehicle_suspended: boolean | null }>(
+        `SELECT vehicle_suspended FROM driver_profiles WHERE user_id = $1`,
+        [dbUser.id]
+      ).catch(() => null);
+      if (suspended?.vehicle_suspended === true) {
+        res.status(403).json({
+          error:
+            "This vehicle is suspended. Contact support or link another car before going online.",
+        });
+        return;
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { allRequiredDocsApproved } = require("../services/adminDrivers");
       const prof = await queryOne<{ lifecycle_status: string | null }>(
@@ -508,67 +532,66 @@ router.get("/vehicle-catalogue", async (_req: AuthRequest, res: Response) => {
 });
 
 // POST /api/drivers/vehicle/classify
-// Body: { make, model, model_year, body_type, fuel_type, doors, seats, derivative?, color? }
-// Runs the tier engine (src/lib/tier-classifier.ts) and stores the result on the
-// driver's profile. Ported from the driver repo's server so the two agree.
+// Body: { make?, model?, model_year?|year?, body_type?, fuel_type?, doors?,
+//         seats?, derivative?, color?|colour? }
+//
+// The old version demanded every field and returned 400 when the driver app
+// omitted fuel_type/doors/seats, which it did. The app swallowed the 400, so
+// classification never ran. This version merges the request with what is
+// already stored, then calls the one shared classifier. Missing details become
+// a review reason instead of a failed request.
 router.post("/vehicle/classify", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { make, model, model_year, body_type, fuel_type, doors, seats, derivative, color } = req.body || {};
-
-    const year = parseInt(String(model_year ?? ""), 10);
-    const doorCount = parseInt(String(doors ?? ""), 10);
-    const seatCount = parseInt(String(seats ?? ""), 10);
-
-    if (!make || !model || !body_type || !fuel_type) {
-      res.status(400).json({ error: "make, model, body_type and fuel_type are required" });
-      return;
-    }
-    if (!Number.isFinite(year) || year < 1950 || year > new Date().getFullYear() + 1) {
-      res.status(400).json({ error: "Valid model_year is required" });
-      return;
-    }
-    if (!Number.isFinite(doorCount) || doorCount < 2 || doorCount > 8) {
-      res.status(400).json({ error: "Valid doors count is required" });
-      return;
-    }
-    if (!Number.isFinite(seatCount) || seatCount < 2 || seatCount > 20) {
-      res.status(400).json({ error: "Valid seats count is required" });
-      return;
-    }
-
     const firebaseUid = req.userId!;
     const user = await queryOne<{ id: string }>("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
-    const assignments = classifyVehicle({
-      vin: "",
-      make: String(make),
-      model: String(model),
-      model_year: year,
-      body_type: String(body_type).toLowerCase(),
-      fuel_type: String(fuel_type).toLowerCase(),
-      doors: doorCount,
-      seats: seatCount,
-      derivative: typeof derivative === "string" ? derivative : null,
-      color: typeof color === "string" ? color : null,
+    const body = req.body || {};
+    const updates: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+
+    const make = body.make;
+    const model = body.model;
+    const yearRaw = body.model_year ?? body.year;
+    const year = yearRaw === undefined || yearRaw === null || yearRaw === "" ? null : parseInt(String(yearRaw), 10);
+    const doorsRaw = body.doors ?? body.vehicle_doors;
+    const doors = doorsRaw === undefined || doorsRaw === null || doorsRaw === "" ? null : parseInt(String(doorsRaw), 10);
+    const seatsRaw = body.seats ?? body.vehicle_seats;
+    const seats = seatsRaw === undefined || seatsRaw === null || seatsRaw === "" ? null : parseInt(String(seatsRaw), 10);
+    const bodyType = body.body_type ?? body.vehicle_body_type;
+    const fuelType = body.fuel_type ?? body.vehicle_fuel_type;
+    const derivative = body.derivative ?? body.vehicle_derivative;
+    const colour = body.color ?? body.colour ?? body.vehicle_color;
+
+    if (make !== undefined) { updates.push(`vehicle_make = $${idx}`); params.push(String(make).trim()); idx++; }
+    if (model !== undefined) { updates.push(`vehicle_model = $${idx}`); params.push(String(model).trim()); idx++; }
+    if (year !== null && Number.isFinite(year)) { updates.push(`vehicle_year = $${idx}`); params.push(year); idx++; }
+    if (bodyType !== undefined) { updates.push(`body_type = $${idx}`); params.push(String(bodyType).trim().toLowerCase()); idx++; }
+    if (fuelType !== undefined) { updates.push(`vehicle_fuel_type = $${idx}`); params.push(String(fuelType).trim().toLowerCase()); idx++; }
+    if (doors !== null && Number.isFinite(doors)) { updates.push(`vehicle_doors = $${idx}`); params.push(doors); idx++; }
+    if (seats !== null && Number.isFinite(seats)) { updates.push(`vehicle_seats = $${idx}`); params.push(seats); idx++; }
+    if (derivative !== undefined) { updates.push(`vehicle_derivative = $${idx}`); params.push(String(derivative).trim()); idx++; }
+    if (colour !== undefined) { updates.push(`vehicle_color = $${idx}`); params.push(String(colour).trim()); idx++; }
+
+    if (updates.length > 0) {
+      params.push(user.id);
+      await execute(
+        `UPDATE driver_profiles SET ${updates.join(", ")}, updated_at = NOW() WHERE user_id = $${idx}`,
+        params
+      );
+    }
+
+    const result = await classifyDriverVehicle(user.id);
+    if (!result) { res.status(404).json({ error: "Driver profile not found" }); return; }
+
+    res.json({
+      assignments: result.assignments,
+      primary_tier: result.primary_tier,
+      needs_review: result.needs_review,
+      review_reason: result.review_reason,
+      categories: result.categories,
     });
-
-    const tier = primaryTier(assignments);
-
-    // the tier columns are created on demand so production never needs a migration
-    await execute(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tier VARCHAR(20)`).catch(() => {});
-    await execute(`ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_tiers JSONB DEFAULT '[]'::jsonb`).catch(() => {});
-
-    await execute(
-      `UPDATE driver_profiles
-          SET vehicle_tier  = $2,
-              vehicle_tiers = $3::jsonb,
-              updated_at    = NOW()
-        WHERE user_id = $1`,
-      [user.id, tier, JSON.stringify(assignments)]
-    );
-
-    res.json({ assignments, primary_tier: tier });
   } catch (err: any) {
     console.error("vehicle classify error:", err?.message || err);
     res.status(500).json({ error: "Failed to classify vehicle" });

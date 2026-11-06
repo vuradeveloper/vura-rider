@@ -89,6 +89,13 @@ import {
   resolveRequestsForCacheKey,
   resolveVehicleRequest,
 } from "../services/adminVehicleDb";
+import { attachVehicleImages } from "../services/vehicleImages";
+import {
+  ensureVehicleReviewSchema,
+  saveVehicleClasses,
+  setVehicleDocExpiry,
+  setVehicleSuspended,
+} from "../services/vehicleReview";
 
 /** sendError, but respects err.status (503 missing key, 429 quota, 502 provider). */
 function sendCarDbError(res: Response, err: any) {
@@ -564,32 +571,204 @@ router.get("/documents/expiring", requireAdmin("drivers.read"), async (req: Auth
   }
 });
 
-// GET /api/admin/v2/vehicles — vehicle register: linked driver, documents,
-// expiry dates, vehicle_tier (existing driver_profiles.vehicle_tier, NOT the
-// performance tier).
-router.get("/vehicles", requireAdmin("drivers.read"), async (_req: AuthRequest, res: Response) => {
+// GET /api/admin/v2/vehicles - vehicle register: linked driver, documents,
+// expiry dates, car photo, VIN and the ride-class review state.
+//
+// `?unclassified=1` returns only cars that have no ride classes or were flagged
+// by the classifier. The default returns every car, with a count for the tab.
+router.get("/vehicles", requireAdmin("drivers.read"), async (req: AuthRequest, res: Response) => {
   try {
+    await ensureVehicleReviewSchema().catch(() => {});
+    const unclassifiedOnly = String(req.query.unclassified || "") === "1";
+
     const rows = await query<any>(
-      `SELECT u.id AS driver_id, u.full_name,
+      `SELECT u.id AS driver_id, u.full_name, u.email, u.phone_number,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_year, dp.vehicle_color,
-              dp.body_type, dp.vehicle_category, dp.vehicle_tier, dp.license_plate,
+              dp.body_type, dp.vehicle_seats, dp.vehicle_doors, dp.vehicle_fuel_type,
+              dp.vehicle_category, dp.vehicle_tier, dp.vehicle_tiers,
+              dp.license_plate, dp.vehicle_vin, dp.vehicle_engine, dp.vehicle_categories,
+              dp.vehicle_needs_review, dp.vehicle_review_reason,
+              dp.vehicle_reviewed_at, dp.vehicle_reviewed_by, dp.vehicle_admin_note,
+              dp.vehicle_suspended, dp.vehicle_suspended_reason,
+              dp.vehicle_suspended_at, dp.vehicle_suspended_by,
               dp.lifecycle_status,
               (SELECT MIN(d.expires_at) FROM driver_documents d
                 WHERE d.driver_id = u.id AND d.doc_type IN ('carscan_report','vehicle_scan','license_disk')
                   AND d.expires_at IS NOT NULL) AS vehicle_doc_expires,
+              (SELECT MAX(d.expires_at) FROM driver_documents d
+                WHERE d.driver_id = u.id AND d.doc_type = 'license_disk'
+                  AND d.expires_at IS NOT NULL) AS license_disk_expires,
+              (SELECT MAX(d.expires_at) FROM driver_documents d
+                WHERE d.driver_id = u.id AND d.doc_type = 'carscan_report'
+                  AND d.expires_at IS NOT NULL) AS carscan_expires,
+              (SELECT MAX(d.expires_at) FROM driver_documents d
+                WHERE d.driver_id = u.id AND d.doc_type = 'vehicle_scan'
+                  AND d.expires_at IS NOT NULL) AS vehicle_scan_expires,
               (SELECT COUNT(*) FROM driver_documents d
                 WHERE d.driver_id = u.id AND d.status = 'pending_review')::int AS pending_docs
          FROM users u
          JOIN driver_profiles dp ON dp.user_id = u.id
         WHERE u.role = 'driver'
           AND (dp.license_plate IS NOT NULL OR dp.vehicle_make IS NOT NULL)
-        ORDER BY dp.vehicle_tier NULLS LAST, u.full_name`
+          AND ($1::boolean = FALSE
+               OR dp.vehicle_needs_review = TRUE
+               OR dp.vehicle_categories IS NULL
+               OR dp.vehicle_categories = '[]'::jsonb)
+        ORDER BY dp.vehicle_needs_review DESC, dp.vehicle_tier NULLS LAST, u.full_name`,
+      [unclassifiedOnly]
     );
-    res.json({ vehicles: rows });
+
+    // The rider-facing photo comes from the same resolver the apps use.
+    await attachVehicleImages(rows).catch(() => rows);
+
+    const stats = await queryOne<any>(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (
+                WHERE dp.vehicle_needs_review = TRUE
+                   OR dp.vehicle_categories IS NULL
+                   OR dp.vehicle_categories = '[]'::jsonb
+              )::int AS unclassified
+         FROM users u
+         JOIN driver_profiles dp ON dp.user_id = u.id
+        WHERE u.role = 'driver'
+          AND (dp.license_plate IS NOT NULL OR dp.vehicle_make IS NOT NULL)`
+    );
+
+    res.json({ vehicles: rows, stats: stats || { total: rows.length, unclassified: 0 } });
   } catch (err) {
     sendError(res, err);
   }
 });
+
+// POST /api/admin/v2/vehicles/:id/classify - set the ride classes for one car
+// and close its review. Plate and VIN are evidence from CarScan and stay
+// read-only; this endpoint writes only classification + the internal note.
+router.post(
+  "/vehicles/:id/classify",
+  requireAdmin("drivers.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin not found" }); return; }
+      const driverId = String(req.params.id);
+      const driver = await queryOne<{ id: string }>(
+        `SELECT id FROM users WHERE id = $1 AND role = 'driver'`,
+        [driverId]
+      );
+      if (!driver) { res.status(404).json({ error: "Driver not found" }); return; }
+
+      const updated = await saveVehicleClasses(
+        driverId,
+        req.body?.categories,
+        actor,
+        req.body?.note !== undefined ? String(req.body.note) : undefined
+      );
+      if (!updated) { res.status(404).json({ error: "Driver profile not found" }); return; }
+      await attachVehicleImages(updated).catch(() => updated);
+      res.json({ ok: true, vehicle: updated });
+    } catch (err: any) {
+      if (String(err?.message || "").startsWith("Pick at least one")) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendError(res, err);
+    }
+  }
+);
+
+// POST /api/admin/v2/vehicles/:id/suspend - suspend or reactivate ONE car.
+// The driver account stays active; dispatch simply stops offering rides to this
+// vehicle while it is suspended.
+router.post(
+  "/vehicles/:id/suspend",
+  requireAdmin("drivers.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin not found" }); return; }
+      const driverId = String(req.params.id);
+      const suspended = req.body?.suspended !== false;
+      const reason = req.body?.reason !== undefined ? String(req.body.reason) : undefined;
+      const driver = await queryOne<{ id: string }>(
+        `SELECT id FROM users WHERE id = $1 AND role = 'driver'`,
+        [driverId]
+      );
+      if (!driver) { res.status(404).json({ error: "Driver not found" }); return; }
+
+      const updated = await setVehicleSuspended(driverId, suspended, actor, reason);
+      if (!updated) { res.status(404).json({ error: "Driver profile not found" }); return; }
+      res.json({ ok: true, vehicle: updated });
+    } catch (err: any) {
+      if (String(err?.message || "").includes("reason is required")) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendError(res, err);
+    }
+  }
+);
+
+// PATCH /api/admin/v2/vehicles/:id/expiry - set the expiry of the latest
+// licence disc / CarScan / vehicle scan on file. Evidence file untouched.
+router.patch(
+  "/vehicles/:id/expiry",
+  requireAdmin("drivers.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin not found" }); return; }
+      const driverId = String(req.params.id);
+      const docType = String(req.body?.docType || "");
+      const expiresAt = req.body?.expiresAt ? String(req.body.expiresAt) : null;
+      const driver = await queryOne<{ id: string }>(
+        `SELECT id FROM users WHERE id = $1 AND role = 'driver'`,
+        [driverId]
+      );
+      if (!driver) { res.status(404).json({ error: "Driver not found" }); return; }
+
+      const updated = await setVehicleDocExpiry(driverId, docType, expiresAt, actor);
+      if (!updated) {
+        res.status(404).json({ error: "No document of that type is on file yet" });
+        return;
+      }
+      res.json({ ok: true, document: updated });
+    } catch (err: any) {
+      if (
+        String(err?.message || "").includes("not a vehicle expiry") ||
+        String(err?.message || "").includes("Invalid expiry")
+      ) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendError(res, err);
+    }
+  }
+);
+
+// GET /api/admin/v2/vehicles/:id/audit - the change history for one car.
+router.get(
+  "/vehicles/:id/audit",
+  requireAdmin("drivers.read"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const driverId = String(req.params.id);
+      const rows = await query<any>(
+        `SELECT id, actor_email, actor_role, action, old_value, new_value, reason, created_at
+           FROM admin_audit_log
+          WHERE (entity_type = 'driver_profiles' AND entity_id = $1)
+             OR (entity_type = 'driver_documents' AND entity_id IN (
+                   SELECT id::text FROM driver_documents WHERE driver_id = $1
+                 ))
+          ORDER BY created_at DESC
+          LIMIT 30`,
+        [driverId]
+      );
+      res.json({ audit: rows });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
 
 // GET /api/admin/v2/drivers/:id/tier — performance tier view (metrics,
 // thresholds read-only; editing thresholds is Phase 5).

@@ -668,6 +668,7 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
       vehicle_categories?: unknown;
       vehicle_seats?: number | null;
       body_type?: string | null;
+      vehicle_suspended?: boolean | null;
     } | null = me
       ? await queryOne<{
           current_lat: number | null;
@@ -675,8 +676,9 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
           vehicle_categories?: unknown;
           vehicle_seats?: number | null;
           body_type?: string | null;
+          vehicle_suspended?: boolean | null;
         }>(
-          `SELECT current_lat, current_lng, vehicle_categories, vehicle_seats, body_type
+          `SELECT current_lat, current_lng, vehicle_categories, vehicle_seats, body_type, vehicle_suspended
              FROM driver_profiles WHERE user_id = $1`,
           [me.id]
         ).catch(async () =>
@@ -687,6 +689,13 @@ router.get("/available", requireAuth, async (_req: AuthRequest, res: Response) =
           ).catch(() => null)
         )
       : null;
+
+    // A suspended vehicle gets an empty offer feed. acceptRide enforces the
+    // same rule server-side, so a stale client cannot claim a ride either.
+    if (dp?.vehicle_suspended === true) {
+      res.json({ rides: [], scoped: false, radius_km: null, suspended: true });
+      return;
+    }
 
     // The ride classes this car may serve. The list below is what the driver
     // app auto-opens every 2 seconds, so it must obey exactly the same class

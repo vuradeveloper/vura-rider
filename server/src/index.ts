@@ -40,6 +40,7 @@ import devDiagRouter from "./routes/devDiag";
 import debugTraceRouter from "./routes/debugTrace";
 import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
+import { ensureVehicleReviewSchema, sweepVehicleClassification } from "./services/vehicleReview";
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
 import safetyAdminRouter from "./routes/safetyAdmin";
@@ -155,6 +156,15 @@ ensureVehicleImageTables().catch((err) =>
   console.error("[vehicleImages] table ensure failed:", err?.message || err)
 );
 startVehicleImageWorker();
+
+// Vehicle classification review columns. Same lazy pattern as the image
+// tables: production does not run migrations on boot, so the columns travel in
+// dist and are created idempotently here.
+ensureVehicleReviewSchema()
+  .then(() => sweepVehicleClassification())
+  .catch((err) =>
+    console.error("[vehicleReview] schema ensure/classification failed:", err?.message || err)
+  );
 
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
