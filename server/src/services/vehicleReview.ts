@@ -215,14 +215,17 @@ export async function classifyDriverVehicle(driverId: string): Promise<VehicleRe
 
   await execute(
     `UPDATE driver_profiles
-        SET vehicle_tier = COALESCE($2, vehicle_tier),
+        SET vehicle_tier = CASE
+              WHEN $6::boolean THEN vehicle_tier
+              ELSE COALESCE($2, vehicle_tier)
+            END,
             vehicle_tiers = $3::jsonb,
             vehicle_needs_review = $4,
             vehicle_review_reason = $5,
             vehicle_classified_at = NOW(),
             updated_at = NOW()
       WHERE user_id = $1`,
-    [driverId, tier, JSON.stringify(assignments), needsReview, reviewReason]
+    [driverId, tier, JSON.stringify(assignments), needsReview, reviewReason, reviewedSameCar]
   );
 
   // A confident catalog match with no CarScan Eligible Categories still needs
