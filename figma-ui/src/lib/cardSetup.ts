@@ -86,16 +86,24 @@ export async function startCardSetup(
     },
   });
 
-  if (result === "cancelled") {
-    return { ok: false, cancelled: true, message: "Card setup cancelled." };
-  }
-  if (result === "failed") {
-    return {
-      ok: false,
-      message:
-        "Could not open the secure card form. Check your internet connection and try again.",
-      reference,
-    };
+  if (result === "cancelled" || result === "failed") {
+    // The rider may have finished bank authentication and then dismissed the
+    // modal (or the modal timed out) before Paystack's callback fired. A single
+    // server check here turns that into success instead of losing a saved card.
+    const alreadySaved = await verifyPayment(reference)
+      .then((v) => isSavedStatus(String(v?.status || "")))
+      .catch(() => false);
+    if (alreadySaved) {
+      return { ok: true, message: "Card added.", reference };
+    }
+    return result === "cancelled"
+      ? { ok: false, cancelled: true, message: "Card setup cancelled." }
+      : {
+          ok: false,
+          message:
+            "Could not open the secure card form. Check your internet connection and try again.",
+          reference,
+        };
   }
 
   // 3. Confirm with the server. This also tokenises the card and requests the
