@@ -74,6 +74,13 @@ import {
   getRide,
   getRideHistory,
   getSavedPlaces,
+  getSplitInvites,
+  getRideSplits,
+  createSplitInvite,
+  paySplitShare,
+  declineSplitShare,
+  SplitInvite,
+  RideSplit,
   getStoredOnline,
   getStoredProfileInfo,
   getStoredUser,
@@ -431,6 +438,160 @@ function PlaceIcon({ type }: { type: string }) {
   )
 }
 
+// ── Split fare: the co-rider's payment sheet ────────────────────────────────
+// A share is only accepted by PAYING it. No card → the existing Paystack card
+// setup opens, then the same share is charged from the new saved card.
+function SplitPaySheet({
+  invite,
+  onClose,
+  onDone,
+}: {
+  invite: SplitInvite
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+  const [needsCard, setNeedsCard] = useState(false)
+  const amount = Number(invite.amount) || 0
+  const inviter = invite.inviter_name || 'A rider'
+  const destination = invite.destination_address || 'the same trip'
+  const tripTotal =
+    Number(invite.actual_fare) > 0
+      ? Number(invite.actual_fare)
+      : Number(invite.estimated_fare) > 0
+        ? Number(invite.estimated_fare)
+        : amount * Math.max(2, Number(invite.share_count || 2))
+
+  async function pay() {
+    if (busy) return
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      await paySplitShare(invite.id)
+      setMsg(`Share paid — R${amount.toFixed(2)}`)
+      window.setTimeout(onDone, 1100)
+    } catch (e: any) {
+      if (e?.code === 'no_card') {
+        setNeedsCard(true)
+        setErr('Add a card first, then pay your share.')
+      } else {
+        setErr(e?.message || 'Could not pay your share. Please try again.')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function addCardAndPay() {
+    if (busy) return
+    setBusy(true)
+    setErr('')
+    setMsg('Opening the secure card form…')
+    const result = await startCardSetup((m) => setMsg(m)).catch((e: any) => ({
+      ok: false,
+      message: e?.message || 'Could not open the card form.',
+    }))
+    if (!result.ok) {
+      setBusy(false)
+      setErr(result.message || 'The card was not added.')
+      return
+    }
+    setNeedsCard(false)
+    setMsg('Card added — paying your share…')
+    setBusy(false)
+    await pay()
+  }
+
+  async function decline() {
+    if (busy) return
+    setBusy(true)
+    setErr('')
+    try {
+      await declineSplitShare(invite.id)
+      onDone()
+    } catch (e: any) {
+      setErr(e?.message || 'Could not decline this split.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end bg-black/50" onClick={() => { if (!busy) onClose() }}>
+      <div
+        className="mx-auto w-full max-w-sm rounded-t-[28px] bg-white px-5 pb-8 pt-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mx-auto mb-5 h-1 w-9 rounded-full bg-[#E8E8E8]" />
+        <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#EA4335]">Fare split</p>
+        <h2 className="mt-1.5 text-[22px] font-semibold leading-tight text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+          {inviter} invited you
+        </h2>
+        <p className="mt-1 text-[13px] text-[#8A8A8A]">Share this trip and pay only your part.</p>
+
+        <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[#F0F0F0] bg-[#F9F9F9] px-4 py-3">
+          {IC.loc()}
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-[#ADADAD]">Destination</p>
+            <p className="truncate text-[13px] font-semibold text-[#1A1A1A]">{destination}</p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-2xl bg-[#1A1A1A] px-5 py-4 text-white">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-[#ADADAD]">Your share</p>
+              <p className="mt-0.5 text-[30px] font-bold leading-none" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                {formatRand(amount)}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-[#ADADAD]">Trip total</p>
+              <p className="text-[14px] font-semibold">{formatRand(tripTotal)}</p>
+              <p className="mt-0.5 text-[10px] text-[#8A8A8A]">{Number(invite.share_count || 2)} riders</p>
+            </div>
+          </div>
+        </div>
+
+        {err && <p className="mt-3 text-[12px] font-semibold text-[#C5221F]">{err}</p>}
+        {msg && <p className={`mt-3 text-[12px] font-semibold ${msg.startsWith('Share paid') ? 'text-[#137333]' : 'text-[#6B6B6B]'}`}>{msg}</p>}
+
+        {needsCard ? (
+          <button
+            onClick={() => void addCardAndPay()}
+            disabled={busy}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#EA4335] py-4 text-[15px] font-bold text-white active:bg-[#C5221F] disabled:opacity-60"
+          >
+            {busy && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+            {busy ? 'Opening card form…' : 'Add a card and pay'}
+          </button>
+        ) : (
+          <button
+            onClick={() => void pay()}
+            disabled={busy || msg.startsWith('Share paid')}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#EA4335] py-4 text-[15px] font-bold text-white active:bg-[#C5221F] disabled:opacity-60"
+          >
+            {busy && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+            {busy ? 'Paying…' : `Pay ${formatRand(amount)}`}
+          </button>
+        )}
+        <button
+          onClick={() => void decline()}
+          disabled={busy || msg.startsWith('Share paid')}
+          className="mt-2.5 w-full rounded-2xl border border-[#EBEBEB] py-3.5 text-[14px] font-semibold text-[#6B6B6B] active:bg-[#F7F7F7] disabled:opacity-50"
+        >
+          Decline
+        </button>
+        <p className="mt-3 text-center text-[10px] leading-relaxed text-[#ADADAD]">
+          Your card is charged only this share. If you decline, the rider who booked pays it.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode: AppMode; onMode: (m: AppMode) => void }) {
   const [me, setMe] = useState<LatLng | null>(null)
   const [placeLabel, setPlaceLabel] = useState('Locating you…')
@@ -441,6 +602,9 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
   const [results, setResults] = useState<Place[]>([])
   const [searching, setSearching] = useState(false)
   const [recents, setRecents] = useState<RecentSearch[]>([])
+  // Split fare invites waiting for THIS rider to pay their share.
+  const [splitInvites, setSplitInvites] = useState<SplitInvite[]>([])
+  const [payingInvite, setPayingInvite] = useState<SplitInvite | null>(null)
 
   // Real GPS fix — the rider's actual position, used for the pickup point and
   // the map centre (the same geolocation the native app uses via expo-location).
@@ -484,6 +648,27 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
       .catch(() => setRecents([]))
   }, [])
 
+  // Open split invites: refreshed on mount, every 30 s and whenever the app
+  // comes back to the foreground, so a co-rider sees the request without
+  // needing a push.
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      getSplitInvites()
+        .then((r) => { if (alive) setSplitInvites(Array.isArray(r?.splits) ? r.splits : []) })
+        .catch(() => undefined)
+    }
+    load()
+    const timer = window.setInterval(load, 30000)
+    const onVisible = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+
   /** Pick a destination: remember it (server + device) then start booking. */
   function chooseDestination(name: string, address: string, lat: number, lng: number) {
     void saveSearch({ name, addr: address, lat, lng }).catch(() => { })
@@ -513,20 +698,69 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
   }
 
   return (
-    <div className="flex flex-col h-screen">
-      <div className="relative" style={{ height: '42%' }}>
-        <MapCanvas marker={me ?? undefined} zoom={16} controls controlsBottom={PANEL_RISE + 12} />
-        <div className="absolute inset-x-0 top-0 flex items-start justify-between px-5 pt-12 z-10">
-          <div className="bg-white/90 backdrop-blur-md rounded-2xl px-3.5 py-2 shadow-sm border border-white/60">
-            <p className="text-[10px] text-[#9E9E9E] font-semibold uppercase tracking-wider">My Current Location</p>
-            <p className="text-[13px] text-[#1A1A1A] font-semibold leading-tight">{placeLabel}</p>
+    <div className="flex flex-col h-screen bg-white">
+      {/* Map removed from Home by request: the page opens on a warm brand
+          header instead of a map, so the first thing a rider sees is the
+          destination search. The tracking/booking maps are untouched. */}
+      <div className="relative shrink-0 overflow-hidden bg-[#FFF6F4] px-5 pt-12 pb-8">
+        {/* Soft brand glows — purely decorative, never intercept touches. */}
+        <div className="pointer-events-none absolute -top-24 -right-16 w-60 h-60 rounded-full bg-[#EA4335]/10 blur-3xl" />
+        <div className="pointer-events-none absolute top-16 -left-24 w-48 h-48 rounded-full bg-[#FFB4A8]/20 blur-3xl" />
+        {/* A subtle route line nods to the product without showing a map. */}
+        <svg className="pointer-events-none absolute right-2 top-7 w-36 h-28 opacity-70" viewBox="0 0 144 112" fill="none" aria-hidden="true">
+          <path d="M8 96C38 96 34 52 70 52c34 0 30-34 66-34" stroke="#EA4335" strokeOpacity="0.30" strokeWidth="2" strokeDasharray="1 7" strokeLinecap="round" />
+          <circle cx="8" cy="96" r="4" fill="#EA4335" fillOpacity="0.45" />
+          <circle cx="136" cy="18" r="5.5" fill="#EA4335" />
+          <circle cx="136" cy="18" r="10" stroke="#EA4335" strokeOpacity="0.18" strokeWidth="2" />
+        </svg>
+
+        <div className="relative">
+          <p className="text-[10px] uppercase tracking-[0.24em] text-[#EA4335] font-bold">Vura</p>
+          <h1 className="text-[29px] leading-[1.08] font-semibold text-[#1A1A1A] mt-2" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+            Where to today?
+          </h1>
+          <p className="text-[13px] text-[#8A8A8A] mt-2">Your ride, your way.</p>
+
+          <div className="mt-5 inline-flex max-w-full items-center gap-2 rounded-full border border-white bg-white/90 py-2 pl-2.5 pr-4 shadow-sm backdrop-blur-md">
+            <span className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#34A853]/35" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#34A853]" />
+            </span>
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-[#9E9E9E]">Pickup</span>
+            <span className="truncate text-[12px] font-semibold text-[#1A1A1A]">{placeLabel}</span>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 bg-white z-10 rounded-t-3xl -mt-5 flex flex-col overflow-hidden shadow-[0_-4px_24px_rgba(0,0,0,0.08)]">
-        <div className="px-5 pt-5 pb-4 flex-1 overflow-y-auto">
-          <h1 className="text-[22px] font-semibold text-[#1A1A1A] mb-4" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Where to?</h1>
+      <div className="z-10 -mt-4 flex flex-1 flex-col overflow-hidden rounded-t-[28px] border-t border-[#FFF1EF] bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.06)]">
+        <div className="px-5 pt-6 pb-4 flex-1 overflow-y-auto">
+          {/* Split fare request from another rider — pay your share in-app. */}
+          {splitInvites.length > 0 && (
+            <button
+              onClick={() => setPayingInvite(splitInvites[0])}
+              className="mb-4 w-full rounded-2xl bg-[#1A1A1A] px-4 py-3.5 text-left active:opacity-90"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#EA4335] text-[13px] font-bold text-white">
+                  {String(splitInvites[0].inviter_name || 'V').slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-semibold text-white">
+                    {splitInvites[0].inviter_name} invited you to split a ride
+                  </p>
+                  <p className="mt-0.5 truncate text-[11px] text-[#ADADAD]">
+                    {splitInvites[0].destination_address || 'Tap to see the trip'} · {formatRand(Number(splitInvites[0].amount) || 0)}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[12px] font-bold text-[#FF8A80]">Pay ›</span>
+              </div>
+              {splitInvites.length > 1 && (
+                <p className="mt-2 text-[10px] text-[#8A8A8A]">
+                  +{splitInvites.length - 1} more split request{splitInvites.length > 2 ? 's' : ''}
+                </p>
+              )}
+            </button>
+          )}
 
           {/* Real search box */}
           <div className="w-full flex items-center gap-3 bg-[#F7F7F7] rounded-2xl px-4 py-3.5 mb-3 border border-transparent focus-within:border-[#EA4335]/30 transition-all">
@@ -655,6 +889,17 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
         </div>
         <div className="h-20" />
       </div>
+      {payingInvite && (
+        <SplitPaySheet
+          invite={payingInvite}
+          onClose={() => setPayingInvite(null)}
+          onDone={() => {
+            const id = payingInvite.id
+            setPayingInvite(null)
+            setSplitInvites((prev) => prev.filter((s) => s.id !== id))
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -2218,6 +2463,14 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   // The hired driver's live car, independent of the ride row so a socket ping
   // that lands before the first fetch is not dropped.
   const [driverPos, setDriverPos] = useState<MapCar | null>(null)
+  // ── Split fare (booking rider) ────────────────────────────────────────────
+  const [splitOpen, setSplitOpen] = useState(false)
+  const [splits, setSplits] = useState<RideSplit[]>([])
+  const [splitCount, setSplitCount] = useState(2)
+  const [splitEmails, setSplitEmails] = useState<string[]>([''])
+  const [splitBusy, setSplitBusy] = useState(false)
+  const [splitErr, setSplitErr] = useState('')
+  const [splitMsg, setSplitMsg] = useState('')
 
   /**
    * The live route to draw. It prefers the coordinates the SERVER holds for this
@@ -2256,6 +2509,34 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
       .catch(() => { })
     return () => { alive = false }
   }, [rideId])
+
+  // Split fare: poll the shares so the booking rider sees co-riders' payments
+  // land while they pay in their own app. Stops once the trip ends.
+  useEffect(() => {
+    if (!rideId || status === 'completed' || status === 'cancelled') return
+    let alive = true
+    const load = () => {
+      getRideSplits(rideId)
+        .then((r) => { if (alive) setSplits(Array.isArray(r?.splits) ? r.splits : []) })
+        .catch(() => undefined)
+    }
+    load()
+    const timer = window.setInterval(load, 5000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [rideId, status])
+
+  // Keep exactly the remaining email boxes for the chosen rider count.
+  useEffect(() => {
+    const locked = splits.length ? Number(splits[0]?.share_count || splitCount) : 0
+    const remaining = splits.length
+      ? Math.max(0, locked - 1 - splits.length)
+      : Math.max(0, splitCount - 1)
+    setSplitEmails((prev) => {
+      const next = prev.slice(0, remaining)
+      while (next.length < remaining) next.push('')
+      return next
+    })
+  }, [splitCount, splits.length, splits[0]?.share_count])
 
   // ── Safety suite state (§1 check-ins, §3 start PIN, §4 SOS) ──────────────
   const [startPin, setStartPin] = useState<string | null>(null)
@@ -2446,6 +2727,54 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
   }, [done, rideId])
   const paidFare = Number(tripReceipt?.fare ?? ride?.actual_fare ?? ride?.estimated_fare ?? 0)
   const inviteApplied = Number(tripReceipt?.affiliate_credit || 0)
+
+  // ── Split fare summary ────────────────────────────────────────────────────
+  const splitFare =
+    Number(ride?.actual_fare) > 0
+      ? Number(ride?.actual_fare)
+      : Number(ride?.estimated_fare || 0)
+  const splitPaid = splits.filter((s) => s.status === 'paid')
+  const splitCollected = splitPaid.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
+  const splitLockedCount = splits.length
+    ? Number(splits[0]?.share_count || splitCount)
+    : splitCount
+  const splitPreview = splitFare / Math.max(2, splitLockedCount)
+  const splitSlotsLeft = splits.length
+    ? Math.max(0, splitLockedCount - 1 - splits.length)
+    : Math.max(0, splitCount - 1)
+
+  async function sendSplitInvites() {
+    if (!rideId || splitBusy) return
+    const emails = splitEmails.map((e) => e.trim().toLowerCase()).filter(Boolean)
+    if (emails.length === 0) {
+      setSplitErr("Enter your co-rider's Vura email.")
+      return
+    }
+    setSplitBusy(true)
+    setSplitErr('')
+    setSplitMsg('')
+    let sent = 0
+    let firstError = ''
+    for (const email of emails) {
+      try {
+        await createSplitInvite(rideId, email, splitLockedCount)
+        sent++
+      } catch (e: any) {
+        if (!firstError) firstError = e?.message || 'Could not invite that rider.'
+      }
+    }
+    setSplitBusy(false)
+    if (sent > 0) {
+      setSplitMsg(
+        `${sent} request${sent > 1 ? 's' : ''} sent. They pay their share in the Vura app.`
+      )
+      setSplitEmails([''])
+    }
+    if (firstError) setSplitErr(firstError)
+    getRideSplits(rideId)
+      .then((r) => setSplits(Array.isArray(r?.splits) ? r.splits : []))
+      .catch(() => undefined)
+  }
 
   async function finishTrip() {
     if (!rideId) { setSheet(false); onDone(); return }
@@ -2640,6 +2969,28 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
           <span className="ml-auto text-[12px] text-[#ADADAD] truncate">{ride?.payment_method || 'cash'}</span>
         </div>
 
+        {/* Split fare — only on card rides, before the trip ends. One-person
+            rides never open this sheet and their payment flow is unchanged. */}
+        {rideId && !done && !cancelled && String(ride?.payment_method || '').toLowerCase() === 'card' && (
+          <button
+            onClick={() => { setSplitOpen(true); setSplitErr(''); setSplitMsg('') }}
+            className="mb-4 flex w-full items-center gap-3 rounded-2xl border border-[#F0F0F0] bg-white px-4 py-3.5 text-left active:bg-[#F9F9F9]"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#FEF0EF]">
+              {IC.user('#EA4335')}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-semibold text-[#1A1A1A]">Split fare</p>
+              <p className="mt-0.5 truncate text-[11px] text-[#ADADAD]">
+                {splits.length === 0
+                  ? 'Share the fare with up to 3 riders'
+                  : `${splitPaid.length} of ${splits.length} paid · ${formatRand(splitCollected)} collected`}
+              </p>
+            </div>
+            {IC.chevRight()}
+          </button>
+        )}
+
         {/* §3: the START CODE — share it ONLY with the driver of the matching
             car. Single use; dies the moment the trip begins. */}
         {startPin && !done && !cancelled && (
@@ -2744,6 +3095,148 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
         )}
         {cancelled && (
           <p className="text-center text-[12px] text-[#C5221F] font-semibold mt-3">This trip was cancelled.</p>
+        )}
+
+        {/* Split fare sheet — booking rider invites co-riders; each pays their
+            share from their own saved card before the trip ends. */}
+        {splitOpen && !done && !cancelled && (
+          <div
+            className="fixed inset-0 z-50 flex items-end bg-black/40"
+            onClick={() => { if (!splitBusy) setSplitOpen(false) }}
+          >
+            <div
+              className="max-h-[88vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 pb-8"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-4 h-1 w-8 rounded-full bg-[#E8E8E8]" />
+              <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#EA4335]">Fare split</p>
+              <h2 className="mt-1 text-[20px] font-bold text-[#1A1A1A]">Split this fare</h2>
+              <p className="mt-1 text-[12px] text-[#6B6B6B]">
+                Everyone pays their part in Vura before the trip ends. You only pay yours.
+              </p>
+
+              <div className="mt-4 flex items-end justify-between rounded-2xl bg-[#1A1A1A] px-4 py-4 text-white">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-[#ADADAD]">Trip fare</p>
+                  <p className="mt-0.5 text-[26px] font-bold leading-none" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                    {formatRand(splitFare)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-[#ADADAD]">Each rider</p>
+                  <p className="text-[18px] font-semibold">{formatRand(splitPreview)}</p>
+                  <p className="mt-0.5 text-[10px] text-[#8A8A8A]">{splitLockedCount} riders</p>
+                </div>
+              </div>
+
+              {splits.length === 0 && (
+                <div className="mt-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-[#ADADAD]">How many riders?</p>
+                  <div className="mt-2 flex gap-2">
+                    {[2, 3, 4].map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => setSplitCount(n)}
+                        className={`flex-1 rounded-2xl border py-3 text-[13px] font-semibold transition-colors ${
+                          splitCount === n
+                            ? 'border-[#1A1A1A] bg-[#1A1A1A] text-white'
+                            : 'border-[#EBEBEB] bg-white text-[#4A4A4A]'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-[#ADADAD]">Including you. Up to 3 co-riders.</p>
+                </div>
+              )}
+
+              {splits.length > 0 && (
+                <div className="mt-4 overflow-hidden rounded-2xl border border-[#F0F0F0]">
+                  {splits.map((s) => {
+                    const label =
+                      s.status === 'paid' ? 'Paid'
+                      : s.status === 'paying' ? 'Paying…'
+                      : s.status === 'declined' ? 'Declined'
+                      : s.status === 'refunded' ? 'Refunded'
+                      : 'Waiting to pay'
+                    const tone =
+                      s.status === 'paid' ? 'text-[#137333]'
+                      : s.status === 'declined' ? 'text-[#C5221F]'
+                      : s.status === 'refunded' ? 'text-[#6B6B6B]'
+                      : 'text-[#B06000]'
+                    return (
+                      <div key={s.id} className="flex items-center gap-3 border-b border-[#F5F5F5] px-4 py-3 last:border-b-0">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#F7F7F7] text-[11px] font-bold text-[#6B6B6B]">
+                          {String(s.invitee_email || '?').slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[12px] font-semibold text-[#1A1A1A]">{s.invitee_email}</p>
+                          <p className={`text-[10px] font-semibold ${tone}`}>{label}</p>
+                        </div>
+                        <p className="text-[13px] font-bold text-[#1A1A1A]">{formatRand(Number(s.amount) || 0)}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {splitSlotsLeft > 0 && (
+                <div className="mt-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-[#ADADAD]">
+                    {splits.length > 0 ? 'Invite another rider' : 'Their Vura email'}
+                  </p>
+                  <div className="mt-2 flex flex-col gap-2">
+                    {splitEmails.map((email, i) => (
+                      <input
+                        key={i}
+                        value={email}
+                        inputMode="email"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        onChange={(e) =>
+                          setSplitEmails((prev) => prev.map((v, idx) => (idx === i ? e.target.value : v)))
+                        }
+                        placeholder="co-rider@email.com"
+                        className="w-full rounded-xl border border-[#EBEBEB] bg-[#FAFAFA] px-3.5 py-3 text-[13px] text-[#1A1A1A] outline-none transition-colors focus:border-[#EA4335]/40"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {splitErr && <p className="mt-3 text-[12px] font-semibold text-[#C5221F]">{splitErr}</p>}
+              {splitMsg && <p className="mt-3 text-[12px] font-semibold text-[#137333]">{splitMsg}</p>}
+
+              {splitSlotsLeft > 0 ? (
+                <button
+                  onClick={() => void sendSplitInvites()}
+                  disabled={splitBusy}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#EA4335] py-4 text-[15px] font-bold text-white active:bg-[#C5221F] disabled:opacity-60"
+                >
+                  {splitBusy && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+                  {splitBusy ? 'Sending…' : 'Send split request'}
+                </button>
+              ) : splits.length > 0 ? (
+                <p className="mt-4 rounded-2xl bg-[#F7F7F7] px-4 py-3 text-[11px] leading-relaxed text-[#6B6B6B]">
+                  All {splitLockedCount} riders are on this split. Any share still unpaid at the end is charged to your card with the fare.
+                </p>
+              ) : null}
+
+              <p className="mt-3 text-center text-[10px] leading-relaxed text-[#ADADAD]">
+                Each rider pays their share before the trip ends. If someone declines or does not pay,
+                you cover that share — the driver is always paid in full.
+              </p>
+
+              <button
+                onClick={() => setSplitOpen(false)}
+                disabled={splitBusy}
+                className="mt-4 w-full rounded-2xl border border-[#EBEBEB] py-3.5 text-[14px] font-semibold text-[#4A4A4A] active:bg-[#F7F7F7] disabled:opacity-50"
+              >
+                Done
+              </button>
+            </div>
+          </div>
         )}
 
         {/* End of trip: rating + tip. Opens by itself when the driver ends the trip;

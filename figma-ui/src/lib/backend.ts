@@ -457,6 +457,10 @@ export async function apiFetch<T = any>(
     // an empty list (which is what used to happen — every failure was swallowed).
     const err: any = new Error(String(msg));
     err.status = res.status;
+    // Server errors also carry a machine code (e.g. split fare's "no_card")
+    // so screens can react without matching on human text.
+    err.code = (json as any)?.code;
+    err.payload = json;
     throw err;
   }
   return json as T;
@@ -1603,6 +1607,77 @@ export async function splitRespond(splitId: string, accept: boolean) {
   const s = await getSocket();
   s.emit("split:respond", { splitId, accept });
 }
+
+// ── Fare split (REST) ────────────────────────────────────────────────────────
+// The money flow lives in REST, not the socket: an invite is created per
+// co-rider, they pay their share from their saved card, and the ride's card
+// capture at completion subtracts what was already collected.
+export interface SplitInvite {
+  id: string;
+  ride_id: string;
+  amount: number | string;
+  status: string;
+  share_count: number | null;
+  created_at: string;
+  inviter_name: string;
+  destination_address: string | null;
+  pickup_address: string | null;
+  ride_status: string;
+  payment_method: string | null;
+  estimated_fare: number | string | null;
+  actual_fare: number | string | null;
+}
+
+export interface RideSplit {
+  id: string;
+  invitee_email: string;
+  amount: number | string;
+  status: "pending" | "paying" | "paid" | "declined" | "refunded";
+  share_count: number | null;
+  paid_at: string | null;
+  created_at: string;
+  last_error: string | null;
+}
+
+/** Open split invites for the signed-in rider (Home banner). */
+export const getSplitInvites = () =>
+  apiFetch<{ splits: SplitInvite[] }>("/api/split/pending");
+
+/** All shares on one ride (booking rider's ride screen). */
+export const getRideSplits = (rideId: string) =>
+  apiFetch<{ splits: RideSplit[] }>(`/api/split/ride/${rideId}`);
+
+/** Invite one co-rider. `shareCount` is the TOTAL number of riders (2–4). */
+export const createSplitInvite = (
+  rideId: string,
+  inviteeEmail: string,
+  shareCount: number
+) =>
+  apiFetch<{
+    id: string;
+    rideId: string;
+    inviteeEmail: string;
+    amount: number;
+    shareCount: number;
+    status: string;
+  }>("/api/split/invite", {
+    method: "POST",
+    body: JSON.stringify({ rideId, inviteeEmail, shareCount }),
+  });
+
+/** Pay my share from my saved card. */
+export const paySplitShare = (splitId: string) =>
+  apiFetch<{ success: boolean; status: string; amount: number; duplicate?: boolean }>(
+    `/api/split/${splitId}/pay`,
+    { method: "POST" }
+  );
+
+/** Decline a split invite (booking rider then covers that share). */
+export const declineSplitShare = (splitId: string) =>
+  apiFetch<{ success: boolean; status: string }>(`/api/split/${splitId}/decline`, {
+    method: "POST",
+  });
+
 
 // ── Safety (socket + REST) ───────────────────────────────────────────────────
 export async function triggerSos(rideId: string) {
