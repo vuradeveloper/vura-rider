@@ -502,7 +502,7 @@ router.get("/vehicles", (0, adminAuth_1.requireAdmin)("drivers.read"), async (re
     try {
         await (0, vehicleReview_1.ensureVehicleReviewSchema)().catch(() => { });
         const unclassifiedOnly = String(req.query.unclassified || "") === "1";
-        const rows = await (0, database_1.query)(`SELECT u.id AS driver_id, u.full_name, u.email, u.phone_number,
+        const rows = await (0, database_1.query)(`SELECT u.id AS driver_id, u.full_name, u.email, u.phone AS phone_number,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_year, dp.vehicle_color,
               dp.body_type, dp.vehicle_seats, dp.vehicle_doors, dp.vehicle_fuel_type,
               dp.vehicle_category, dp.vehicle_tier, dp.vehicle_tiers,
