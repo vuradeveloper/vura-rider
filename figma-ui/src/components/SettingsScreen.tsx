@@ -141,10 +141,11 @@ export function SettingsScreen({
  * Help Center — the port of the native app/help.tsx page: a recent-trip card,
  * an "All topics" accordion, and a Contact Support action.
  */
-export function HelpCenter({ onBack, onTrips, recentTrip }: {
+export function HelpCenter({ onBack, onTrips, recentTrip, onChatSupport }: {
   onBack: () => void
   onTrips: () => void
   recentTrip?: { title: string; sub: string } | null
+  onChatSupport?: () => void
 }) {
   const [open, setOpen] = useState<string | null>(null)
   const topics = [
@@ -158,6 +159,25 @@ export function HelpCenter({ onBack, onTrips, recentTrip }: {
     <div className="flex flex-col h-screen bg-[#F7F7F7]">
       <Header title="Help" sub="Past trips, topics and support" onBack={onBack} />
       <div className="flex-1 overflow-y-auto pb-24 pt-5 px-4">
+
+        {/* Live support — the real chat, not an email hand-off. */}
+        {onChatSupport && (
+          <button
+            onClick={onChatSupport}
+            className="w-full rounded-2xl bg-[#1A1A1A] p-4 text-left mb-5 active:opacity-90"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 text-[20px]">
+                💬
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[14px] font-semibold text-white">Live support</p>
+                <p className="mt-0.5 text-[11px] text-[#ADADAD]">Chat with a real Vura agent — usually a few minutes.</p>
+              </div>
+              <span className="shrink-0 text-[12px] font-bold text-[#FF8A80]">Open ›</span>
+            </div>
+          </button>
+        )}
 
         <p className="text-[13px] font-bold text-[#1A1A1A] mb-2.5">Recent Trip</p>
         <button onClick={onTrips} className="w-full rounded-2xl bg-white border border-[#F0F0F0] p-4 flex items-center justify-between shadow-sm active:bg-[#F7F7F7]">
@@ -198,12 +218,21 @@ export function HelpCenter({ onBack, onTrips, recentTrip }: {
                     <p className="text-[11px] text-[#ADADAD] mt-1">
                       Our team is available to assist you with {t.title.toLowerCase()}. We typically reply within 2 hours.
                     </p>
-                    <a
-                      href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(t.title)}`}
-                      className="mt-3 inline-block bg-[#EA4335] text-white px-3 py-1.5 rounded-lg text-[11px] font-bold"
-                    >
-                      Contact Support
-                    </a>
+                    {onChatSupport ? (
+                      <button
+                        onClick={onChatSupport}
+                        className="mt-3 inline-block bg-[#EA4335] text-white px-3 py-1.5 rounded-lg text-[11px] font-bold active:opacity-90"
+                      >
+                        Chat with support
+                      </button>
+                    ) : (
+                      <a
+                        href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(t.title)}`}
+                        className="mt-3 inline-block bg-[#EA4335] text-white px-3 py-1.5 rounded-lg text-[11px] font-bold"
+                      >
+                        Contact Support
+                      </a>
+                    )}
                   </div>
                 </div>
               )}

@@ -2062,6 +2062,46 @@ export const reportLostItem = (input: { rideId: string; itemName: string; itemDe
 export const getLostItemReports = () =>
   apiFetch<{ reports: any[] }>("/api/disputes/lost-items").then((r) => r?.reports || []);
 
+// ── Live Support chat ────────────────────────────────────────────────────────
+// POST /api/support/live-chat opens a chat when there is no open one, so the
+// first message is enough — no separate "start chat" screen.
+export interface RiderLiveChatMessage {
+  id: string;
+  author_role: "rider" | "admin" | "system";
+  author_email: string | null;
+  message: string;
+  created_at: string;
+}
+
+export interface RiderLiveChat {
+  id: string;
+  reference: string;
+  status: "open" | "pending" | "resolved" | "closed";
+  rider_id: string | null;
+  rider_name: string | null;
+  rider_email: string | null;
+  rider_phone: string | null;
+  ride_id: string | null;
+  pickup_address?: string | null;
+  destination_address?: string | null;
+  ride_status?: string | null;
+  actual_fare?: number | string | null;
+  estimated_fare?: number | string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  messages: RiderLiveChatMessage[];
+}
+
+export const getLiveChat = () =>
+  apiFetch<{ chat: RiderLiveChat | null }>("/api/support/live-chat");
+
+export const sendLiveChatMessage = (message: string, rideId?: string | null) =>
+  apiFetch<{ chat: RiderLiveChat }>("/api/support/live-chat", {
+    method: "POST",
+    body: JSON.stringify({ message, rideId: rideId || undefined }),
+  });
+
 // ── Scheduled rides ──────────────────────────────────────────────────────────
 // GET /api/rides/scheduled + POST /api/rides/schedule (both confirmed live).
 // FULL LIFECYCLE VERIFIED LIVE (_safety2.mjs): POST /api/rides/schedule -> 201

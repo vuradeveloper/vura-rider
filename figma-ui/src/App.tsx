@@ -34,6 +34,7 @@ import { SafetyScreen } from './components/SafetyScreen'
 import VehicleLinkScreen from './components/VehicleLinkScreen'
 import { ScheduledRidesScreen } from './components/ScheduledRidesScreen'
 import { ReceiptScreen } from './components/ReceiptScreen'
+import { SupportChat } from './components/SupportChat'
 // `getRoute` is what useRouteLine() calls to turn pickups/stops/drop-offs into a
 // road-following polyline. It existed in the backend lib all along but was never
 // imported here, so the map's route effect threw `getRoute is not defined` the
@@ -132,7 +133,7 @@ import { startCardSetup } from './lib/cardSetup'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
   | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater' | 'deleteAccount'
-  | 'scheduled' | 'receipt' | 'changePassword'
+  | 'scheduled' | 'receipt' | 'changePassword' | 'supportChat'
 type DriverScreen = 'driverHome' | 'request' | 'pickup' | 'dropoff' | 'complete' | 'earnings' | 'driverAccount' | 'vehicle' | 'tripHistory' | 'settings' | 'help' | 'report' | 'wallet'
 type AppMode = 'rider' | 'driver'
 
@@ -5609,6 +5610,7 @@ export default function App() {
             />
           )}
           {rScreen === 'changePassword' && <ChangePassword onBack={() => setRScreen('settings')} />}
+          {rScreen === 'supportChat' && <SupportChat onBack={() => setRScreen('help')} />}
           {rScreen === 'deleteAccount' && (
             <DeleteAccount
               onBack={() => setRScreen('settings')}
@@ -5621,7 +5623,7 @@ export default function App() {
           {rScreen === 'promos' && <PromosScreen onBack={() => setRScreen('account')} />}
           {rScreen === 'safety' && <SafetyScreen onBack={() => setRScreen('account')} onReportIssue={() => openReport(null)} />}
           {rScreen === 'guidelines' && <Guidelines onBack={() => setRScreen('account')} />}
-          {rScreen === 'help' && <HelpCenter onBack={() => setRScreen('account')} onTrips={() => setRScreen('activity')} recentTrip={null} />}
+          {rScreen === 'help' && <HelpCenter onBack={() => setRScreen('account')} onTrips={() => setRScreen('activity')} recentTrip={null} onChatSupport={() => setRScreen('supportChat')} />}
           {rScreen === 'report' && (
             <ReportIssue
               onBack={() => {
