@@ -28,7 +28,7 @@
 // Safety: CREDIT_RECONCILE_DRY_RUN=1 logs what it WOULD do and changes nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { query } from "../config/database";
+import { execute, query } from "../config/database";
 import { captureRideHold } from "./preauthorization";
 import { confirmCardRideCredit, closeRideWalletEntries } from "./walletService";
 
@@ -56,6 +56,24 @@ interface PendingRow {
   ride_status: string | null;
   payment_status: string | null;
   preauth_reference: string | null;
+}
+
+/**
+ * A captured ride whose success webhook was lost stays CAPTURE_PENDING forever
+ * — the rider sees "Paystack is settling it" even though the driver's credit
+ * has already been posted. Promote it once the money is provably captured.
+ * The webhook would do this; the reconciler is the fallback for a lost webhook.
+ */
+async function markRidePaid(rideId: string): Promise<void> {
+  await execute(
+    `UPDATE rides
+        SET payment_status = 'PAID',
+            paid_at = COALESCE(paid_at, NOW()),
+            captured_amount = COALESCE(captured_amount, actual_fare, estimated_fare, 0),
+            updated_at = NOW()
+      WHERE id = $1 AND payment_status IN ('CAPTURE_PENDING', 'CAPTURED')`,
+    [rideId]
+  ).catch(() => {});
 }
 
 type Action =
@@ -141,7 +159,8 @@ export async function reconcileOnce(): Promise<{
       switch (action) {
         case "post": {
           await confirmCardRideCredit(row.driver_id, row.ride_id);
-          console.log(`${tag} posted`);
+          await markRidePaid(row.ride_id);
+          console.log(`${tag} posted + ride PAID`);
           stats.posted++;
           break;
         }
@@ -150,7 +169,8 @@ export async function reconcileOnce(): Promise<{
           const res = await captureRideHold(row.ride_id);
           if (res?.captured || res?.alreadyProcessed) {
             await confirmCardRideCredit(row.driver_id, row.ride_id);
-            console.log(`${tag} captured=${res?.captured} then posted`);
+            await markRidePaid(row.ride_id);
+            console.log(`${tag} captured=${res?.captured} then posted + ride PAID`);
             stats.captured++;
             stats.posted++;
           } else {

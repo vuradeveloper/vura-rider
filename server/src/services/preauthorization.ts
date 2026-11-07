@@ -770,7 +770,23 @@ export async function releaseRideHold(
   try {
     await releasePreauthorization({ reference: ride.preauth_reference });
   } catch (err: any) {
-    if (current === "HOLD_PENDING") {
+    const msg = String(err?.message || err || "").toLowerCase();
+    // Paystack is the source of truth: if it has no preauthorized transaction
+    // for this reference, no money is held, regardless of the local status.
+    // Treat it as released instead of retrying forever (the old behaviour
+    // produced "No preauthorized transaction exists" on every driver cancel).
+    const noPaystackHold =
+      msg.includes("no preauthorized transaction") ||
+      msg.includes("preauthorization not found") ||
+      msg.includes("preauthorization does not exist") ||
+      msg.includes("transaction not found") ||
+      msg.includes("invalid reference");
+
+    if (noPaystackHold) {
+      console.warn(
+        `[preauth] no Paystack hold for ${ride.preauth_reference} (${err?.message || err}) — marking RELEASED`
+      );
+    } else if (current === "HOLD_PENDING") {
       // The checkout never completed, so there is nothing for Paystack to
       // release — an error here means funds were NEVER held. Mark it released
       // locally so the rider's UI and the reaper stop caring about it.
