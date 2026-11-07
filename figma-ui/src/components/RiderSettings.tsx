@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Header } from './SettingsScreen'
-import { deleteAccount, openExternalUrl } from '../lib/backend'
+import { changePassword, deleteAccount, openExternalUrl } from '../lib/backend'
 
 const TERMS_URL = 'https://www.ridevura.com/terms'
 const PRIVACY_URL = 'https://www.ridevura.com/privacy'
@@ -21,6 +21,7 @@ const PRIVACY_URL = 'https://www.ridevura.com/privacy'
  */
 export default function RiderSettings({
   onBack, onProfile, onPayments, onPromos, onSafety, onNotifications, onHelp, onReport, onGuidelines, onDelete,
+  onScheduled, onChangePassword,
 }: {
   onBack: () => void
   onProfile: () => void
@@ -32,6 +33,8 @@ export default function RiderSettings({
   onReport: () => void
   onGuidelines: () => void
   onDelete: () => void
+  onScheduled: () => void
+  onChangePassword: () => void
 }) {
   const sections: { section: string; items: { label: string; sub?: string; action: () => void; danger?: boolean }[] }[] = [
     {
@@ -40,6 +43,8 @@ export default function RiderSettings({
         { label: 'Your Details', sub: 'Name, phone and your ID document', action: onProfile },
         { label: 'Payment Methods', sub: 'Cards saved on your account', action: onPayments },
         { label: 'Promos & Invites', sub: 'Offers, promo codes and referrals', action: onPromos },
+        { label: 'Scheduled rides', sub: 'Reserve a ride up to 90 days ahead', action: onScheduled },
+        { label: 'Change password', sub: 'Update the password you sign in with', action: onChangePassword },
       ],
     },
     {
@@ -242,6 +247,91 @@ export function Guidelines({ onBack }: { onBack: () => void }) {
               <p className="text-[12px] text-[#6B6B6B] mt-1 leading-relaxed">{body}</p>
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** In-app password change (current password → new password), no email loop. */
+export function ChangePassword({ onBack }: { onBack: () => void }) {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+
+  async function save() {
+    if (busy) return
+    setError('')
+    setDone(false)
+    if (!current) { setError('Enter your current password.'); return }
+    if (next.length < 8) { setError('Your new password must be at least 8 characters.'); return }
+    if (next !== confirm) { setError('The new passwords do not match.'); return }
+    setBusy(true)
+    try {
+      await changePassword(current, next)
+      setDone(true)
+      setCurrent('')
+      setNext('')
+      setConfirm('')
+    } catch (e: any) {
+      setError(e?.message || 'Could not change your password.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-screen bg-[#F7F7F7]">
+      <Header title="Change password" sub="Keep your account secure" onBack={onBack} />
+      <div className="flex-1 overflow-y-auto px-4 py-4 pb-24">
+        <div className="rounded-2xl border border-[#F0F0F0] bg-white p-4 shadow-sm">
+          <p className="text-[12px] leading-relaxed text-[#6B6B6B]">
+            Enter the password you use now, then choose a new one. You stay signed in on this device.
+          </p>
+
+          {done && (
+            <div className="mt-3 rounded-xl border border-[#CEEAD6] bg-[#E6F4EA] px-3.5 py-2.5">
+              <p className="text-[12px] font-semibold text-[#137333]">Password changed.</p>
+            </div>
+          )}
+          {error && (
+            <div className="mt-3 rounded-xl border border-[#F5C6C2] bg-[#FCE8E6] px-3.5 py-2.5">
+              <p className="text-[12px] font-semibold text-[#C5221F]">{error}</p>
+            </div>
+          )}
+
+          <div className="mt-4 space-y-3">
+            {[
+              { label: 'Current password', value: current, set: setCurrent, ph: 'Your current password' },
+              { label: 'New password', value: next, set: setNext, ph: 'At least 8 characters' },
+              { label: 'Confirm new password', value: confirm, set: setConfirm, ph: 'Repeat the new password' },
+            ].map((row) => (
+              <div key={row.label}>
+                <label className="mb-1 ml-0.5 block text-[11px] font-medium text-[#4A4A4A]">{row.label}</label>
+                <input
+                  type="password"
+                  value={row.value}
+                  onChange={(e) => row.set(e.target.value)}
+                  placeholder={row.ph}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  className="w-full rounded-xl border border-[#EBEBEB] bg-[#FAFAFA] px-3.5 py-3 text-[14px] text-[#1A1A1A] outline-none transition-colors focus:border-[#EA4335]/50"
+                />
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={() => void save()}
+            disabled={busy}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#EA4335] py-4 text-[15px] font-bold text-white active:bg-[#C5221F] disabled:opacity-60"
+          >
+            {busy && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+            {busy ? 'Saving…' : 'Change password'}
+          </button>
         </div>
       </div>
     </div>

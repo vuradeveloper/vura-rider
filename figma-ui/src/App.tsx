@@ -29,9 +29,11 @@ import PayLaterScreen from './components/PayLaterScreen'
 import RidePaymentStatus from './components/RidePaymentStatus'
 import PromosScreen from './components/PromosScreen'
 import RiderProfile from './components/RiderProfile'
-import RiderSettings, { DeleteAccount, Guidelines } from './components/RiderSettings'
+import RiderSettings, { ChangePassword, DeleteAccount, Guidelines } from './components/RiderSettings'
 import { SafetyScreen } from './components/SafetyScreen'
 import VehicleLinkScreen from './components/VehicleLinkScreen'
+import { ScheduledRidesScreen } from './components/ScheduledRidesScreen'
+import { ReceiptScreen } from './components/ReceiptScreen'
 // `getRoute` is what useRouteLine() calls to turn pickups/stops/drop-offs into a
 // road-following polyline. It existed in the backend lib all along but was never
 // imported here, so the map's route effect threw `getRoute is not defined` the
@@ -130,6 +132,7 @@ import { startCardSetup } from './lib/cardSetup'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
   | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater' | 'deleteAccount'
+  | 'scheduled' | 'receipt' | 'changePassword'
 type DriverScreen = 'driverHome' | 'request' | 'pickup' | 'dropoff' | 'complete' | 'earnings' | 'driverAccount' | 'vehicle' | 'tripHistory' | 'settings' | 'help' | 'report' | 'wallet'
 type AppMode = 'rider' | 'driver'
 
@@ -592,7 +595,7 @@ function SplitPaySheet({
   )
 }
 
-function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode: AppMode; onMode: (m: AppMode) => void }) {
+function RiderHome({ onBook, mode, onMode, onScheduled }: { onBook: (d: string) => void; mode: AppMode; onMode: (m: AppMode) => void; onScheduled: () => void }) {
   const [me, setMe] = useState<LatLng | null>(null)
   const [placeLabel, setPlaceLabel] = useState('Locating you…')
   const [places, setPlaces] = useState<SavedPlace[]>(() => getSavedPlaces())
@@ -847,6 +850,21 @@ function RiderHome({ onBook, mode, onMode }: { onBook: (d: string) => void; mode
               )
             })}
           </div>
+
+          {/* Reserve: the scheduled-rides screen was built but had no entry point. */}
+          <button
+            onClick={onScheduled}
+            className="mb-5 flex w-full items-center gap-3 rounded-2xl bg-[#1A1A1A] px-4 py-3.5 text-left active:opacity-90"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10">
+              {IC.clock('#FFFFFF')}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-semibold text-white">Reserve a ride</p>
+              <p className="mt-0.5 text-[11px] text-[#ADADAD]">Plan ahead — up to 90 days</p>
+            </div>
+            <span className="shrink-0 text-[12px] font-bold text-[#FF8A80]">Book ›</span>
+          </button>
 
           <div className="flex items-center justify-between mb-3">
             <p className="text-[11px] uppercase tracking-widest text-[#ADADAD] font-semibold">Saved places</p>
@@ -2441,7 +2459,7 @@ function ChatSheet({ rideId, peer, senderRole, onClose }: {
   )
 }
 
-function RideScreen({ destination, rideId, onDone }: { destination: string; rideId: string | null; onDone: () => void }) {
+function RideScreen({ destination, rideId, onDone, onReceipt }: { destination: string; rideId: string | null; onDone: () => void; onReceipt: (rideId: string) => void }) {
   const [ride, setRide] = useState<any>(null)
   const [status, setStatus] = useState<string>('accepted')
   const [toast, setToast] = useState('')
@@ -3265,6 +3283,15 @@ function RideScreen({ destination, rideId, onDone }: { destination: string; ride
                 </div>
               )}
 
+              {rideId && (
+                <button
+                  onClick={() => onReceipt(rideId)}
+                  className="mt-2 w-full text-center text-[12px] font-semibold text-[#EA4335]"
+                >
+                  View full receipt
+                </button>
+              )}
+
               <div className="flex justify-center gap-3 my-5">
                 {[1, 2, 3, 4, 5].map((n) => (
                   <button key={n} onClick={() => setStars(n)} aria-label={`${n} star`}>
@@ -3404,7 +3431,7 @@ function TripCarPhoto({ row, size = 78 }: { row: any; size?: number }) {
   return <VehicleImage bodyType={row?.vehicle_body_type || row?.body_type} size={size} />
 }
 
-function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) => void }) {
+function RiderActivity({ onReceipt }: { onReceipt: (rideId: string) => void }) {
   const [rides, setRides] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -3484,9 +3511,17 @@ function RiderActivity({ onRate }: { onRate?: (rideId: string, score: number) =>
 
                 <div className="flex items-center justify-between pt-3 border-t border-[#F5F5F5]">
                   <p className="text-[12px] text-[#ADADAD]">{fmtTripTime(t.date || t.completed_at || t.created_at)}</p>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[12px] text-[#ADADAD]">with</span>
-                    <span className="text-[12px] text-[#6B6B6B] font-semibold truncate max-w-[120px]">{driver}</span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => onReceipt(String(t.id))}
+                      className="text-[12px] font-semibold text-[#EA4335]"
+                    >
+                      Receipt
+                    </button>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[12px] text-[#ADADAD]">with</span>
+                      <span className="text-[12px] text-[#6B6B6B] font-semibold truncate max-w-[110px]">{driver}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -5272,6 +5307,12 @@ export default function App() {
   // The id of the ride the server created, used to track / cancel / rate it.
   const [rideId, setRideId] = useState<string | null>(null)
   const [rScreen, setRScreen] = useState<RiderScreen>('home')
+  // Receipt + report context: a receipt opens for one ride, and a report can
+  // carry that ride id into POST /api/disputes.
+  const [receiptRideId, setReceiptRideId] = useState<string | null>(null)
+  const [reportRideId, setReportRideId] = useState<string | null>(null)
+  // Where "Scheduled rides" should return to (Home tile or Settings row).
+  const [scheduledReturn, setScheduledReturn] = useState<RiderScreen>('account')
 
     // ── Trip continuity: launch, resume and reconnect all rebuild from the DB ──
     // The server is the source of truth, not the screen we happened to be on.
@@ -5401,6 +5442,15 @@ export default function App() {
 
   function switchMode(m: AppMode) { setMode(m) }
   function riderGo(s: RiderScreen) { setRNav(s); setRScreen(s) }
+  function goScheduled(from: RiderScreen) { setScheduledReturn(from); setRScreen('scheduled') }
+  function openReceipt(id: string) {
+    setReceiptRideId(id)
+    setRScreen('receipt')
+  }
+  function openReport(id?: string | null) {
+    setReportRideId(id || null)
+    setRScreen('report')
+  }
   function driverGo(s: DriverScreen) { setDNav(s); setDScreen(s) }
   function book(d: string) { setDest(d || 'Google HQ'); setRScreen('booking') }
 
@@ -5481,7 +5531,7 @@ export default function App() {
       {/* ?????? App flow ?????? */}
       {authed && (<>
         {mode === 'rider' && (<>
-          {rScreen === 'home' && <RiderHome onBook={book} mode={mode} onMode={switchMode} />}
+          {rScreen === 'home' && <RiderHome onBook={book} mode={mode} onMode={switchMode} onScheduled={() => goScheduled('home')} />}
           {rScreen === 'booking' && (
             <BookingScreen
               destination={dest}
@@ -5519,9 +5569,10 @@ export default function App() {
               destination={dest}
               rideId={rideId}
               onDone={() => { setRideId(null); setRScreen('home'); setRNav('home') }}
+              onReceipt={(id) => { setRideId(null); openReceipt(id); setRNav('activity') }}
             />
           )}
-          {rScreen === 'activity' && <RiderActivity />}
+          {rScreen === 'activity' && <RiderActivity onReceipt={(id) => { openReceipt(id); setRNav('activity') }} />}
           {rScreen === 'account' && <RiderAccount mode={mode} onMode={switchMode} onSignOut={() => { signOut(); setAuthed(false); setAuth('login') }} onNotifications={() => setRScreen('notifications')} open={setRScreen} />}
           {rScreen === 'notifications' && <RiderNotifications onBack={() => setRScreen('account')} />}
           {rScreen === 'settings' && (
@@ -5533,11 +5584,31 @@ export default function App() {
               onSafety={() => setRScreen('safety')}
               onNotifications={() => setRScreen('notifications')}
               onHelp={() => setRScreen('help')}
-              onReport={() => setRScreen('report')}
+              onReport={() => openReport(null)}
               onGuidelines={() => setRScreen('guidelines')}
               onDelete={() => setRScreen('deleteAccount')}
+              onScheduled={() => goScheduled('settings')}
+              onChangePassword={() => setRScreen('changePassword')}
             />
           )}
+          {rScreen === 'scheduled' && (
+            <ScheduledRidesScreen
+              onBack={() => {
+                setRScreen(scheduledReturn)
+                if (scheduledReturn === 'home' || scheduledReturn === 'activity' || scheduledReturn === 'account') {
+                  setRNav(scheduledReturn)
+                }
+              }}
+            />
+          )}
+          {rScreen === 'receipt' && (
+            <ReceiptScreen
+              rideId={receiptRideId}
+              onBack={() => { setRScreen('activity'); setRNav('activity') }}
+              onReportIssue={(id) => openReport(id)}
+            />
+          )}
+          {rScreen === 'changePassword' && <ChangePassword onBack={() => setRScreen('settings')} />}
           {rScreen === 'deleteAccount' && (
             <DeleteAccount
               onBack={() => setRScreen('settings')}
@@ -5548,10 +5619,18 @@ export default function App() {
           {rScreen === 'payments' && <PaymentMethods onBack={() => setRScreen('account')} />}
           {PAY_LATER_ENABLED && rScreen === 'paylater' && <PayLaterScreen onBack={() => setRScreen('account')} />}
           {rScreen === 'promos' && <PromosScreen onBack={() => setRScreen('account')} />}
-          {rScreen === 'safety' && <SafetyScreen onBack={() => setRScreen('account')} onReportIssue={() => setRScreen('report')} />}
+          {rScreen === 'safety' && <SafetyScreen onBack={() => setRScreen('account')} onReportIssue={() => openReport(null)} />}
           {rScreen === 'guidelines' && <Guidelines onBack={() => setRScreen('account')} />}
           {rScreen === 'help' && <HelpCenter onBack={() => setRScreen('account')} onTrips={() => setRScreen('activity')} recentTrip={null} />}
-          {rScreen === 'report' && <ReportIssue onBack={() => setRScreen('account')} />}
+          {rScreen === 'report' && (
+            <ReportIssue
+              onBack={() => {
+                if (reportRideId) { setRScreen('activity'); setRNav('activity') }
+                else setRScreen('account')
+              }}
+              rideId={reportRideId}
+            />
+          )}
           {/* Keep the bottom nav visible on the rider tabs only. */}
           {riderNav && <RiderNav active={rNav} go={riderGo} />}
         </>)}

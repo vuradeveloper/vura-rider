@@ -340,6 +340,43 @@ export async function signIn(email: string, password: string): Promise<AuthUser>
   return getStoredUser() || user;
 }
 
+/**
+ * In-app password change. Re-authenticates with the CURRENT password first
+ * (Firebase refuses a wrong one), then updates it and keeps the fresh token so
+ * the rider is not signed out.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  const u = getStoredUser();
+  if (!u?.email) throw new Error("Sign in again to change your password.");
+  if (String(newPassword).length < 8) {
+    throw new Error("Your new password must be at least 8 characters.");
+  }
+  if (currentPassword === newPassword) {
+    throw new Error("Choose a new password that is different from the current one.");
+  }
+
+  const verified = await identityCall("signInWithPassword", {
+    email: u.email.trim(),
+    password: currentPassword,
+    returnSecureToken: true,
+  });
+  const updated = await identityCall("update", {
+    idToken: verified.idToken,
+    password: newPassword,
+    returnSecureToken: true,
+  });
+
+  storeUser({
+    ...u,
+    idToken: String(updated?.idToken || verified?.idToken || u.idToken),
+    refreshToken: String(updated?.refreshToken || verified?.refreshToken || u.refreshToken || ""),
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  });
+}
+
 export async function signUp(
   email: string,
   password: string,

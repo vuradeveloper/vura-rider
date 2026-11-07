@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createDispute } from '../lib/backend'
 
 /**
  * Driver Settings + the Help Center and Report-an-Issue pages.
@@ -241,13 +242,33 @@ export function ReportIssue({ onBack, rideId }: { onBack: () => void; rideId?: s
   const [description, setDescription] = useState('')
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  const submit = () => {
+  const submit = async () => {
     if (!description.trim()) {
       setError('Please describe what happened')
       return
     }
     setError('')
+    setSent(false)
+    setBusy(true)
+    const label = types.find((t) => t.id === type)?.label || type
+    try {
+      await createDispute({
+        rideId: rideId || undefined,
+        type: type as any,
+        reason: reason.trim() || label,
+        description: description.trim(),
+      })
+      setSent(true)
+    } catch (e: any) {
+      setError(e?.message || 'Could not submit your report. Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const emailFallback = () => {
     const label = types.find((t) => t.id === type)?.label || type
     const body = [
       `Issue type: ${label}`,
@@ -259,7 +280,6 @@ export function ReportIssue({ onBack, rideId }: { onBack: () => void; rideId?: s
     window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
       `Issue report — ${label}`
     )}&body=${encodeURIComponent(body)}`
-    setSent(true)
   }
 
   return (
@@ -269,7 +289,7 @@ export function ReportIssue({ onBack, rideId }: { onBack: () => void; rideId?: s
 
         {sent && (
           <div className="rounded-xl bg-[#E6F4EA] border border-[#CEEAD6] px-4 py-3 text-[12px] font-semibold text-[#137333] mb-5">
-            Your report is ready in your email app — press send and our team will review it.
+            Your report was submitted. Our team will review it and contact you if we need more details.
           </div>
         )}
 
@@ -312,11 +332,16 @@ export function ReportIssue({ onBack, rideId }: { onBack: () => void; rideId?: s
         </div>
 
         <button
-          onClick={submit}
-          className="mt-6 w-full h-12 rounded-2xl bg-[#EA4335] text-white text-[14px] font-bold active:opacity-90"
+          onClick={() => void submit()}
+          disabled={busy}
+          className="mt-6 flex w-full h-12 items-center justify-center gap-2 rounded-2xl bg-[#EA4335] text-white text-[14px] font-bold active:opacity-90 disabled:opacity-60"
           style={{ boxShadow: '0 4px 16px rgba(234,67,53,0.28)' }}
         >
-          Submit report
+          {busy && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+          {busy ? 'Sending…' : 'Submit report'}
+        </button>
+        <button onClick={emailFallback} className="mt-3 w-full text-center text-[11px] font-semibold text-[#6B6B6B] underline underline-offset-2">
+          Email us instead
         </button>
       </div>
     </div>
