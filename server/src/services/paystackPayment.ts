@@ -453,9 +453,21 @@ export async function transferFunds(input: {
   amountRands: number;
   reference: string;
   reason?: string;
-}): Promise<{ success: boolean; transferCode?: string; reference?: string; message?: string }> {
+}): Promise<{
+  success: boolean;
+  pending?: boolean;
+  status: "success" | "pending" | "failed";
+  transferCode?: string;
+  reference?: string;
+  message?: string;
+}> {
   if (paymentsMode() === "mock") {
-    return { success: true, transferCode: `TRF_MOCK`, reference: input.reference };
+    return {
+      success: true,
+      status: "success",
+      transferCode: `TRF_MOCK`,
+      reference: input.reference,
+    };
   }
   if (!isPaystackConfigured()) {
     throw new Error("Paystack is not configured.");
@@ -473,13 +485,24 @@ export async function transferFunds(input: {
     }),
   });
 
-  const status = String(data?.data?.status || "").toLowerCase();
+  const raw = String(data?.data?.status || "").toLowerCase();
+  // Paystack queues ZAR transfers: the API can answer "pending" and only send
+  // transfer.success later. Only a real "success" is final; "pending" is
+  // accepted and must remain pending until the webhook confirms it.
+  const status: "success" | "pending" | "failed" =
+    raw === "success"
+      ? "success"
+      : raw === "pending" || raw === "queued" || raw === "processing"
+        ? "pending"
+        : "failed";
+
   return {
-    success: status !== "failed" && status !== "pending",
+    success: status !== "failed",
+    pending: status === "pending",
+    status,
     transferCode: data?.data?.transfer_code,
     reference: data?.data?.reference || input.reference,
     message: data?.message,
-    ...((data as any)?.data ? { bank_name: data.data.bank_type } : {}),
   };
 }
 

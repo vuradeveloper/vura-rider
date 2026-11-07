@@ -24,6 +24,7 @@ import {
   verifyPaystackSignature,
 } from "../services/preauthorization";
 import { handlePayLaterChargeWebhook } from "../services/PayLaterService";
+import { handleTransferEvent } from "../services/payoutSettlement";
 import { queryOne, execute } from "../config/database";
 import { refundTransaction } from "../services/paystackPayment";
 
@@ -129,7 +130,12 @@ router.post("/webhook", async (req: any, res: Response) => {
     // card flow uses preauthorization.*; the legacy branch saves the card and
     // refunds the R1 even when the app never returned to poll /verify.
     let result: any;
-    if (event.startsWith("charge.")) {
+    if (event.startsWith("transfer.")) {
+      // Driver payouts: transfer.success / transfer.failed / transfer.reversed.
+      // The request path may only see "pending"; this makes the final state
+      // authoritative and debits/credits the driver wallet exactly once.
+      result = await handleTransferEvent(event, payload);
+    } else if (event.startsWith("charge.")) {
       const legacyCard =
         event === "charge.success" ? await handleLegacyCardRegisterCharge(payload) : false;
       result = legacyCard

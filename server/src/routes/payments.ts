@@ -776,13 +776,15 @@ router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res
     // Ensure the payouts table exists - if it's missing the subquery below would 500
     // ("relation payouts does not exist") and the app falls back to R0.00.
     await ensurePayoutsTable();
-    const earnings = await queryOne<{ card_earnings: number; paid_out: number; total_rides: number }>(
+    const earnings = await queryOne<{ card_earnings: number; paid_out: number; pending_out: number; total_rides: number }>(
       `SELECT
          (SELECT COALESCE(SUM(COALESCE(actual_fare, estimated_fare, 0)), 0)::float FROM rides
            WHERE driver_id = $1 AND status = 'completed'
              AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS card_earnings,
          (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
            WHERE driver_id = $1 AND status = 'success') AS paid_out,
+         (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
+           WHERE driver_id = $1 AND status = 'pending') AS pending_out,
          (SELECT COUNT(*)::int FROM rides
            WHERE driver_id = $1 AND status = 'completed'
              AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS total_rides`,
@@ -791,6 +793,7 @@ router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res
 
     const cardEarnings = Number(earnings?.card_earnings || 0);
     const paidOut = Number(earnings?.paid_out || 0);
+    const pendingOut = Number(earnings?.pending_out || 0);
     // ── LEDGER IS THE SOURCE OF TRUTH (commission spec): the wallet balance
     // is the sum of POSTED wallet_ledger entries — card credits land only
     // after the Paystack capture webhook, cash commissions debit at
@@ -799,18 +802,19 @@ router.get("/driver/earnings/pending", requireAuth, async (req: AuthRequest, res
     // /driver/wallet, and can never be cashed out. The legacy rides-derived
     // expression survives only as a fallback if the ledger is unreachable.
     let balanceCents: number | null = null;
-    let balance = Math.max(0, cardEarnings - paidOut);
+    let balance = Math.max(0, cardEarnings - paidOut - pendingOut);
     try {
       const { getBalanceCents, walletLedgerReady } = await import("../services/walletService");
       if (await walletLedgerReady()) {
         balanceCents = await getBalanceCents(user.id);
-        balance = Math.max(0, Math.round(balanceCents) / 100);
+        balance = Math.max(0, Math.round(balanceCents) / 100 - pendingOut);
       }
     } catch { balanceCents = null; }
     res.json({
       ...(earnings || {}),
       card_earnings: cardEarnings,
       paid_out: paidOut,
+      pending_out: pendingOut,
       total_earnings: balance,
       balance,
       balance_cents: balanceCents,
