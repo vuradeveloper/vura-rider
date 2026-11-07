@@ -17,6 +17,15 @@ import { openPaystackInline } from "./paystackInline";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+async function closeHostedBrowser(): Promise<void> {
+  try {
+    const { Browser } = await import("@capacitor/browser");
+    await Browser.close();
+  } catch {
+    /* nothing open, or plugin unavailable */
+  }
+}
+
 export interface CardSetupResult {
   ok: boolean;
   cancelled?: boolean;
@@ -51,6 +60,7 @@ export async function startCardSetup(
   onStatus?: (message: string) => void
 ): Promise<CardSetupResult> {
   let reference = "";
+  let usedHostedPage = false;
 
   // 1. Preferred: in-app Paystack modal.
   const intent = await createCardIntent().catch(() => null);
@@ -83,11 +93,15 @@ export async function startCardSetup(
     }
     onStatus?.("Opening the secure Paystack page...");
     await openExternalUrl(reg.authorizationUrl);
+    usedHostedPage = true;
     reference = reg.reference;
   }
 
   onStatus?.("Confirming your card...");
   const saved = await pollCardSaved(reference, onStatus);
+  // Return the rider to the exact page they started on if the hosted fallback
+  // was used. Paystack Inline never leaves the app, so there is nothing to close.
+  if (usedHostedPage) await closeHostedBrowser();
   if (!saved) {
     return {
       ok: false,

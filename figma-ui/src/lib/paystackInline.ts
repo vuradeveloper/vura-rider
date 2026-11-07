@@ -54,14 +54,15 @@ export async function openPaystackInline(input: {
       clearTimeout(timer);
       resolve(result);
     };
-    // Paystack Inline should answer in seconds. In a WebView whose third-party
-    // cookies are blocked it can sit on its cookie-support page forever; after
-    // this timeout the shared card flow falls back to the hosted page instead
-    // of leaving the rider on "connecting to your bank" indefinitely.
+    // This is a LOAD/HANG guard, not a card-entry timer. A rider can easily
+    // spend a minute typing a card number and another minute in bank OTP, so a
+    // short timeout used to close the modal mid-entry and dump them on the
+    // hosted R5 page. Five minutes is only for a modal that never becomes
+    // usable; normal success/cancel resolves much earlier.
     const timer = setTimeout(() => {
       try { handler?.close?.(); } catch { /* modal already gone */ }
       finish("failed");
-    }, 25_000);
+    }, 5 * 60_000);
 
     try {
       handler = PaystackPop.setup({
