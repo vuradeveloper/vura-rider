@@ -119,6 +119,8 @@ export declare function transferFunds(input: {
     reason?: string;
 }): Promise<{
     success: boolean;
+    pending?: boolean;
+    status: "success" | "pending" | "failed";
     transferCode?: string;
     reference?: string;
     message?: string;

@@ -69,6 +69,12 @@ export declare function confirmCardRideCredit(driverId: string, rideId: string, 
 export declare function closeRideWalletEntries(rideId: string, reason: string): Promise<void>;
 /** Successful payout → posted ledger debit (idempotent per payout id). */
 export declare function recordPayoutDebit(driverId: string, payoutId: string, amountRands: number): Promise<void>;
+/**
+ * A payout that was debited and later came back (Paystack transfer failed or
+ * was reversed) → posted ledger credit, idempotent per payout id. If the
+ * original debit never happened (pending transfer that failed) this is a no-op.
+ */
+export declare function recordPayoutReversal(driverId: string, payoutId: string, amountRands: number): Promise<void>;
 export interface WalletViewEntry {
     id: string;
     ride_id: string | null;

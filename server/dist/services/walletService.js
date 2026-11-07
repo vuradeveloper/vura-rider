@@ -15,6 +15,7 @@ exports.recordRideCompletion = recordRideCompletion;
 exports.confirmCardRideCredit = confirmCardRideCredit;
 exports.closeRideWalletEntries = closeRideWalletEntries;
 exports.recordPayoutDebit = recordPayoutDebit;
+exports.recordPayoutReversal = recordPayoutReversal;
 exports.getWalletView = getWalletView;
 exports.backfillDriverLedger = backfillDriverLedger;
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,6 +318,33 @@ async function recordPayoutDebit(driverId, payoutId, amountRands) {
      RETURNING id`, [driverId, cents, payoutId]).catch(() => null);
     if (!inserted)
         return;
+    const after = await applyDeltaCents(driverId, cents);
+    await (0, database_1.execute)("UPDATE wallet_ledger SET balance_after_cents = $2 WHERE id = $1", [
+        inserted.id, after,
+    ]).catch(() => { });
+}
+/**
+ * A payout that was debited and later came back (Paystack transfer failed or
+ * was reversed) → posted ledger credit, idempotent per payout id. If the
+ * original debit never happened (pending transfer that failed) this is a no-op.
+ */
+async function recordPayoutReversal(driverId, payoutId, amountRands) {
+    await ensureWalletTables();
+    const debit = await (0, database_1.queryOne)("SELECT id FROM wallet_ledger WHERE payout_id = $1 AND type = 'payout'", [payoutId]).catch(() => null);
+    if (!debit)
+        return;
+    const existing = await (0, database_1.queryOne)("SELECT id FROM wallet_ledger WHERE payout_id = $1 AND type = 'reversal'", [payoutId]).catch(() => null);
+    if (existing)
+        return;
+    const cents = Math.max(0, toCents(amountRands));
+    const inserted = await (0, database_1.queryOne)(`INSERT INTO wallet_ledger (driver_id, type, amount_cents, status, payout_id, note)
+     VALUES ($1, 'reversal', $2, 'posted', $3, 'payout reversed')
+     RETURNING id`, [driverId, cents, payoutId]).catch(() => null);
+    if (!inserted)
+        return;
+    // The earnings this payout had marked as paid become unpaid again, so the
+    // next successful withdrawal can allocate them.
+    await (0, database_1.execute)("DELETE FROM driver_earnings_paid WHERE payout_id = $1", [payoutId]).catch(() => { });
     const after = await applyDeltaCents(driverId, cents);
     await (0, database_1.execute)("UPDATE wallet_ledger SET balance_after_cents = $2 WHERE id = $1", [
         inserted.id, after,

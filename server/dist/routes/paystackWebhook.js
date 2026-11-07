@@ -21,6 +21,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const preauthorization_1 = require("../services/preauthorization");
 const PayLaterService_1 = require("../services/PayLaterService");
+const payoutSettlement_1 = require("../services/payoutSettlement");
 const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
 /**
@@ -111,7 +112,13 @@ router.post("/webhook", async (req, res) => {
         // card flow uses preauthorization.*; the legacy branch saves the card and
         // refunds the R1 even when the app never returned to poll /verify.
         let result;
-        if (event.startsWith("charge.")) {
+        if (event.startsWith("transfer.")) {
+            // Driver payouts: transfer.success / transfer.failed / transfer.reversed.
+            // The request path may only see "pending"; this makes the final state
+            // authoritative and debits/credits the driver wallet exactly once.
+            result = await (0, payoutSettlement_1.handleTransferEvent)(event, payload);
+        }
+        else if (event.startsWith("charge.")) {
             const legacyCard = event === "charge.success" ? await handleLegacyCardRegisterCharge(payload) : false;
             result = legacyCard
                 ? {

@@ -38,6 +38,7 @@ const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const paystackPayment_1 = require("../services/paystackPayment");
+const payoutSettlement_1 = require("../services/payoutSettlement");
 const router = (0, express_1.Router)();
 // Ensure the payouts table exists.
 async function ensurePayoutsTable() {
@@ -59,6 +60,7 @@ async function ensurePayoutsTable() {
       )
     `);
         await (0, database_1.execute)(`ALTER TABLE payouts ADD COLUMN IF NOT EXISTS transfer_code VARCHAR(100)`);
+        await (0, database_1.execute)(`ALTER TABLE payouts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
         // The banking table may not exist yet if no driver ever saved banking via
         // the old wallet flow — create it here so we can cache recipients.
         await (0, database_1.execute)(`
@@ -155,16 +157,23 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
             res.status(401).json({ error: "User not found" });
             return;
         }
+        await ensurePayoutsTable();
+        // Pending transfers are already promised to the driver and must not be
+        // spendable again while Paystack confirms them.
+        const pendingRow = await (0, database_1.queryOne)(`SELECT COALESCE(SUM(amount), 0)::float AS pending FROM payouts
+        WHERE driver_id = $1 AND status = 'pending'`, [user.id]).catch(() => null);
+        const pendingOut = Number(pendingRow?.pending || 0);
         // ── LEDGER IS THE SOURCE OF TRUTH (commission spec): available cash-out
         // = the wallet's posted balance (card credits after webhook capture,
-        // − cash commissions, − previous payouts). Clamped at 0: you can never
-        // withdraw money you owe. The legacy rides-derived expression remains
-        // only as a fallback if the ledger tables are unreachable mid-deploy.
+        // − cash commissions, − previous payouts), minus transfers still pending.
+        // Clamped at 0: you can never withdraw money you owe. The legacy
+        // rides-derived expression remains only as a fallback if the ledger tables
+        // are unreachable mid-deploy.
         let available = -1;
         try {
             const { getBalanceCents, walletLedgerReady } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
             if (await walletLedgerReady()) {
-                available = Math.max(0, Math.round(await getBalanceCents(user.id)) / 100);
+                available = Math.max(0, Math.round(await getBalanceCents(user.id)) / 100 - pendingOut);
             }
         }
         catch {
@@ -177,13 +186,12 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
                AND LOWER(COALESCE(payment_method, '')) IN ('card', 'pay_later')) AS card_earnings,
            (SELECT COALESCE(SUM(amount), 0)::float FROM payouts
              WHERE driver_id = $1 AND status = 'success') AS paid_out`, [user.id]);
-            available = Math.max(0, Number(earnings?.card_earnings || 0) - Number(earnings?.paid_out || 0));
+            available = Math.max(0, Number(earnings?.card_earnings || 0) - Number(earnings?.paid_out || 0) - pendingOut);
         }
         if (amountRands > available) {
             res.status(400).json({ error: `Insufficient balance. You have R${available.toFixed(2)} available to cash out.` });
             return;
         }
-        await ensurePayoutsTable();
         // Get or reuse the recipient (resolve if not passed in).
         let rc = recipientCode || null;
         if (!rc) {
@@ -198,52 +206,70 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         }
         const reference = `VURAPAY${Date.now().toString(36).toUpperCase()}` +
             `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-        const transfer = await (0, paystackPayment_1.transferFunds)({
-            recipientCode: rc,
-            amountRands,
-            reference,
-            reason: "Vura driver cash-out",
-        });
-        const status = transfer.success ? "success" : "failed";
-        const payoutRow = await (0, database_1.execute)(`INSERT INTO payouts (driver_id, bank_code, account_number, bank_name, recipient_code, amount, reference, transfer_code, status, message)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id`, [user.id, bankCode, accountNumber, bankName || null, rc, amountRands, reference, transfer.transferCode || null, status, transfer.message || null]).catch(() => null);
-        // On success, mark the oldest unpaid earnings as paid so the next
-        // available-balance calculation reflects the withdrawal.
-        if (transfer.success && payoutRow?.rows?.[0]?.id) {
-            const payoutId = payoutRow.rows[0].id;
-            try {
-                const toPay = await (0, database_1.query)(`SELECT de.id, COALESCE(de.net_amount, 0)::float AS net FROM driver_earnings de
-           LEFT JOIN driver_earnings_paid dep ON dep.earning_id = de.id
-           WHERE de.driver_id = $1 AND dep.earning_id IS NULL
-           ORDER BY de.created_at ASC`, [user.id]);
-                let remaining = amountRands;
-                for (const e of toPay || []) {
-                    if (remaining <= 0)
-                        break;
-                    await (0, database_1.execute)(`INSERT INTO driver_earnings_paid (earning_id, payout_id) VALUES ($1, $2)
-             ON CONFLICT (earning_id) DO NOTHING`, [e.id, payoutId]).catch(() => undefined);
-                    remaining -= Math.min(Number(e.net) || 0, remaining);
-                }
-            }
-            catch (err) {
-                console.warn("Mark-paid earnings error:", err);
-            }
-            // ── Ledger debit: the successful cash-out reduces the wallet balance
-            // (idempotent per payout id — a retried success can't double-debit).
-            try {
-                const { recordPayoutDebit } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
-                await recordPayoutDebit(user.id, payoutId, amountRands);
-            }
-            catch (err) {
-                console.warn(`[wallet] payout debit failed payout=${payoutId}:`, err?.message || err);
-            }
+        // Record the payout BEFORE asking Paystack. A transfer webhook can arrive
+        // before the HTTP response returns; if the row did not exist yet, the
+        // event would be acknowledged and lost. The row starts pending and is
+        // subtracted from the available balance while it exists.
+        const insertedRow = await (0, database_1.execute)(`INSERT INTO payouts (driver_id, bank_code, account_number, bank_name, recipient_code, amount, reference, status, message)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 'Submitting to Paystack')
+       RETURNING id`, [user.id, bankCode, accountNumber, bankName || null, rc, amountRands, reference]);
+        const payoutId = insertedRow?.rows?.[0]?.id;
+        if (!payoutId) {
+            res.status(500).json({ error: "Could not record the withdrawal. Please try again." });
+            return;
         }
+        let transfer;
+        try {
+            transfer = await (0, paystackPayment_1.transferFunds)({
+                recipientCode: rc,
+                amountRands,
+                reference,
+                reason: "Vura driver cash-out",
+            });
+        }
+        catch (e) {
+            await (0, database_1.execute)(`UPDATE payouts SET status = 'failed', message = $2, updated_at = NOW() WHERE id = $1`, [payoutId, String(e?.message || "Paystack could not process the transfer")]).catch(() => { });
+            throw e;
+        }
+        const payoutStatus = transfer.status === "success" ? "success" : transfer.status === "pending" ? "pending" : "failed";
+        // Conditional update: the webhook may already have moved the row to a final
+        // state while the HTTP call was in flight. Never overwrite a final state.
+        await (0, database_1.execute)(`UPDATE payouts
+          SET status = $2,
+              transfer_code = COALESCE(NULLIF($3, ''), transfer_code),
+              message = $4,
+              updated_at = NOW()
+        WHERE id = $1 AND status = 'pending'`, [payoutId, payoutStatus, transfer.transferCode || "", transfer.message || null]).catch(() => { });
+        // Trust the row (and therefore the webhook) over the immediate API answer.
+        // Paystack can answer "pending" and fire transfer.success before this
+        // request even returns.
+        const current = await (0, database_1.queryOne)("SELECT status FROM payouts WHERE id = $1", [payoutId]).catch(() => null);
+        const effectiveStatus = String(current?.status || payoutStatus);
+        // Only a FINAL success debits the wallet. A pending transfer stays pending
+        // (and is subtracted from the available balance) until transfer.success /
+        // transfer.failed arrives; the webhook calls the same idempotent helper.
+        if (effectiveStatus === "success") {
+            await (0, payoutSettlement_1.markPayoutEarningsPaid)({
+                id: payoutId,
+                driver_id: user.id,
+                amount: amountRands,
+                status: "success",
+                reference,
+                transfer_code: transfer.transferCode || null,
+            });
+        }
+        const pending = effectiveStatus === "pending";
         res.json({
-            success: transfer.success,
+            success: effectiveStatus !== "failed",
+            pending,
+            status: effectiveStatus,
             reference: transfer.reference || reference,
             transferCode: transfer.transferCode,
-            message: transfer.message || (transfer.success ? "Withdrawal submitted." : "Withdrawal failed."),
+            message: transfer.message || (pending
+                ? "Withdrawal submitted — awaiting bank confirmation."
+                : effectiveStatus === "success"
+                    ? "Withdrawal submitted."
+                    : "Withdrawal failed."),
         });
     }
     catch (err) {
