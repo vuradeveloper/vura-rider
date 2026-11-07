@@ -120,6 +120,9 @@ async function probeS3() {
 async function paymentsDiag() {
     const out = {
         secretConfigured: Boolean(process.env.PAYSTACK_SECRET_LIVE || process.env.PAYSTACK_SECRET_KEY),
+        publicKeyConfigured: Boolean(process.env.PAYSTACK_PUBLIC_LIVE ||
+            process.env.PAYSTACK_PUBLIC_TEST ||
+            process.env.PAYSTACK_PUBLIC_KEY),
         webhookUrl: "https://api.ridevura.com/api/paystack/webhook",
     };
     try {
