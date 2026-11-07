@@ -78,6 +78,7 @@ const debugTrace_1 = __importDefault(require("./routes/debugTrace"));
 const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmin"));
 const vehicleImages_1 = require("./services/vehicleImages");
 const vehicleReview_1 = require("./services/vehicleReview");
+const duplicateDetection_1 = require("./services/duplicateDetection");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
@@ -178,6 +179,11 @@ app.use("/api", vehicleImagesAdmin_1.default);
 (0, vehicleReview_1.ensureVehicleReviewSchema)()
     .then(() => (0, vehicleReview_1.sweepVehicleClassification)())
     .catch((err) => console.error("[vehicleReview] schema ensure/classification failed:", err?.message || err));
+// Duplicate-account detection: normalised phone/ID columns, existing-account
+// sweep, and the admin queue. Additive; failures never stop the API booting.
+(0, duplicateDetection_1.ensureDuplicateSchema)()
+    .then(() => (0, duplicateDetection_1.sweepDuplicateUsers)())
+    .catch((err) => console.error("[duplicates] schema ensure/sweep failed:", err?.message || err));
 function safeRateLimit(name, options) {
     try {
         return (0, express_rate_limit_1.default)(options);

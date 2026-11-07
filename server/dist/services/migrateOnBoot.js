@@ -62,6 +62,7 @@ exports.MIGRATION_ORDER = [
     "023_backfill_categories.sql",
     "024_driver_break.sql",
     "025_vehicle_review.sql",
+    "026_duplicate_accounts.sql",
 ];
 /** Arbitrary app-wide advisory key — one constant so all boots serialise. */
 const ADVISORY_KEY = 726401001;

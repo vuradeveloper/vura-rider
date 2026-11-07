@@ -7,6 +7,8 @@ const accountDeletion_1 = require("../services/accountDeletion");
 const AffiliateService_1 = require("../services/AffiliateService");
 const firebase_1 = require("../config/firebase");
 const adminInvite_1 = require("../services/adminInvite");
+const duplicateDetection_1 = require("../services/duplicateDetection");
+const identity_1 = require("../lib/identity");
 const router = (0, express_1.Router)();
 // POST /api/users/forgot-password — the console's "Forgot password?".
 // Emails a Firebase set-password link (delivered via Resend). ALWAYS answers
@@ -38,7 +40,7 @@ router.post("/forgot-password", async (req, res) => {
 // POST /api/users/sync — Create or update user from Firebase auth
 router.post("/sync", auth_1.requireAuth, async (req, res) => {
     try {
-        const { role, phone, full_name, referralCode } = req.body;
+        const { role, phone, full_name, id_number, referralCode } = req.body;
         const firebaseUid = req.userId;
         const existing = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
         if (existing) {
@@ -75,6 +77,11 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
                 params.push(full_name);
                 idx++;
             }
+            if (id_number !== undefined) {
+                updates.push(`id_number = $${idx}`);
+                params.push(id_number);
+                idx++;
+            }
             if (req.user?.email) {
                 updates.push(`email = $${idx}`);
                 params.push(req.user.email);
@@ -86,6 +93,26 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
                 await (0, database_1.execute)(`UPDATE users SET ${updates.join(", ")} WHERE firebase_uid = $${idx}`, params);
             }
             const user = await (0, database_1.queryOne)("SELECT id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name, created_at FROM users WHERE firebase_uid = $1", [firebaseUid]);
+            // Keep the searchable normalised columns current, then flag (but never
+            // block) an existing account that now shares a phone/ID/email. A login
+            // must always succeed; the admin decides what to do with the duplicate.
+            let duplicateFlagged = false;
+            if (user?.id) {
+                await (0, database_1.execute)(`UPDATE users SET phone_normalized = $2, id_number_normalized = $3 WHERE id = $1`, [
+                    user.id,
+                    (0, identity_1.normalisePhone)(user.phone) || null,
+                    (0, identity_1.normaliseIdNumber)(user.id_number) || null,
+                ]).catch(() => { });
+                const matches = await (0, duplicateDetection_1.findDuplicateMatches)({
+                    userId: user.id,
+                    phone: user.phone,
+                    idNumber: user.id_number,
+                    email: user.email,
+                }).catch(() => []);
+                if (matches.length > 0) {
+                    duplicateFlagged = await (0, duplicateDetection_1.markUserDuplicate)(user.id, matches[0]).catch(() => false);
+                }
+            }
             // Existing user may have picked up a referral code since their first login
             // (e.g. tapped an invite link after registering). Claim it now — the claim
             // is idempotent, so it's a safe no-op if they've already been referred.
@@ -98,12 +125,48 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
                     console.warn("Referral claim skipped:", err.message);
                 }
             }
-            res.json({ user });
+            res.json({ user, duplicate_flagged: duplicateFlagged });
         }
         else {
-            const user = await (0, database_1.queryOne)(`INSERT INTO users (firebase_uid, full_name, email, phone, role, profile_photo_url)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name, created_at`, [firebaseUid, full_name || req.user?.name || "Rider", req.user?.email || null, phone || null, role || "passenger", req.user?.picture || null]);
+            // A new account may not reuse a phone number or ID number. This is the
+            // strong signal; an email typo alone is queued for review instead.
+            const matches = await (0, duplicateDetection_1.findDuplicateMatches)({
+                phone,
+                idNumber: id_number,
+                email: req.user?.email,
+            }).catch(() => []);
+            const strong = matches.find((m) => m.kind === "phone" || m.kind === "id");
+            if (strong) {
+                res.status(409).json({
+                    error: "This phone number or ID number is already linked to another Vura account. " +
+                        "Sign in with that account, or contact support if you no longer have access to it.",
+                    code: "DUPLICATE_ACCOUNT",
+                    duplicate_kind: strong.kind,
+                });
+                return;
+            }
+            const user = await (0, database_1.queryOne)(`INSERT INTO users (firebase_uid, full_name, email, phone, id_number, role, profile_photo_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name, created_at`, [
+                firebaseUid,
+                full_name || req.user?.name || "Rider",
+                req.user?.email || null,
+                phone || null,
+                id_number || null,
+                role || "passenger",
+                req.user?.picture || null,
+            ]);
+            let duplicateFlagged = false;
+            if (user?.id) {
+                await (0, database_1.execute)(`UPDATE users SET phone_normalized = $2, id_number_normalized = $3 WHERE id = $1`, [
+                    user.id,
+                    (0, identity_1.normalisePhone)(user.phone) || null,
+                    (0, identity_1.normaliseIdNumber)(user.id_number) || null,
+                ]).catch(() => { });
+                if (matches.length > 0) {
+                    duplicateFlagged = await (0, duplicateDetection_1.markUserDuplicate)(user.id, matches[0]).catch(() => false);
+                }
+            }
             if (user?.id && referralCode) {
                 try {
                     await (0, AffiliateService_1.ensureAffiliateTables)();
@@ -113,7 +176,7 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
                     console.warn("Referral claim skipped:", err.message);
                 }
             }
-            res.status(201).json({ user });
+            res.status(201).json({ user, duplicate_flagged: duplicateFlagged });
         }
     }
     catch (err) {
@@ -124,7 +187,7 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
 // PUT /api/users/profile — Update user profile
 router.put("/profile", auth_1.requireAuth, async (req, res) => {
     try {
-        const { full_name, email, phone } = req.body;
+        const { full_name, email, phone, id_number } = req.body;
         const firebaseUid = req.userId;
         const updates = [];
         const params = [];
@@ -144,11 +207,33 @@ router.put("/profile", auth_1.requireAuth, async (req, res) => {
             params.push(phone);
             idx++;
         }
+        if (id_number !== undefined) {
+            updates.push(`id_number = $${idx}`);
+            params.push(id_number);
+            idx++;
+        }
         updates.push(`updated_at = NOW()`);
         params.push(firebaseUid);
         await (0, database_1.execute)(`UPDATE users SET ${updates.join(", ")} WHERE firebase_uid = $${idx}`, params);
         const updated = await (0, database_1.queryOne)("SELECT id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name FROM users WHERE firebase_uid = $1", [firebaseUid]);
-        res.json({ user: updated });
+        let duplicateFlagged = false;
+        if (updated?.id) {
+            await (0, database_1.execute)(`UPDATE users SET phone_normalized = $2, id_number_normalized = $3 WHERE id = $1`, [
+                updated.id,
+                (0, identity_1.normalisePhone)(updated.phone) || null,
+                (0, identity_1.normaliseIdNumber)(updated.id_number) || null,
+            ]).catch(() => { });
+            const matches = await (0, duplicateDetection_1.findDuplicateMatches)({
+                userId: updated.id,
+                phone: updated.phone,
+                idNumber: updated.id_number,
+                email: updated.email,
+            }).catch(() => []);
+            if (matches.length > 0) {
+                duplicateFlagged = await (0, duplicateDetection_1.markUserDuplicate)(updated.id, matches[0]).catch(() => false);
+            }
+        }
+        res.json({ user: updated, duplicate_flagged: duplicateFlagged });
     }
     catch (err) {
         console.error("Profile update error:", err);

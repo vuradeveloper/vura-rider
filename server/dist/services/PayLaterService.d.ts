@@ -288,7 +288,7 @@ export declare function payRideWithPayLater(dbUserId: string, rideId: string): P
     account?: undefined;
 } | {
     success: boolean;
-    status: "pending" | "confirmed";
+    status: "confirmed" | "pending";
     reference: string;
     amount_paid: number;
     message: string | undefined;

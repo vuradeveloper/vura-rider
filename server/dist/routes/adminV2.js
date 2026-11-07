@@ -23,6 +23,7 @@ const push_1 = require("../services/push");
 const adminTrips_1 = require("../services/adminTrips");
 const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
+const identity_1 = require("../lib/identity");
 const adminMessaging_1 = require("../services/adminMessaging");
 const featureFlags_1 = require("../services/featureFlags");
 const adminDocReview_1 = require("../services/adminDocReview");
@@ -33,6 +34,7 @@ const adminMoney_1 = require("../services/adminMoney");
 const adminVehicleDb_1 = require("../services/adminVehicleDb");
 const vehicleImages_1 = require("../services/vehicleImages");
 const vehicleReview_1 = require("../services/vehicleReview");
+const duplicateDetection_1 = require("../services/duplicateDetection");
 /** sendError, but respects err.status (503 missing key, 429 quota, 502 provider). */
 function sendCarDbError(res, err) {
     if (err?.status && Number.isInteger(err.status)) {
@@ -664,6 +666,50 @@ router.get("/vehicles/:id/audit", (0, adminAuth_1.requireAdmin)("drivers.read"),
           ORDER BY created_at DESC
           LIMIT 30`, [driverId]);
         res.json({ audit: rows });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/duplicates - accounts sharing a phone, ID or near-identical
+// email. Both sides are masked in the list; the driver profile reveals raw data.
+router.get("/duplicates", (0, adminAuth_1.requireAdmin)("drivers.read"), async (_req, res) => {
+    try {
+        const rows = await (0, duplicateDetection_1.listDuplicateFlags)();
+        res.json({
+            duplicates: rows.map((r) => ({
+                ...r,
+                email: r.email ? (0, identity_1.maskEmail)(r.email) : null,
+                phone: r.phone ? (0, format_1.maskPhone)(r.phone) : null,
+                match_email: r.match_email ? (0, identity_1.maskEmail)(r.match_email) : null,
+                match_phone: r.match_phone ? (0, format_1.maskPhone)(r.match_phone) : null,
+            })),
+        });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/duplicates/:id/resolve - clear or confirm one flag.
+router.post("/duplicates/:id/resolve", (0, adminAuth_1.requireAdmin)("drivers.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const resolution = String(req.body?.resolution || "");
+        if (resolution !== "cleared" && resolution !== "confirmed") {
+            res.status(400).json({ error: "resolution must be cleared or confirmed" });
+            return;
+        }
+        const note = req.body?.note ? String(req.body.note) : undefined;
+        const out = await (0, duplicateDetection_1.resolveDuplicate)(String(req.params.id), resolution, actor, note);
+        if (!out) {
+            res.status(404).json({ error: "Account not found" });
+            return;
+        }
+        res.json({ ok: true, duplicate: out });
     }
     catch (err) {
         sendError(res, err);
