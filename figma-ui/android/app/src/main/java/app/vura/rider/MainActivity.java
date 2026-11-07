@@ -8,6 +8,9 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Register before super.onCreate so the plugin is part of the bridge.
+        registerPlugin(PaystackNativePlugin.class);
+
         super.onCreate(savedInstanceState);
 
         // Paystack Inline runs inside this WebView and uses its own cookies on
