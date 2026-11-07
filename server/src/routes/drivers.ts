@@ -334,6 +334,9 @@ router.get("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
       [req.userId!]
     );
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    // A break that has elapsed must not leave status='break' forever: dispatch
+    // filters on status='available', so lazily restore it before reporting.
+    await expireBreak(user.id).catch(() => {});
     const profile = await queryOne(
       "SELECT * FROM driver_profiles WHERE user_id = $1",
       [user.id]

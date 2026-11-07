@@ -241,6 +241,19 @@ export function startCreditReconciler(): void {
   void ensureBreakColumn();
   const intervalMs = envInt("CREDIT_RECONCILE_INTERVAL_MS", DEFAULT_INTERVAL_MS, 60_000);
 
+  const expireBreaks = async () => {
+    try {
+      await execute(
+        `UPDATE driver_profiles
+            SET status = 'available', break_until = NULL, updated_at = NOW()
+          WHERE status = 'break'
+            AND break_until IS NOT NULL AND break_until < NOW()`
+      );
+    } catch (e: any) {
+      console.warn("[break] expiry sweep failed:", e?.message || e);
+    }
+  };
+
   const tick = async () => {
     if (running) return; // never overlap two passes
     running = true;
@@ -248,10 +261,19 @@ export function startCreditReconciler(): void {
       await reconcileOnce();
     } catch (e: any) {
       console.warn("[reconcile] pass failed:", e?.message || e);
-    } finally {
-      running = false;
     }
+    // Break mode: a driver whose timer expired must go back into dispatch even
+    // if their app was killed or frozen in the background. Lazy expiry on the
+    // profile read covers the app path; this covers the server path.
+    await expireBreaks();
+    running = false;
   };
+
+  // Breaks are 15/30/45 minutes: sweep them every minute so a 15-minute break
+  // cannot linger until the 10-minute credit pass. The credit pass still calls
+  // it, harmlessly.
+  setTimeout(() => { void expireBreaks(); }, 30_000);
+  setInterval(() => { void expireBreaks(); }, 60_000).unref?.();
 
   // Catch up shortly after boot (the deploy that fixes a stuck receipt should
   // settle it without waiting a full interval).

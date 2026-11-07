@@ -1152,7 +1152,16 @@ export function setupSocketHandlers(io: SocketIOServer) {
                     status = CASE
                       WHEN $1 = FALSE THEN 'offline'
                       WHEN COALESCE(status, 'offline') = 'on_trip' THEN 'on_trip'
+                      WHEN COALESCE(status, 'offline') = 'break'
+                           AND break_until IS NOT NULL AND break_until > NOW() THEN 'break'
                       ELSE 'available'
+                    END,
+                    break_until = CASE
+                      WHEN $1 = TRUE
+                           AND COALESCE(status, 'offline') = 'break'
+                           AND break_until IS NOT NULL AND break_until > NOW()
+                        THEN break_until
+                      ELSE NULL
                     END,
                     last_heartbeat_at = NOW(),
                     updated_at = NOW()
