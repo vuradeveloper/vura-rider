@@ -54,6 +54,7 @@ export const MIGRATION_ORDER = [
   "023_backfill_categories.sql",
   "024_driver_break.sql",
   "025_vehicle_review.sql",
+  "026_duplicate_accounts.sql",
 ] as const;
 
 export type MigrationOutcome = "applied" | "skipped" | "failed";

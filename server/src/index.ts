@@ -41,6 +41,7 @@ import debugTraceRouter from "./routes/debugTrace";
 import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import { ensureVehicleReviewSchema, sweepVehicleClassification } from "./services/vehicleReview";
+import { ensureDuplicateSchema, sweepDuplicateUsers } from "./services/duplicateDetection";
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
 import safetyAdminRouter from "./routes/safetyAdmin";
@@ -164,6 +165,14 @@ ensureVehicleReviewSchema()
   .then(() => sweepVehicleClassification())
   .catch((err) =>
     console.error("[vehicleReview] schema ensure/classification failed:", err?.message || err)
+  );
+
+// Duplicate-account detection: normalised phone/ID columns, existing-account
+// sweep, and the admin queue. Additive; failures never stop the API booting.
+ensureDuplicateSchema()
+  .then(() => sweepDuplicateUsers())
+  .catch((err) =>
+    console.error("[duplicates] schema ensure/sweep failed:", err?.message || err)
   );
 
 // Rate limiting — generous limits so the driver's high-frequency polling (1s

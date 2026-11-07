@@ -57,6 +57,7 @@ import {
   moderateRider,
 } from "../services/adminRiders";
 import { maskPhone } from "../lib/format";
+import { maskEmail } from "../lib/identity";
 import {
   CAMPAIGN_AUDIENCES,
   createCampaign,
@@ -96,6 +97,7 @@ import {
   setVehicleDocExpiry,
   setVehicleSuspended,
 } from "../services/vehicleReview";
+import { listDuplicateFlags, resolveDuplicate } from "../services/duplicateDetection";
 
 /** sendError, but respects err.status (503 missing key, 429 quota, 502 provider). */
 function sendCarDbError(res: Response, err: any) {
@@ -764,6 +766,48 @@ router.get(
         [driverId]
       );
       res.json({ audit: rows });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
+// GET /api/admin/v2/duplicates - accounts sharing a phone, ID or near-identical
+// email. Both sides are masked in the list; the driver profile reveals raw data.
+router.get("/duplicates", requireAdmin("drivers.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    const rows = await listDuplicateFlags();
+    res.json({
+      duplicates: rows.map((r) => ({
+        ...r,
+        email: r.email ? maskEmail(r.email) : null,
+        phone: r.phone ? maskPhone(r.phone) : null,
+        match_email: r.match_email ? maskEmail(r.match_email) : null,
+        match_phone: r.match_phone ? maskPhone(r.match_phone) : null,
+      })),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/duplicates/:id/resolve - clear or confirm one flag.
+router.post(
+  "/duplicates/:id/resolve",
+  requireAdmin("drivers.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      const resolution = String(req.body?.resolution || "");
+      if (resolution !== "cleared" && resolution !== "confirmed") {
+        res.status(400).json({ error: "resolution must be cleared or confirmed" });
+        return;
+      }
+      const note = req.body?.note ? String(req.body.note) : undefined;
+      const out = await resolveDuplicate(String(req.params.id), resolution, actor, note);
+      if (!out) { res.status(404).json({ error: "Account not found" }); return; }
+      res.json({ ok: true, duplicate: out });
     } catch (err) {
       sendError(res, err);
     }
