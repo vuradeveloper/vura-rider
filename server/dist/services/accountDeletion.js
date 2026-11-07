@@ -144,6 +144,13 @@ async function deleteAccountData(userId) {
         await deleteStep(client, "DELETE FROM emergency_contacts WHERE user_id = $1", [userId]);
         // 4. Keep shared/audit records but cut the link to the person. Support
         //    tickets use ON DELETE SET NULL and are handled by Postgres below.
+        await deleteStep(client, `DELETE FROM live_chat_messages
+        WHERE chat_id IN (
+          SELECT id FROM live_chats
+           WHERE rider_id = $1 OR LOWER(rider_email) = LOWER((SELECT email FROM users WHERE id = $1))
+        )`, [userId]);
+        await deleteStep(client, `DELETE FROM live_chats
+        WHERE rider_id = $1 OR LOWER(rider_email) = LOWER((SELECT email FROM users WHERE id = $1))`, [userId]);
         await deleteStep(client, "UPDATE community_places SET created_by = NULL WHERE created_by = $1", [userId]);
         await deleteStep(client, "UPDATE sos_alerts SET triggered_by = NULL WHERE triggered_by = $1", [userId]);
         await deleteStep(client, "UPDATE notifications_log SET user_id = NULL WHERE user_id = $1", [userId]);
