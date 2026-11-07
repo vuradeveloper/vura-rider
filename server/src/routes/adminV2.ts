@@ -97,7 +97,11 @@ import {
   setVehicleDocExpiry,
   setVehicleSuspended,
 } from "../services/vehicleReview";
-import { listDuplicateFlags, resolveDuplicate } from "../services/duplicateDetection";
+import {
+  listDuplicateFlags,
+  resolveDuplicate,
+  sweepDuplicateUsers,
+} from "../services/duplicateDetection";
 
 /** sendError, but respects err.status (503 missing key, 429 quota, 502 provider). */
 function sendCarDbError(res: Response, err: any) {
@@ -790,6 +794,21 @@ router.get("/duplicates", requireAdmin("drivers.read"), async (_req: AuthRequest
     sendError(res, err);
   }
 });
+
+// POST /api/admin/v2/duplicates/sweep - re-run detection now. The boot sweep
+// normally does this; the button is for "I just fixed/changed an account".
+router.post(
+  "/duplicates/sweep",
+  requireAdmin("drivers.write"),
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const flagged = await sweepDuplicateUsers();
+      res.json({ ok: true, flagged });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
 
 // POST /api/admin/v2/duplicates/:id/resolve - clear or confirm one flag.
 router.post(
