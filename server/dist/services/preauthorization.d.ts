@@ -4,7 +4,7 @@ export declare const RIDE_PAYMENT_STATUSES: readonly RidePaymentStatus[];
 export declare function normalizePaymentStatus(raw: unknown): RidePaymentStatus;
 /** Typed failure so routes map onto honest HTTP statuses in one catch. */
 export declare class PreauthError extends Error {
-    code: "ride_not_found" | "not_owner" | "no_fare" | "not_configured" | "hold_failed" | "no_hold" | "hold_incomplete" | "hold_released" | "capture_exceeds_hold" | "capture_failed" | "release_failed";
+    code: "ride_not_found" | "not_owner" | "no_fare" | "not_configured" | "hold_failed" | "no_hold" | "hold_incomplete" | "hold_released" | "capture_exceeds_hold" | "capture_failed" | "split_payment_processing" | "release_failed";
     httpStatus: number;
     constructor(code: PreauthError["code"], message: string, httpStatus: number);
 }

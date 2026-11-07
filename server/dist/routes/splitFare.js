@@ -2,90 +2,106 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
-const database_1 = require("../config/database");
+const splitFareService_1 = require("../services/splitFareService");
 const router = (0, express_1.Router)();
-// Ensure table exists
-async function ensureTable() {
-    await (0, database_1.execute)(`
-    CREATE TABLE IF NOT EXISTS split_fares (
-      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-      ride_id UUID REFERENCES rides(id),
-      inviter_id UUID NOT NULL REFERENCES users(id),
-      invitee_id UUID REFERENCES users(id),
-      invitee_email VARCHAR(255) NOT NULL,
-      amount DECIMAL(10,2) NOT NULL,
-      status VARCHAR(20) DEFAULT 'pending',
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+function fail(res, err) {
+    if (err instanceof splitFareService_1.SplitError) {
+        res.status(err.httpStatus).json({ error: err.message, code: err.code });
+        return;
+    }
+    res.status(500).json({ error: err?.message || "Split fare failed." });
 }
-// POST /api/split/invite — Invite to split
+// POST /api/split/invite — invite one co-rider to share this ride.
+// body: { rideId, inviteeEmail, shareCount }  (shareCount = TOTAL riders, 2–4)
 router.post("/invite", auth_1.requireAuth, async (req, res) => {
     try {
-        await ensureTable();
-        const firebaseUid = req.userId;
-        const { rideId, inviteeEmail, amount } = req.body;
-        const user = await (0, database_1.queryOne)("SELECT id, full_name, email FROM users WHERE firebase_uid = $1", [firebaseUid]);
-        if (!user) {
-            res.status(404).json({ error: "User not found" });
-            return;
-        }
-        const split = await (0, database_1.queryOne)(`INSERT INTO split_fares (ride_id, inviter_id, invitee_email, amount) VALUES ($1, $2, $3, $4)
-       RETURNING id, ride_id, inviter_id, invitee_email, amount, status, created_at`, [rideId, user.id, inviteeEmail, amount]);
+        const split = await (0, splitFareService_1.createSplitInvite)({
+            firebaseUid: req.userId,
+            rideId: String(req.body?.rideId || ""),
+            inviteeEmail: String(req.body?.inviteeEmail || ""),
+            shareCount: Number(req.body?.shareCount || 2),
+        });
         res.status(201).json(split);
     }
     catch (err) {
-        res.status(500).json({ error: err.message });
+        fail(res, err);
     }
 });
-// POST /api/split/respond — Accept or decline
-router.post("/respond", auth_1.requireAuth, async (req, res) => {
-    try {
-        const firebaseUid = req.userId;
-        const { splitId, accept } = req.body;
-        const user = await (0, database_1.queryOne)("SELECT id, email FROM users WHERE firebase_uid = $1", [firebaseUid]);
-        if (!user) {
-            res.status(404).json({ error: "User not found" });
-            return;
-        }
-        const status = accept ? "accepted" : "declined";
-        await (0, database_1.execute)(`UPDATE split_fares SET status = $1, invitee_id = $2, updated_at = NOW() WHERE id = $3 AND invitee_email = $4`, [status, user.id, splitId, user.email]);
-        res.json({ success: true, status });
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// GET /api/split/status — Get split status for a ride
-router.get("/status", auth_1.requireAuth, async (req, res) => {
-    try {
-        const { rideId } = req.query;
-        const splits = await (0, database_1.query)(`SELECT sf.*, u.full_name AS inviter_name, u.email AS inviter_email
-       FROM split_fares sf LEFT JOIN users u ON u.id = sf.inviter_id
-       WHERE sf.ride_id = $1 ORDER BY sf.created_at DESC`, [rideId]);
-        res.json({ splits });
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// GET /api/split/pending — Get pending invites
+// GET /api/split/pending — open invites for the signed-in rider (Home banner).
 router.get("/pending", auth_1.requireAuth, async (req, res) => {
     try {
-        const firebaseUid = req.userId;
-        const user = await (0, database_1.queryOne)("SELECT id, email FROM users WHERE firebase_uid = $1", [firebaseUid]);
-        if (!user) {
-            res.json({ splits: [] });
-            return;
-        }
-        const splits = await (0, database_1.query)(`SELECT sf.*, u.full_name AS inviter_name, u.email AS inviter_email
-       FROM split_fares sf LEFT JOIN users u ON u.id = sf.inviter_id
-       WHERE sf.invitee_email = $1 AND sf.status = 'pending' ORDER BY sf.created_at DESC`, [user.email]);
+        const splits = await (0, splitFareService_1.listPendingInvites)(req.userId);
         res.json({ splits });
     }
     catch (err) {
-        res.status(500).json({ error: err.message });
+        fail(res, err);
+    }
+});
+// GET /api/split/ride/:rideId — all shares on one ride (booking rider only).
+router.get("/ride/:rideId", auth_1.requireAuth, async (req, res) => {
+    try {
+        const splits = await (0, splitFareService_1.listRideSplits)(req.userId, String(req.params.rideId));
+        res.json({ splits });
+    }
+    catch (err) {
+        fail(res, err);
+    }
+});
+// POST /api/split/:id/pay — co-rider pays their share from their saved card.
+router.post("/:id/pay", auth_1.requireAuth, async (req, res) => {
+    try {
+        const result = await (0, splitFareService_1.paySplit)({
+            firebaseUid: req.userId,
+            splitId: String(req.params.id),
+        });
+        res.json(result);
+    }
+    catch (err) {
+        fail(res, err);
+    }
+});
+// POST /api/split/:id/decline — co-rider declines; the booking rider covers.
+router.post("/:id/decline", auth_1.requireAuth, async (req, res) => {
+    try {
+        const result = await (0, splitFareService_1.declineSplit)({
+            firebaseUid: req.userId,
+            splitId: String(req.params.id),
+        });
+        res.json(result);
+    }
+    catch (err) {
+        fail(res, err);
+    }
+});
+// Legacy endpoint kept for older builds. Accepting without paying is refused —
+// money must land before the share counts.
+router.post("/respond", auth_1.requireAuth, async (req, res) => {
+    try {
+        if (req.body?.accept) {
+            res.status(400).json({
+                error: "Paying the share is what accepts it. Open the invite and pay.",
+                code: "payment_required",
+            });
+            return;
+        }
+        const result = await (0, splitFareService_1.declineSplit)({
+            firebaseUid: req.userId,
+            splitId: String(req.body?.splitId || ""),
+        });
+        res.json(result);
+    }
+    catch (err) {
+        fail(res, err);
+    }
+});
+// Legacy status endpoint (older builds) — now delegates to the ride listing.
+router.get("/status", auth_1.requireAuth, async (req, res) => {
+    try {
+        const splits = await (0, splitFareService_1.listRideSplits)(req.userId, String(req.query.rideId || ""));
+        res.json({ splits });
+    }
+    catch (err) {
+        fail(res, err);
     }
 });
 exports.default = router;

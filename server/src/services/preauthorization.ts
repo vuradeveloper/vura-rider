@@ -48,6 +48,12 @@ import {
   isPaystackConfigured,
 } from "./paystackPayment";
 import { query, queryOne, execute } from "../config/database";
+import {
+  paidSplitTotalRands,
+  primaryRemainderRands,
+  refundRideSplits,
+  waitForPayingSplits,
+} from "./splitFareService";
 
 // ── Status enum ───────────────────────────────────────────────────────────────
 
@@ -104,6 +110,7 @@ export class PreauthError extends Error {
     | "hold_released"
     | "capture_exceeds_hold"
     | "capture_failed"
+    | "split_payment_processing"
     | "release_failed";
   httpStatus: number;
   constructor(code: PreauthError["code"], message: string, httpStatus: number) {
@@ -405,6 +412,7 @@ export interface RideHoldResult {
 interface RideHoldRow {
   id: string;
   passenger_id: string | null;
+  driver_id: string | null;
   payment_method: string | null;
   status: string;
   estimated_fare: number | string | null;
@@ -423,7 +431,7 @@ const HOLD_CLAIMABLE = `COALESCE(NULLIF(payment_status, ''), 'NONE')
 async function loadRide(rideId: string): Promise<RideHoldRow | null> {
   await ensurePreauthSchema();
   return await queryOne<RideHoldRow>(
-    `SELECT id, passenger_id, payment_method, status,
+    `SELECT id, passenger_id, driver_id, payment_method, status,
             estimated_fare, actual_fare, payment_status,
             preauth_reference, hold_checkout_url, hold_expires_at,
             hold_amount_cents, captured_amount
@@ -640,14 +648,57 @@ export async function captureRideHold(
     );
   }
 
-  const fareRands =
+  const grossFareRands =
     Number(opts.amountRands) > 0
       ? Number(opts.amountRands)
       : Number(ride.actual_fare) > 0
         ? Number(ride.actual_fare)
         : Number(ride.estimated_fare || 0);
+
+  // Split fare: co-riders pay their shares directly as separate Paystack
+  // charges before the trip ends. Capture only what the booking rider still
+  // owes. With no splits this is 0 and the flow is byte-for-byte the same as
+  // before. An explicit amountRands (if ever passed) means "capture exactly
+  // this" and is left alone.
+  let splitPaidRands = 0;
+  if (!(Number(opts.amountRands) > 0)) {
+    // Never capture while a co-rider's share is mid-charge: that share could
+    // otherwise be collected twice (from their card and from this hold).
+    const stillPaying = await waitForPayingSplits(ride.id, 30000);
+    if (stillPaying > 0) {
+      throw new PreauthError(
+        "split_payment_processing",
+        "A co-rider's share is still being confirmed. The fare capture will retry.",
+        409
+      );
+    }
+    splitPaidRands = await paidSplitTotalRands(ride.id).catch(() => 0);
+  }
+  const fareRands = primaryRemainderRands(grossFareRands, splitPaidRands);
   const cents = captureAmountCents(fareRands);
   if (!Number.isFinite(cents) || cents <= 0) {
+    if (splitPaidRands > 0) {
+      // The whole fare was already collected from co-riders: free the hold and
+      // mark the ride paid. The driver's pending wallet credit is confirmed
+      // once the completion hook has written it (it runs just after this call).
+      const zeroClaim = await execute(
+        `UPDATE rides
+            SET payment_status = 'PAID', paid_at = NOW(), captured_amount = 0, updated_at = NOW()
+          WHERE id = $1 AND payment_status = 'HOLD_ACTIVE'`,
+        [ride.id]
+      );
+      if ((zeroClaim?.rowCount ?? 0) > 0) {
+        releasePreauthorization({ reference: ride.preauth_reference }).catch(() => {});
+        setTimeout(() => {
+          void import("./walletService")
+            .then(({ confirmCardRideCredit }) =>
+              confirmCardRideCredit(ride.driver_id ?? "", ride.id, null)
+            )
+            .catch(() => {});
+        }, 5000);
+      }
+      return { paymentStatus: "PAID", captured: false, capturedAmount: 0 };
+    }
     throw new PreauthError(
       "no_fare",
       "This ride has no final fare to capture.",
@@ -808,6 +859,13 @@ export async function releaseRideHold(
       );
     }
   }
+
+  // Split fare: co-riders prepaid shares for a ride that is now dead — refund
+  // them exactly once. Fire-and-forget so a provider hiccup cannot turn a
+  // successful cancellation into an error.
+  void refundRideSplits(ride.id).catch((e) => {
+    console.warn(`[split] refund sweep ride=${ride.id}:`, e?.message || e);
+  });
 
   const after = await loadRide(ride.id);
   const st = normalizePaymentStatus(after?.payment_status);
