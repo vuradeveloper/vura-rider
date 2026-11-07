@@ -7,8 +7,10 @@ import {
   chargeAuthorization,
   refundTransaction,
   paymentsMode,
+  paystackConfig,
   PaystackVerifyResult,
 } from "../services/paystackPayment";
+import { initializePreauthorization } from "../services/preauthorization";
 import { ensurePayoutsTable } from "./payouts";
 
 const router = Router();
@@ -151,9 +153,17 @@ router.delete("/methods/:id", requireAuth, async (req: AuthRequest, res: Respons
   }
 });
 
-// POST /api/payments/card-register — Start a Paystack card registration.
-// Uses a R1.00 auth (the minimum Paystack accepts) which is immediately
-// refunded on success. The card is tokenised for future ride payments.
+// POST /api/payments/card-register - Start a Paystack card registration.
+//
+// WHY A PREAUTHORIZATION, NOT A CHARGE: adding a card used to charge R1.00 and
+// refund it. Refunds are not instant (the rider saw "R1 taken" for days) and a
+// failed return left the card unsaved. Paystack's card-verification flow can
+// instead HOLD the minimum (R5.00 for ZA), tokenise the card, and release the
+// hold immediately - no money leaves the account, only a temporary hold.
+//
+// The app opens the returned authorization_url and polls GET /verify. The
+// webhook (preauthorization.reserve.success) stores the card and releases the
+// hold even if the rider closes the app before returning.
 router.post("/card-register", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
@@ -162,11 +172,66 @@ router.post("/card-register", requireAuth, async (req: AuthRequest, res: Respons
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
 
-    const amount = 1.0;
-
+    // Paystack's live ZAR preauthorization floor is R5.00. It is only a hold
+    // and is released as soon as the card is tokenised.
+    const amount = 5.0;
     const reference =
       `VURACARD${Date.now().toString(36).toUpperCase()}` +
       `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+    try {
+      await ensurePaymentsTable();
+      await execute(
+        `INSERT INTO payments (user_id, ride_id, reference, amount, currency, status, provider)
+         VALUES ($1, NULL, $2, $3, 'ZAR', 'hold_pending', 'paystack')`,
+        [user.id, reference, amount]
+      );
+    } catch (e) { /* logging/table issues shouldn't block the payment */ }
+
+    const result = await initializePreauthorization({
+      email: user.email,
+      amountRands: amount,
+      reference,
+      expireAction: "release",
+      callbackUrl: paystackConfig().callbackUrl,
+    });
+
+    try {
+      await execute(
+        `UPDATE payments SET authorization_url = $1, updated_at = NOW() WHERE reference = $2`,
+        [result.authorizationUrl, reference]
+      );
+    } catch (e) { /* best-effort */ }
+
+    res.json({
+      reference: result.reference,
+      authorizationUrl: result.authorizationUrl,
+      amountRands: amount,
+      hold: true,
+    });
+  } catch (err: any) {
+    console.error("Card register error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/payments/card-intent - reference + public key for Paystack Inline.
+//
+// This is the IN-APP card form: the rider never leaves Vura; Paystack's own
+// modal collects the card. The R1 verification charge is refunded by /verify or
+// the charge.success webhook (whichever arrives first).
+router.post("/card-intent", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = await queryOne<{ id: string; email: string }>(
+      "SELECT id, email FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) { res.status(401).json({ error: "User not found" }); return; }
+
+    const reference =
+      `VURAADD${Date.now().toString(36).toUpperCase()}` +
+      `${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const amount = 1.0;
 
     try {
       await ensurePaymentsTable();
@@ -177,25 +242,21 @@ router.post("/card-register", requireAuth, async (req: AuthRequest, res: Respons
       );
     } catch (e) { /* logging/table issues shouldn't block the payment */ }
 
-    const result = await initializeTransaction({
-      amountRands: amount,
+    const mode = paymentsMode();
+    const publicKey =
+      mode === "live"
+        ? process.env.PAYSTACK_PUBLIC_LIVE || process.env.PAYSTACK_PUBLIC_KEY || ""
+        : process.env.PAYSTACK_PUBLIC_TEST || process.env.PAYSTACK_PUBLIC_KEY || "";
+
+    res.json({
       reference,
+      publicKey,
       email: user.email,
+      amountRands: amount,
+      mode,
     });
-
-    // Persist the checkout URL so /verify can hand it back to the app while the
-    // transaction is still pending 3-D Secure (Paystack's `authorization_url`
-    // is resumable — e.g. checkout.paystack.com/resume/{access_code}).
-    try {
-      await execute(
-        `UPDATE payments SET authorization_url = $1, updated_at = NOW() WHERE reference = $2`,
-        [result.authorizationUrl, reference]
-      );
-    } catch (e) { /* best-effort */ }
-
-    res.json({ ...result, reference });
   } catch (err: any) {
-    console.error("Card register error:", err);
+    console.error("Card intent error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -425,12 +486,37 @@ router.get("/verify", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const payment = await queryOne<{ status: string; authorization_url: string | null }>(
-      "SELECT status, authorization_url FROM payments WHERE reference = $1 LIMIT 1",
+    const payment = await queryOne<{
+      status: string;
+      authorization_url: string | null;
+      ride_id: string | null;
+    }>(
+      "SELECT status, authorization_url, ride_id FROM payments WHERE reference = $1 LIMIT 1",
       [reference]
     );
     if (!payment) {
       res.json({ status: "pending", reference });
+      return;
+    }
+
+    // Card registration now uses a preauthorization hold, not a Paystack
+    // transaction. The webhook sets card_saved (or failed); this endpoint only
+    // reports that state to the app's poll.
+    if (payment.ride_id === null && String(reference).toUpperCase().startsWith("VURACARD")) {
+      if (["card_saved", "completed", "released", "refunded"].includes(String(payment.status))) {
+        res.json({ status: "completed", success: true, reference, cardSaved: true });
+        return;
+      }
+      if (String(payment.status) === "failed") {
+        res.json({ status: "failed", success: false, reference, cardSaved: false });
+        return;
+      }
+      res.json({
+        status: "pending",
+        pending: true,
+        reference,
+        authorizationUrl: payment.authorization_url || null,
+      });
       return;
     }
 
@@ -446,22 +532,32 @@ router.get("/verify", async (req: AuthRequest, res: Response) => {
   const payStatus = String(verified?.status || "").toLowerCase();
 
   if (payStatus === "success") {
-    const rec = await queryOne<{ user_id: string; ride_id: string | null; amount: string }>(
-      "SELECT user_id, ride_id, amount FROM payments WHERE reference = $1",
+    const rec = await queryOne<{
+      user_id: string;
+      ride_id: string | null;
+      amount: string;
+      status: string;
+    }>(
+      "SELECT user_id, ride_id, amount, status FROM payments WHERE reference = $1",
       [reference]
     ).catch(() => null);
     if (rec) {
-      await execute(
-        "UPDATE payments SET status = 'completed', raw_response = $1, updated_at = NOW() WHERE reference = $2",
-        [JSON.stringify(verified), reference]
-      ).catch(() => {});
+      const alreadyFinal = ["refunded", "card_saved", "released"].includes(String(rec.status));
+      if (!alreadyFinal) {
+        await execute(
+          "UPDATE payments SET status = 'completed', raw_response = $1, updated_at = NOW() WHERE reference = $2",
+          [JSON.stringify(verified), reference]
+        ).catch(() => {});
+      }
       if (verified?.authorization?.reusable) {
         try {
           await storeAuthorizationCard(rec.user_id, verified);
         } catch (e) {
           console.warn("Store card failed on verify:", e);
         }
-        if (!rec.ride_id) {
+        // The webhook may already have saved the card and requested the refund.
+        // Do not issue a second refund in that case.
+        if (!rec.ride_id && !alreadyFinal) {
           try {
             await refundTransaction(reference, Number(rec.amount));
             await execute(

@@ -53,7 +53,11 @@ export function paystackConfig(): PaystackConfig {
         : process.env.PAYSTACK_SECRET_TEST) ||
       process.env.PAYSTACK_SECRET_KEY ||
       "",
-    callbackUrl: process.env.PAYSTACK_CALLBACK_URL || "",
+    // Paystack requires a callback after hosted checkout. Without one it shows
+    // its own success page and the app never learns the card was saved. The
+    // dashboard "Live callback URL" can be empty; this is the per-request value.
+    callbackUrl:
+      process.env.PAYSTACK_CALLBACK_URL || "https://api.ridevura.com/api/payments/return",
     baseUrl: PAYSTACK_BASE_URL,
   };
 }

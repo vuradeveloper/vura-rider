@@ -20,9 +20,68 @@ import { Router, Response } from "express";
 import {
   handlePreauthorizationEvent,
   paystackWebhookSecret,
+  saveReusableAuthorization,
   verifyPaystackSignature,
 } from "../services/preauthorization";
 import { handlePayLaterChargeWebhook } from "../services/PayLaterService";
+import { queryOne, execute } from "../config/database";
+import { refundTransaction } from "../services/paystackPayment";
+
+/**
+ * Legacy card-registration charges (reference VURACARD...) used a real R1
+ * charge. The new flow uses a preauthorization hold, but events already in
+ * flight still need to save the card and refund the R1 even if the app never
+ * returned to poll /verify.
+ */
+async function handleLegacyCardRegisterCharge(payload: any): Promise<boolean> {
+  const data = payload?.data || {};
+  const ref = String(data.reference || "");
+  const upper = ref.toUpperCase();
+  if (!upper.startsWith("VURACARD") && !upper.startsWith("VURAADD")) return false;
+  const row = await queryOne<{ id: string; user_id: string; status: string }>(
+    `SELECT id, user_id, status FROM payments
+      WHERE reference = $1 AND ride_id IS NULL LIMIT 1`,
+    [ref]
+  ).catch(() => null);
+  if (!row) return false;
+  if (["card_saved", "refunded", "released"].includes(String(row.status))) {
+    // The refund may have happened before the card was tokenised (the old
+    // /verify raced the webhook). Recover the card from the charge payload
+    // without issuing a second refund.
+    if (String(row.status) === "refunded" && data.authorization) {
+      const stored = await saveReusableAuthorization(row.user_id, data.authorization).catch(() => false);
+      if (stored) {
+        await execute(
+          `UPDATE payments SET status = 'card_saved', updated_at = NOW() WHERE id = $1`,
+          [row.id]
+        ).catch(() => {});
+      }
+    }
+    return true;
+  }
+
+  let stored = false;
+  if (data.authorization) {
+    stored = await saveReusableAuthorization(row.user_id, data.authorization).catch(() => false);
+  }
+
+  // The R1 was a verification charge. Refund it exactly once via the status
+  // guard. Paystack refunds are asynchronous; the dashboard shows refund.pending
+  // until the bank completes it.
+  try {
+    await refundTransaction(ref, Number(data.amount || 0) / 100);
+  } catch (e: any) {
+    console.warn(`[preauth] legacy card refund failed ref=${ref}:`, e?.message || e);
+  }
+
+  await execute(
+    `UPDATE payments SET status = $2, raw_response = $3, updated_at = NOW()
+      WHERE id = $1`,
+    [row.id, stored ? "card_saved" : "refunded", JSON.stringify(data)]
+  ).catch(() => {});
+  console.log(`[preauth] legacy card register ref=${ref} saved=${stored} (R1 refund requested)`);
+  return true;
+}
 
 const router = Router();
 
@@ -65,12 +124,26 @@ router.post("/webhook", async (req: any, res: Response) => {
       return;
     }
 
-    // charge.* events are Pay Later REPAYMENT confirmations ("PLR…" references
-    // only — card registration / legacy charges are acknowledged, not touched).
-    // preauthorization.* keeps its own handler. Both are idempotent.
-    const result = event.startsWith("charge.")
-      ? await handlePayLaterChargeWebhook(event, payload)
-      : await handlePreauthorizationEvent(event, payload);
+    // charge.* events are Pay Later REPAYMENT confirmations ("PLR..." references)
+    // OR legacy card-registration charges ("VURACARD..." references). The new
+    // card flow uses preauthorization.*; the legacy branch saves the card and
+    // refunds the R1 even when the app never returned to poll /verify.
+    let result: any;
+    if (event.startsWith("charge.")) {
+      const legacyCard =
+        event === "charge.success" ? await handleLegacyCardRegisterCharge(payload) : false;
+      result = legacyCard
+        ? {
+            received: true,
+            event,
+            duplicate: false,
+            handled: true,
+            detail: "legacy card registration saved + R1 refund requested",
+          }
+        : await handlePayLaterChargeWebhook(event, payload);
+    } else {
+      result = await handlePreauthorizationEvent(event, payload);
+    }
     // 200: Paystack keeps retrying anything else for 72 hours. `duplicate`
     // answers are still 200 — a replay is success, not an error.
     res.status(200).json(result);
