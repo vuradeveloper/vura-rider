@@ -1,29 +1,27 @@
 // cardSetup - one card-add flow for every screen.
 //
-// Preferred: Paystack Inline, Paystack's own card modal rendered inside the app.
-// It collects the card, handles PIN/OTP and returns without leaving Vura. The
-// server creates the reference; /verify stores the card and refunds the R1
-// verification charge.
+// Paystack Inline ONLY. It is Paystack's own card modal rendered inside the app:
+// the rider never leaves Vura, so there is no browser tab to come back from and
+// no stale checkout page left behind. The server creates the reference; /verify
+// stores the card and refunds the R1 verification charge.
 //
-// Fallback: the hosted preauthorization page (R5 hold, released immediately)
-// when the Inline script cannot load (offline build, blocked script).
-import {
-  createCardIntent,
-  openExternalUrl,
-  registerPaystackCard,
-  verifyPayment,
-} from "./backend";
+// There is deliberately NO hosted-page fallback. Sending the rider to
+// checkout.paystack.com and back was the thing that made card setup feel broken
+// (the web page kept waiting for the issuer while the app showed its own stale
+// modal). If Inline cannot load we report an error and let them retry in-app.
+import { createCardIntent, verifyPayment } from "./backend";
 import { openPaystackInline } from "./paystackInline";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function closeHostedBrowser(): Promise<void> {
-  try {
-    const { Browser } = await import("@capacitor/browser");
-    await Browser.close();
-  } catch {
-    /* nothing open, or plugin unavailable */
-  }
+/** True when the server already has the card (and has started the R1 refund). */
+function isSavedStatus(status: string): boolean {
+  return (
+    status === "success" ||
+    status === "completed" ||
+    status === "refunded" ||
+    status === "card_saved"
+  );
 }
 
 export interface CardSetupResult {
@@ -44,7 +42,7 @@ async function pollCardSaved(
     await sleep(2500);
     const v = await verifyPayment(reference).catch(() => null);
     const status = String(v?.status || "");
-    if (status === "success" || status === "completed" || status === "refunded" || status === "card_saved") {
+    if (isSavedStatus(status)) {
       return true;
     }
     if (status === "failed") return false;
@@ -59,49 +57,51 @@ async function pollCardSaved(
 export async function startCardSetup(
   onStatus?: (message: string) => void
 ): Promise<CardSetupResult> {
-  let reference = "";
-  let usedHostedPage = false;
-
-  // 1. Preferred: in-app Paystack modal.
+  // 1. Ask the server for a reference and the live Paystack public key.
   const intent = await createCardIntent().catch(() => null);
-  if (intent?.publicKey && intent.reference && intent.email) {
-    onStatus?.("Enter your card details. The R1 verification is refunded automatically.");
-    const result = await openPaystackInline({
-      publicKey: intent.publicKey,
-      email: intent.email,
-      amountRands: Number(intent.amountRands || 1),
-      reference: intent.reference,
-    });
-    if (result === "cancelled") {
-      return { ok: false, cancelled: true, message: "Card setup cancelled." };
-    }
-    if (result === "success") {
-      reference = intent.reference;
-    }
-    // "failed" means the Inline script could not load/initialise. Fall through
-    // to the hosted page instead of dead-ending the rider.
+  if (!intent?.publicKey || !intent.reference || !intent.email) {
+    return {
+      ok: false,
+      message:
+        intent?.error ||
+        "Could not start card setup. Check your internet connection and try again.",
+    };
   }
 
-  // 2. Fallback: hosted Paystack page (preauthorization hold, released at once).
-  if (!reference) {
-    const reg = await registerPaystackCard().catch(() => null);
-    if (!reg?.reference || !reg?.authorizationUrl) {
-      return {
-        ok: false,
-        message: reg?.error || "Could not start card setup. Please try again.",
-      };
-    }
-    onStatus?.("Opening the secure Paystack page...");
-    await openExternalUrl(reg.authorizationUrl);
-    usedHostedPage = true;
-    reference = reg.reference;
+  const reference = intent.reference;
+
+  // 2. Paystack's card form, inside the app. `checkSaved` is the safety net:
+  // some bank 3DS pages return to the app without firing Paystack's callback,
+  // which used to leave the modal on "waiting for your card issuer" forever.
+  // Polling the server closes the modal the moment the card is really saved.
+  onStatus?.("Enter your card details. The R1 verification is refunded automatically.");
+  const result = await openPaystackInline({
+    publicKey: intent.publicKey,
+    email: intent.email,
+    amountRands: Number(intent.amountRands || 1),
+    reference,
+    checkSaved: async () => {
+      const v = await verifyPayment(reference).catch(() => null);
+      return isSavedStatus(String(v?.status || ""));
+    },
+  });
+
+  if (result === "cancelled") {
+    return { ok: false, cancelled: true, message: "Card setup cancelled." };
+  }
+  if (result === "failed") {
+    return {
+      ok: false,
+      message:
+        "Could not open the secure card form. Check your internet connection and try again.",
+      reference,
+    };
   }
 
+  // 3. Confirm with the server. This also tokenises the card and requests the
+  // R1 refund if the webhook has not landed yet.
   onStatus?.("Confirming your card...");
   const saved = await pollCardSaved(reference, onStatus);
-  // Return the rider to the exact page they started on if the hosted fallback
-  // was used. Paystack Inline never leaves the app, so there is nothing to close.
-  if (usedHostedPage) await closeHostedBrowser();
   if (!saved) {
     return {
       ok: false,
