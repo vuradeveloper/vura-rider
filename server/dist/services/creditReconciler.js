@@ -49,6 +49,20 @@ function envBool(name, fallback = false) {
         return fallback;
     return /^(1|true|yes|on)$/i.test(v);
 }
+/**
+ * A captured ride whose success webhook was lost stays CAPTURE_PENDING forever
+ * — the rider sees "Paystack is settling it" even though the driver's credit
+ * has already been posted. Promote it once the money is provably captured.
+ * The webhook would do this; the reconciler is the fallback for a lost webhook.
+ */
+async function markRidePaid(rideId) {
+    await (0, database_1.execute)(`UPDATE rides
+        SET payment_status = 'PAID',
+            paid_at = COALESCE(paid_at, NOW()),
+            captured_amount = COALESCE(captured_amount, actual_fare, estimated_fare, 0),
+            updated_at = NOW()
+      WHERE id = $1 AND payment_status IN ('CAPTURE_PENDING', 'CAPTURED')`, [rideId]).catch(() => { });
+}
 /** Decide what should happen to one pending credit. Pure and testable. */
 function decideAction(row, nowMs) {
     const st = String(row.payment_status || "").toUpperCase();
@@ -107,7 +121,8 @@ async function reconcileOnce() {
             switch (action) {
                 case "post": {
                     await (0, walletService_1.confirmCardRideCredit)(row.driver_id, row.ride_id);
-                    console.log(`${tag} posted`);
+                    await markRidePaid(row.ride_id);
+                    console.log(`${tag} posted + ride PAID`);
                     stats.posted++;
                     break;
                 }
@@ -116,7 +131,8 @@ async function reconcileOnce() {
                     const res = await (0, preauthorization_1.captureRideHold)(row.ride_id);
                     if (res?.captured || res?.alreadyProcessed) {
                         await (0, walletService_1.confirmCardRideCredit)(row.driver_id, row.ride_id);
-                        console.log(`${tag} captured=${res?.captured} then posted`);
+                        await markRidePaid(row.ride_id);
+                        console.log(`${tag} captured=${res?.captured} then posted + ride PAID`);
                         stats.captured++;
                         stats.posted++;
                     }

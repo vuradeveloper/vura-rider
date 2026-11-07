@@ -112,15 +112,47 @@ async function probeS3() {
         return { ok: false, bucket, key, error: String(err?.message || err), name: err?.name ?? null };
     }
 }
+/**
+ * Paystack diagnostics: whether the secret is present, whether webhooks are
+ * actually arriving, and how many card credits are still pending. This is the
+ * fastest way to tell "Paystack is settling" from "the webhook never reached us".
+ */
+async function paymentsDiag() {
+    const out = {
+        secretConfigured: Boolean(process.env.PAYSTACK_SECRET_LIVE || process.env.PAYSTACK_SECRET_KEY),
+        webhookUrl: "https://api.ridevura.com/api/paystack/webhook",
+    };
+    try {
+        const events = await (0, database_1.query)(`SELECT event, received_at FROM paystack_webhook_events
+        ORDER BY received_at DESC LIMIT 5`);
+        out.recentWebhookEvents = events;
+    }
+    catch (err) {
+        out.recentWebhookEvents = { error: String(err?.message || err) };
+    }
+    try {
+        const pending = await (0, database_1.queryOne)(`SELECT COUNT(*)::int AS count,
+              MIN(created_at) AS oldest
+         FROM wallet_ledger
+        WHERE type = 'card_credit_pending' AND status = 'pending'`);
+        out.cardCreditsPending = pending?.count ?? null;
+        out.oldestPendingAt = pending?.oldest ?? null;
+    }
+    catch (err) {
+        out.cardCreditsPending = { error: String(err?.message || err) };
+    }
+    return out;
+}
 router.get("/", async (req, res) => {
     if (String(req.query.key || "") !== devLogs_1.READ_KEY) {
         res.status(401).json({ error: "bad read key" });
         return;
     }
     const wantS3 = String(req.query.s3 || "") === "1";
-    const [sharpStatus, budget] = await Promise.all([
+    const [sharpStatus, budget, payments] = await Promise.all([
         probeSharp(),
         (0, vehicleImages_1.carsxeUsage)().catch((err) => ({ error: String(err?.message || err) })),
+        paymentsDiag(),
     ]);
     const out = {
         serverTime: new Date().toISOString(),
@@ -138,6 +170,7 @@ router.get("/", async (req, res) => {
         // store the live server will actually read photos from.
         carsxe: { retired: true, keySet: Boolean(process.env.CARSXE_API_KEY), budget },
         vehicleImages: { source: (0, vehicleImages_1.vehicleImageSource)() },
+        payments,
         storage: {
             bucket: process.env.AWS_S3_BUCKET || "MISSING",
             region: process.env.AWS_S3_REGION || "(default af-south-1)",
