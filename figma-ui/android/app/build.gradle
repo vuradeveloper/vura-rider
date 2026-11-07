@@ -15,8 +15,8 @@ android {
         applicationId "app.vura.rider"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.5.3"
+        versionCode 10
+        versionName "1.5.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -57,9 +57,11 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
-    // Paystack's native card form + PIN/OTP/3-D Secure. Keeps card entry inside
-    // the app; Inline's web iframe cannot complete 3DS in an Android WebView.
-    implementation 'co.paystack.android:paystack:3.5.0'
+    // Paystack's current native checkout UI (Card/PIN/OTP + 3DS). Uses the new
+    // /transaction/charge API; the legacy checkout endpoints return
+    // "Invalid Transaction" for this merchant. 0.1.8 is the newest release that
+    // builds against compileSdk 36 (1.0.0 requires compileSdk 37).
+    implementation 'com.paystack.android:paystack-ui:0.1.8-vura2'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

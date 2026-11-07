@@ -1,18 +1,22 @@
 // cardSetup - one card-add flow for every screen.
 //
-// Android: Paystack's NATIVE card form (lib/paystackNative.ts -> PaystackNative
-// plugin). It is fully inside the app: card entry, PIN/OTP and the bank's
-// 3-D Secure page are native Android screens. There is no iframe and no cookie
-// bridge, which is what broke Inline after authentication.
+// Android: Paystack's current native checkout (paystack-ui PaymentSheet) via
+// the PaystackNative plugin. Card entry, PIN and OTP are native Android screens;
+// bank 3DS opens Paystack's auth page and returns to the sheet. There is no
+// cross-origin iframe and no cookie-support page, which is what broke Inline.
 //
 // iOS/web: Paystack Inline remains the fallback (no native plugin there yet).
 // There is no hosted checkout redirect in either path.
 //
 // The server creates the reference; /verify stores the card and refunds the R1
 // verification charge.
-import { createCardIntent, verifyPayment } from "./backend";
+import { createCardIntent, registerPaystackCard, verifyPayment } from "./backend";
 import { openPaystackInline } from "./paystackInline";
-import { canUseNativeCardForm, chargeWithNativeCardForm } from "./paystackNative";
+import {
+  accessCodeFromUrl,
+  canUseNativeCardForm,
+  chargeWithNativeCardForm,
+} from "./paystackNative";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -31,6 +35,11 @@ export interface CardSetupResult {
   cancelled?: boolean;
   message: string;
   reference?: string;
+}
+
+async function isSavedNow(reference: string): Promise<boolean> {
+  const v = await verifyPayment(reference).catch(() => null);
+  return isSavedStatus(String(v?.status || ""));
 }
 
 async function pollCardSaved(
@@ -59,40 +68,59 @@ async function pollCardSaved(
 export async function startCardSetup(
   onStatus?: (message: string) => void
 ): Promise<CardSetupResult> {
-  // 1. Ask the server for a reference and the live Paystack public key.
-  const intent = await createCardIntent().catch(() => null);
-  if (!intent?.publicKey || !intent.reference || !intent.email) {
-    return {
-      ok: false,
-      message:
-        intent?.error ||
-        "Could not start card setup. Check your internet connection and try again.",
-    };
-  }
+  let reference = "";
 
-  const reference = intent.reference;
-
-  // 2. Open the card form. On Android this is Paystack's native SDK screen; on
-  // iOS/web it is Inline. Either way the rider stays inside Vura.
-  onStatus?.("Enter your card details. The R1 verification is refunded automatically.");
-
-  let result: "success" | "cancelled" | "failed";
   if (canUseNativeCardForm()) {
-    try {
-      result = await chargeWithNativeCardForm({
-        publicKey: intent.publicKey,
-        email: intent.email,
+    // 1a. Public key for the Paystack SDK. card-intent already returns the live
+    // public key (and validates the signed-in rider).
+    const intent = await createCardIntent().catch(() => null);
+    if (!intent?.publicKey) {
+      return {
+        ok: false,
+        message:
+          intent?.error ||
+          "Could not start card setup. Check your internet connection and try again.",
+      };
+    }
+
+    // 1b. Server initializes the R1 transaction and returns its checkout URL;
+    // the last path segment is the access code the native sheet consumes.
+    const reg = await registerPaystackCard().catch(() => null);
+    if (!reg?.reference || !reg?.authorizationUrl) {
+      return {
+        ok: false,
+        message:
+          reg?.error ||
+          "Could not start card setup. Please try again.",
+      };
+    }
+    reference = reg.reference;
+    const accessCode = accessCodeFromUrl(reg.authorizationUrl);
+    if (!accessCode) {
+      return {
+        ok: false,
+        message: "Could not start card setup. Please try again.",
         reference,
-        amountCents: Math.round(Number(intent.amountRands || 1) * 100),
-        currency: "ZAR",
+      };
+    }
+
+    onStatus?.("Enter your card details. The R1 verification is refunded automatically.");
+    try {
+      const result = await chargeWithNativeCardForm({
+        publicKey: intent.publicKey,
+        accessCode,
+        reference,
       });
+      if (result === "cancelled") {
+        // The rider may have approved with the bank and then dismissed the
+        // sheet before Paystack's callback landed.
+        if (await isSavedNow(reference)) {
+          return { ok: true, message: "Card added.", reference };
+        }
+        return { ok: false, cancelled: true, message: "Card setup cancelled." };
+      }
     } catch (e: any) {
-      // Paystack may have completed the charge before the native screen
-      // reported an error. Trust the server before showing a failure.
-      const alreadySaved = await verifyPayment(reference)
-        .then((v) => isSavedStatus(String(v?.status || "")))
-        .catch(() => false);
-      if (alreadySaved) {
+      if (await isSavedNow(reference)) {
         return { ok: true, message: "Card added.", reference };
       }
       return {
@@ -102,7 +130,20 @@ export async function startCardSetup(
       };
     }
   } else {
-    result = await openPaystackInline({
+    // iOS/web: Inline. Android never reaches this branch.
+    const intent = await createCardIntent().catch(() => null);
+    if (!intent?.publicKey || !intent.reference || !intent.email) {
+      return {
+        ok: false,
+        message:
+          intent?.error ||
+          "Could not start card setup. Check your internet connection and try again.",
+      };
+    }
+    reference = intent.reference;
+
+    onStatus?.("Enter your card details. The R1 verification is refunded automatically.");
+    const result = await openPaystackInline({
       publicKey: intent.publicKey,
       email: intent.email,
       amountRands: Number(intent.amountRands || 1),
@@ -112,29 +153,23 @@ export async function startCardSetup(
         return isSavedStatus(String(v?.status || ""));
       },
     });
-  }
 
-  if (result === "cancelled" || result === "failed") {
-    // The rider may have finished bank authentication and then dismissed the
-    // modal (or the modal timed out) before Paystack's callback fired. A single
-    // server check here turns that into success instead of losing a saved card.
-    const alreadySaved = await verifyPayment(reference)
-      .then((v) => isSavedStatus(String(v?.status || "")))
-      .catch(() => false);
-    if (alreadySaved) {
-      return { ok: true, message: "Card added.", reference };
+    if (result === "cancelled" || result === "failed") {
+      if (await isSavedNow(reference)) {
+        return { ok: true, message: "Card added.", reference };
+      }
+      return result === "cancelled"
+        ? { ok: false, cancelled: true, message: "Card setup cancelled." }
+        : {
+            ok: false,
+            message:
+              "Could not open the secure card form. Check your internet connection and try again.",
+            reference,
+          };
     }
-    return result === "cancelled"
-      ? { ok: false, cancelled: true, message: "Card setup cancelled." }
-      : {
-          ok: false,
-          message:
-            "Could not open the secure card form. Check your internet connection and try again.",
-          reference,
-        };
   }
 
-  // 3. Confirm with the server. This also tokenises the card and requests the
+  // 2. Confirm with the server. This also tokenises the card and requests the
   // R1 refund if the webhook has not landed yet.
   onStatus?.("Confirming your card...");
   const saved = await pollCardSaved(reference, onStatus);

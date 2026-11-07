@@ -19,4 +19,21 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>
+
+    <!-- Paystack PaymentSheetActivity: full-page, not a translucent floating
+         sheet over the WebView. The Compose scaffold is patched to 100% height
+         with no scrim and square corners (local-repo paystack-ui 0.1.8-vura). -->
+    <style name="PstkTheme.PaystackSdk" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <style name="VuraAuthTheme" parent="AppTheme.NoActionBar">
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>

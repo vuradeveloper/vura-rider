@@ -1,19 +1,19 @@
-// paystackNative - Paystack's native Android card form.
+// paystackNative - Paystack's current native checkout (paystack-ui SDK).
 //
-// Inline renders checkout.paystack.com inside a cross-origin iframe. After the
-// bank's 3-D Secure step it loads paystack.com/public/test/cookie-support to
-// pass the result back, and Android WebView blocks that page with
-// ERR_BLOCKED_BY_RESPONSE - leaving the rider on "connecting to your bank"
-// forever. The native SDK has no iframe and no cookie bridge, so the card form,
-// PIN/OTP and 3DS all run as Android screens inside Vura.
+// The SDK's PaymentSheet is a native Android screen: card form, PIN, OTP and
+// card-scheme icons. It uses Paystack's new /transaction/charge API.
+//
+// WHY NOT INLINE: Inline runs checkout.paystack.com in a cross-origin iframe and
+// returns 3DS through paystack.com/public/test/cookie-support, which Android
+// WebView blocks with ERR_BLOCKED_BY_RESPONSE.
+// WHY NOT THE OLD SDK: co.paystack.android:paystack:3.5.0 posts to the legacy
+// /checkout/card/charge endpoint, which answers "Invalid Transaction" here.
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 export interface NativeCardCharge {
   publicKey: string;
-  email: string;
+  accessCode: string;
   reference: string;
-  amountCents: number;
-  currency?: string;
 }
 
 interface PaystackNativePlugin {
@@ -31,13 +31,26 @@ export function canUseNativeCardForm(): boolean {
 }
 
 /**
- * Opens Paystack's native card form. Resolves "success" once Paystack has
+ * Opens Paystack's native checkout. Resolves "success" once Paystack has
  * completed the charge (the caller still verifies with the server) or
- * "cancelled" if the rider dismissed the native screens.
+ * "cancelled" if the rider dismissed the sheet.
  */
 export async function chargeWithNativeCardForm(
   input: NativeCardCharge
 ): Promise<'success' | 'cancelled'> {
   const result = await PaystackNative.charge(input);
   return result.status === 'success' ? 'success' : 'cancelled';
+}
+
+/**
+ * Paystack's initialize response returns
+ * https://checkout.paystack.com/<access_code>; the native sheet needs the code.
+ */
+export function accessCodeFromUrl(url: string): string {
+  try {
+    const parts = new URL(url).pathname.split('/').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : '';
+  } catch {
+    return '';
+  }
 }

@@ -24,6 +24,13 @@
 
         </activity>
 
+        <!-- Bank 3DS page, opened in-app instead of a Chrome Custom Tab. -->
+        <activity
+            android:name=".VuraAuthActivity"
+            android:exported="false"
+            android:theme="@style/VuraAuthTheme"
+            android:windowSoftInputMode="adjustResize" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

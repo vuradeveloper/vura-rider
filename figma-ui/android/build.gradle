@@ -19,6 +19,9 @@ apply from: "variables.gradle"
 
 allprojects {
     repositories {
+        // Local patched paystack-ui: the sheet is made full-page (height 1.0,
+        // no scrim, square corners). See local-repo/.../0.1.8-vura.
+        maven { url = uri("$rootDir/local-repo") }
         google()
         mavenCentral()
     }
