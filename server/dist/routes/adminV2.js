@@ -690,6 +690,17 @@ router.get("/duplicates", (0, adminAuth_1.requireAdmin)("drivers.read"), async (
         sendError(res, err);
     }
 });
+// POST /api/admin/v2/duplicates/sweep - re-run detection now. The boot sweep
+// normally does this; the button is for "I just fixed/changed an account".
+router.post("/duplicates/sweep", (0, adminAuth_1.requireAdmin)("drivers.write"), async (_req, res) => {
+    try {
+        const flagged = await (0, duplicateDetection_1.sweepDuplicateUsers)();
+        res.json({ ok: true, flagged });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
 // POST /api/admin/v2/duplicates/:id/resolve - clear or confirm one flag.
 router.post("/duplicates/:id/resolve", (0, adminAuth_1.requireAdmin)("drivers.write"), async (req, res) => {
     try {
