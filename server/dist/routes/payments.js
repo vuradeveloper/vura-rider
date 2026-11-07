@@ -423,6 +423,14 @@ router.get("/verify", async (req, res) => {
             res.json({ status: "pending", reference });
             return;
         }
+        // The webhook (or an earlier /verify) may already have tokenised the card.
+        // Return the final state without calling Paystack again; the native card
+        // sheet polls this endpoint so it can close even when Paystack's 3DS event
+        // stream never delivers a completion.
+        if (["card_saved", "refunded", "released", "completed"].includes(String(payment.status))) {
+            res.json({ status: "completed", success: true, reference, cardSaved: true });
+            return;
+        }
         let verified = null;
         try {
             verified = await (0, paystackPayment_1.verifyTransaction)(reference);
