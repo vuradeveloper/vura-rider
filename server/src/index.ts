@@ -24,6 +24,7 @@ import safetyRouter from "./routes/safety";
 import searchRouter from "./routes/search";
 import disputesRouter from "./routes/disputes";
 import splitFareRouter from "./routes/splitFare";
+import liveSupportRouter from "./routes/liveSupport";
 import tipsRouter from "./routes/tips";
 import notificationsRouter from "./routes/notifications";
 import affiliatesRouter from "./routes/affiliates";
@@ -44,6 +45,7 @@ import { ensureVehicleReviewSchema, sweepVehicleClassification } from "./service
 import { ensureDuplicateSchema, sweepDuplicateUsers } from "./services/duplicateDetection";
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
+import adminLiveSupportRouter from "./routes/adminLiveSupport";
 import safetyAdminRouter from "./routes/safetyAdmin";
 import walletAdminRouter from "./routes/walletAdmin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
@@ -262,6 +264,7 @@ app.use("/api/searches", searchRouter);
 app.use("/api/search", searchRouter);
 app.use("/api/disputes", disputesRouter);
 app.use("/api/split", splitFareRouter);
+app.use("/api/support", liveSupportRouter);
 app.use("/api/tips", tipsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/payouts", payoutsRouter);
@@ -272,6 +275,9 @@ app.use("/api/admin", adminRouter);
 // Same console API the Vura-Admin app and the integration tests both call at
 // /api/admin/v2/* (the test harness mounts this router there; production used
 // to mount at /api/admin which 404'd every console call - fixed 2026-10-14).
+// Live Support: the chat inbox is mounted BEFORE the general admin router so
+// /api/admin/v2/live-chats never depends on adminV2's route table.
+app.use("/api/admin/v2/live-chats", adminLiveSupportRouter);
 app.use("/api/admin/v2", adminV2Router);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
