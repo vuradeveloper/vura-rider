@@ -754,6 +754,47 @@ async function handlePreauthorizationEvent(event, payload) {
     const fresh = await recordWebhookEventOnce(event, data, ref);
     if (!fresh)
         return done(true, false, "duplicate delivery ignored");
+    // Card registration uses a preauthorization hold (reference VURACARD...), not
+    // a ride. Store the reusable card and release the R5 verification hold. This
+    // is what makes card-add work even if the rider closes the app before the
+    // browser returns.
+    const cardReg = await (0, database_1.queryOne)(`SELECT id, user_id, status FROM payments
+      WHERE reference = $1 AND ride_id IS NULL
+      LIMIT 1`, [ref]).catch(() => null);
+    if (cardReg) {
+        if (event === "preauthorization.reserve.success") {
+            const stored = await saveReusableAuthorization(cardReg.user_id, data.authorization || {});
+            let released = false;
+            try {
+                await releasePreauthorization({ reference: ref });
+                released = true;
+            }
+            catch (e) {
+                console.warn(`[preauth] card verification hold release failed ref=${ref} (expire_action=release is the backstop):`, e?.message || e);
+            }
+            await (0, database_1.execute)(`UPDATE payments SET status = $2, raw_response = $3, updated_at = NOW()
+          WHERE id = $1`, [cardReg.id, stored ? "card_saved" : "failed", JSON.stringify(data)]).catch(() => { });
+            console.log(`[preauth] card register ref=${ref} saved=${stored} holdReleased=${released}`);
+            return done(false, true, stored ? "card saved; verification hold released" : "card not reusable; hold released");
+        }
+        if (event === "preauthorization.reserve.failed") {
+            await (0, database_1.execute)(`UPDATE payments SET status = 'failed', raw_response = $2, updated_at = NOW()
+          WHERE id = $1`, [cardReg.id, JSON.stringify(data)]).catch(() => { });
+            return done(false, true, "card verification failed");
+        }
+        if (event === "preauthorization.release.success") {
+            if (!["card_saved", "failed"].includes(String(cardReg.status))) {
+                await (0, database_1.execute)(`UPDATE payments SET status = 'released', raw_response = $2, updated_at = NOW()
+            WHERE id = $1`, [cardReg.id, JSON.stringify(data)]).catch(() => { });
+            }
+            return done(false, true, "card verification hold released");
+        }
+        if (event === "preauthorization.release.failed") {
+            console.error(`[preauth] card verification hold release FAILED ref=${ref}`);
+            return done(false, true, "card verification hold release failed");
+        }
+        return done(false, false, `unhandled card-register event ${event}`);
+    }
     const ride = await (0, database_1.queryOne)(`SELECT id, passenger_id, driver_id, payment_status FROM rides WHERE preauth_reference = $1`, [ref]).catch(() => null);
     if (!ride) {
         // A valid event for something we don't track: still 200 so Paystack stops
