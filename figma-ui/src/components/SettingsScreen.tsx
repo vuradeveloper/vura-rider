@@ -167,8 +167,10 @@ export function HelpCenter({ onBack, onTrips, recentTrip, onChatSupport }: {
             className="w-full rounded-2xl bg-[#1A1A1A] p-4 text-left mb-5 active:opacity-90"
           >
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 text-[20px]">
-                💬
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 01-2 2H8l-5 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+                </svg>
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[14px] font-semibold text-white">Live support</p>

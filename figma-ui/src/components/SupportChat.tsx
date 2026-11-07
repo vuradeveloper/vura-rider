@@ -114,8 +114,10 @@ export function SupportChat({ onBack }: { onBack: () => void }) {
             {showWelcome ? (
               <div className="px-4 pb-4 pt-5">
                 <div className="rounded-3xl border border-[#F0F0F0] bg-white p-5 text-center shadow-sm">
-                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#FEF0EF] text-[24px]">
-                    💬
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#FEF0EF]">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA4335" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15a2 2 0 01-2 2H8l-5 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+                    </svg>
                   </div>
                   <h2 className="mt-3 text-[19px] font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
                     Hi{firstName ? ` ${firstName}` : ''} — how can we help?
