@@ -61,6 +61,7 @@ const safety_1 = __importDefault(require("./routes/safety"));
 const search_1 = __importDefault(require("./routes/search"));
 const disputes_1 = __importDefault(require("./routes/disputes"));
 const splitFare_1 = __importDefault(require("./routes/splitFare"));
+const liveSupport_1 = __importDefault(require("./routes/liveSupport"));
 const tips_1 = __importDefault(require("./routes/tips"));
 const notifications_1 = __importDefault(require("./routes/notifications"));
 const affiliates_1 = __importDefault(require("./routes/affiliates"));
@@ -81,6 +82,7 @@ const vehicleReview_1 = require("./services/vehicleReview");
 const duplicateDetection_1 = require("./services/duplicateDetection");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
+const adminLiveSupport_1 = __importDefault(require("./routes/adminLiveSupport"));
 const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
 const walletAdmin_1 = __importDefault(require("./routes/walletAdmin"));
 const SchedulingService_1 = require("./services/SchedulingService");
@@ -249,6 +251,7 @@ app.use("/api/searches", search_1.default);
 app.use("/api/search", search_1.default);
 app.use("/api/disputes", disputes_1.default);
 app.use("/api/split", splitFare_1.default);
+app.use("/api/support", liveSupport_1.default);
 app.use("/api/tips", tips_1.default);
 app.use("/api/notifications", notifications_1.default);
 app.use("/api/payouts", payouts_1.default);
@@ -259,6 +262,9 @@ app.use("/api/admin", admin_1.default);
 // Same console API the Vura-Admin app and the integration tests both call at
 // /api/admin/v2/* (the test harness mounts this router there; production used
 // to mount at /api/admin which 404'd every console call - fixed 2026-10-14).
+// Live Support: the chat inbox is mounted BEFORE the general admin router so
+// /api/admin/v2/live-chats never depends on adminV2's route table.
+app.use("/api/admin/v2/live-chats", adminLiveSupport_1.default);
 app.use("/api/admin/v2", adminV2_1.default);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
