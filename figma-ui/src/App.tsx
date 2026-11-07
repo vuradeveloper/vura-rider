@@ -92,7 +92,6 @@ import {
   Place,
   publishLocation,
   RecentSearch,
-  registerPaystackCard,
   requestPasswordReset,
   requestRide,
   resyncOnlineState,
@@ -118,9 +117,9 @@ import {
   submitRating,
   takePayLaterRide,
   setDriverServerOnline,
-  triggerSos,
-  verifyPayment
+  triggerSos
 } from './lib/backend'
+import { startCardSetup } from './lib/cardSetup'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
   | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater' | 'deleteAccount'
@@ -320,37 +319,6 @@ const IC = {
 }
 
 // ????????? Map ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-/**
- * Opens a URL for card checkout.
- *
- * Capacitor's Browser plugin renders the page in a Custom Tab ON TOP of the app,
- * so the rider never gets thrown out to a separate browser app — that in-app
- * feeling is what the old React Native app had (it used an in-app WebView).
- *
- * An iframe cannot be used instead: the Paystack checkout returns
- * `x-frame-options: SAMEORIGIN`, verified against the live endpoint, so a framed
- * copy would simply come up blank.
- */
-async function openExternal(url: string) {
-  if (!url) return
-  try {
-    const { Browser } = await import('@capacitor/browser')
-    await Browser.open({ url })
-    return
-  } catch {
-    /* plugin missing (e.g. running as a plain web build) — fall through */
-  }
-  const w = window.open(url, '_system')
-  if (w) return
-  const a = document.createElement('a')
-  a.href = url
-  a.target = '_blank'
-  a.rel = 'noopener noreferrer'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-}
-
 /**
  * How far the white "sheet" panel below the map overlaps it, in px. It is applied
  * as -mt-5 on those panels and must be mirrored by anything pinned to the map's
@@ -873,77 +841,29 @@ function BookingScreen({ destination, onBack, onConfirm }: {
   }
 
   /**
-   * Adds a card through Paystack's hosted checkout.
-   *
-   * The checkout is opened in the OS browser (3-D Secure / OTP cannot complete in
-   * an in-app view), then the card is confirmed by polling the server — the same
-   * two-step flow as the native app (app/add-payment-method.tsx).
+   * Adds a card with Paystack Inline — Paystack's own card modal inside the app.
+   * The server creates the reference; /verify stores the card and refunds the R1
+   * verification charge. If Inline cannot load, the shared flow falls back to
+   * the hosted preauthorization page.
    */
   async function addCard() {
     if (addingCard) return
     setAddingCard(true)
-    setCardMsg('Opening the secure payment page…')
+    setCardMsg('Starting card setup…')
     try {
-      const reg = await registerPaystackCard()
-      if (!reg?.reference || !reg?.authorizationUrl) {
-        setCardMsg(reg?.error || 'Could not start card setup. Please try again.')
-        return
-      }
-      await openExternal(reg.authorizationUrl)
-      setCardMsg('Waiting for your bank to confirm…')
-      const saved = await pollCardSaved(reg.reference)
-      if (saved) {
-        // Close the checkout tab so the rider lands back on the booking screen.
-        try {
-          const { Browser } = await import('@capacitor/browser')
-          await Browser.close()
-        } catch { /* nothing open, or plugin unavailable */ }
+      const result = await startCardSetup(setCardMsg)
+      if (result.ok) {
         await loadCards()
         setCardMsg('Card added.')
+      } else if (!result.cancelled) {
+        setCardMsg(result.message)
+      } else {
+        setCardMsg('')
       }
     } catch (e: any) {
       setCardMsg(e?.message || 'Could not add the card.')
     } finally {
       setAddingCard(false)
-    }
-  }
-
-  /**
-   * Polls until the server has stored the card, mirroring the native app: every
-   * 3s for up to 5 minutes.
-   *
-   * `abandoned` is Paystack's RESTING status for a checkout that has not been paid
-   * yet, so it only counts as final after a 2-minute grace — treating it as an
-   * immediate failure ends the flow seconds after opening, before the rider could
-   * possibly have typed anything. `failed` is a genuine decline and is immediate.
-   */
-  async function pollCardSaved(reference: string): Promise<boolean> {
-    const startedAt = Date.now()
-    const ABANDON_GRACE_MS = 2 * 60 * 1000
-    // A generous ceiling rather than 5 minutes: while the rider is in the bank's
-    // 3-D Secure page the app is in the background, where Android throttles
-    // timers. A deadline that expires while hidden would report a failure the
-    // rider never caused, and the card would still have been saved.
-    const CEILING_MS = 15 * 60 * 1000
-    for (; ;) {
-      await new Promise((r) => setTimeout(r, 3000))
-      const v = await verifyPayment(reference).catch(() => null)
-      const status = v?.status
-      if (status) {
-        if (status === 'success' || status === 'completed' || status === 'refunded') return true
-        // "abandoned" is Paystack's resting state for a checkout that has not been
-        // paid YET, so it only counts as final after the grace period. "failed" is
-        // a genuine decline and stops immediately.
-        const abandonedFinal = status === 'abandoned' && Date.now() - startedAt >= ABANDON_GRACE_MS
-        if (status === 'failed' || abandonedFinal) {
-          setCardMsg(`The payment page didn't complete (${status}). No card was saved.`)
-          return false
-        }
-      }
-      if (Date.now() - startedAt > CEILING_MS) {
-        setCardMsg('Still waiting for bank approval. The card saves as soon as it is approved.')
-        return false
-      }
     }
   }
 

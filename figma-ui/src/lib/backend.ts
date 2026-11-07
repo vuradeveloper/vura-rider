@@ -1037,6 +1037,21 @@ export const registerPaystackCard = () =>
   );
 
 /**
+ * Reference + public key for Paystack Inline (the in-app card modal). The
+ * server creates the payments row so the same /verify and webhook paths work;
+ * Paystack Inline creates the actual R1 verification charge.
+ */
+export const createCardIntent = () =>
+  apiFetch<{
+    reference: string;
+    publicKey?: string;
+    email?: string;
+    amountRands?: number;
+    mode?: string;
+    error?: string;
+  }>("/api/payments/card-intent", { method: "POST", body: JSON.stringify({}) });
+
+/**
  * Checks a Paystack transaction. `status` is the field that matters:
  *   success | completed | refunded  -> card saved, stop polling
  *   failed                          -> genuine decline, stop immediately

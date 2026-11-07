@@ -3,11 +3,9 @@ import { Header } from './SettingsScreen'
 import {
   deletePaymentMethod,
   getPaymentMethods,
-  openExternalUrl,
-  registerPaystackCard,
-  verifyPayment,
   type PaymentMethod,
 } from '../lib/backend'
+import { startCardSetup } from '../lib/cardSetup'
 
 /**
  * Payment Methods — the cards on the account.
@@ -38,39 +36,16 @@ export default function PaymentMethods({ onBack }: { onBack: () => void }) {
   async function add() {
     if (busy) return
     setBusy(true)
-    setMsg('Opening the secure payment page…')
+    setMsg('Starting card setup…')
     try {
-      const reg = await registerPaystackCard()
-      if (!reg?.reference || !reg?.authorizationUrl) {
-        setMsg(reg?.error || 'Could not start card setup. Please try again.')
-        return
-      }
-      await openExternalUrl(reg.authorizationUrl)
-      setMsg('Waiting for your bank to confirm…')
-
-      // Poll until the server has the card. `abandoned` is Paystack's resting
-      // status for a checkout nobody has paid yet, so it only counts as final
-      // after a grace period; `failed` is a genuine decline.
-      const startedAt = Date.now()
-      const ABANDON_GRACE = 2 * 60 * 1000
-      const CEILING = 15 * 60 * 1000
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 3000))
-        const v = await verifyPayment(reg.reference).catch(() => null)
-        const status = v?.status
-        if (status === 'success' || status === 'completed' || status === 'refunded') {
-          await load()
-          setMsg('Card added.')
-          return
-        }
-        if (status === 'failed' || (status === 'abandoned' && Date.now() - startedAt >= ABANDON_GRACE)) {
-          setMsg(`The payment page didn't complete (${status}). No card was saved.`)
-          return
-        }
-        if (Date.now() - startedAt > CEILING) {
-          setMsg('Still waiting for bank approval. The card saves as soon as it is approved.')
-          return
-        }
+      const result = await startCardSetup(setMsg)
+      if (result.ok) {
+        await load()
+        setMsg('Card added.')
+      } else if (!result.cancelled) {
+        setMsg(result.message)
+      } else {
+        setMsg('')
       }
     } catch (e: any) {
       setMsg(e?.message || 'Could not add the card.')
