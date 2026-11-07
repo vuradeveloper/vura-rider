@@ -46,19 +46,36 @@ export async function openPaystackInline(input: {
   if (!loaded || !PaystackPop?.setup) return "failed";
 
   return new Promise<InlineResult>((resolve) => {
+    let settled = false;
+    let handler: any = null;
+    const finish = (result: InlineResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    // Paystack Inline should answer in seconds. In a WebView whose third-party
+    // cookies are blocked it can sit on its cookie-support page forever; after
+    // this timeout the shared card flow falls back to the hosted page instead
+    // of leaving the rider on "connecting to your bank" indefinitely.
+    const timer = setTimeout(() => {
+      try { handler?.close?.(); } catch { /* modal already gone */ }
+      finish("failed");
+    }, 25_000);
+
     try {
-      const handler = PaystackPop.setup({
+      handler = PaystackPop.setup({
         key: input.publicKey,
         email: input.email,
         amount: Math.round(input.amountRands * 100),
         currency: "ZAR",
         ref: input.reference,
-        callback: () => resolve("success"),
-        onClose: () => resolve("cancelled"),
+        callback: () => finish("success"),
+        onClose: () => finish("cancelled"),
       });
       handler.openIframe();
     } catch {
-      resolve("failed");
+      finish("failed");
     }
   });
 }
