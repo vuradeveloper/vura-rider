@@ -582,7 +582,7 @@ router.get("/vehicles", requireAdmin("drivers.read"), async (req: AuthRequest, r
     const unclassifiedOnly = String(req.query.unclassified || "") === "1";
 
     const rows = await query<any>(
-      `SELECT u.id AS driver_id, u.full_name, u.email, u.phone_number,
+      `SELECT u.id AS driver_id, u.full_name, u.email, u.phone AS phone_number,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_year, dp.vehicle_color,
               dp.body_type, dp.vehicle_seats, dp.vehicle_doors, dp.vehicle_fuel_type,
               dp.vehicle_category, dp.vehicle_tier, dp.vehicle_tiers,
