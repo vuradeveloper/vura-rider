@@ -704,41 +704,24 @@ function RiderHome({ onBook, mode, onMode, onScheduled }: { onBook: (d: string) 
 
   return (
     <div className="flex flex-col h-screen bg-white">
-      {/* Map removed from Home by request: the page opens on a warm brand
-          header instead of a map, so the first thing a rider sees is the
-          destination search. The tracking/booking maps are untouched. */}
-      <div className="relative shrink-0 overflow-hidden bg-[#FFF6F4] px-5 pt-12 pb-8">
-        {/* Soft brand glows — purely decorative, never intercept touches. */}
-        <div className="pointer-events-none absolute -top-24 -right-16 w-60 h-60 rounded-full bg-[#EA4335]/10 blur-3xl" />
-        <div className="pointer-events-none absolute top-16 -left-24 w-48 h-48 rounded-full bg-[#FFB4A8]/20 blur-3xl" />
-        {/* A subtle route line nods to the product without showing a map. */}
-        <svg className="pointer-events-none absolute right-2 top-7 w-36 h-28 opacity-70" viewBox="0 0 144 112" fill="none" aria-hidden="true">
-          <path d="M8 96C38 96 34 52 70 52c34 0 30-34 66-34" stroke="#EA4335" strokeOpacity="0.30" strokeWidth="2" strokeDasharray="1 7" strokeLinecap="round" />
-          <circle cx="8" cy="96" r="4" fill="#EA4335" fillOpacity="0.45" />
-          <circle cx="136" cy="18" r="5.5" fill="#EA4335" />
-          <circle cx="136" cy="18" r="10" stroke="#EA4335" strokeOpacity="0.18" strokeWidth="2" />
-        </svg>
-
-        <div className="relative">
-          <p className="text-[10px] uppercase tracking-[0.24em] text-[#EA4335] font-bold">Vura</p>
-          <h1 className="text-[29px] leading-[1.08] font-semibold text-[#1A1A1A] mt-2" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-            Where to today?
-          </h1>
-          <p className="text-[13px] text-[#8A8A8A] mt-2">Your ride, your way.</p>
-
-          <div className="mt-5 inline-flex max-w-full items-center gap-2 rounded-full border border-white bg-white/90 py-2 pl-2.5 pr-4 shadow-sm backdrop-blur-md">
-            <span className="relative flex h-2.5 w-2.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#34A853]/35" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#34A853]" />
-            </span>
-            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-[#9E9E9E]">Pickup</span>
-            <span className="truncate text-[12px] font-semibold text-[#1A1A1A]">{placeLabel}</span>
+      {/* Location-first Home: no coloured hero or decorative panel. The page
+          stays white from top to bottom; the pickup is the only element above
+          the destination search. */}
+      <div className="shrink-0 bg-white px-5 pt-12 pb-3">
+        <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-[#EDEDED] bg-white px-3.5 py-3">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#34A853]/35" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#34A853]" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[9.5px] font-semibold uppercase tracking-wider text-[#9E9E9E]">Pickup</p>
+            <p className="mt-0.5 truncate text-[12.5px] font-semibold text-[#1A1A1A]">{placeLabel}</p>
           </div>
         </div>
       </div>
 
-      <div className="z-10 -mt-4 flex flex-1 flex-col overflow-hidden rounded-t-[28px] border-t border-[#FFF1EF] bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.06)]">
-        <div className="px-5 pt-6 pb-4 flex-1 overflow-y-auto">
+      <div className="z-10 flex flex-1 flex-col overflow-hidden bg-white">
+        <div className="px-5 pt-1 pb-4 flex-1 overflow-y-auto">
           {/* Split fare request from another rider — pay your share in-app. */}
           {splitInvites.length > 0 && (
             <button
