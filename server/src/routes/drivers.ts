@@ -92,6 +92,77 @@ router.post("/break/end", requireAuth, async (req: AuthRequest, res: Response) =
 });
 
 // GET /api/drivers/stats — Get driver statistics
+// GET /api/drivers/demand — live demand zones near the driver's current position.
+// This is the real replacement for the demo "Around you" rail: it groups live
+// ride requests from the last 30 minutes by the first part of the pickup address
+// and only returns areas inside a sensible radius. No exact pickup coordinates
+// are exposed.
+router.get("/demand", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = await driverUserId(req.userId!);
+    if (!userId) {
+      res.status(404).json({ error: "Driver account not found" });
+      return;
+    }
+    const dp = await queryOne<{ current_lat: number | null; current_lng: number | null }>(
+      "SELECT current_lat, current_lng FROM driver_profiles WHERE user_id = $1",
+      [userId]
+    );
+    if (dp?.current_lat == null || dp?.current_lng == null) {
+      res.json({ zones: [], needs_location: true, radius_km: 15 });
+      return;
+    }
+    const radiusKm = Math.max(3, Math.min(50, Number(process.env.DEMAND_RADIUS_KM || 15)));
+    const rows = await query<{
+      area: string;
+      requests: number;
+      distance_km: number | string;
+    }>(
+      `WITH live AS (
+         SELECT COALESCE(
+                  NULLIF(TRIM(SPLIT_PART(COALESCE(r.pickup_address, ''), ',', 1)), ''),
+                  'Nearby'
+                ) AS area,
+                (6371 * acos(LEAST(1, GREATEST(-1,
+                  cos(radians($2)) * cos(radians(r.pickup_lat)) *
+                    cos(radians(r.pickup_lng) - radians($1)) +
+                  sin(radians($2)) * sin(radians(r.pickup_lat))
+                )))) AS distance_km
+           FROM rides r
+          WHERE r.status IN ('searching', 'no_drivers')
+            AND r.created_at > NOW() - INTERVAL '30 minutes'
+            AND r.pickup_lat IS NOT NULL
+            AND r.pickup_lng IS NOT NULL
+       )
+       SELECT area, COUNT(*)::int AS requests, MIN(distance_km) AS distance_km
+         FROM live
+        WHERE distance_km <= $3
+        GROUP BY area
+        ORDER BY requests DESC, distance_km ASC
+        LIMIT 6`,
+      [dp.current_lng, dp.current_lat, radiusKm]
+    );
+    const zones = rows.map((row) => {
+      const requests = Number(row.requests) || 0;
+      const distance = Number(row.distance_km) || 0;
+      return {
+        name: row.area,
+        requests,
+        distance_km: Math.round(distance * 10) / 10,
+        level: requests >= 3 ? "high" : requests >= 2 ? "medium" : "low",
+      };
+    });
+    res.json({
+      zones,
+      radius_km: radiusKm,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error("Demand endpoint error:", err?.message || err);
+    res.status(500).json({ error: "Could not load live demand" });
+  }
+});
+
 router.get("/stats", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const firebaseUid = req.userId!;

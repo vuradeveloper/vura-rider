@@ -7,6 +7,7 @@ import {
   sendAdminMessage,
   updateLiveChat,
 } from "../services/liveSupport";
+import { sendPushToUsers } from "../services/notify";
 
 const router = Router();
 
@@ -88,6 +89,20 @@ router.post(
         entityId: id,
         newValue: { chars: message.length },
       });
+      // A public agent reply reaches the rider/driver even when the app is
+      // backgrounded or closed. Internal notes never leave the console.
+      if (!req.body?.is_internal && chat?.rider_id) {
+        const excerpt = message.replace(/\s+/g, " ").trim().slice(0, 120);
+        void sendPushToUsers([String(chat.rider_id)], {
+          type: "live_support",
+          title: "Vura support replied",
+          body: excerpt || "Open Live Support to read the reply.",
+          channelId: "ride_updates",
+          data: { kind: "live_support", chat_id: id },
+        }).catch((err: any) =>
+          console.warn("[live-support] reply push failed:", err?.message || err)
+        );
+      }
       res.json({ chat });
     } catch (err: any) {
       res.status(400).json({ error: err?.message || "Could not send the message" });
