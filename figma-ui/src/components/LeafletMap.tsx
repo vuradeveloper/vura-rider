@@ -195,6 +195,7 @@ export default function LeafletMap({
   showSelf = true,
   pickupLabel,
   destinationLabel,
+  onPick,
 }: {
   /** Pin for the driver / focal point. Falls back to live GPS, then Joburg. */
   marker?: LatLng
@@ -232,6 +233,8 @@ export default function LeafletMap({
    * moving marker there should be the hired driver's car.
    */
   showSelf?: boolean
+  /** Tap-to-place callback for the map picker (not used by tracking maps). */
+  onPick?: (p: LatLng) => void
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
@@ -248,6 +251,10 @@ export default function LeafletMap({
   // Once the driver pans the map themselves we stop yanking it back to their
   // position on every GPS tick.
   const userMoved = useRef(false)
+  // Tap-to-place: keep the latest callback in a ref so the Leaflet handler is
+  // registered once, not on every render.
+  const onPickRef = useRef(onPick)
+  useEffect(() => { onPickRef.current = onPick }, [onPick])
   // Leaflet is loaded asynchronously, so the drawing effects wait for this.
   const [ready, setReady] = useState(false)
 
@@ -285,6 +292,10 @@ export default function LeafletMap({
 
         // Remember if the driver took manual control of the viewport.
         mapRef.current.on('dragstart', () => { userMoved.current = true })
+        // Tap-to-place for the rider map picker.
+        mapRef.current.on('click', (e: any) => {
+          onPickRef.current?.({ lat: e.latlng.lat, lng: e.latlng.lng })
+        })
         setReady(true)
       }
 

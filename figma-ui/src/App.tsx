@@ -35,6 +35,7 @@ import VehicleLinkScreen from './components/VehicleLinkScreen'
 import { ScheduledRidesScreen } from './components/ScheduledRidesScreen'
 import { ReceiptScreen } from './components/ReceiptScreen'
 import { SupportChat } from './components/SupportChat'
+import { MapPicker } from './components/MapPicker'
 // `getRoute` is what useRouteLine() calls to turn pickups/stops/drop-offs into a
 // road-following polyline. It existed in the backend lib all along but was never
 // imported here, so the map's route effect threw `getRoute is not defined` the
@@ -996,6 +997,8 @@ function BookingScreen({ destination, onBack, onConfirm }: {
       { id: 'dropoff', label: destName, lat: dc?.lat ?? null, lng: dc?.lng ?? null },
     ]
   })
+  // Which row the full-screen map picker is editing (null = closed).
+  const [mapRow, setMapRow] = useState<number | null>(null)
   // Which row the search sheet is editing. insert=true appends a new stop
   // before the drop-off; otherwise it replaces that row in place.
   const [editor, setEditor] = useState<{ index: number; insert: boolean } | null>(null)
@@ -1356,6 +1359,16 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                       <p className="text-[13px] text-[#1A1A1A] font-semibold break-words leading-snug">
                         {p.label}
                       </p>
+                    </button>
+
+                    {/* Choose this point on the map (tap-to-place pin). */}
+                    <button
+                      type="button"
+                      aria-label={`Choose ${role} on map`}
+                      onClick={() => setMapRow(i)}
+                      className="shrink-0 w-7 h-9 flex items-center justify-center text-[#6B6B6B] active:bg-[#EDEDED] rounded-md"
+                    >
+                      {IC.map('#6B6B6B')}
                     </button>
 
                     {/* Drag handle — pointer-based so it works in the Android
@@ -1759,6 +1772,34 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
           </div>
         </div>
+      )}
+
+      {mapRow !== null && (
+        <MapPicker
+          title={
+            mapRow === 0
+              ? 'Pickup point'
+              : mapRow === places.length - 1
+                ? 'Drop-off point'
+                : `Stop ${mapRow}`
+          }
+          initial={
+            places[mapRow]?.lat != null && places[mapRow]?.lng != null
+              ? { lat: Number(places[mapRow].lat), lng: Number(places[mapRow].lng) }
+              : null
+          }
+          onCancel={() => setMapRow(null)}
+          onConfirm={(p) => {
+            setPlaces((prev) =>
+              prev.map((row, idx) =>
+                idx === mapRow
+                  ? { ...row, label: p.label, lat: p.lat, lng: p.lng, current: false }
+                  : row
+              )
+            )
+            setMapRow(null)
+          }}
+        />
       )}
     </div>
   )
