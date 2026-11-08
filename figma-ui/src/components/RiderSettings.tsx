@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Header } from './SettingsScreen'
 import { changePassword, deleteAccount, openExternalUrl } from '../lib/backend'
+import { passwordError, passwordRules } from '../lib/passwordPolicy'
 
 const TERMS_URL = 'https://www.ridevura.com/terms'
 const PRIVACY_URL = 'https://www.ridevura.com/privacy'
@@ -267,7 +268,8 @@ export function ChangePassword({ onBack }: { onBack: () => void }) {
     setError('')
     setDone(false)
     if (!current) { setError('Enter your current password.'); return }
-    if (next.length < 8) { setError('Your new password must be at least 8 characters.'); return }
+    const passwordProblem = passwordError(next)
+    if (passwordProblem) { setError(passwordProblem); return }
     if (next !== confirm) { setError('The new passwords do not match.'); return }
     setBusy(true)
     try {
@@ -306,7 +308,7 @@ export function ChangePassword({ onBack }: { onBack: () => void }) {
           <div className="mt-4 space-y-3">
             {[
               { label: 'Current password', value: current, set: setCurrent, ph: 'Your current password' },
-              { label: 'New password', value: next, set: setNext, ph: 'At least 8 characters' },
+              { label: 'New password', value: next, set: setNext, ph: '8+ characters, mixed' },
               { label: 'Confirm new password', value: confirm, set: setConfirm, ph: 'Repeat the new password' },
             ].map((row) => (
               <div key={row.label}>
@@ -323,6 +325,28 @@ export function ChangePassword({ onBack }: { onBack: () => void }) {
               </div>
             ))}
           </div>
+
+          {next.length > 0 && (
+            <div className="mt-3 rounded-xl border border-[#EBEBEB] bg-[#FAFAFA] px-3.5 py-3">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-[#9E9E9E]">
+                New password must include
+              </p>
+              <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                {passwordRules(next).map((rule) => (
+                  <div key={rule.id} className="flex items-center gap-1.5">
+                    <span className={`flex h-3 w-3 shrink-0 items-center justify-center rounded-full ${rule.met ? 'bg-[#34A853]' : 'bg-[#E0E0E0]'}`}>
+                      {rule.met && (
+                        <svg width="7" height="7" viewBox="0 0 12 12" fill="none">
+                          <path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </span>
+                    <span className={`text-[10px] ${rule.met ? 'text-[#1A1A1A]' : 'text-[#ADADAD]'}`}>{rule.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <button
             onClick={() => void save()}

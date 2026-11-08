@@ -12,6 +12,8 @@
 
 export const API_URL = "https://api.ridevura.com";
 
+import { passwordError } from "./passwordPolicy";
+
 /**
  * Make a server-supplied path absolute so the WebView can actually load it.
  *
@@ -164,13 +166,16 @@ async function identityCall(path: string, body: Record<string, unknown>) {
   const json: any = res.text ? (() => { try { return JSON.parse(res.text); } catch { return {}; } })() : {};
   if (!res.ok) {
     const msg = json?.error?.message || `Auth failed (${res.status})`;
+    if (String(msg).startsWith("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")) {
+      throw new Error("Use at least 8 characters with uppercase, lowercase, a number and a symbol.");
+    }
     // Friendlier versions of Firebase's codes.
     const friendly: Record<string, string> = {
       EMAIL_EXISTS: "That email is already registered. Try signing in.",
       EMAIL_NOT_FOUND: "No account found with that email.",
       INVALID_PASSWORD: "Incorrect password.",
       INVALID_LOGIN_CREDENTIALS: "Incorrect email or password.",
-      WEAK_PASSWORD: "Password must be at least 6 characters.",
+      WEAK_PASSWORD: "Use at least 8 characters with uppercase, lowercase, a number and a symbol.",
       INVALID_EMAIL: "That email address doesn't look right.",
       OPERATION_NOT_ALLOWED: "Email sign-in is disabled for this project.",
     };
@@ -351,9 +356,8 @@ export async function changePassword(
 ): Promise<void> {
   const u = getStoredUser();
   if (!u?.email) throw new Error("Sign in again to change your password.");
-  if (String(newPassword).length < 8) {
-    throw new Error("Your new password must be at least 8 characters.");
-  }
+  const passwordProblem = passwordError(newPassword);
+  if (passwordProblem) throw new Error(passwordProblem);
   if (currentPassword === newPassword) {
     throw new Error("Choose a new password that is different from the current one.");
   }
@@ -382,6 +386,8 @@ export async function signUp(
   password: string,
   extra: { fullName: string; phone?: string; referralCode?: string }
 ): Promise<AuthUser> {
+  const passwordProblem = passwordError(password);
+  if (passwordProblem) throw new Error(passwordProblem);
   const json = await identityCall("signUp", {
     email: email.trim(),
     password,

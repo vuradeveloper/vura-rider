@@ -131,6 +131,7 @@ import {
   triggerSos
 } from './lib/backend'
 import { startCardSetup } from './lib/cardSetup'
+import { passwordError, passwordIsStrong, passwordRules } from './lib/passwordPolicy'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
   | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater' | 'deleteAccount'
@@ -5004,7 +5005,7 @@ function LoginScreen({ onBack, onSuccess, onSignup }: { onBack: () => void; onSu
               <>
                 <p className="text-[13px] font-semibold text-[#1A1A1A]">Reset your password</p>
                 <p className="text-[12px] text-[#6B6B6B] mt-1 mb-3 leading-relaxed">
-                  Enter the email on your account and we'll send you a reset link.
+                  Enter the email on your account and we'll send you a reset link. Your new password must be 8+ characters with uppercase, lowercase, a number and a symbol.
                 </p>
                 <InputField
                   label="Email address"
@@ -5099,6 +5100,11 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
     }
     if (step === 2) {
       if (!phone || !password) return
+      const passwordProblem = passwordError(password)
+      if (passwordProblem) {
+        setError(passwordProblem)
+        return
+      }
       const newCode = String(Math.floor(100000 + Math.random() * 900000))
       setCode(newCode)
       setOtp('')
@@ -5144,7 +5150,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
     step === 1
       ? (firstName.length > 0 && email.includes('@'))
       : step === 2
-        ? (phone.length >= 8 && password.length >= 6 && agreed)
+        ? (phone.length >= 8 && passwordIsStrong(password) && agreed)
         : otp.length === 6
 
   return (
@@ -5207,19 +5213,35 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
             placeholder="At least 8 characters"
             value={password}
             onChange={setPassword}
-            hint="Use a mix of letters, numbers and symbols"
+            hint="8+ characters with uppercase, lowercase, a number and a symbol"
           />
 
-          {/* Password strength */}
+          {/* Password policy — every rule is enforced by Firebase as well. */}
           {password.length > 0 && (
-            <div className="flex gap-1.5 -mt-2">
-              {[1, 2, 3, 4].map(i => (
-                <div key={i} className="flex-1 h-1 rounded-full transition-all"
-                  style={{ background: password.length >= i * 3 ? (password.length >= 10 ? '#34A853' : '#FBBC04') : '#F0F0F0' }} />
-              ))}
-              <span className="text-[11px] text-[#ADADAD] ml-1 self-center">
-                {password.length < 4 ? 'Weak' : password.length < 8 ? 'Fair' : password.length < 10 ? 'Good' : 'Strong'}
-              </span>
+            <div className="rounded-2xl border border-[#EBEBEB] bg-[#F7F7F7] px-4 py-3 -mt-2">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#9E9E9E]">
+                Password must include
+              </p>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                {passwordRules(password).map((rule) => (
+                  <div key={rule.id} className="flex items-center gap-1.5">
+                    <span
+                      className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full ${
+                        rule.met ? 'bg-[#34A853]' : 'bg-[#E0E0E0]'
+                      }`}
+                    >
+                      {rule.met && (
+                        <svg width="8" height="8" viewBox="0 0 12 12" fill="none">
+                          <path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </span>
+                    <span className={`text-[10.5px] ${rule.met ? 'text-[#1A1A1A]' : 'text-[#ADADAD]'}`}>
+                      {rule.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
