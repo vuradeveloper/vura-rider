@@ -6,6 +6,7 @@
  * friendly UX layer: the checklist and the error shown before a request.
  */
 export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 64;
 
 export interface PasswordRule {
   id: string;
@@ -16,6 +17,7 @@ export interface PasswordRule {
 export function passwordRules(password: string): PasswordRule[] {
   return [
     { id: 'length', label: 'At least 8 characters', met: password.length >= PASSWORD_MIN_LENGTH },
+    { id: 'max', label: 'No more than 64 characters', met: password.length <= PASSWORD_MAX_LENGTH },
     { id: 'lower', label: 'One lowercase letter', met: /[a-z]/.test(password) },
     { id: 'upper', label: 'One uppercase letter', met: /[A-Z]/.test(password) },
     { id: 'number', label: 'One number', met: /[0-9]/.test(password) },
