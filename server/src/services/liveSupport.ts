@@ -118,8 +118,11 @@ async function riderUser(firebaseUid: string) {
     email: string | null;
     phone: string | null;
     role: string | null;
+    has_driver_profile: boolean;
   }>(
-    `SELECT id, full_name, email, phone, role FROM users WHERE firebase_uid = $1`,
+    `SELECT u.id, u.full_name, u.email, u.phone, u.role,
+            EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = u.id) AS has_driver_profile
+       FROM users u WHERE u.firebase_uid = $1`,
     [firebaseUid]
   );
 }
@@ -177,7 +180,7 @@ export async function sendRiderMessage(input: {
   if (!user) throw new Error("User not found.");
   const message = cleanMessage(input.message);
   if (message.length < 1) throw new Error("Type a message first.");
-  const userRole = user.role === "driver" ? "driver" : "rider";
+  const userRole = user.role === "driver" || user.has_driver_profile ? "driver" : "rider";
 
   const openChat = await queryOne<LiveChatRow>(
     `SELECT * FROM live_chats
