@@ -64,13 +64,21 @@ function renderInviteEmail(m) {
 </div>`;
     return { subject, html };
 }
-/** The console's "Forgot password" email (pure — unit-tested). */
-function renderResetEmail(resetLink) {
+/** "Vura" for riders/drivers, "Vura BackOffice" for the console. */
+const appLabel = (appName) => {
+    const name = String(appName || "").trim();
+    return name || "Vura";
+};
+/** Password-reset email shared by the rider app, driver app and console. */
+function renderResetEmail(resetLink, appName = "Vura") {
+    const app = appLabel(appName);
     return {
-        subject: "Reset your Vura BackOffice password",
+        subject: `Reset your ${app} password`,
         html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#1A1A1A;max-width:520px;margin:0 auto">
   <h2>Reset your password</h2>
+  <p>We received a request to reset the password for your <strong>${app}</strong> account.</p>
   <p><a href="${resetLink}" style="display:inline-block;background:#1A1A1A;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:700">Choose a new password</a></p>
+  <p>Open the ${app} app and sign in with your new password.</p>
   <p style="color:#888;font-size:12px">If you didn't request this, ignore this email — nothing changes.</p>
 </div>`,
     };
@@ -100,9 +108,9 @@ async function sendAdminInviteEmail(m) {
     const { subject, html } = renderInviteEmail(m);
     return sendResendEmail({ to: m.email, subject, html });
 }
-/** Deliver a password-reset link (console "Forgot password?"). */
-async function sendPasswordResetEmail(email, resetLink) {
-    const { subject, html } = renderResetEmail(resetLink);
+/** Deliver a password-reset link (rider, driver or console). */
+async function sendPasswordResetEmail(email, resetLink, appName = "Vura") {
+    const { subject, html } = renderResetEmail(resetLink, appName);
     return sendResendEmail({ to: email, subject, html });
 }
 //# sourceMappingURL=adminInvite.js.map

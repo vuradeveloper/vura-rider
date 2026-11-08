@@ -17,8 +17,8 @@ export declare function renderInviteEmail(m: InviteMail): {
     subject: string;
     html: string;
 };
-/** The console's "Forgot password" email (pure — unit-tested). */
-export declare function renderResetEmail(resetLink: string): {
+/** Password-reset email shared by the rider app, driver app and console. */
+export declare function renderResetEmail(resetLink: string, appName?: string): {
     subject: string;
     html: string;
 };
@@ -36,8 +36,8 @@ export declare function sendAdminInviteEmail(m: InviteMail): Promise<{
     ok: boolean;
     error?: string;
 }>;
-/** Deliver a password-reset link (console "Forgot password?"). */
-export declare function sendPasswordResetEmail(email: string, resetLink: string): Promise<{
+/** Deliver a password-reset link (rider, driver or console). */
+export declare function sendPasswordResetEmail(email: string, resetLink: string, appName?: string): Promise<{
     ok: boolean;
     error?: string;
 }>;
