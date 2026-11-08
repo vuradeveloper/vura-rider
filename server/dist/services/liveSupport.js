@@ -52,6 +52,7 @@ async function ensureLiveSupportSchema() {
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+            await (0, database_1.execute)(`ALTER TABLE live_chats ADD COLUMN IF NOT EXISTS user_role VARCHAR(20) DEFAULT 'rider'`);
             await (0, database_1.execute)(`CREATE INDEX IF NOT EXISTS idx_live_chats_status ON live_chats (status, updated_at DESC)`);
             await (0, database_1.execute)(`CREATE INDEX IF NOT EXISTS idx_live_chats_rider ON live_chats (rider_id, created_at DESC)`);
             await (0, database_1.execute)(`CREATE INDEX IF NOT EXISTS idx_live_chat_messages_chat ON live_chat_messages (chat_id, created_at)`);
@@ -74,10 +75,12 @@ function cleanMessage(value) {
     return String(value || "").trim().slice(0, 4000);
 }
 async function riderUser(firebaseUid) {
-    return await (0, database_1.queryOne)(`SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1`, [firebaseUid]);
+    return await (0, database_1.queryOne)(`SELECT id, full_name, email, phone, role FROM users WHERE firebase_uid = $1`, [firebaseUid]);
 }
-async function latestRideId(riderId) {
-    const row = await (0, database_1.queryOne)(`SELECT id FROM rides WHERE passenger_id = $1 ORDER BY created_at DESC LIMIT 1`, [riderId]).catch(() => null);
+async function latestRideId(userId, role) {
+    const row = await (0, database_1.queryOne)(role === "driver"
+        ? `SELECT id FROM rides WHERE driver_id = $1 ORDER BY created_at DESC LIMIT 1`
+        : `SELECT id FROM rides WHERE passenger_id = $1 ORDER BY created_at DESC LIMIT 1`, [userId]).catch(() => null);
     return row?.id ?? null;
 }
 /** Latest chat for a rider — including resolved, so the app can show the outcome. */
@@ -114,19 +117,20 @@ async function sendRiderMessage(input) {
     const message = cleanMessage(input.message);
     if (message.length < 1)
         throw new Error("Type a message first.");
+    const userRole = user.role === "driver" ? "driver" : "rider";
     const openChat = await (0, database_1.queryOne)(`SELECT * FROM live_chats
       WHERE rider_id = $1 AND status IN ('open', 'pending')
       ORDER BY created_at DESC LIMIT 1`, [user.id]);
     let chatId = openChat?.id;
     if (!chatId) {
-        const rideId = input.rideId || (await latestRideId(user.id));
+        const rideId = input.rideId || (await latestRideId(user.id, userRole));
         for (let attempt = 0; attempt < 5; attempt++) {
             const reference = makeReference();
             try {
                 const created = await (0, database_1.queryOne)(`INSERT INTO live_chats
-             (reference, rider_id, rider_name, rider_email, rider_phone, ride_id, status)
-           VALUES ($1, $2, $3, $4, $5, $6, 'open')
-           RETURNING id`, [reference, user.id, user.full_name, user.email, user.phone, rideId]);
+             (reference, rider_id, rider_name, rider_email, rider_phone, user_role, ride_id, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'open')
+           RETURNING id`, [reference, user.id, user.full_name, user.email, user.phone, userRole, rideId]);
                 chatId = created?.id;
                 break;
             }
@@ -140,8 +144,10 @@ async function sendRiderMessage(input) {
     if (!chatId)
         throw new Error("Could not start a live chat.");
     await (0, database_1.execute)(`INSERT INTO live_chat_messages (chat_id, author_role, author_email, message)
-     VALUES ($1, 'rider', $2, $3)`, [chatId, user.email, message]);
-    await (0, database_1.execute)(`UPDATE live_chats SET status = 'open', updated_at = NOW() WHERE id = $1`, [chatId]);
+     VALUES ($1, $2, $3, $4)`, [chatId, userRole, user.email, message]);
+    await (0, database_1.execute)(`UPDATE live_chats
+        SET status = 'open', user_role = $2, updated_at = NOW()
+      WHERE id = $1`, [chatId, userRole]);
     return await getRiderChat(input.firebaseUid);
 }
 /** Admin list: open first, newest activity first, with the last public message. */

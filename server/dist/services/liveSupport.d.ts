@@ -1,5 +1,5 @@
 export type LiveChatStatus = "open" | "pending" | "resolved" | "closed";
-export type LiveChatAuthorRole = "rider" | "admin" | "system";
+export type LiveChatAuthorRole = "rider" | "driver" | "admin" | "system";
 export interface LiveChatMessage {
     id: string;
     chat_id: string;
@@ -16,6 +16,7 @@ export interface LiveChatRow {
     rider_name: string | null;
     rider_email: string | null;
     rider_phone: string | null;
+    user_role: "rider" | "driver";
     ride_id: string | null;
     status: LiveChatStatus;
     priority: string;
