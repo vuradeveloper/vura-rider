@@ -422,7 +422,7 @@ export function signOut() {
 export async function requestPasswordReset(email: string): Promise<void> {
   await apiFetch("/api/users/forgot-password", {
     method: "POST",
-    body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    body: JSON.stringify({ email: email.trim().toLowerCase(), app: "rider" }),
   });
 }
 
@@ -2067,7 +2067,7 @@ export const getLostItemReports = () =>
 // first message is enough — no separate "start chat" screen.
 export interface RiderLiveChatMessage {
   id: string;
-  author_role: "rider" | "admin" | "system";
+  author_role: "rider" | "driver" | "admin" | "system";
   author_email: string | null;
   message: string;
   created_at: string;
