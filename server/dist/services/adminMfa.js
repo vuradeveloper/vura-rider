@@ -88,11 +88,25 @@ function baseSecret() {
     const dedicated = (process.env.ADMIN_2FA_KEY || "").trim();
     if (dedicated)
         return dedicated;
-    const firebaseKey = (process.env.FIREBASE_PRIVATE_KEY || "").trim();
+    // The EB environment stores the Firebase key as FIREBASE_PRIVATE_KEY_B64
+    // (single-line, copy-safe). The Admin SDK accepts that form, but this file
+    // previously only looked at FIREBASE_PRIVATE_KEY, which is absent in
+    // production — hence "Admin 2FA is not configured" despite Firebase working.
+    let firebaseKey = (process.env.FIREBASE_PRIVATE_KEY || "").trim();
+    if (!firebaseKey && process.env.FIREBASE_PRIVATE_KEY_B64) {
+        try {
+            firebaseKey = Buffer.from(process.env.FIREBASE_PRIVATE_KEY_B64, "base64")
+                .toString("utf8")
+                .trim();
+        }
+        catch {
+            /* fall through to the service-account file */
+        }
+    }
     if (firebaseKey) {
         if (!fallbackWarned) {
             fallbackWarned = true;
-            console.warn("[admin-mfa] ADMIN_2FA_KEY is not set; deriving the key from FIREBASE_PRIVATE_KEY. Set ADMIN_2FA_KEY before rotating Firebase credentials.");
+            console.warn("[admin-mfa] ADMIN_2FA_KEY is not set; deriving the key from the Firebase private key. Set ADMIN_2FA_KEY before rotating Firebase credentials.");
         }
         return firebaseKey;
     }
