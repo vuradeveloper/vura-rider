@@ -1,4 +1,4 @@
-import { Router, Response } from "express";
+import { Router, Response, NextFunction } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { recalculatePerformanceTiers } from "../services/performanceTier";
@@ -20,26 +20,35 @@ function isAdmin(req: AuthRequest): boolean {
 
 // The legacy /api/admin endpoints are still used by a few console screens.
 // Protect them with the same TOTP session as /api/admin/v2 so 2FA cannot be
-// bypassed by calling the older route. Non-admin callers fall through to the
-// route's own 403.
-router.use(requireAuth, async (req: AuthRequest, res: Response, next) => {
-  if (!isAdmin(req)) {
+// bypassed by calling the older route. Requests under /v2 belong to the
+// dedicated adminV2/MFA routers mounted after this one and must NOT be blocked
+// here (otherwise an unenrolled admin could never reach the setup endpoints).
+router.use((req: AuthRequest, res: Response, next: NextFunction) => {
+  if (req.path === "/v2" || req.path.startsWith("/v2/")) {
     next();
     return;
   }
-  try {
-    const uid = req.userId || req.user?.uid || "";
-    const gate = await getAdminMfaGate(uid);
-    const token = String(req.headers["x-admin-mfa"] || "");
-    if (!gate.enabled || !(await adminMfaTokenValid(uid, token))) {
-      res.status(403).json({ error: "Two-factor authentication required", code: "mfa_required" });
+  requireAuth(req, res, () => {
+    if (!isAdmin(req)) {
+      next();
       return;
     }
-    next();
-  } catch (err: any) {
-    console.error("[admin] 2FA gate failed:", err?.message || err);
-    res.status(503).json({ error: "Two-factor authentication is not available yet" });
-  }
+    void (async () => {
+      try {
+        const uid = req.userId || req.user?.uid || "";
+        const gate = await getAdminMfaGate(uid);
+        const token = String(req.headers["x-admin-mfa"] || "");
+        if (!gate.enabled || !(await adminMfaTokenValid(uid, token))) {
+          res.status(403).json({ error: "Two-factor authentication required", code: "mfa_required" });
+          return;
+        }
+        next();
+      } catch (err: any) {
+        console.error("[admin] 2FA gate failed:", err?.message || err);
+        res.status(503).json({ error: "Two-factor authentication is not available yet" });
+      }
+    })();
+  });
 });
 
 // Ensure the fare config table exists (config singleton keyed by "current").
