@@ -43,9 +43,11 @@ import vehicleImagesRouter from "./routes/vehicleImagesAdmin";
 import { ensureVehicleImageTables, startVehicleImageWorker } from "./services/vehicleImages";
 import { ensureVehicleReviewSchema, sweepVehicleClassification } from "./services/vehicleReview";
 import { ensureDuplicateSchema, sweepDuplicateUsers } from "./services/duplicateDetection";
+import { ensureReportSchema } from "./services/adminReports";
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
 import adminLiveSupportRouter from "./routes/adminLiveSupport";
+import adminReportsRouter from "./routes/adminReports";
 import safetyAdminRouter from "./routes/safetyAdmin";
 import walletAdminRouter from "./routes/walletAdmin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
@@ -177,6 +179,12 @@ ensureDuplicateSchema()
     console.error("[duplicates] schema ensure/sweep failed:", err?.message || err)
   );
 
+// Admin support queue: additive columns and indexes for disputes, refund
+// requests and lost-item reports. Failures never stop the API booting.
+ensureReportSchema().catch((err) =>
+  console.error("[adminReports] schema ensure failed:", err?.message || err)
+);
+
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
 // 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
@@ -278,6 +286,9 @@ app.use("/api/admin", adminRouter);
 // Live Support: the chat inbox is mounted BEFORE the general admin router so
 // /api/admin/v2/live-chats never depends on adminV2's route table.
 app.use("/api/admin/v2/live-chats", adminLiveSupportRouter);
+// Disputes, refund requests and lost-item reports: mounted before adminV2 so
+// the support queue does not depend on the general router's route table.
+app.use("/api/admin/v2", adminReportsRouter);
 app.use("/api/admin/v2", adminV2Router);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
