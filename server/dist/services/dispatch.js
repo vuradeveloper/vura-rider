@@ -1080,11 +1080,26 @@ async function acceptRide(io, params) {
     }
     const result = await (0, database_1.withTransaction)(async (client) => {
         const rideRes = await client.query(`SELECT id, status, passenger_id, estimated_fare, COALESCE(version, 0) AS version, driver_id,
-              payment_method, COALESCE(tier, 'go') AS tier
+              payment_method, COALESCE(tier, 'go') AS tier, scheduled_at
          FROM rides WHERE id = $1 FOR UPDATE`, [rideId]);
         const ride = rideRes.rows[0];
         if (!ride)
             return { ok: false, error: "Ride no longer available" };
+        const reserving = ride.status === "scheduled" &&
+            !!ride.scheduled_at &&
+            new Date(ride.scheduled_at).getTime() > Date.now() + 15 * 60 * 1000;
+        if (ride.status === "scheduled" && ride.driver_id && ride.driver_id !== driverId) {
+            return { ok: false, error: "This ride is reserved by another driver." };
+        } // Idempotent re-tap: the same driver already holds this reservation.
+        if (reserving && ride.driver_id === driverId) {
+            return {
+                ok: true,
+                duplicate: true,
+                reserved: true,
+                rideId,
+                version: ride.version ?? 0,
+            };
+        }
         // Already taken?
         if (["accepted", "driver_arrived", "in_progress"].includes(ride.status)) {
             if (ride.driver_id === driverId) {
@@ -1094,6 +1109,25 @@ async function acceptRide(io, params) {
         }
         if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
             return { ok: false, error: `Ride is ${ride.status}` };
+        }
+        // ── Uber Reserve: accept early, stay available ───────────────────────────
+        // The ride stays 'scheduled' with this driver assigned. The driver keeps
+        // taking normal rides; the reservation activates 15 minutes before pickup.
+        if (reserving) {
+            const when = ride.scheduled_at ? new Date(ride.scheduled_at).getTime() : 0;
+            if (!when || when <= Date.now()) {
+                return { ok: false, error: "This reservation has already started." };
+            }
+            const dp = await client.query("SELECT status FROM driver_profiles WHERE user_id = $1", [driverId]);
+            if (String(dp.rows[0]?.status || "") === "on_trip") {
+                return { ok: false, error: "Finish your current trip before reserving another ride." };
+            }
+            const other = await client.query(`SELECT 1 FROM rides
+          WHERE driver_id = $1 AND status = 'scheduled' AND id <> $2
+          LIMIT 1`, [driverId, rideId]);
+            if ((other.rowCount ?? 0) > 0) {
+                return { ok: false, error: "You already have an upcoming reservation." };
+            }
         }
         // RIDE CLASS is enforced HERE too, not only in dispatch. The driver app has
         // a 2-second polling fallback (GET /api/rides/available) and any client can
@@ -1146,10 +1180,10 @@ async function acceptRide(io, params) {
             }
         }
         const upd = await client.query(`UPDATE rides
-          SET driver_id = $1, status = 'accepted', accepted_at = NOW(), updated_at = NOW(),
+          SET driver_id = $1, status = $3, accepted_at = NOW(), updated_at = NOW(),
               version = COALESCE(version, 0) + 1
         WHERE id = $2 AND status IN ('searching', 'scheduled', 'no_drivers')
-        RETURNING COALESCE(version, 0) AS version`, [driverId, rideId]);
+        RETURNING COALESCE(version, 0) AS version`, [driverId, rideId, reserving ? "scheduled" : "accepted"]);
         // 0 rows here is the NORMAL losing path: another driver won the race, or the
         // 15s window closed. It is a clean business error, not a fault. A real database
         // error is NOT swallowed here -- this query is deliberately un-caught so
@@ -1165,11 +1199,14 @@ async function acceptRide(io, params) {
         const losersRes = await client.query(`UPDATE ride_offers SET status = 'expired', decline_reason = 'ride_taken', updated_at = NOW()
         WHERE ride_id = $1 AND status = 'pending' AND driver_id <> $2
         RETURNING driver_id`, [rideId, driverId]);
-        await client.query(`UPDATE driver_profiles SET status = 'on_trip', updated_at = NOW() WHERE user_id = $1`, [driverId]);
+        if (!reserving) {
+            await client.query(`UPDATE driver_profiles SET status = 'on_trip', updated_at = NOW() WHERE user_id = $1`, [driverId]);
+        }
         return {
             ok: true,
             rideId,
             version: upd.rows[0]?.version ?? 0,
+            reserved: reserving,
             losers: losersRes.rows.map((r) => r.driver_id),
         };
     });
@@ -1185,7 +1222,7 @@ async function acceptRide(io, params) {
     await logRideEvent(rideId, driverId, result.duplicate ? "accept_duplicate" : "ride_accepted", {
         version: result.version,
     });
-    if (!result.duplicate) {
+    if (!result.duplicate && !result.reserved) {
         // Safety (§3): the rider's start PIN is minted here — one per ride, shown
         // only to the rider, keyed by this driver before the trip can begin.
         void (0, pinService_1.mintRidePin)(rideId).catch((err) => console.warn("[safety] PIN mint failed:", err?.message || err));

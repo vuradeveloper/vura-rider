@@ -140,6 +140,8 @@ export interface AcceptResult {
     rideId?: string;
     version?: number;
     duplicate?: boolean;
+    /** True when a scheduled ride was reserved but not activated yet. */
+    reserved?: boolean;
     /**
      * Drivers who still held a pending offer for this ride when it was won, and so
      * have to be told it is gone. Collected inside the accept transaction, acted on

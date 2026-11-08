@@ -15,6 +15,7 @@ const rideCategories_1 = require("../services/rideCategories");
 const preauthorization_1 = require("../services/preauthorization");
 const PayLaterService_1 = require("../services/PayLaterService");
 const promos_1 = require("../services/promos");
+const notify_1 = require("../services/notify");
 const router = (0, express_1.Router)();
 // GET /api/rides/me/active-state — ONE call that rebuilds the app's world.
 //
@@ -362,7 +363,7 @@ router.post("/:id/accept", auth_1.requireAuth, async (req, res) => {
             res.status(409).json({ ok: false, error: result.error || "Ride no longer available" });
             return;
         }
-        res.json({ ok: true, rideId: result.rideId, version: result.version, duplicate: result.duplicate === true });
+        res.json({ ok: true, rideId: result.rideId, version: result.version, duplicate: result.duplicate === true, reserved: result.reserved === true });
     }
     catch (err) {
         console.error("REST accept error:", err);
@@ -715,6 +716,74 @@ router.get("/scheduled", auth_1.requireAuth, async (req, res) => {
     }
 });
 // GET /api/rides/:id — Get specific ride details
+router.get("/driver/reservations", auth_1.requireAuth, async (req, res) => {
+    try {
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!user) {
+            res.status(401).json({ error: "User not found" });
+            return;
+        }
+        const rows = await (0, database_1.query)(`SELECT id, pickup_address, pickup_lat, pickup_lng,
+              destination_address, destination_lat, destination_lng,
+              scheduled_at, estimated_fare, tier, payment_method, waypoints, status
+         FROM rides
+        WHERE driver_id = $1 AND status = 'scheduled' AND scheduled_at > NOW()
+        ORDER BY scheduled_at ASC`, [user.id]);
+        res.json({ reservations: rows });
+    }
+    catch (err) {
+        res.status(500).json({ error: err?.message || "Could not load reservations" });
+    }
+});
+// POST /api/rides/driver/reservations/:id/release — give a reservation back
+// without cancelling the rider's ride. Still-scheduled means the scheduler can
+// rematch at T-15; inside the window it goes straight back to searching.
+router.post("/driver/reservations/:id/release", auth_1.requireAuth, async (req, res) => {
+    try {
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!user) {
+            res.status(401).json({ error: "User not found" });
+            return;
+        }
+        const ride = await (0, database_1.queryOne)(`SELECT id, scheduled_at, passenger_id FROM rides
+          WHERE id = $1 AND driver_id = $2 AND status = 'scheduled'`, [req.params.id, user.id]);
+        if (!ride) {
+            res.status(404).json({ error: "Reservation not found" });
+            return;
+        }
+        const when = ride.scheduled_at ? new Date(ride.scheduled_at).getTime() : 0;
+        const soon = when > 0 && when <= Date.now() + 15 * 60 * 1000;
+        const nextStatus = soon ? "searching" : "scheduled";
+        const upd = await (0, database_1.execute)(`UPDATE rides
+            SET driver_id = NULL, status = $2,
+                announced = CASE WHEN $2 = 'searching' THEN TRUE ELSE announced END,
+                updated_at = NOW()
+          WHERE id = $1 AND driver_id = $3 AND status = 'scheduled'`, [ride.id, nextStatus, user.id]);
+        if ((upd?.rowCount ?? 0) === 0) {
+            res.status(409).json({ error: "That reservation has already started" });
+            return;
+        }
+        const io = global.__vuraIo;
+        if (nextStatus === "searching" && io) {
+            io.to("drivers").emit("ride:rematch", { rideId: ride.id });
+        }
+        if (ride.passenger_id) {
+            const pax = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null);
+            if (pax?.firebase_uid) {
+                (0, notify_1.sendPushToUser)(pax.firebase_uid, {
+                    type: "reservation_released",
+                    title: "Finding a new driver",
+                    body: "Your reserved driver released the ride — we're matching another driver for your pickup.",
+                    data: { rideId: ride.id, type: "reservation_released" },
+                }).catch(() => { });
+            }
+        }
+        res.json({ success: true, status: nextStatus });
+    }
+    catch (err) {
+        res.status(500).json({ error: err?.message || "Could not release the reservation" });
+    }
+});
 router.get("/:id", auth_1.requireAuth, async (req, res) => {
     try {
         const firebaseUid = req.userId;
