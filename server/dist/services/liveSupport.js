@@ -75,7 +75,9 @@ function cleanMessage(value) {
     return String(value || "").trim().slice(0, 4000);
 }
 async function riderUser(firebaseUid) {
-    return await (0, database_1.queryOne)(`SELECT id, full_name, email, phone, role FROM users WHERE firebase_uid = $1`, [firebaseUid]);
+    return await (0, database_1.queryOne)(`SELECT u.id, u.full_name, u.email, u.phone, u.role,
+            EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = u.id) AS has_driver_profile
+       FROM users u WHERE u.firebase_uid = $1`, [firebaseUid]);
 }
 async function latestRideId(userId, role) {
     const row = await (0, database_1.queryOne)(role === "driver"
@@ -117,7 +119,7 @@ async function sendRiderMessage(input) {
     const message = cleanMessage(input.message);
     if (message.length < 1)
         throw new Error("Type a message first.");
-    const userRole = user.role === "driver" ? "driver" : "rider";
+    const userRole = user.role === "driver" || user.has_driver_profile ? "driver" : "rider";
     const openChat = await (0, database_1.queryOne)(`SELECT * FROM live_chats
       WHERE rider_id = $1 AND status IN ('open', 'pending')
       ORDER BY created_at DESC LIMIT 1`, [user.id]);
