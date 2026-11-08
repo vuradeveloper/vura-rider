@@ -80,9 +80,11 @@ const vehicleImagesAdmin_1 = __importDefault(require("./routes/vehicleImagesAdmi
 const vehicleImages_1 = require("./services/vehicleImages");
 const vehicleReview_1 = require("./services/vehicleReview");
 const duplicateDetection_1 = require("./services/duplicateDetection");
+const adminReports_1 = require("./services/adminReports");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const adminLiveSupport_1 = __importDefault(require("./routes/adminLiveSupport"));
+const adminReports_2 = __importDefault(require("./routes/adminReports"));
 const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
 const walletAdmin_1 = __importDefault(require("./routes/walletAdmin"));
 const SchedulingService_1 = require("./services/SchedulingService");
@@ -186,6 +188,9 @@ app.use("/api", vehicleImagesAdmin_1.default);
 (0, duplicateDetection_1.ensureDuplicateSchema)()
     .then(() => (0, duplicateDetection_1.sweepDuplicateUsers)())
     .catch((err) => console.error("[duplicates] schema ensure/sweep failed:", err?.message || err));
+// Admin support queue: additive columns and indexes for disputes, refund
+// requests and lost-item reports. Failures never stop the API booting.
+(0, adminReports_1.ensureReportSchema)().catch((err) => console.error("[adminReports] schema ensure failed:", err?.message || err));
 function safeRateLimit(name, options) {
     try {
         return (0, express_rate_limit_1.default)(options);
@@ -265,6 +270,9 @@ app.use("/api/admin", admin_1.default);
 // Live Support: the chat inbox is mounted BEFORE the general admin router so
 // /api/admin/v2/live-chats never depends on adminV2's route table.
 app.use("/api/admin/v2/live-chats", adminLiveSupport_1.default);
+// Disputes, refund requests and lost-item reports: mounted before adminV2 so
+// the support queue does not depend on the general router's route table.
+app.use("/api/admin/v2", adminReports_2.default);
 app.use("/api/admin/v2", adminV2_1.default);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
