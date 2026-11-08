@@ -22,6 +22,7 @@
 import { Response, NextFunction } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { queryOne, execute, isMissingRelation } from "../config/database";
+import { adminMfaTokenValid, getAdminMfaGate } from "./adminMfa";
 
 export const ADMIN_ROLES = [
   "super_admin",
@@ -194,6 +195,22 @@ export function requireAdmin(perm: AdminPermission) {
           error: "Governance access is restricted to the account owner",
           required: perm,
           role: actor.role,
+        });
+        return;
+      }
+      // Every admin API call needs a recent TOTP session. Enrollment itself
+      // goes through /api/admin/v2/mfa, which does not use this middleware.
+      const uid = req.user?.uid || req.userId;
+      if (!uid) {
+        res.status(401).json({ error: "Authentication required", code: "mfa_required" });
+        return;
+      }
+      const gate = await getAdminMfaGate(uid);
+      const mfaToken = String(req.headers["x-admin-mfa"] || "");
+      if (!gate.enabled || !(await adminMfaTokenValid(uid, mfaToken))) {
+        res.status(403).json({
+          error: "Two-factor authentication required",
+          code: "mfa_required",
         });
         return;
       }
