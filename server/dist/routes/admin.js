@@ -7,6 +7,7 @@ const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const performanceTier_1 = require("../services/performanceTier");
+const adminMfa_1 = require("../services/adminMfa");
 const adminFeatures_1 = __importDefault(require("./adminFeatures"));
 const router = (0, express_1.Router)();
 function isAdmin(req) {
@@ -17,6 +18,30 @@ function isAdmin(req) {
         !!req.user?.email &&
         admins.includes(req.user.email.toLowerCase()));
 }
+// The legacy /api/admin endpoints are still used by a few console screens.
+// Protect them with the same TOTP session as /api/admin/v2 so 2FA cannot be
+// bypassed by calling the older route. Non-admin callers fall through to the
+// route's own 403.
+router.use(auth_1.requireAuth, async (req, res, next) => {
+    if (!isAdmin(req)) {
+        next();
+        return;
+    }
+    try {
+        const uid = req.userId || req.user?.uid || "";
+        const gate = await (0, adminMfa_1.getAdminMfaGate)(uid);
+        const token = String(req.headers["x-admin-mfa"] || "");
+        if (!gate.enabled || !(await (0, adminMfa_1.adminMfaTokenValid)(uid, token))) {
+            res.status(403).json({ error: "Two-factor authentication required", code: "mfa_required" });
+            return;
+        }
+        next();
+    }
+    catch (err) {
+        console.error("[admin] 2FA gate failed:", err?.message || err);
+        res.status(503).json({ error: "Two-factor authentication is not available yet" });
+    }
+});
 // Ensure the fare config table exists (config singleton keyed by "current").
 async function ensureFareConfigTable() {
     await (0, database_1.execute)(`
