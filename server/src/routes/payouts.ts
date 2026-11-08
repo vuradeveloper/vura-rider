@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth } from "../middleware/auth";
-import { queryOne, execute } from "../config/database";
+import { query, queryOne, execute } from "../config/database";
 import { createTransferRecipient, transferFunds } from "../services/paystackPayment";
 import { markPayoutEarningsPaid } from "../services/payoutSettlement";
 
@@ -69,6 +69,36 @@ router.get("/banks", (_req: AuthRequest, res: Response) => {
     { name: "Discovery Bank", code: "679000" },
     { name: "TymeBank", code: "678910" },
   ]);
+});
+
+// GET /api/payouts/history — the driver's withdrawals, from the server (not the
+// device), so reinstalling or switching phones does not lose the history.
+router.get("/history", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    await ensurePayoutsTable();
+    const user = await queryOne<{ id: string }>(
+      "SELECT id FROM users WHERE firebase_uid = $1",
+      [req.userId!]
+    );
+    if (!user) {
+      res.status(401).json({ error: "User not found" });
+      return;
+    }
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const rows = await query(
+      `SELECT id, amount, status, reference, transfer_code, bank_name,
+              RIGHT(COALESCE(account_number, ''), 4) AS account_last4,
+              message, created_at, updated_at
+         FROM payouts
+        WHERE driver_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2`,
+      [user.id, limit]
+    );
+    res.json({ payouts: rows });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Could not load payout history" });
+  }
 });
 
 // POST /api/payouts/resolve — Validate + create a transfer recipient for the driver
