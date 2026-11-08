@@ -1270,6 +1270,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return;
         }
         socket.join(`ride:${rideId}`);
+        const reserved = claim.reserved === true;
         // Notify the rider
         const driver = await queryOne<any>(
           "SELECT u.full_name, dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.license_plate, COALESCE(dp.rating_avg, 0) AS rating_avg FROM users u LEFT JOIN driver_profiles dp ON dp.user_id = u.id WHERE u.id = $1",
@@ -1280,7 +1281,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // the ride `version` and is delivered to the user room as well). Removing
         // the old duplicate here stops the rider's phone buzzing twice.
         void driver;
-        // Push "driver found" to the rider's devices.
+        // Push "driver found" (or "reserved") to the rider's devices.
         (async () => {
           const passenger = await queryOne<{ firebase_uid: string }>(
             "SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]
@@ -1288,16 +1289,39 @@ export function setupSocketHandlers(io: SocketIOServer) {
           const isScheduled = (ride?.status ?? "") === "scheduled";
           notifyUser(
             passenger?.firebase_uid,
-            isScheduled ? "Driver assigned" : "Driver found",
-            isScheduled
-              ? `${driver?.full_name || "Your driver"} is confirmed for your scheduled ride. They'll pick you up at the booked time.`
-              : `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`,
+            reserved ? "Driver reserved" : isScheduled ? "Driver assigned" : "Driver found",
+            reserved
+              ? `${driver?.full_name || "Your driver"} is reserved for your scheduled ride${
+                  ride?.scheduled_at
+                    ? ` at ${new Date(ride.scheduled_at).toLocaleString("en-ZA", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        day: "numeric",
+                        month: "short",
+                      })}`
+                    : ""
+                }.`
+              : isScheduled
+                ? `${driver?.full_name || "Your driver"} is confirmed for your scheduled ride. They'll pick you up at the booked time.`
+                : `${driver?.full_name || "Your driver"} has accepted your ride and is on the way to pick you up.`,
             { ride_id: rideId, scheduled_at: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : undefined },
             rideId,
-            "ride_accepted"
+            reserved ? "ride_reserved" : "ride_accepted"
           );
         })();
-        socket.emit("ride:accepted:ack", { success: true, rideId });
+        if (reserved) {
+          const drv = await queryOne<{ firebase_uid: string }>(
+            "SELECT firebase_uid FROM users WHERE id = $1",
+            [dbUserId]
+          ).catch(() => null);
+          if (drv?.firebase_uid) {
+            io.to(`user:${drv.firebase_uid}`).emit("driver:reservation:confirmed", {
+              rideId,
+              scheduledAt: ride?.scheduled_at ? new Date(ride.scheduled_at).toISOString() : null,
+            });
+          }
+        }
+        socket.emit("ride:accepted:ack", { success: true, rideId, reserved });
         // A ride was taken — refresh the rider-request count for drivers.
         await broadcastRiderQueue();
       } catch (err: any) {

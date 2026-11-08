@@ -1,6 +1,8 @@
 import { query, queryOne, execute } from "../config/database";
 import type { Server as SocketIOServer } from "socket.io";
-import { sendPushToUser } from "./push";
+import { emitRideAccepted } from "./dispatch";
+import { mintRidePin } from "./pinService";
+import { sendPushToUser } from "./notify";
 
 // How long before pickup the system starts matching a driver — mirrors how
 // Uber/Bolt dispatch drivers ~15-30 minutes before a reserved pickup so the
@@ -28,7 +30,7 @@ let timer: NodeJS.Timeout | null = null;
 export async function processDueScheduledRides(io: SocketIOServer): Promise<number> {
   const due = await query<any>(
     `SELECT id, scheduled_at FROM rides
-     WHERE status = 'scheduled' AND announced = FALSE
+     WHERE status = 'scheduled' AND announced = FALSE AND driver_id IS NULL
        AND scheduled_at <= NOW() + make_interval(mins => $1)
        AND scheduled_at > NOW()
      ORDER BY scheduled_at ASC`,
@@ -56,6 +58,9 @@ export function startScheduler(io: SocketIOServer): NodeJS.Timeout {
     processDueScheduledRides(io).catch((err) => {
       console.error("[Scheduler] Failed to process due scheduled rides:", err);
     });
+    activateDueReservations(io).catch((err) => {
+      console.error("[Scheduler] Failed to activate reservations:", err);
+    });
     remindAssignedDrivers(io).catch((err) => {
       console.error("[Scheduler] Failed to send reservation reminders:", err);
     });
@@ -78,13 +83,79 @@ export function stopScheduler() {
 // and if they are still offline near pickup time the reservation is released
 // back into the normal matching pool so the rider still gets a car.
 
+/**
+ * A reserved ride activates 15 minutes before pickup: only then does it become
+ * an active trip and the driver go on_trip. Before that the driver stays
+ * available for normal rides. If the driver is offline or already on a trip,
+ * releaseOfflineReservations() returns the ride to matching instead.
+ */
+export async function activateDueReservations(io: SocketIOServer): Promise<number> {
+  const due = await query<any>(
+    `SELECT r.id, r.driver_id, r.scheduled_at, u.firebase_uid AS driver_uid
+       FROM rides r
+       JOIN driver_profiles dp ON dp.user_id = r.driver_id
+       JOIN users u ON u.id = r.driver_id
+      WHERE r.status = 'scheduled'
+        AND r.driver_id IS NOT NULL
+        AND r.scheduled_at IS NOT NULL
+        AND r.scheduled_at <= NOW() + make_interval(mins => $1)
+        AND r.scheduled_at > NOW()
+        AND COALESCE(dp.is_online, FALSE) = TRUE
+        AND COALESCE(dp.status, '') NOT IN ('on_trip', 'break')
+      ORDER BY r.scheduled_at ASC`,
+    [BOOK_AHEAD_MINUTES]
+  );
+
+  let activated = 0;
+  for (const ride of due) {
+    const upd = await queryOne<{ version: number }>(
+      `UPDATE rides
+          SET status = 'accepted', accepted_at = NOW(), updated_at = NOW(),
+              version = COALESCE(version, 0) + 1
+        WHERE id = $1 AND status = 'scheduled' AND driver_id = $2
+        RETURNING COALESCE(version, 0) AS version`,
+      [ride.id, ride.driver_id]
+    );
+    if (!upd) continue;
+
+    await execute(
+      `UPDATE driver_profiles SET status = 'on_trip', updated_at = NOW() WHERE user_id = $1`,
+      [ride.driver_id]
+    ).catch(() => {});
+    void mintRidePin(ride.id).catch((err) =>
+      console.warn("[Scheduler] PIN mint failed:", err?.message || err)
+    );
+    await emitRideAccepted(io, ride.id, ride.driver_id, Number(upd.version) || 0).catch((err) =>
+      console.warn("[Scheduler] emitRideAccepted failed:", err?.message || err)
+    );
+    if (ride.driver_uid) {
+      io.to(`user:${ride.driver_uid}`).emit("ride:reservation:activated", {
+        rideId: ride.id,
+        scheduledAt: ride.scheduled_at,
+      });
+      sendPushToUser(ride.driver_uid, {
+        type: "reservation_activated",
+        title: "Reservation starting",
+        body: "Head to the pickup point for your reserved ride.",
+        data: { rideId: ride.id, type: "reservation_activated" },
+      }).catch(() => {});
+    }
+    activated++;
+    console.log(
+      `[Scheduler] Activated reservation ${ride.id} (pickup ${ride.scheduled_at})`
+    );
+  }
+  return activated;
+}
+
 /** Reminds the assigned driver once, ~REMINDER_MINUTES before pickup. */
 export async function remindAssignedDrivers(io: SocketIOServer): Promise<number> {
   const due = await query<any>(
     `SELECT r.id, r.scheduled_at, u.firebase_uid AS driver_uid
        FROM rides r
        JOIN users u ON u.id = r.driver_id
-      WHERE r.status = 'accepted'
+      WHERE r.status = 'scheduled'
+        AND r.driver_id IS NOT NULL
         AND r.scheduled_at IS NOT NULL
         AND r.scheduled_at <= NOW() + make_interval(mins => $1)
         AND r.scheduled_at > NOW()`,
@@ -98,6 +169,7 @@ export async function remindAssignedDrivers(io: SocketIOServer): Promise<number>
 
     if (ride.driver_uid) {
       sendPushToUser(ride.driver_uid, {
+        type: "reservation_reminder",
         title: "Reservation soon",
         body: "You have a reserved pickup in 30 minutes. Go online to keep it.",
         data: { rideId: ride.id, type: "reservation_reminder" },
@@ -124,11 +196,12 @@ export async function releaseOfflineReservations(io: SocketIOServer): Promise<nu
        FROM rides r
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
        JOIN users u ON u.id = r.passenger_id
-      WHERE r.status = 'accepted'
+      WHERE r.status = 'scheduled'
+        AND r.driver_id IS NOT NULL
         AND r.scheduled_at IS NOT NULL
         AND r.scheduled_at <= NOW() + make_interval(mins => $1)
         AND r.scheduled_at > NOW()
-        AND COALESCE(dp.is_online, FALSE) = FALSE`,
+        AND (COALESCE(dp.is_online, FALSE) = FALSE OR COALESCE(dp.status, '') IN ('on_trip', 'break'))`,
     [RELEASE_MINUTES]
   );
 
@@ -137,7 +210,7 @@ export async function releaseOfflineReservations(io: SocketIOServer): Promise<nu
     const upd = await queryOne<{ id: string }>(
       `UPDATE rides
           SET status = 'searching', driver_id = NULL, announced = TRUE, updated_at = NOW()
-        WHERE id = $1 AND status = 'accepted'
+        WHERE id = $1 AND status = 'scheduled'
         RETURNING id`,
       [ride.id]
     );
@@ -145,6 +218,7 @@ export async function releaseOfflineReservations(io: SocketIOServer): Promise<nu
 
     if (ride.passenger_uid) {
       sendPushToUser(ride.passenger_uid, {
+        type: "reservation_released",
         title: "Finding a new driver",
         body: "Your reserved driver went offline — we're finding a replacement for your pickup.",
         data: { rideId: ride.id, type: "reservation_released" },
