@@ -25,6 +25,12 @@ import {
 
 const router = Router();
 
+// Never let a proxy/browser cache a TOTP secret, recovery code or session token.
+router.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 async function mfaAdmin(req: AuthRequest): Promise<{ uid: string; email: string } | null> {
   const uid = req.userId;
   const email = String(req.user?.email || "").trim().toLowerCase();

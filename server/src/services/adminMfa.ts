@@ -368,6 +368,12 @@ async function recordFailure(uid: string, row: AdminMfaRow): Promise<never> {
   throw new AdminMfaError("That code is not valid. Try the current 6-digit code.", 400, "mfa_invalid_code");
 }
 
+function assertNotLocked(row: AdminMfaRow): void {
+  if (row.locked_until && new Date(row.locked_until).getTime() > Date.now()) {
+    throw new AdminMfaError("Too many incorrect codes. Try again later.", 429, "mfa_locked");
+  }
+}
+
 export async function enableAdminMfa(
   uid: string,
   code: string
@@ -375,6 +381,7 @@ export async function enableAdminMfa(
   const row = await rowFor(uid);
   if (!row) throw new AdminMfaError("Start the authenticator setup first.", 400, "mfa_setup_missing");
   if (row.enabled) throw new AdminMfaError("Two-factor authentication is already enabled.", 409, "mfa_already_enabled");
+  assertNotLocked(row);
   const secret = decryptSecret(row.secret_enc);
   if (!secret) throw new AdminMfaError("Start the authenticator setup first.", 400, "mfa_setup_missing");
   if (!verifyTotp(secret, code)) return recordFailure(uid, row);
@@ -400,9 +407,7 @@ export async function verifyAdminMfa(
   if (!row?.enabled || !row.secret_enc) {
     throw new AdminMfaError("Two-factor authentication is not enabled.", 400, "mfa_not_enabled");
   }
-  if (row.locked_until && new Date(row.locked_until).getTime() > Date.now()) {
-    throw new AdminMfaError("Too many incorrect codes. Try again later.", 429, "mfa_locked");
-  }
+  assertNotLocked(row);
   const secret = decryptSecret(row.secret_enc);
   if (!secret) {
     throw new AdminMfaError("The authenticator secret could not be read. Ask governance to reset 2FA.", 500, "mfa_secret_unreadable");
@@ -447,6 +452,7 @@ export async function disableAdminMfa(uid: string, code: string): Promise<void> 
   if (!row?.enabled || !row.secret_enc) {
     throw new AdminMfaError("Two-factor authentication is not enabled.", 400, "mfa_not_enabled");
   }
+  assertNotLocked(row);
   const secret = decryptSecret(row.secret_enc);
   if (!secret || !verifyTotp(secret, code)) return recordFailure(uid, row);
   await execute(
