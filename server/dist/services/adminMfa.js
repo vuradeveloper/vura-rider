@@ -314,12 +314,18 @@ async function recordFailure(uid, row) {
     await (0, database_1.execute)(`UPDATE admin_mfa SET failed_attempts = $2, updated_at = NOW() WHERE admin_uid = $1`, [uid, attempts]).catch(() => { });
     throw new AdminMfaError("That code is not valid. Try the current 6-digit code.", 400, "mfa_invalid_code");
 }
+function assertNotLocked(row) {
+    if (row.locked_until && new Date(row.locked_until).getTime() > Date.now()) {
+        throw new AdminMfaError("Too many incorrect codes. Try again later.", 429, "mfa_locked");
+    }
+}
 async function enableAdminMfa(uid, code) {
     const row = await rowFor(uid);
     if (!row)
         throw new AdminMfaError("Start the authenticator setup first.", 400, "mfa_setup_missing");
     if (row.enabled)
         throw new AdminMfaError("Two-factor authentication is already enabled.", 409, "mfa_already_enabled");
+    assertNotLocked(row);
     const secret = decryptSecret(row.secret_enc);
     if (!secret)
         throw new AdminMfaError("Start the authenticator setup first.", 400, "mfa_setup_missing");
@@ -339,9 +345,7 @@ async function verifyAdminMfa(uid, code) {
     if (!row?.enabled || !row.secret_enc) {
         throw new AdminMfaError("Two-factor authentication is not enabled.", 400, "mfa_not_enabled");
     }
-    if (row.locked_until && new Date(row.locked_until).getTime() > Date.now()) {
-        throw new AdminMfaError("Too many incorrect codes. Try again later.", 429, "mfa_locked");
-    }
+    assertNotLocked(row);
     const secret = decryptSecret(row.secret_enc);
     if (!secret) {
         throw new AdminMfaError("The authenticator secret could not be read. Ask governance to reset 2FA.", 500, "mfa_secret_unreadable");
@@ -379,6 +383,7 @@ async function disableAdminMfa(uid, code) {
     if (!row?.enabled || !row.secret_enc) {
         throw new AdminMfaError("Two-factor authentication is not enabled.", 400, "mfa_not_enabled");
     }
+    assertNotLocked(row);
     const secret = decryptSecret(row.secret_enc);
     if (!secret || !verifyTotp(secret, code))
         return recordFailure(uid, row);

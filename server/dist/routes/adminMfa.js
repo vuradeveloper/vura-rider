@@ -16,6 +16,11 @@ const adminMfa_1 = require("../services/adminMfa");
  * admin (including their own MFA token).
  */
 const router = (0, express_1.Router)();
+// Never let a proxy/browser cache a TOTP secret, recovery code or session token.
+router.use((_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+});
 async function mfaAdmin(req) {
     const uid = req.userId;
     const email = String(req.user?.email || "").trim().toLowerCase();
