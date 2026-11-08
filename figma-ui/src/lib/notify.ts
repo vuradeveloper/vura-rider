@@ -81,8 +81,17 @@ export async function initPushNotifications(): Promise<boolean> {
 
     // Tapping the tray notification (cold start or resume) re-runs the shell's
     // restore, so the app navigates from the SERVER's state, not a stale payload.
-    await PushNotifications.addListener('pushNotificationActionPerformed', () => {
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('vura:reconnect'))
+    // The payload is also kept briefly so a live-support tap can open the chat
+    // even when the tap event arrives before React mounted its listener.
+    await PushNotifications.addListener('pushNotificationActionPerformed', (n: any) => {
+      const data = n?.notification?.data || {}
+      try {
+        sessionStorage.setItem('vura.push.action', JSON.stringify(data))
+      } catch { /* storage may be unavailable */ }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('vura:push:action', { detail: data }))
+        window.dispatchEvent(new CustomEvent('vura:reconnect'))
+      }
     })
 
     await PushNotifications.register()
@@ -116,5 +125,17 @@ export async function initPushNotifications(): Promise<boolean> {
 export async function notifyRide(title: string, body: string): Promise<void> {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new CustomEvent('vura:push', { detail: { title, body, source: 'app' } }))
+}
+
+/** One pending tray-tap payload, consumed once after the app has mounted. */
+export function consumePushAction(): any | null {
+  try {
+    const raw = sessionStorage.getItem('vura.push.action')
+    if (!raw) return null
+    sessionStorage.removeItem('vura.push.action')
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
 }
 

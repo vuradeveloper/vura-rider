@@ -42,7 +42,7 @@ import { MapPicker } from './components/MapPicker'
 // moment a screen rendered with two or more points — one of the white screens.
 import { getRoute } from './lib/backend'
 import WalletScreen from './components/WalletScreen'
-import { initPushNotifications, notifyRide } from './lib/notify'
+import { initPushNotifications, notifyRide, consumePushAction } from './lib/notify'
 import type { Earnings as EarningsSummary } from './lib/backend'
 import {
   acceptRide,
@@ -5432,6 +5432,23 @@ export default function App() {
   const [rNav, setRNav] = useState<RiderScreen>('home')
   const [dScreen, setDScreen] = useState<DriverScreen>('driverHome')
   const [dNav, setDNav] = useState<DriverScreen>('driverHome')
+
+  // A live-support push should land on the chat, not just the home screen.
+  useEffect(() => {
+    if (!authed) return
+    const openSupport = (data: any) => {
+      if (data?.type === 'live_support' || data?.kind === 'live_support') {
+        setRNav('account')
+        setRScreen('supportChat')
+      }
+    }
+    const onAction = (event: Event) => openSupport((event as CustomEvent).detail)
+    window.addEventListener('vura:push:action', onAction)
+    const pending = consumePushAction()
+    if (pending) openSupport(pending)
+    return () => window.removeEventListener('vura:push:action', onAction)
+  }, [authed])
+
   const [dest, setDest] = useState('')
   // Live ride request pushed over the socket, handed to the RideRequest screen.
   const [req, setReq] = useState<RideRequestData | null>(null)
