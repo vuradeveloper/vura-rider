@@ -62,6 +62,18 @@ describe("renderResetEmail", () => {
     expect(html).toContain("https://identity.example/rst?x=1");
     expect(html).toMatch(/didn't request/i);
   });
+
+  it("uses the rider/driver app name instead of the BackOffice brand", () => {
+    const rider = renderResetEmail("https://identity.example/rst?x=1", "Vura Ride");
+    expect(rider.subject).toContain("Vura Ride");
+    expect(rider.html).toContain("Vura Ride");
+    expect(rider.html).not.toContain("BackOffice");
+
+    const driver = renderResetEmail("https://identity.example/rst?x=1", "Vura Driver");
+    expect(driver.subject).toContain("Vura Driver");
+    expect(driver.html).toContain("Vura Driver");
+    expect(driver.html).not.toContain("BackOffice");
+  });
 });
 
 describe("humanizeRole", () => {

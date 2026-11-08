@@ -4,17 +4,32 @@ import { query, queryOne, execute } from "../config/database";
 import { deleteAccountData } from "../services/accountDeletion";
 import { claimReferral, ensureAffiliateTables } from "../services/AffiliateService";
 import { getAuth } from "../config/firebase";
-import { CONSOLE_URL, sendPasswordResetEmail } from "../services/adminInvite";
+import { sendPasswordResetEmail } from "../services/adminInvite";
 import { findDuplicateMatches, markUserDuplicate } from "../services/duplicateDetection";
 import { normaliseIdNumber, normalisePhone } from "../lib/identity";
 
 const router = Router();
 
-// POST /api/users/forgot-password — the console's "Forgot password?".
-// Emails a Firebase set-password link (delivered via Resend). ALWAYS answers
-// success: the response must not reveal which addresses have accounts.
+// POST /api/users/forgot-password - rider, driver and console "Forgot password?".
+// Emails a Firebase set-password link through Resend. ALWAYS answers success:
+// the response must not reveal which addresses have accounts.
+//
+// IMPORTANT: do not pass a `url` continue target here. Only the Firebase auth
+// domains are allowlisted for this project; passing the console URL made every
+// reset fail with `auth/unauthorized-continue-uri`, and the catch returned
+// success without sending anything. The default Firebase action page lets the
+// user choose a new password, then they return to the app. `app` only selects
+// the copy in the email.
+const APP_LABELS: Record<string, string> = {
+  rider: "Vura Ride",
+  driver: "Vura Driver",
+  admin: "Vura BackOffice",
+};
+
 router.post("/forgot-password", async (req: AuthRequest, res: Response) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
+  const app = String(req.body?.app || "").trim().toLowerCase();
+  const appName = APP_LABELS[app] || "Vura";
   try {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       res.json({ success: true });
@@ -22,18 +37,29 @@ router.post("/forgot-password", async (req: AuthRequest, res: Response) => {
     }
     let link: string;
     try {
-      link = await getAuth().generatePasswordResetLink(email, { url: CONSOLE_URL });
-    } catch {
-      res.json({ success: true }); // no such account — stay silent
+      link = await getAuth().generatePasswordResetLink(email);
+    } catch (err: any) {
+      // No such account is expected; anything else is an operational failure
+      // and must be visible in the logs even though the API stays neutral.
+      if (err?.code !== "auth/user-not-found") {
+        console.warn(
+          `[password-reset] link generation failed for ${email}:`,
+          err?.code || "",
+          err?.message || err
+        );
+      }
+      res.json({ success: true });
       return;
     }
-    const sent = await sendPasswordResetEmail(email, link);
+    const sent = await sendPasswordResetEmail(email, link, appName);
     console.log(
-      `[admin-invite] password reset for ${email}: ${sent.ok ? "sent" : `FAILED — ${sent.error}`}`
+      `[password-reset] ${app || "app"} link for ${email}: ${
+        sent.ok ? "sent via Resend" : `FAILED - ${sent.error}`
+      }`
     );
     res.json({ success: true });
   } catch (err: any) {
-    console.warn("[admin-invite] forgot-password error:", err?.message || err);
+    console.warn("[password-reset] forgot-password error:", err?.message || err);
     res.json({ success: true });
   }
 });
