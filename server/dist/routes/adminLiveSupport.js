@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const adminAuth_1 = require("../services/adminAuth");
 const liveSupport_1 = require("../services/liveSupport");
+const notify_1 = require("../services/notify");
 const router = (0, express_1.Router)();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function badId(id) {
@@ -76,6 +77,18 @@ router.post("/:id/messages", (0, adminAuth_1.requireAdmin)("tickets.write"), asy
             entityId: id,
             newValue: { chars: message.length },
         });
+        // A public agent reply reaches the rider/driver even when the app is
+        // backgrounded or closed. Internal notes never leave the console.
+        if (!req.body?.is_internal && chat?.rider_id) {
+            const excerpt = message.replace(/\s+/g, " ").trim().slice(0, 120);
+            void (0, notify_1.sendPushToUsers)([String(chat.rider_id)], {
+                type: "live_support",
+                title: "Vura support replied",
+                body: excerpt || "Open Live Support to read the reply.",
+                channelId: "ride_updates",
+                data: { kind: "live_support", chat_id: id },
+            }).catch((err) => console.warn("[live-support] reply push failed:", err?.message || err));
+        }
         res.json({ chat });
     }
     catch (err) {
