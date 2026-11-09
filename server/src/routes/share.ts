@@ -276,7 +276,10 @@ var first = true;
         if(first){
           first = false;
           app.innerHTML = buildCard(r);
-          initMap(r);
+          // Leaflet is loaded from a CDN. If that CDN is blocked, the trip card
+          // above must still be usable — a map failure must not send us into the
+          // .catch() that replaces the whole page with "link isn't available".
+          try { initMap(r); } catch (e) { /* keep the card without the map */ }
         } else {
           var st = document.querySelector('.status');
           if(st && !r.sharingEnded){ st.innerHTML = '<span class="dot"></span><span>'+statusText(r.status)+'</span>'; }
@@ -297,6 +300,12 @@ var first = true;
       });
   }
 
+  // START the poller. This call was missing: the page rendered its
+  // "Loading your trip…" placeholder and never called tick(), so every share
+  // link stayed on that spinner forever even though the API had the ride.
+  tick();
+  setInterval(tick, 3000);
+})();
 
 </script>
 </body>
