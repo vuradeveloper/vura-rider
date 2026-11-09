@@ -115,6 +115,7 @@ import {
   searchPlaces,
   sendVerificationEmail,
   shareTrip,
+  shareTripLink,
   sosRest,
   getRideStartPin,
   respondCheckin,
@@ -132,6 +133,7 @@ import {
   triggerSos
 } from './lib/backend'
 import { startCardSetup } from './lib/cardSetup'
+import { copyToClipboard, openShareSheet } from './lib/share'
 import { passwordError, passwordIsStrong, passwordRules } from './lib/passwordPolicy'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
@@ -2901,8 +2903,24 @@ function RideScreen({ destination, rideId, onDone, onReceipt }: { destination: s
   const mapEtaLabel = `${Math.max(1, Math.round(Number(ride?.duration_mins || 12)))} min`
   async function share() {
     if (!rideId) return
-    await shareTrip(rideId).catch(() => { })
-    setToast('Trip link shared')
+    try {
+      const res = await shareTripLink(rideId)
+      const url = String(res?.shareUrl || '').trim()
+      await shareTrip(rideId).catch(() => { })
+      if (!url) {
+        setToast('The server did not return a trip link. Please try again.')
+        return
+      }
+      const copied = await copyToClipboard(url)
+      await openShareSheet(url)
+      setToast(
+        copied
+          ? 'Trip link copied — choose where to share it.'
+          : 'Choose where to share the trip link.'
+      )
+    } catch (e: any) {
+      setToast(e?.message || 'Could not create the trip link. Please try again.')
+    }
   }
   // The Cancel button opens the "are you sure?" sheet instead of cancelling
   // straight away.

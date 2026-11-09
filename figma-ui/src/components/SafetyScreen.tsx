@@ -13,6 +13,7 @@ import {
   triggerSos,
   type EmergencyContact,
 } from '../lib/backend'
+import { copyToClipboard, openShareSheet } from '../lib/share'
 
 /**
  * Safety Center — the port of the native app/safety.tsx page.
@@ -142,11 +143,18 @@ export function SafetyScreen({
       } else {
         setError('The server did not return a share link for this trip.')
       }
-      const nav: any = navigator
-      if (url && typeof nav?.share === 'function') {
-        nav.share({ title: 'Track my Vura ride', text: 'Follow my trip live:', url }).catch(() => {})
+      let copied = false
+      if (url) {
+        copied = await copyToClipboard(url)
+        await openShareSheet(url)
       }
-      flash(url ? 'Trip link created — share it with anyone you trust.' : 'Sharing started.')
+      flash(
+        url
+          ? copied
+            ? 'Trip link copied - choose where to share it.'
+            : 'Trip link created - choose where to share it.'
+          : 'Sharing started.'
+      )
     } catch (e: any) {
       setError(`Could not share this trip: ${e?.message || 'unknown error'}`)
     } finally { setBusy('') }
@@ -167,12 +175,15 @@ export function SafetyScreen({
 
   async function copyLink() {
     if (!share?.url) return
-    try {
-      await navigator.clipboard.writeText(share.url)
-      flash('Link copied to your clipboard.')
-    } catch {
-      flash(share.url)
-    }
+    const copied = await copyToClipboard(share.url)
+    const shared = await openShareSheet(share.url)
+    flash(
+      copied
+        ? 'Link copied - choose where to share it.'
+        : shared
+          ? 'Choose where to share the link.'
+          : 'Could not copy the link. Long-press the link above to copy it.'
+    )
   }
 
   async function saveContact() {
@@ -275,7 +286,7 @@ export function SafetyScreen({
             {share ? (
               <>
                 <button onClick={copyLink} className="flex-1 flex items-center justify-center gap-1.5 border border-[#EBEBEB] text-[#1A1A1A] font-semibold text-[13px] py-3 rounded-xl active:bg-[#F7F7F7]">
-                  <Sv inner={COPY} c="#4A4A4A" size={14} /> Copy link
+                  <Sv inner={COPY} c="#4A4A4A" size={14} /> Copy & share
                 </button>
                 <button onClick={stopSharing} disabled={busy === 'stop'} className="flex-1 border border-[#F5C6C2] text-[#C5221F] font-semibold text-[13px] py-3 rounded-xl active:bg-[#FEF0EF] disabled:opacity-50">
                   {busy === 'stop' ? 'Stopping…' : 'Stop sharing'}

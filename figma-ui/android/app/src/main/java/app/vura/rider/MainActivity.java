@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
         // Register before super.onCreate so the plugin is part of the bridge.
         registerPlugin(PaystackNativePlugin.class);
         registerPlugin(RiderServicePlugin.class);
+        registerPlugin(ShareLinkPlugin.class);
 
         super.onCreate(savedInstanceState);
 

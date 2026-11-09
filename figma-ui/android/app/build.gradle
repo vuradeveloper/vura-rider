@@ -15,8 +15,8 @@ android {
         applicationId "app.vura.rider"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 22
-        versionName "1.5.16"
+        versionCode 23
+        versionName "1.5.17"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -69,6 +69,16 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// Capacitor 8's generated file asks for Java 21. This build machine has JDK 17
+// and every plugin we ship (core, browser, push, our own ShareLink) compiles at
+// 17. Keep the app module at 17 so adding a Java source cannot break the build.
+android {
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
 
 try {
     def servicesJSON = file('google-services.json')
