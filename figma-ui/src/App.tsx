@@ -77,6 +77,7 @@ import {
   getRecentTrips,
   getRide,
   getRideHistory,
+  getScheduledRides,
   getSavedPlaces,
   getSplitInvites,
   getRideSplits,
@@ -313,6 +314,7 @@ const IC = {
   chevRight: (c = '#C4C4C4') => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round"><path d="M9 18l6-6-6-6" /></svg>,
   chevLeft: (c = '#1A1A1A') => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round"><path d="M15 18l-6-6 6-6" /></svg>,
   search: (c = '#9E9E9E') => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>,
+  calendar: (c = '#6B6B6B') => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="16" rx="2" /><line x1="16" y1="3" x2="16" y2="7" /><line x1="8" y1="3" x2="8" y2="7" /><line x1="3" y1="10" x2="21" y2="10" /></svg>,
   phone: (c = '#4A4A4A') => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.18 19.79 19.79 0 01.22 4.6 2 2 0 012.18 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.91 9.91a16 16 0 006.06 6.06l1.48-1.48a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" /></svg>,
   msg: (c = '#4A4A4A') => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>,
   star: (c = '#EA4335') => <svg width="13" height="13" viewBox="0 0 24 24" fill={c} stroke={c} strokeWidth="1"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>,
@@ -598,7 +600,7 @@ function SplitPaySheet({
   )
 }
 
-function RiderHome({ onBook, mode, onMode, onScheduled }: { onBook: (d: string) => void; mode: AppMode; onMode: (m: AppMode) => void; onScheduled: () => void }) {
+function RiderHome({ onBook, mode, onMode, onScheduled, onPayLater }: { onBook: (d: string) => void; mode: AppMode; onMode: (m: AppMode) => void; onScheduled: () => void; onPayLater: () => void }) {
   const [me, setMe] = useState<LatLng | null>(null)
   const [placeLabel, setPlaceLabel] = useState('Locating you…')
   const [places, setPlaces] = useState<SavedPlace[]>(() => getSavedPlaces())
@@ -650,7 +652,7 @@ function RiderHome({ onBook, mode, onMode, onScheduled }: { onBook: (d: string) 
   // (exactly the old SearchService behaviour).
   useEffect(() => {
     getRecentSearches()
-      .then((rows) => setRecents(Array.isArray(rows) ? rows.slice(0, 6) : []))
+      .then((rows) => setRecents(Array.isArray(rows) ? rows.slice(0, 5) : []))
       .catch(() => setRecents([]))
   }, [])
 
@@ -709,14 +711,14 @@ function RiderHome({ onBook, mode, onMode, onScheduled }: { onBook: (d: string) 
           stays white from top to bottom; the pickup is the only element above
           the destination search. */}
       <div className="shrink-0 bg-white px-5 pt-12 pb-3">
-        <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-[#EDEDED] bg-white px-3.5 py-3">
-          <span className="relative flex h-2.5 w-2.5 shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#34A853]/35" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#34A853]" />
+        <div className="flex min-w-0 items-center gap-2.5 rounded-full border border-[#F1F1F1] bg-[#FAFAFA] px-3.5 py-2">
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#34A853]/20" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-[#4C9A6A]" />
           </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[9.5px] font-semibold uppercase tracking-wider text-[#9E9E9E]">Pickup</p>
-            <p className="mt-0.5 truncate text-[12.5px] font-semibold text-[#1A1A1A]">{placeLabel}</p>
+          <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            <p className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-[#A3A3A3]">Pickup</p>
+            <p className="truncate text-[11.5px] font-semibold text-[#3A3A3A]">{placeLabel}</p>
           </div>
         </div>
       </div>
@@ -762,7 +764,16 @@ function RiderHome({ onBook, mode, onMode, onScheduled }: { onBook: (d: string) 
             />
             {query ? (
               <button onClick={() => setQuery('')} className="text-[#ADADAD] text-[16px] leading-none">×</button>
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                onClick={onScheduled}
+                aria-label="Scheduled rides"
+                className="shrink-0 rounded-full p-1.5 text-[#6B6B6B] active:bg-[#EDEDED]"
+              >
+                {IC.calendar('#6B6B6B')}
+              </button>
+            )}
           </div>
 
           {searching && <p className="text-[12px] text-[#ADADAD] mb-3 px-1">Searching…</p>}
@@ -817,21 +828,31 @@ function RiderHome({ onBook, mode, onMode, onScheduled }: { onBook: (d: string) 
           )}
           {/* __SAVED__ */}
 
-          {/* Quick picks — Home / Work / Airport, backed by saved places */}
+          {/* Quick picks — Home / Work, plus the Pay Later entry. Airport was
+              removed: reservations now have the calendar icon in the search box. */}
           <div className="flex gap-2.5 mb-6">
-            {[{ label: 'Home', type: 'home' }, { label: 'Work', type: 'work' }, { label: 'Airport', type: 'airport' }].map(q => {
-              const saved = places.find((p) => p.label.toLowerCase() === q.label.toLowerCase())
+            {[
+              { label: 'Home', type: 'home' },
+              { label: 'Work', type: 'work' },
+              ...(PAY_LATER_ENABLED ? [{ label: 'Pay Later', type: 'paylater' }] : []),
+            ].map(q => {
+              const payLater = q.type === 'paylater'
+              const saved = payLater ? null : places.find((p) => p.label.toLowerCase() === q.label.toLowerCase())
               return (
                 <button
                   key={q.label}
-                  onClick={() => { if (saved) onBook(`${saved.name}||${saved.lat}||${saved.lng}`); else addPlace(q.label) }}
-                  className="flex-1 flex flex-col items-center gap-2 bg-[#F7F7F7] rounded-2xl py-3.5 border border-transparent hover:border-[#EA4335]/30 transition-all"
+                  onClick={() => {
+                    if (payLater) { onPayLater(); return }
+                    if (saved) onBook(`${saved.name}||${saved.lat}||${saved.lng}`)
+                    else addPlace(q.label)
+                  }}
+                  className="flex-1 min-w-0 flex flex-col items-center gap-2 bg-[#F7F7F7] rounded-2xl py-3.5 px-1 border border-transparent hover:border-[#EA4335]/30 transition-all"
                 >
                   <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm">
-                    {q.type === 'home' ? IC.home('#6B6B6B') : q.type === 'work' ? IC.work('#6B6B6B') : IC.airport('#6B6B6B')}
+                    {q.type === 'home' ? IC.home('#6B6B6B') : q.type === 'work' ? IC.work('#6B6B6B') : IC.wallet('#6B6B6B')}
                   </div>
-                  <span className="text-[12px] text-[#4A4A4A] font-semibold">{q.label}</span>
-                  <span className="text-[9px] text-[#C4C4C4]">{saved ? 'saved' : 'tap to save'}</span>
+                  <span className="text-[11.5px] text-[#4A4A4A] font-semibold text-center leading-tight">{payLater ? 'Ride Now' : q.label}</span>
+                  <span className="text-[9px] text-[#C4C4C4]">{payLater ? 'Pay Later' : saved ? 'saved' : 'tap to save'}</span>
                 </button>
               )
             })}
@@ -1857,6 +1878,10 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   const [error, setError] = useState('')
   const sent = useRef(!!initialRideId)
   const rideIdRef = useRef<string | null>(initialRideId ?? null)
+  // A ride can be accepted twice over the socket (ride room + the rider's own
+  // user room), and the 3 s poll can race the same event. Only the first one may
+  // navigate, otherwise the rider gets a duplicate notification / screen jump.
+  const matchedRef = useRef(false)
   // When Wait & Save timer expires, this flag lets bookRide proceed to dispatch.
   const waitSaveDispatched = useRef(false)
   // Where the pickup will be. When the phone cannot give us a GPS fix we ask
@@ -1960,7 +1985,7 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   const bookRide = async () => {
     // `sent` stops a double-book. Choosing the pickup by hand deliberately
     // re-runs the booking with the coordinates the rider picked.
-    if (sent.current && !manualPickup) return
+    if (sent.current) return
     sent.current = true
     let alive = true
 
@@ -2106,10 +2131,14 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
   // The driver accepting arrives over the socket.
   useEffect(() => {
     const off = on('ride:accepted', (d: any) => {
-      if (d?.id) {
-        void notifyRide('Driver accepted', 'Your driver is on the way — tap to see the trip.')
-        onMatched(String(d.id))
-      }
+      const id = d?.id ?? d?.rideId
+      if (!id) return
+      // Ignore a stale event for a different ride this rider booked earlier.
+      if (rideIdRef.current && String(id) !== String(rideIdRef.current)) return
+      if (matchedRef.current) return
+      matchedRef.current = true
+      void notifyRide('Driver accepted', 'Your driver is on the way — tap to see the trip.')
+      onMatched(String(id))
     })
     return () => off()
   }, [onMatched])
@@ -2132,12 +2161,25 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
 
     const check = async () => {
       try {
-        const active = await getActiveRide()
+        // Track THE RIDE THIS SCREEN BOOKED, not merely "the latest active ride
+        // for this account". A rider can have an older parked ride and a newer
+        // one; asking for the latest made the screen miss the driver who accepted
+        // the one it was actually showing. Fall back to the active ride only when
+        // this screen has no id yet (first booking in flight).
+        const currentId = rideIdRef.current || initialRideId || ''
+        const active = currentId ? await getRide(String(currentId)) : await getActiveRide()
         const st = String((active as any)?.status || '')
         if (!alive) return
         if ((active as any)?.id && ['accepted', 'driver_arrived', 'in_progress'].includes(st)) {
+          if (matchedRef.current) return
+          matchedRef.current = true
           console.log('[rider] matching: recovered from server, status =', st)
           onMatched(String((active as any).id))
+          return
+        }
+        if ((active as any)?.id && ['cancelled', 'completed', 'expired'].includes(st)) {
+          console.log('[rider] matching: ride ended, status =', st)
+          onCancel()
           return
         }
         if (initialRideId) {
@@ -2165,6 +2207,8 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
     // The driver cancelled (or the server ended the ride): the ride is gone on
     // both sides, so the rider is notified and returned to the home screen.
     const offCancel = on('ride:cancelled', (d: any) => {
+      const id = d?.rideId || d?.id
+      if (id && rideIdRef.current && String(id) !== String(rideIdRef.current)) return
       void notifyRide('Ride cancelled', d?.reason || 'This trip was cancelled.')
       onCancel()
     })
@@ -2295,6 +2339,11 @@ function MatchingScreen({ destination, tier, paymentMethod, stops, chosenPromoId
                   onClick={() => {
                     setNeedPickup(false)
                     setError('')
+                    // The first booking attempt stopped because there was no GPS
+                    // fix. Allow exactly ONE rebook with the pin the rider chose;
+                    // without resetting this, every later retry (e.g. the server
+                    // parking the ride as no_drivers) created a second live ride.
+                    sent.current = false
                     setManualPickup({ lat: p.lat, lng: p.lng, label: p.address || p.name })
                   }}
                   className="w-full text-left px-1 py-2.5 border-b border-[#F2F2F2] last:border-0 active:bg-[#F7F7F7]"
@@ -3779,8 +3828,8 @@ function DriverHome({ onRequest, mode, onMode }: { onRequest: (r: RideRequestDat
     getWalletBalance()
       .then((d) => setBalance(Number(d?.total_earnings) || 0))
       .catch(() => { })
-    getRecentTrips(3)
-      .then((d) => setTrips(((d?.rides || []) as any[]).slice(0, 3).map(normalizeRide)))
+    getRecentTrips(5)
+      .then((d) => setTrips(((d?.rides || []) as any[]).slice(0, 5).map(normalizeRide)))
       .catch(() => { })
     getActivePromos('driver')
       .then((r) => setDriverPromo(r?.promos?.[0] ?? null))
@@ -5472,6 +5521,51 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [supportBanner])
 
+  // Keep the app alive at foreground-service priority while a scheduled pickup
+  // is within 2 hours or a ride is live. Android freezes a backgrounded WebView's
+  // timers and socket, which is exactly the "screens are not kept live" symptom:
+  // the trip map, driver-accepted poll and scheduled countdown all stop while the
+  // rider switches apps. The native service is a no-op in a browser build.
+  useEffect(() => {
+    if (!authed) return
+    let alive = true
+    const sync = async () => {
+      try {
+        const [scheduled, active] = await Promise.all([
+          getScheduledRides().catch(() => []),
+          getActiveRide().catch(() => null),
+        ])
+        if (!alive) return
+        const soon = (Array.isArray(scheduled) ? scheduled : []).some((r: any) => {
+          const at = new Date(r?.scheduled_at || 0).getTime()
+          return Number.isFinite(at) && at > Date.now() && at - Date.now() <= 2 * 60 * 60 * 1000
+        })
+        const status = String((active as any)?.status || '')
+        const wanted =
+          soon ||
+          ['searching', 'no_drivers', 'accepted', 'driver_arrived', 'in_progress'].includes(status)
+        const { registerPlugin } = await import('@capacitor/core')
+        const svc = registerPlugin<any>('RiderService')
+        if (wanted) await svc.start().catch(() => null)
+        else await svc.stop().catch(() => null)
+      } catch {
+        /* browser build or offline: nothing to keep alive */
+      }
+    }
+    void sync()
+    const timer = window.setInterval(sync, 60_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') void sync() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      void import('@capacitor/core')
+        .then(({ registerPlugin }) => registerPlugin<any>('RiderService').stop())
+        .catch(() => null)
+    }
+  }, [authed])
+
   const [dest, setDest] = useState('')
   // Live ride request pushed over the socket, handed to the RideRequest screen.
   const [req, setReq] = useState<RideRequestData | null>(null)
@@ -5639,7 +5733,7 @@ export default function App() {
       {/* ?????? App flow ?????? */}
       {authed && (<>
         {mode === 'rider' && (<>
-          {rScreen === 'home' && <RiderHome onBook={book} mode={mode} onMode={switchMode} onScheduled={() => goScheduled('home')} />}
+          {rScreen === 'home' && <RiderHome onBook={book} mode={mode} onMode={switchMode} onScheduled={() => goScheduled('home')} onPayLater={() => setRScreen('paylater')} />}
           {rScreen === 'booking' && (
             <BookingScreen
               destination={dest}

@@ -1396,13 +1396,13 @@ export async function requestRide(input: RideRequestInput): Promise<RideRequestR
           ? done({ ok: true, rideId: String(d.rideId) })
           : done({ ok: false, reason: "error", message: d?.reason || d?.error || d?.message || "Could not book the ride" })
       );
-      const b = on("ride:no:drivers", () =>
-        done({ ok: false, reason: "no_drivers", message: "No drivers nearby right now. Try again shortly." })
-      );
-      const c = on("ride:expired", () =>
-        done({ ok: false, reason: "expired", message: "That request timed out." })
-      );
-      return () => { a(); b(); c(); };
+      // Do NOT treat 'ride:no:drivers' / 'ride:expired' as a booking failure.
+      // The ride is parked, not dead: the worker keeps reviving it and a driver
+      // can still accept it minutes later. Turning that into "Could not book"
+      // left the rider on an error screen while a driver was picking up the same
+      // ride — the exact "rider says no driver, driver has the trip" split. The
+      // screen's DB poll now recovers on accepted/cancelled.
+      return () => { a(); };
     })();
     const timer = setTimeout(
       () => done({ ok: false, reason: "timeout", message: "No response from the server. Check your connection." }),

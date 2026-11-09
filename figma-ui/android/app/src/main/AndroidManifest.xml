@@ -46,6 +46,15 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <!-- Scheduled-ride keep-alive: started by the web layer when a scheduled
+             pickup is within 2 hours. Holds foreground priority so the countdown,
+             driver-accepted poll and trip map stay alive when the app is
+             backgrounded. It does no location or network work itself. -->
+        <service
+            android:name=".RiderKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
     <!-- Permissions -->
@@ -59,4 +68,8 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Scheduled-ride foreground service (RiderKeepAliveService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 </manifest>

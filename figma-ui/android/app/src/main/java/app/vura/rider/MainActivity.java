@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // Register before super.onCreate so the plugin is part of the bridge.
         registerPlugin(PaystackNativePlugin.class);
+        registerPlugin(RiderServicePlugin.class);
 
         super.onCreate(savedInstanceState);
 
