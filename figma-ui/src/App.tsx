@@ -5485,16 +5485,56 @@ export default function App() {
   // A live-support push should land on the chat, not just the home screen.
   // In the foreground Android draws no tray notification, so the same event
   // raises a small tappable banner; a tray tap still opens the chat directly.
+  // Scheduled reminders activate/remind the same way: the tap opens the
+  // scheduled ride, matching screen or live trip for the push's ride id.
   const [supportBanner, setSupportBanner] = useState<{ title: string; body: string } | null>(null)
   useEffect(() => {
     if (!authed) return
-    const openSupport = (data: any) => {
+    const openSupport = (data: any): boolean => {
       if (data?.type === 'live_support' || data?.kind === 'live_support') {
         setRNav('account')
         setRScreen('supportChat')
+        return true
+      }
+      return false
+    }
+    const openRide = async (data: any) => {
+      const type = String(data?.type || data?.kind || '')
+      const id = String(data?.rideId || data?.ride_id || '')
+      if (!id) return
+      if (
+        ![
+          'scheduled_reminder',
+          'scheduled_ride_started',
+          'reservation_activated',
+          'reservation_released',
+          'ride_accepted',
+        ].includes(type)
+      ) {
+        return
+      }
+      try {
+        const row = await getRide(id)
+        const st = String((row as any)?.status || '')
+        if (st === 'scheduled') {
+          goScheduled('home')
+        } else if (st === 'searching' || st === 'no_drivers') {
+          setRideId(id)
+          setRScreen('matching')
+        } else if (['accepted', 'driver_arrived', 'in_progress', 'completed'].includes(st)) {
+          setRideId(id)
+          setRScreen('ride')
+        } else if (st === 'cancelled' || st === 'expired') {
+          setRScreen('home')
+        }
+      } catch {
+        /* the foreground restore/polls will catch up */
       }
     }
-    const onAction = (event: Event) => openSupport((event as CustomEvent).detail)
+    const onAction = (event: Event) => {
+      const data = (event as CustomEvent).detail || {}
+      if (!openSupport(data)) void openRide(data)
+    }
     const onPush = (event: Event) => {
       const data = (event as CustomEvent).detail || {}
       if (data.type === 'live_support' || data.kind === 'live_support') {
@@ -5507,7 +5547,7 @@ export default function App() {
     window.addEventListener('vura:push:action', onAction)
     window.addEventListener('vura:push', onPush)
     const pending = consumePushAction()
-    if (pending) openSupport(pending)
+    if (pending && !openSupport(pending)) void openRide(pending)
     return () => {
       window.removeEventListener('vura:push:action', onAction)
       window.removeEventListener('vura:push', onPush)
@@ -5795,6 +5835,10 @@ export default function App() {
           )}
           {rScreen === 'scheduled' && (
             <ScheduledRidesScreen
+              onTrack={(id, status) => {
+                setRideId(id)
+                setRScreen(status === 'searching' || status === 'no_drivers' ? 'matching' : 'ride')
+              }}
               onBack={() => {
                 setRScreen(scheduledReturn)
                 if (scheduledReturn === 'home' || scheduledReturn === 'activity' || scheduledReturn === 'account') {

@@ -87,7 +87,7 @@ const STATUS_LABEL: Record<string, string> = {
 const MIN_LEAD_MS = 30 * 60 * 1000
 const MAX_AHEAD_MS = 90 * 24 * 60 * 60 * 1000
 
-export function ScheduledRidesScreen({ onBack }: { onBack: () => void }) {
+export function ScheduledRidesScreen({ onBack, onTrack }: { onBack: () => void; onTrack?: (rideId: string, status: string) => void }) {
   const [rides, setRides] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -110,6 +110,26 @@ export function ScheduledRidesScreen({ onBack }: { onBack: () => void }) {
       .catch((e: any) => { if (alive) setError(`Could not load your reservations: ${e?.message || 'unknown error'}`) })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
+  }, [])
+
+  // Keep this list live: a driver can accept the reservation while the rider is
+  // looking at it, and the pickup status changes at T-15. Without this poll the
+  // screen stayed on "Scheduled" until the rider left and came back.
+  useEffect(() => {
+    let alive = true
+    const refresh = () => {
+      getScheduledRides()
+        .then((rows) => { if (alive) setRides(rows) })
+        .catch(() => undefined)
+    }
+    const timer = window.setInterval(refresh, 10000)
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
   // Where the car should collect the rider: the device's own fix, named with the
@@ -384,6 +404,14 @@ export function ScheduledRidesScreen({ onBack }: { onBack: () => void }) {
                     )}
                   </div>
 
+                  {['searching', 'no_drivers', 'accepted', 'driver_arrived', 'in_progress'].includes(status) && onTrack && (
+                    <button
+                      onClick={() => onTrack(String(r.id), status)}
+                      className="w-full mt-3 bg-[#1A1A1A] text-white font-semibold text-[12px] py-3 rounded-xl active:bg-black"
+                    >
+                      {['accepted', 'driver_arrived', 'in_progress'].includes(status) ? 'Track this ride' : 'View driver search'}
+                    </button>
+                  )}
                   <button
                     onClick={() => cancel(String(r.id))}
                     disabled={busy === String(r.id)}

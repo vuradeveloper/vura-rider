@@ -16,6 +16,7 @@ import { apiFetch } from './backend'
 const CHANNELS = [
   { id: 'vura_ride_offers', name: 'Ride offers', description: 'Incoming ride requests', importance: 5 },
   { id: 'ride_updates', name: 'Ride updates', description: 'Driver and trip status changes', importance: 4 },
+  { id: 'scheduled_reminders', name: 'Scheduled ride reminders', description: 'Pickup reminders for reserved rides', importance: 5 },
   { id: 'vura_trip_progress', name: 'Trip progress', description: 'Ongoing trip progress', importance: 2 },
 ]
 
