@@ -72,10 +72,15 @@ export async function initPushNotifications(): Promise<boolean> {
       console.warn('[push] registration failed', err)
     })
 
-    // App in the FOREGROUND: the OS draws nothing for us, the UI shows its banner.
+    // App in the FOREGROUND: the OS draws nothing for us, so hand the title and
+    // body to the UI as well as the data payload. The shell shows a small banner
+    // for a support reply (tap opens the chat); ride state still comes over the
+    // socket.
     await PushNotifications.addListener('pushNotificationReceived', (n: any) => {
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('vura:push', { detail: n?.data || {} }))
+        window.dispatchEvent(new CustomEvent('vura:push', {
+          detail: { ...(n?.data || {}), title: n?.title, body: n?.body },
+        }))
       }
     })
 
@@ -84,7 +89,11 @@ export async function initPushNotifications(): Promise<boolean> {
     // The payload is also kept briefly so a live-support tap can open the chat
     // even when the tap event arrives before React mounted its listener.
     await PushNotifications.addListener('pushNotificationActionPerformed', (n: any) => {
-      const data = n?.notification?.data || {}
+      const data = {
+        ...(n?.notification?.data || {}),
+        title: n?.notification?.title,
+        body: n?.notification?.body,
+      }
       try {
         sessionStorage.setItem('vura.push.action', JSON.stringify(data))
       } catch { /* storage may be unavailable */ }

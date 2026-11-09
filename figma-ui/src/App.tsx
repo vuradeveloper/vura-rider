@@ -5434,6 +5434,9 @@ export default function App() {
   const [dNav, setDNav] = useState<DriverScreen>('driverHome')
 
   // A live-support push should land on the chat, not just the home screen.
+  // In the foreground Android draws no tray notification, so the same event
+  // raises a small tappable banner; a tray tap still opens the chat directly.
+  const [supportBanner, setSupportBanner] = useState<{ title: string; body: string } | null>(null)
   useEffect(() => {
     if (!authed) return
     const openSupport = (data: any) => {
@@ -5443,11 +5446,31 @@ export default function App() {
       }
     }
     const onAction = (event: Event) => openSupport((event as CustomEvent).detail)
+    const onPush = (event: Event) => {
+      const data = (event as CustomEvent).detail || {}
+      if (data.type === 'live_support' || data.kind === 'live_support') {
+        setSupportBanner({
+          title: String(data.title || 'Vura support replied'),
+          body: String(data.body || 'Tap to open Live Support.'),
+        })
+      }
+    }
     window.addEventListener('vura:push:action', onAction)
+    window.addEventListener('vura:push', onPush)
     const pending = consumePushAction()
     if (pending) openSupport(pending)
-    return () => window.removeEventListener('vura:push:action', onAction)
+    return () => {
+      window.removeEventListener('vura:push:action', onAction)
+      window.removeEventListener('vura:push', onPush)
+    }
   }, [authed])
+
+  // Auto-dismiss the foreground support banner; opening the chat dismisses it.
+  useEffect(() => {
+    if (!supportBanner) return
+    const timer = window.setTimeout(() => setSupportBanner(null), 8000)
+    return () => window.clearTimeout(timer)
+  }, [supportBanner])
 
   const [dest, setDest] = useState('')
   // Live ride request pushed over the socket, handed to the RideRequest screen.
@@ -5563,6 +5586,27 @@ export default function App() {
 
   return (
     <div className="max-w-sm mx-auto relative min-h-screen overflow-hidden" style={{ boxShadow: '0 0 0 1px #E0E0E0' }}>
+      {authed && supportBanner && (
+        <button
+          type="button"
+          onClick={() => {
+            setSupportBanner(null)
+            setRNav('account')
+            setRScreen('supportChat')
+          }}
+          className="fixed left-1/2 -translate-x-1/2 top-3 z-[80] w-[calc(100%-24px)] max-w-sm text-left rounded-2xl bg-[#1A1A1A] text-white px-3.5 py-3 shadow-xl active:opacity-90"
+          aria-label="Open Live Support"
+        >
+          <div className="flex items-start gap-2.5">
+            <span className="w-7 h-7 rounded-full bg-[#EA4335] flex items-center justify-center shrink-0 text-[12px] font-bold">V</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[12.5px] font-bold truncate">{supportBanner.title}</p>
+              <p className="text-[11.5px] text-white/75 line-clamp-2 mt-0.5">{supportBanner.body}</p>
+              <p className="text-[10.5px] font-semibold text-white/60 mt-1">Tap to open Live Support</p>
+            </div>
+          </div>
+        </button>
+      )}
       {/* ?????? Auth flow ?????? */}
       {!authed && (<>
         {checkingSession ? (
