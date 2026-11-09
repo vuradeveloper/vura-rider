@@ -941,7 +941,7 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
         }
         // Share the same cancellation-fee policy as the socket path: no fee while
         // searching/scheduled, flat R15 once a driver was matched (after grace).
-        const before = await (0, database_1.queryOne)("SELECT status, accepted_at FROM rides WHERE id = $1 LIMIT 1", [req.params.id]).catch(() => null);
+        const before = await (0, database_1.queryOne)("SELECT status, accepted_at, driver_id FROM rides WHERE id = $1 LIMIT 1", [req.params.id]).catch(() => null);
         const FEE_FLAT_RANDS = 15.0;
         const FEE_GRACE_MINUTES = 2;
         let fee = 0.0;
@@ -969,8 +969,33 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
         // driver's room, the same event the socket cancel sends. Without this a
         // driver could still see/accept the ride for up to 15s after the cancel.
         await (0, dispatch_1.cancelPendingOffers)(io, String(req.params.id), "rider_cancelled");
-        io?.to(`ride:${req.params.id}`).emit("ride:cancelled", { reason: "Ride cancelled by user", cancellation_fee: fee });
+        io?.to(`ride:${req.params.id}`).emit("ride:cancelled", {
+            rideId: req.params.id,
+            reason: "Ride cancelled by user",
+            cancellation_fee: fee,
+        });
         io?.to("drivers").emit("ride:cancelled", { rideId: req.params.id, reason: "Ride cancelled by user" });
+        // Free a pre-accepted reservation driver and tell them on their own room +
+        // push. A scheduled ride can already have a driver assigned; cancelling it
+        // must not leave that driver holding a ghost reservation.
+        if (before?.driver_id) {
+            await (0, dispatch_1.releaseDriver)(String(before.driver_id)).catch(() => undefined);
+            const reservedDriver = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [before.driver_id]).catch(() => null);
+            if (reservedDriver?.firebase_uid) {
+                io?.to(`user:${reservedDriver.firebase_uid}`).emit("ride:cancelled", {
+                    rideId: req.params.id,
+                    reason: "Ride cancelled by user",
+                    cancellation_fee: fee,
+                });
+                void (0, notify_1.sendPushToUser)(reservedDriver.firebase_uid, {
+                    type: "ride_cancelled",
+                    title: "Reservation cancelled",
+                    body: "The rider cancelled this scheduled ride.",
+                    rideId: String(req.params.id),
+                    data: { rideId: String(req.params.id), type: "ride_cancelled" },
+                }).catch(() => 0);
+            }
+        }
         // Card preauthorization: cancelling frees the rider's hold immediately
         // (idempotent — no hold / already released answers honestly).
         let paymentStatus = "NONE";
@@ -1402,6 +1427,7 @@ router.post("/:id/cancel", auth_1.requireAuth, async (req, res) => {
         const io = global.__vuraIo;
         await (0, dispatch_1.cancelPendingOffers)(io, rideId, "rider_cancelled");
         io?.to(`ride:${rideId}`).emit("ride:cancelled", {
+            rideId,
             reason: "Ride cancelled by user",
             cancellation_fee: fee,
         });
@@ -1409,6 +1435,33 @@ router.post("/:id/cancel", auth_1.requireAuth, async (req, res) => {
             rideId,
             reason: "Ride cancelled by user",
         });
+        // The assigned driver must be freed and told on every channel. The socket
+        // cancel path did this; this REST path (the one the rider app actually uses)
+        // used to leave the driver profile on 'on_trip' forever and only emitted to
+        // rooms the driver might have left after a reconnect. That looked exactly like
+        // "the rider cancelled but the driver still has the trip".
+        const assignedDriver = ride.driver_id
+            ? await (0, database_1.queryOne)(`SELECT u.firebase_uid
+             FROM rides r JOIN users u ON u.id = r.driver_id
+            WHERE r.id = $1`, [rideId]).catch(() => null)
+            : null;
+        if (ride.driver_id) {
+            await (0, dispatch_1.releaseDriver)(String(ride.driver_id)).catch(() => undefined);
+            if (assignedDriver?.firebase_uid) {
+                io?.to(`user:${assignedDriver.firebase_uid}`).emit("ride:cancelled", {
+                    rideId,
+                    reason: "Ride cancelled by user",
+                    cancellation_fee: fee,
+                });
+                void (0, notify_1.sendPushToUser)(assignedDriver.firebase_uid, {
+                    type: "ride_cancelled",
+                    title: "Ride cancelled",
+                    body: "The rider cancelled this trip. You are back online for the next request.",
+                    rideId,
+                    data: { rideId, type: "ride_cancelled" },
+                }).catch(() => 0);
+            }
+        }
         // ── Release the hold (the whole point of this endpoint) ──
         let paymentStatus = "NONE";
         let released = false;
