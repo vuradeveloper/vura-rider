@@ -188,6 +188,14 @@ async function findCandidatesHaversine(rideId, pickupLat, pickupLng, limit = 3, 
               SELECT 1 FROM rides r
                WHERE r.driver_id = u.id
                  AND r.status IN ('accepted', 'driver_arrived', 'in_progress'))
+        -- Uber Reserve protection: a driver holding a reservation inside the
+        -- protected window must not be offered an on-demand ride.
+        AND NOT EXISTS (
+              SELECT 1 FROM rides rr
+               WHERE rr.driver_id = u.id
+                 AND rr.status = 'scheduled'
+                 AND rr.scheduled_at > NOW()
+                 AND rr.scheduled_at <= NOW() + INTERVAL '60 minutes')
       ORDER BY distance_km ASC
       LIMIT $5`, [rideId, pickupLat, pickupLng, exports.LOCATION_FRESH_SECONDS, limit, ignorePreviousOffers]
     // NOTE ON ERROR HANDLING: a failed candidate query must NOT be turned into an
@@ -438,6 +446,13 @@ async function findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePrevi
               SELECT 1 FROM rides r
                WHERE r.driver_id = u.id
                  AND r.status IN ('accepted', 'driver_arrived', 'in_progress'))
+        -- Uber Reserve protection (same 60-minute window as acceptRide).
+        AND NOT EXISTS (
+              SELECT 1 FROM rides rr
+               WHERE rr.driver_id = u.id
+                 AND rr.status = 'scheduled'
+                 AND rr.scheduled_at > NOW()
+                 AND rr.scheduled_at <= NOW() + INTERVAL '60 minutes')
         AND NOT EXISTS (
               SELECT 1 FROM driver_blocks blk
                WHERE blk.rider_id = COALESCE((SELECT passenger_id FROM rides WHERE id = $6), '00000000-0000-0000-0000-000000000000'::uuid)
@@ -1055,6 +1070,14 @@ function tierLabel(tier) {
             return "Economy";
     }
 }
+const RESERVE_PROTECT_MINUTES = Math.max(15, Math.min(120, Number(process.env.RESERVE_PROTECT_MINUTES || 60)));
+async function driverReservationWithin(driverId) {
+    return (0, database_1.queryOne)(`SELECT id, scheduled_at FROM rides
+      WHERE driver_id = $1 AND status = 'scheduled'
+        AND scheduled_at > NOW()
+        AND scheduled_at <= NOW() + make_interval(mins => $2)
+      ORDER BY scheduled_at ASC LIMIT 1`, [driverId, RESERVE_PROTECT_MINUTES]).catch(() => null);
+}
 async function acceptRide(io, params) {
     const { rideId, driverId } = params;
     // The driver's recorded car classes: explicit CarScan grant first, then a
@@ -1109,6 +1132,25 @@ async function acceptRide(io, params) {
         }
         if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
             return { ok: false, error: `Ride is ${ride.status}` };
+        }
+        // Uber Reserve protection: once a driver holds a reservation inside the
+        // protected window, on-demand rides must not pull them away from it. The
+        // candidate SQL already excludes these drivers; this guard covers the
+        // REST/twin accept path and a stale offer still on screen.
+        if (!reserving) {
+            const near = await driverReservationWithin(driverId);
+            if (near) {
+                const at = new Date(near.scheduled_at).toLocaleTimeString("en-ZA", {
+                    timeZone: "Africa/Johannesburg",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                });
+                return {
+                    ok: false,
+                    error: `You have a reserved pickup at ${at}. Complete or release that reservation before accepting another ride.`,
+                };
+            }
         }
         // ── Uber Reserve: accept early, stay available ───────────────────────────
         // The ride stays 'scheduled' with this driver assigned. The driver keeps
@@ -1554,12 +1596,16 @@ async function cancelPendingOffers(io, rideId, reason = "cancelled") {
 async function reviveWaitingRides(io, limit = 5) {
     const waiting = await (0, database_1.query)(`SELECT r.id, r.status FROM rides r
       WHERE r.status IN ('searching', 'no_drivers')
-        AND r.created_at > NOW() - INTERVAL '15 minutes'
+        -- A scheduled ride may have been created days ago; once it enters the
+        -- matching pool at T-15 it must stay eligible for revive/offer until
+        -- pickup. Fresh on-demand rides keep the 15-minute guard.
+        AND (r.created_at > NOW() - INTERVAL '15 minutes' OR r.scheduled_at IS NOT NULL)
         AND NOT EXISTS (
               SELECT 1 FROM ride_offers ro
                WHERE ro.ride_id = r.id AND ro.status = 'pending' AND ro.expires_at > NOW())
         AND COALESCE(r.no_drivers_at, r.created_at) < NOW() - INTERVAL '6 seconds'
-      ORDER BY r.created_at DESC
+      ORDER BY CASE WHEN r.scheduled_at IS NOT NULL THEN 0 ELSE 1 END,
+               r.created_at DESC
       LIMIT $1`, [limit]).catch(() => []);
     let revived = 0;
     for (const ride of waiting) {

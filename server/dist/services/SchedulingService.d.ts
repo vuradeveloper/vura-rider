@@ -1,5 +1,12 @@
 import type { Server as SocketIOServer } from "socket.io";
 export declare function processDueScheduledRides(io: SocketIOServer): Promise<number>;
+/**
+ * 10-minute and 5-minute pickup reminders for a scheduled ride. Sent to the
+ * rider always, and to the assigned driver too. HIGH priority + the
+ * `scheduled_reminders` Android channel (importance HIGH, sound + vibration)
+ * so the phone actually buzzes instead of silently posting to the tray.
+ */
+export declare function sendPickupReminders(io: SocketIOServer): Promise<number>;
 export declare function startScheduler(io: SocketIOServer): NodeJS.Timeout;
 export declare function stopScheduler(): void;
 /**

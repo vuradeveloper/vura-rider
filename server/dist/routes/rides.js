@@ -584,6 +584,22 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
             res.json({ rides: [], scoped: false, radius_km: null, suspended: true });
             return;
         }
+        // Uber Reserve protection: while this driver holds a reservation inside the
+        // protected window, the on-demand feed is empty. They still see the
+        // reservation on Home and can Release it; they simply cannot be pulled into
+        // a trip that would make them late. acceptRide enforces the same rule.
+        const protectMinutes = Math.max(15, Math.min(120, Number(process.env.RESERVE_PROTECT_MINUTES || 60)));
+        const nearReservation = me
+            ? await (0, database_1.queryOne)(`SELECT id FROM rides
+            WHERE driver_id = $1 AND status = 'scheduled'
+              AND scheduled_at > NOW()
+              AND scheduled_at <= NOW() + make_interval(mins => $2)
+            LIMIT 1`, [me.id, protectMinutes]).catch(() => null)
+            : null;
+        if (nearReservation) {
+            res.json({ rides: [], scoped: true, radius_km: null, reservation_soon: true });
+            return;
+        }
         // The ride classes this car may serve. The list below is what the driver
         // app auto-opens every 2 seconds, so it must obey exactly the same class
         // contract dispatch does — otherwise an Economy car is shown (and can
@@ -612,7 +628,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         const rows = await (0, database_1.query)(`SELECT r.*,
               u.full_name AS passenger_name, u.phone AS passenger_phone,
               u.profile_photo_url AS passenger_photo_url,
-              CASE WHEN r.status = 'scheduled' THEN TRUE ELSE FALSE END AS is_scheduled,
+              CASE WHEN r.scheduled_at IS NOT NULL THEN TRUE ELSE FALSE END AS is_scheduled,
               -- Distance is only meaningful when we actually know where the
               -- asking driver is. Without a fix it would be measured from
               -- (0,0) in the Gulf of Guinea and could reorder a no-GPS
@@ -634,7 +650,8 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
               END AS pickup_distance_km
          FROM rides r
          LEFT JOIN users u ON u.id = r.passenger_id
-        WHERE ((r.status IN ('searching', 'no_drivers') AND r.created_at > NOW() - INTERVAL '30 minutes')
+        WHERE ((r.status IN ('searching', 'no_drivers')
+                AND (r.created_at > NOW() - INTERVAL '30 minutes' OR r.scheduled_at IS NOT NULL))
            OR (r.status = 'scheduled' AND r.scheduled_at > NOW()))
           -- RIDE CLASS: only requests this car's recorded categories can serve.
           -- Before this line the 2-second poll returned every nearby ride,
@@ -655,7 +672,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
         -- pre-accept keeps working.
         -- NULLS LAST: rides we could not measure sort after measured ones, so a
         -- no-GPS driver keeps newest-first ordering among the unmeasurable.
-        ORDER BY CASE WHEN r.status = 'scheduled' THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN r.scheduled_at IS NOT NULL THEN 0 ELSE 1 END,
                  pickup_distance_km ASC NULLS LAST,
                  r.created_at DESC
         LIMIT 20`, [
@@ -768,15 +785,14 @@ router.post("/driver/reservations/:id/release", auth_1.requireAuth, async (req, 
             io.to("drivers").emit("ride:rematch", { rideId: ride.id });
         }
         if (ride.passenger_id) {
-            const pax = await (0, database_1.queryOne)("SELECT firebase_uid FROM users WHERE id = $1", [ride.passenger_id]).catch(() => null);
-            if (pax?.firebase_uid) {
-                (0, notify_1.sendPushToUser)(pax.firebase_uid, {
-                    type: "reservation_released",
-                    title: "Finding a new driver",
-                    body: "Your reserved driver released the ride — we're matching another driver for your pickup.",
-                    data: { rideId: ride.id, type: "reservation_released" },
-                }).catch(() => { });
-            }
+            (0, notify_1.sendPushToUser)(String(ride.passenger_id), {
+                type: "reservation_released",
+                title: "Finding a new driver",
+                body: "Your reserved driver released the ride — we're matching another driver for your pickup.",
+                highPriority: true,
+                channelId: "scheduled_reminders",
+                data: { rideId: ride.id, type: "reservation_released" },
+            }).catch(() => { });
         }
         res.json({ success: true, status: nextStatus });
     }
@@ -987,7 +1003,7 @@ router.post("/scheduled/:id/cancel", auth_1.requireAuth, async (req, res) => {
                     reason: "Ride cancelled by user",
                     cancellation_fee: fee,
                 });
-                void (0, notify_1.sendPushToUser)(reservedDriver.firebase_uid, {
+                void (0, notify_1.sendPushToUser)(String(before.driver_id), {
                     type: "ride_cancelled",
                     title: "Reservation cancelled",
                     body: "The rider cancelled this scheduled ride.",
@@ -1453,7 +1469,7 @@ router.post("/:id/cancel", auth_1.requireAuth, async (req, res) => {
                     reason: "Ride cancelled by user",
                     cancellation_fee: fee,
                 });
-                void (0, notify_1.sendPushToUser)(assignedDriver.firebase_uid, {
+                void (0, notify_1.sendPushToUser)(String(ride.driver_id), {
                     type: "ride_cancelled",
                     title: "Ride cancelled",
                     body: "The rider cancelled this trip. You are back online for the next request.",
