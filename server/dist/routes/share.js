@@ -42,7 +42,7 @@ router.get("/:token", async (req, res) => {
         const ride = await (0, database_1.queryOne)(`SELECT r.id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
               r.destination_address, r.destination_lat, r.destination_lng, r.created_at,
               u.full_name AS driver_name, u.profile_photo_url AS driver_photo_url,
-              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
+              dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.vehicle_year, NULL::text AS vehicle_image_url, dp.license_plate,
               COALESCE(dp.rating_avg, 0)::float AS driver_rating,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading
        FROM rides r
