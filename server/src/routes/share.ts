@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { query, queryOne, execute } from "../config/database";
 import { attachVehicleImages } from "../services/vehicleImages";
+import { CAR_ICON_DATA_URI } from "./shareCarIcon";
 
 const router = Router();
 import { shareTileProvider } from "../services/providerSeams";
@@ -46,8 +47,9 @@ router.get("/:token", async (req: Request, res: Response) => {
     const ride = await queryOne<any>(
       `SELECT r.id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
               r.destination_address, r.destination_lat, r.destination_lng, r.created_at,
-              u.full_name AS driver_name,
+              u.full_name AS driver_name, u.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, NULL::text AS vehicle_image_url, dp.license_plate,
+              COALESCE(dp.rating_avg, 0)::float AS driver_rating,
               dp.current_lat AS driver_lat, dp.current_lng AS driver_lng, dp.current_heading AS driver_heading
        FROM rides r
        LEFT JOIN users u ON u.id = r.driver_id
@@ -77,6 +79,8 @@ router.get("/:token", async (req: Request, res: Response) => {
         destination: ride.destination_lat != null ? [Number(ride.destination_lat), Number(ride.destination_lng)] : null,
         createdAt: ride.created_at,
         driverName: ride.driver_name || "Your driver",
+        driverPhotoUrl: ride.driver_photo_url || null,
+        driverRating: Number(ride.driver_rating) || 0,
         vehicleMake: ride.vehicle_make,
         vehicleModel: ride.vehicle_model,
         vehicleColor: ride.vehicle_color,
@@ -105,17 +109,14 @@ export async function sharePage(req: Request, res: Response) {
 }
 
 function sharePageHtml(token: string): string {
-  // Tile seam (services/providerSeams.ts): SHARE_TILE_URL when set; the
-  // public OSM tile server only OUTSIDE production; production unset -> NO
-  // tile layer (markers + route line still render on the grey background)
-  // instead of silently hammering tile.openstreetmap.org, whose usage policy
-  // bans production traffic. Single quotes escaped so a hostile env value
-  // cannot break out of the JS string.
+  // Same map look as the apps: OSM tiles with the grayscale/contrast filter,
+  // unless SHARE_TILE_URL overrides the provider. The public OSM layer is what
+  // the apps themselves use; the share page must not fall back to a blank grey
+  // box in production.
   const tile = shareTileProvider();
   const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
-  const tileLayerJs = tile.url
-    ? `L.tileLayer('${tile.url.replace(/'/g, "%27")}',{maxZoom:19,attribution:'${TILE_ATTRIBUTION}'}).addTo(map);`
-    : "";
+  const tileUrl = tile.url || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const tileLayerJs = `L.tileLayer('${tileUrl.replace(/'/g, "%27")}',{maxZoom:19,subdomains:'abc',className:'tile-grayscale',attribution:'${TILE_ATTRIBUTION}'}).addTo(map);`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -135,10 +136,22 @@ function sharePageHtml(token: string): string {
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   .map-wrap{height:42vh;min-height:240px;width:100%;position:relative}
   #map{width:100%;height:100%}
+  .leaflet-container{background:#f8f9fa}
+  .tile-grayscale{filter:grayscale(1) contrast(1.08) brightness(1.02)}
+  .vura-roam-car-icon{background:transparent!important;border:0!important;transition:transform .8s linear}
+  .vura-roam-car{width:56px;height:56px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .vura-roam-car img{width:52px;height:52px;object-fit:contain;transform-origin:50% 50%;transition:transform .45s linear;filter:drop-shadow(0 2px 5px rgba(0,0,0,.30))}
+  .vura-route-pin{background:transparent!important;border:0!important}
   .driver-card{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid #f1ebe7}
-  .avatar{width:46px;height:46px;border-radius:50%;background:#fdeeea;display:flex;align-items:center;justify-content:center;font-size:20px}
-  .driver-card b{font-size:15px;display:block}
-  .driver-card span{font-size:12.5px;color:#80716b}
+  .avatar{width:46px;height:46px;border-radius:50%;background:#fdeeea;display:flex;align-items:center;justify-content:center;font-size:20px;overflow:hidden;flex-shrink:0}
+  .avatar img{width:100%;height:100%;object-fit:cover}
+  .driver-main{min-width:0;flex:1}
+  .driver-name{display:flex;align-items:center;gap:6px;min-width:0}
+  .driver-name b{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rating{font-size:11px;font-weight:700;color:#b26a00;background:#fff7e6;border-radius:999px;padding:2px 6px;flex-shrink:0}
+  .driver-card span{font-size:12.5px;color:#80716b;display:block}
+  .plate{display:inline-block;margin-top:5px;background:#111;color:#fff;border-radius:6px;padding:2px 7px;font:700 11.5px/1.2 ui-monospace,monospace;letter-spacing:.5px;width:max-content}
+  .car-photo{width:74px;height:54px;object-fit:contain;border-radius:8px;background:#f7f7f7;flex-shrink:0}
   .info{display:flex;justify-content:space-between;align-items:center;padding:16px 20px}
   .info .big{font-size:13px;color:#80716b}
   .info .eta{font-size:24px;font-weight:800}
@@ -162,7 +175,7 @@ function sharePageHtml(token: string): string {
   var token = ${JSON.stringify(token)};
   var app = document.getElementById('app');
   var map = null;
-  var carMarker = null, routeLine = null;
+  var carMarker = null, routeLine = null, routeCasing = null;
   var PICKUP = [ -26.2041, 28.0473 ];
   var DROPOFF = [ -26.2041, 28.0473 ];
 
@@ -182,6 +195,16 @@ function sharePageHtml(token: string): string {
 
   function buildCard(r){
     var ended = r.sharingEnded;
+    var photo = r.driverPhotoUrl
+      ? '<img src="' + escapeHtml(r.driverPhotoUrl) + '" alt="">'
+      : '🚗';
+    var carImg = '<img class="car-photo" src="' + escapeHtml(r.vehicleImageUrl || '${CAR_ICON_DATA_URI}') + '" alt="">';
+    var rating = Number(r.driverRating) > 0
+      ? '<span class="rating">★ ' + Number(r.driverRating).toFixed(1) + '</span>'
+      : '';
+    var plate = r.licensePlate
+      ? '<span class="plate">' + escapeHtml(r.licensePlate) + '</span>'
+      : '';
     return '<div class="header">' +
       '<h1>I\\'m on a Vura ride!<br>Track my trip live</h1>' +
       '<p>Live location shared by your rider</p>' +
@@ -192,9 +215,13 @@ function sharePageHtml(token: string): string {
       (ended ? '<div class="ended-banner">This rider has stopped sharing their trip.</div>' : '') +
       '<div class="map-wrap"><div id="map"></div></div>' +
       '<div class="driver-card">' +
-        '<div class="avatar">🚗</div>' +
-        '<div><b>' + escapeHtml(r.driverName) + '</b>' +
-        '<span>' + escapeHtml(vehicleText(r)) + '</span></div>' +
+        '<div class="avatar">' + photo + '</div>' +
+        '<div class="driver-main">' +
+          '<div class="driver-name"><b>' + escapeHtml(r.driverName) + '</b>' + rating + '</div>' +
+          '<span>' + escapeHtml(vehicleText(r)) + '</span>' +
+          plate +
+        '</div>' +
+        carImg +
       '</div>' +
       '<div class="info"><div><div class="big">Ride from</div><div class="addr"><div class="pin" style="background:#22c55e"></div><div><b>' + escapeHtml(r.pickupAddress||'Pickup') + '</b></div></div></div></div>' +
       '<div class="addr" style="margin-top:-12px"><div class="pin" style="background:#ef4444"></div><div><b>' + escapeHtml(r.destinationAddress||'Destination') + '</b></div></div>' +
@@ -206,7 +233,6 @@ function sharePageHtml(token: string): string {
     if(r.vehicleMake) parts.push(r.vehicleMake);
     if(r.vehicleModel) parts.push(r.vehicleModel);
     if(r.vehicleColor) parts.push(r.vehicleColor);
-    if(r.licensePlate) parts.push(r.licensePlate);
     return parts.length ? parts.join(' • ') : 'Private driver';
   }
 
@@ -227,20 +253,64 @@ function sharePageHtml(token: string): string {
     else return;
     PICKUP = hasPickup ? r.pickup : center;
     DROPOFF = hasDrop ? r.destination : r.pickup || center;
-    map = L.map('map',{zoomControl:true,attributionControl:true}).setView([center[0],center[1]], 13);
+    map = L.map('map',{zoomControl:true,attributionControl:true,preferCanvas:true,zoomSnap:0.5})
+      .setView([center[0],center[1]], 14);
     ${tileLayerJs}
+    // The same pickup dot + red drop-off pin the rider/driver map draws.
     if(hasPickup){
-      L.marker([PICKUP[0],PICKUP[1]],{icon:L.divIcon({html:'<div style="background:#22c55e;width:22px;height:22px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff">P</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map);
+      var pickupIcon = L.divIcon({
+        className:'vura-route-pin',
+        html:'<div style="width:22px;height:22px;border-radius:9999px;background:#111;border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.35)"></div>',
+        iconSize:[22,22], iconAnchor:[11,11]
+      });
+      L.marker([PICKUP[0],PICKUP[1]],{icon:pickupIcon,interactive:false,keyboard:false,zIndexOffset:650}).addTo(map);
     }
-    if(hasDrop && !(Math.abs(DROPOFF[0]-PICKUP[0])<1e-9 && Math.abs(DROPOFF[1]-PICKUP[1])<1e-9)){
-      L.marker([DROPOFF[0],DROPOFF[1]],{icon:L.divIcon({html:'<div style="background:#ef4444;width:22px;height:22px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff">D</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map);
+    if(hasDrop){
+      var dropIcon = L.divIcon({
+        className:'vura-route-pin',
+        html:'<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40"><path d="M16 0C7.2 0 0 7.2 0 16c0 11.5 16 24 16 24s16-12.5 16-24C32 7.2 24.8 0 16 0z" fill="#EA4335"/><circle cx="16" cy="16" r="6" fill="#fff"/></svg>',
+        iconSize:[32,40], iconAnchor:[16,40]
+      });
+      L.marker([DROPOFF[0],DROPOFF[1]],{icon:dropIcon,interactive:false,keyboard:false,zIndexOffset:640}).addTo(map);
     }
-    carMarker = L.marker([center[0],center[1]],{icon:L.divIcon({html:'<div style="width:30px;height:30px;background:#1a1a1a;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.3)">🚗</div>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map);
-    // Fit both points after the car is placed
-    if(hasPickup && hasDrop){ try{ map.fitBounds(L.latLngBounds([PICKUP,DROPOFF]),{padding:[40,40]}); }catch(e){} }
-    else if (hasDriver){ try{ map.setView([r.driverLat,r.driverLng], 15); }catch(e){} }
-    if (hasDriver){ carMarker.setLatLng([r.driverLat,r.driverLng]); }
+    if (hasDriver) setCar(Number(r.driverLat), Number(r.driverLng), r.driverHeading);
+    var bounds = [];
+    if(hasPickup) bounds.push(PICKUP);
+    if(hasDrop) bounds.push(DROPOFF);
+    if(hasDriver) bounds.push([Number(r.driverLat),Number(r.driverLng)]);
+    if(bounds.length >= 2){ try{ map.fitBounds(L.latLngBounds(bounds),{padding:[48,48],maxZoom:16}); }catch(e){} }
+    else if (hasDriver){ try{ map.setView([Number(r.driverLat),Number(r.driverLng)], 16); }catch(e){} }
     loadRoute();
+  }
+
+  // The exact roam-car image used by the app map, rotated to the live heading.
+  var carAnim = { lat: null, lng: null, heading: null };
+  function bearingBetween(lat1,lng1,lat2,lng2){
+    var toRad = function(d){ return d*Math.PI/180; };
+    var p1=toRad(lat1), p2=toRad(lat2), dl=toRad(lng2-lng1);
+    var y=Math.sin(dl)*Math.cos(p2);
+    var x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+    return (Math.atan2(y,x)*180/Math.PI+360)%360;
+  }
+  function setCar(lat,lng,heading){
+    if(!map) return;
+    var h = (typeof heading === 'number' && isFinite(heading)) ? Number(heading) : null;
+    if(carAnim.lat != null && h == null) h = bearingBetween(carAnim.lat, carAnim.lng, lat, lng);
+    if(h != null) carAnim.heading = h;
+    carAnim.lat = lat; carAnim.lng = lng;
+    if(!carMarker){
+      var icon = L.divIcon({
+        className:'vura-roam-car-icon',
+        html:'<div class="vura-roam-car"><img src="${CAR_ICON_DATA_URI}" alt="" draggable="false"/></div>',
+        iconSize:[56,56], iconAnchor:[28,28]
+      });
+      carMarker = L.marker([lat,lng],{icon:icon,interactive:false,keyboard:false,zIndexOffset:1000}).addTo(map);
+    } else {
+      carMarker.setLatLng([lat,lng]);
+    }
+    var el = carMarker.getElement && carMarker.getElement();
+    var img = el && el.querySelector('img');
+    if(img && carAnim.heading != null) img.style.transform = 'rotate(' + carAnim.heading.toFixed(1) + 'deg)';
   }
 
   function loadRoute(){
@@ -253,20 +323,19 @@ function sharePageHtml(token: string): string {
         var coords = data && data.routes && data.routes[0] && data.routes[0].geometry && data.routes[0].geometry.coordinates;
         if(!coords || !coords.length) return;
         var latlngs = coords.map(function(c){ return [c[1],c[0]]; });
-        if(routeLine){ map.removeLayer(routeLine); }
-        routeLine = L.polyline(latlngs,{color:'#2563EB',weight:5,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(map);
+        if(routeCasing){ map.removeLayer(routeCasing); routeCasing = null; }
+        if(routeLine){ map.removeLayer(routeLine); routeLine = null; }
+        // The app's map draws a white casing under a Vura-blue line.
+        routeCasing = L.polyline(latlngs,{color:'#FFFFFF',weight:9,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(map);
+        routeLine = L.polyline(latlngs,{color:'#2563EB',weight:5,opacity:1,lineCap:'round',lineJoin:'round'}).addTo(map);
       })
       .catch(function(){});
   }
 
   function updateCar(r){
-    if(!map || !carMarker) return;
+    if(!map) return;
     if(r.driverLat!=null && r.driverLng!=null){
-      carMarker.setLatLng([r.driverLat,r.driverLng]);
-      if(r.driverHeading!=null){
-        var el2=carMarker.getElement();
-        if(el2){ el2.style.transition='transform .3s linear'; }
-      }
+      setCar(Number(r.driverLat), Number(r.driverLng), r.driverHeading);
     }
   }
 

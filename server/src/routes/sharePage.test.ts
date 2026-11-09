@@ -20,6 +20,11 @@ describe("public share page", () => {
 
     expect(headers["Cache-Control"]).toContain("no-store");
     expect(html).toContain("Loading your trip");
+    expect(html).toContain("tile-grayscale");
+    expect(html).toContain("vura-roam-car");
+    expect(html).toContain("driverPhotoUrl");
+    expect(html).toContain("driverRating");
+    expect(html).toContain("licensePlate");
     expect(html).toContain("tick();");
     expect(html).toContain("setInterval(tick, 3000);");
     expect(html).toContain("})();");
