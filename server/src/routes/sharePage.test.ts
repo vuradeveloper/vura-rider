@@ -11,9 +11,14 @@ import { sharePage } from "./share";
 describe("public share page", () => {
   it("parses and starts the live poller", async () => {
     let html = "";
-    const res: any = { send: (body: string) => { html = body; } };
+    const headers: Record<string, string> = {};
+    const res: any = {
+      set: (key: string, value: string) => { headers[key] = value; },
+      send: (body: string) => { html = body; },
+    };
     await sharePage({ params: { token: "test-token" } } as any, res);
 
+    expect(headers["Cache-Control"]).toContain("no-store");
     expect(html).toContain("Loading your trip");
     expect(html).toContain("tick();");
     expect(html).toContain("setInterval(tick, 3000);");
