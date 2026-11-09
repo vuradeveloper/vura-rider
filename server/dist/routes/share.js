@@ -27,6 +27,7 @@ async function ensureShareTables() {
 router.get("/:token", async (req, res) => {
     try {
         await ensureShareTables();
+        res.set("Cache-Control", "no-store, max-age=0");
         const { token } = req.params;
         const evt = await (0, database_1.queryOne)(`SELECT ride_id FROM safety_events
        WHERE type = 'share_started' AND data->>'shareToken' = $1
@@ -82,6 +83,10 @@ router.get("/:token", async (req, res) => {
 // GET /share/:token — Public tracking web page
 async function sharePage(req, res) {
     const token = String(req.params.token || "");
+    // The page is hand-written HTML and can be cached by an intermediary after a
+    // bad deploy; always serve the current version so a fixed poller is not hidden
+    // behind a stale "Loading your trip…" copy.
+    res.set("Cache-Control", "no-store, max-age=0");
     res.send(sharePageHtml(token));
 }
 function sharePageHtml(token) {
