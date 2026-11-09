@@ -29,11 +29,13 @@ let timer: NodeJS.Timeout | null = null;
 // like a regular on-demand ride request.
 export async function processDueScheduledRides(io: SocketIOServer): Promise<number> {
   const due = await query<any>(
-    `SELECT id, scheduled_at FROM rides
-     WHERE status = 'scheduled' AND announced = FALSE AND driver_id IS NULL
-       AND scheduled_at <= NOW() + make_interval(mins => $1)
-       AND scheduled_at > NOW()
-     ORDER BY scheduled_at ASC`,
+    `SELECT r.id, r.scheduled_at, u.firebase_uid AS passenger_uid
+       FROM rides r
+       JOIN users u ON u.id = r.passenger_id
+     WHERE r.status = 'scheduled' AND r.announced = FALSE AND r.driver_id IS NULL
+       AND r.scheduled_at <= NOW() + make_interval(mins => $1)
+       AND r.scheduled_at > NOW()
+     ORDER BY r.scheduled_at ASC`,
     [BOOK_AHEAD_MINUTES]
   );
 
@@ -47,6 +49,17 @@ export async function processDueScheduledRides(io: SocketIOServer): Promise<numb
       rideId: ride.id,
       scheduledAt: ride.scheduled_at,
     });
+    // The app may be closed while the rider waits for their reserved pickup.
+    // Push this milestone so the rider knows matching has started even if the
+    // socket is gone (the in-app screen receives the same event when open).
+    if (ride.passenger_uid) {
+      sendPushToUser(ride.passenger_uid, {
+        type: "scheduled_ride_started",
+        title: "Your scheduled ride is starting",
+        body: "We are finding a driver for your pickup now.",
+        data: { rideId: ride.id, type: "scheduled_ride_started" },
+      }).catch(() => {});
+    }
     console.log(`[Scheduler] Auto-booked scheduled ride ${ride.id} (pickup ${ride.scheduled_at})`);
   }
   return due.length;

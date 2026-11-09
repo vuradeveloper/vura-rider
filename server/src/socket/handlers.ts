@@ -733,6 +733,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         // Tell the rider instantly — no waiting on the refund API.
         io.to(`ride:${rideId}`).emit("ride:cancelled", {
+          rideId,
           reason,
           cancellation_fee: fee,
           fee_note: fee > 0
