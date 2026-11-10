@@ -1,8 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.FeatureFlagError = exports.FEATURE_KEYS = void 0;
+exports.FeatureFlagError = exports.MAINTENANCE_KEYS = exports.FEATURE_KEYS = void 0;
 exports.validateField = validateField;
 exports.readFeatures = readFeatures;
+exports.invalidateMaintenanceCache = invalidateMaintenanceCache;
+exports.readMaintenanceStatus = readMaintenanceStatus;
 exports.updateFeature = updateFeature;
 exports.disableAllFeatures = disableAllFeatures;
 exports.enableForAccounts = enableForAccounts;
@@ -39,6 +41,7 @@ const database_1 = require("../config/database");
 const config_1 = require("./config");
 const offerWorker_1 = require("./offerWorker");
 exports.FEATURE_KEYS = ["matching", "destination", "performance_tier"];
+exports.MAINTENANCE_KEYS = ["rider_maintenance", "driver_maintenance"];
 class FeatureFlagError extends Error {
     code;
     constructor(code, message) {
@@ -65,12 +68,18 @@ const SETTABLE = {
         performance_tier_rollout_mode: "mode",
         performance_tier_rollout_driver_ids: "string[]",
     },
+    rider_maintenance: { enabled: "boolean", message: "text" },
+    driver_maintenance: { enabled: "boolean", message: "text" },
 };
 const H3_MODES = ["off", "allowlist", "percent", "all"];
 /** destination / tier only need these two — no percent bucketing for drivers. */
 const DRIVER_ROLLOUT_MODES = ["allowlist", "all"];
 function isFeatureKey(k) {
-    return typeof k === "string" && exports.FEATURE_KEYS.includes(k);
+    return (typeof k === "string" &&
+        (exports.FEATURE_KEYS.includes(k) || exports.MAINTENANCE_KEYS.includes(k)));
+}
+function isMaintenanceKey(k) {
+    return exports.MAINTENANCE_KEYS.includes(k);
 }
 function normId(id) {
     if (typeof id !== "string")
@@ -115,6 +124,14 @@ function validateField(key, field, value) {
             }
             return Math.floor(value);
         }
+        case "text": {
+            if (typeof value !== "string")
+                throw new FeatureFlagError("validation", `${field} must be text`);
+            const text = value.trim();
+            if (text.length > 500)
+                throw new FeatureFlagError("validation", `${field} must be 500 characters or fewer`);
+            return text;
+        }
     }
 }
 /** One structured JSON audit line per write — greppable in CloudWatch. */
@@ -141,6 +158,14 @@ async function readRow(key) {
 }
 /** Project the raw JSONB row into the operator-facing section (or explain why absent). */
 function section(key, row) {
+    if (isMaintenanceKey(key)) {
+        return {
+            exists: true,
+            enabled: row?.enabled === true,
+            message: typeof row?.message === "string" ? row.message : "",
+            updated_at: typeof row?.updated_at === "string" ? row.updated_at : null,
+        };
+    }
     if (!row)
         return { exists: false, error: "config row missing — apply the migration" };
     if (key === "matching") {
@@ -201,27 +226,88 @@ async function recentMatchingPaths() {
 }
 /** Full operator view: all three flags/allowlists + last rides + server build. */
 async function readFeatures() {
-    const [m, d, t] = await Promise.all([readRow("matching"), readRow("destination"), readRow("performance_tier")]);
+    const [m, d, t, riderMaint, driverMaint] = await Promise.all([
+        readRow("matching"),
+        readRow("destination"),
+        readRow("performance_tier"),
+        readRow("rider_maintenance"),
+        readRow("driver_maintenance"),
+    ]);
     return {
         server_build: (0, offerWorker_1.getBuildCommit)(),
         flags: {
             matching: section("matching", m),
             destination: section("destination", d),
             performance_tier: section("performance_tier", t),
+            rider_maintenance: section("rider_maintenance", riderMaint),
+            driver_maintenance: section("driver_maintenance", driverMaint),
         },
         recent_matching_paths: await recentMatchingPaths(),
     };
 }
+const DEFAULT_MAINTENANCE_MESSAGE = "Vura is under maintenance. We'll be back shortly.";
+let maintenanceCache = null;
+function invalidateMaintenanceCache() {
+    maintenanceCache = null;
+}
+function maintenanceSide(row) {
+    const message = typeof row?.message === "string" ? row.message.trim() : "";
+    return {
+        enabled: row?.enabled === true,
+        message: message || DEFAULT_MAINTENANCE_MESSAGE,
+    };
+}
+/** Current rider/driver maintenance state (5 s cache). Never throws. */
+async function readMaintenanceStatus(force = false) {
+    if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 5_000) {
+        return maintenanceCache.value;
+    }
+    try {
+        const [rider, driver] = await Promise.all([
+            readRow("rider_maintenance"),
+            readRow("driver_maintenance"),
+        ]);
+        const value = {
+            rider: maintenanceSide(rider),
+            driver: maintenanceSide(driver),
+        };
+        maintenanceCache = { at: Date.now(), value };
+        return value;
+    }
+    catch {
+        const value = {
+            rider: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE },
+            driver: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE },
+        };
+        maintenanceCache = { at: Date.now(), value };
+        return value;
+    }
+}
 /** Read-modify-write one app_config row with validated patches; audit + invalidate. */
 async function writeFeatureValue(key, patch, actor, action) {
+    const maintenance = isMaintenanceKey(key);
     const row = await readRow(key);
-    if (!row)
-        throw new FeatureFlagError("no_row", `app_config row '${key}' missing — run migrations first (RUN_MIGRATIONS_ON_BOOT=true)`);
-    const next = { ...row, ...patch };
-    await (0, database_1.execute)("UPDATE app_config SET value = $2::jsonb WHERE key = $1", [
-        key,
-        JSON.stringify(next),
-    ]);
+    if (!row && !maintenance) {
+        throw new FeatureFlagError("no_row", `app_config row '${key}' missing �?" run migrations first (RUN_MIGRATIONS_ON_BOOT=true)`);
+    }
+    const next = {
+        ...(row ?? {}),
+        ...patch,
+        ...(maintenance ? { updated_at: new Date().toISOString() } : {}),
+    };
+    if (maintenance) {
+        // First use creates the row; ON CONFLICT keeps every subsequent toggle a
+        // single write. This is the only place this service may create a row.
+        await (0, database_1.execute)(`INSERT INTO app_config (key, value) VALUES ($1, $2::jsonb)
+       ON CONFLICT (key) DO UPDATE SET value = $2::jsonb`, [key, JSON.stringify(next)]);
+        invalidateMaintenanceCache();
+    }
+    else {
+        await (0, database_1.execute)("UPDATE app_config SET value = $2::jsonb WHERE key = $1", [
+            key,
+            JSON.stringify(next),
+        ]);
+    }
     (0, config_1.invalidateConfigCache)();
     audit(actor, action, { key, patch });
     return section(key, next);

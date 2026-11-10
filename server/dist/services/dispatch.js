@@ -83,6 +83,7 @@ const driverPhoto_1 = require("./driverPhoto");
 const trace_1 = require("./trace");
 const pinService_1 = require("./pinService");
 const destinationFit_1 = require("./destinationFit");
+const featureFlags_1 = require("./featureFlags");
 const config_1 = require("./config");
 const config_2 = require("./config");
 const performanceTier_1 = require("./performanceTier");
@@ -1080,6 +1081,12 @@ async function driverReservationWithin(driverId) {
 }
 async function acceptRide(io, params) {
     const { rideId, driverId } = params;
+    // Admin maintenance switch: no new accepts while the driver app is off.
+    // Existing trips continue; the driver app shows this exact message.
+    const driverMaintenance = (await (0, featureFlags_1.readMaintenanceStatus)()).driver;
+    if (driverMaintenance.enabled) {
+        return { ok: false, error: driverMaintenance.message };
+    }
     // The driver's recorded car classes: explicit CarScan grant first, then a
     // derivation from seats/body, then economy. Read BEFORE the transaction so a
     // pre-013 database (no vehicle_categories column) can fall back cleanly — a

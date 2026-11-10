@@ -49,6 +49,7 @@ const metrics_1 = require("../services/metrics");
 const destinationSession_1 = require("../services/destinationSession");
 const performanceTier_1 = require("../services/performanceTier");
 const adminRiders_1 = require("../services/adminRiders");
+const featureFlags_1 = require("../services/featureFlags");
 const promos_1 = require("../services/promos");
 const rideCategories_1 = require("../services/rideCategories");
 const locationLog_1 = require("../services/locationLog");
@@ -287,6 +288,17 @@ function setupSocketHandlers(io) {
                     socket.emit("ride:requested:ack", {
                         success: false,
                         reason: gateErr.message || "Account not allowed",
+                    });
+                    return;
+                }
+                // Admin maintenance switch: refuse NEW bookings immediately. Existing
+                // trips continue; the ack reason is what the rider app shows.
+                const socketRiderMaint = (await (0, featureFlags_1.readMaintenanceStatus)()).rider;
+                if (socketRiderMaint.enabled) {
+                    socket.emit("ride:requested:ack", {
+                        success: false,
+                        reason: socketRiderMaint.message,
+                        code: "maintenance",
                     });
                     return;
                 }
@@ -957,6 +969,18 @@ function setupSocketHandlers(io) {
                 const dbUserId = await getDbUserId();
                 if (!dbUserId)
                     return;
+                // Admin maintenance switch: never mark a driver available while the
+                // driver app is off. Existing trips continue.
+                if (online === true) {
+                    const driverMaint = (await (0, featureFlags_1.readMaintenanceStatus)()).driver;
+                    if (driverMaint.enabled) {
+                        await (0, database_1.execute)(`UPDATE driver_profiles SET is_online = FALSE, status = 'offline', updated_at = NOW()
+                WHERE user_id = $1`, [dbUserId]).catch(() => { });
+                        socket.leave("drivers");
+                        socket.emit("driver:maintenance", { message: driverMaint.message });
+                        return;
+                    }
+                }
                 // Auto-create driver_profiles if missing (first time going online).
                 let existing = await (0, database_1.queryOne)("SELECT id, verification_status, vehicle_suspended FROM driver_profiles WHERE user_id = $1", [dbUserId]).catch(() => null);
                 if (!existing) {

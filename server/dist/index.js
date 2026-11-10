@@ -50,6 +50,7 @@ const database_1 = require("./config/database");
 const firebase_1 = require("./config/firebase");
 // ── Import routes ──
 const users_1 = __importDefault(require("./routes/users"));
+const appStatus_1 = __importDefault(require("./routes/appStatus"));
 const rides_1 = __importStar(require("./routes/rides"));
 const payments_1 = __importDefault(require("./routes/payments"));
 const drivers_1 = __importDefault(require("./routes/drivers"));
@@ -248,6 +249,7 @@ app.get("/", (_req, res) => {
     res.json({ status: "ok", service: "vura-rider-backend" });
 });
 // ── Routes ──
+app.use("/api/app-status", appStatus_1.default);
 app.use("/api/users", users_1.default);
 app.use("/api/rides", rides_1.default);
 app.use("/api/payments", payments_1.default);

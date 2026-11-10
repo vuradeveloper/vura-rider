@@ -1,13 +1,32 @@
 export type FeatureKey = "matching" | "destination" | "performance_tier";
 export declare const FEATURE_KEYS: FeatureKey[];
+/**
+ * The two service-wide kill switches. These are NOT rollout flags: they stop
+ * new rider bookings / driver offers immediately and are shown by the apps as
+ * a maintenance screen. They do not remove anything from Google Play.
+ */
+export type MaintenanceKey = "rider_maintenance" | "driver_maintenance";
+export declare const MAINTENANCE_KEYS: MaintenanceKey[];
+export type AnyFeatureKey = FeatureKey | MaintenanceKey;
 export declare class FeatureFlagError extends Error {
     code: "validation" | "no_row" | "not_found";
     constructor(code: FeatureFlagError["code"], message: string);
 }
 /** Validate one field against SETTABLE; throws FeatureFlagError on anything unexpected. */
-export declare function validateField(key: FeatureKey, field: string, value: unknown): unknown;
+export declare function validateField(key: AnyFeatureKey, field: string, value: unknown): unknown;
 /** Full operator view: all three flags/allowlists + last rides + server build. */
 export declare function readFeatures(): Promise<Record<string, unknown>>;
+export interface MaintenanceSide {
+    enabled: boolean;
+    message: string;
+}
+export interface MaintenanceStatus {
+    rider: MaintenanceSide;
+    driver: MaintenanceSide;
+}
+export declare function invalidateMaintenanceCache(): void;
+/** Current rider/driver maintenance state (5 s cache). Never throws. */
+export declare function readMaintenanceStatus(force?: boolean): Promise<MaintenanceStatus>;
 /** Validate + apply one flag update. Validated keys only — never a money column. */
 export declare function updateFeature(key: unknown, changes: unknown, actor: string): Promise<Record<string, unknown>>;
 export interface EnableInput {

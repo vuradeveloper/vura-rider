@@ -11,6 +11,7 @@ const vehicleImages_1 = require("../services/vehicleImages");
 const driverPhoto_1 = require("../services/driverPhoto");
 const trace_1 = require("../services/trace");
 const adminRiders_1 = require("../services/adminRiders");
+const featureFlags_1 = require("../services/featureFlags");
 const rideCategories_1 = require("../services/rideCategories");
 const preauthorization_1 = require("../services/preauthorization");
 const PayLaterService_1 = require("../services/PayLaterService");
@@ -160,6 +161,13 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         }
         catch (gateErr) {
             res.status(gateErr.status || 403).json({ error: gateErr.message || "Account not allowed" });
+            return;
+        }
+        // Admin maintenance switch: stop NEW bookings immediately, before the ride
+        // row (and any card hold) is created. Existing trips are unaffected.
+        const riderMaint = (await (0, featureFlags_1.readMaintenanceStatus)()).rider;
+        if (riderMaint.enabled) {
+            res.status(503).json({ error: riderMaint.message, code: "maintenance" });
             return;
         }
         const { pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, paymentMethod, fare, deviceId, waypoints, stops, tier, } = req.body || {};
@@ -911,6 +919,12 @@ router.post("/schedule", auth_1.requireAuth, async (req, res) => {
         const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
         if (!user) {
             res.status(404).json({ error: "User not found" });
+            return;
+        }
+        // Admin maintenance switch: no new reservations while the rider app is off.
+        const scheduleMaint = (await (0, featureFlags_1.readMaintenanceStatus)()).rider;
+        if (scheduleMaint.enabled) {
+            res.status(503).json({ error: scheduleMaint.message, code: "maintenance" });
             return;
         }
         // The upfront price is stored at booking time and is locked for the
