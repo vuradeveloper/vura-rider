@@ -643,10 +643,17 @@ export async function createRideHold(input: {
     };
   }
 
+  // The RIDE row is authoritative. The client's amount is only a fallback for
+  // a row that has no fare yet: promos and invite credit are applied to
+  // rides.estimated_fare server-side, and a client-sent R5 would otherwise
+  // hold (and split) the pre-discount fare.
+  const storedFare = Number(ride.estimated_fare || 0);
   const fareRands =
-    Number.isFinite(Number(input.amountRands)) && Number(input.amountRands) > 0
-      ? Number(input.amountRands)
-      : Number(ride.estimated_fare || 0);
+    Number.isFinite(storedFare) && storedFare > 0
+      ? storedFare
+      : Number.isFinite(Number(input.amountRands)) && Number(input.amountRands) > 0
+        ? Number(input.amountRands)
+        : 0;
   if (!Number.isFinite(fareRands) || fareRands <= 0) {
     throw new PreauthError(
       "no_fare",

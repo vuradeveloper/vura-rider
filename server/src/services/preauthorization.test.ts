@@ -347,6 +347,46 @@ describe("createRideHold guards", () => {
     ]);
   });
 
+  it("uses the ride's stored (promo-adjusted) fare, not the client's R5", async () => {
+    const ride = {
+      id: "ride-1",
+      passenger_id: "u1",
+      driver_id: null,
+      payment_method: "card",
+      status: "searching",
+      estimated_fare: 4, // promo already applied server-side
+      actual_fare: null,
+      payment_status: "NONE",
+      preauth_reference: null,
+      hold_checkout_url: null,
+      hold_expires_at: null,
+      hold_amount_cents: null,
+      captured_amount: null,
+      booking_fee_cents: null,
+      platform_share_cents: null,
+      split_applied: null,
+    };
+    vi.mocked(queryOne).mockImplementation(async (sql: any) => {
+      const s = String(sql);
+      if (s.includes("FROM rides WHERE id = $1")) return ride as any;
+      if (s.includes("FROM saved_cards")) return { transaction_index: "AUTH_saved" } as any;
+      return null as any;
+    });
+
+    await createRideHold({
+      rideId: "ride-1",
+      userId: "u1",
+      amountRands: 5, // the app's stale pre-promo number
+      email: "rider@vura.com",
+    });
+
+    const c = lastCall();
+    // The ride is R4 + 4% (R0.16) = R4.16, but Paystack's live ZAR hold floor
+    // is R5.00; the capture will be the exact R4.16 and the balance auto-releases.
+    expect(c.body.amount).toBe(500);
+    expect(c.body.split.subaccounts[0].share).toBe(56); // 40c commission + 16c fee
+  });
+
   it("captures the fare + stored booking fee (R5.20), never the fare alone", async () => {
     const ride = {
       id: "ride-1",
