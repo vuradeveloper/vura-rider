@@ -298,17 +298,22 @@ function maintenanceSide(row: Record<string, unknown> | null): MaintenanceSide {
 
 /** Current rider/driver maintenance state (5 s cache). Never throws. */
 export async function readMaintenanceStatus(force = false): Promise<MaintenanceStatus> {
-  if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 1_000) {
+  // 5 s cache for the high-frequency polls. Booking/login/accept pass
+  // force=true, so a lock still takes effect immediately where it matters.
+  if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 5_000) {
     return maintenanceCache.value;
   }
   try {
-    const [rider, driver] = await Promise.all([
-      readRow("rider_maintenance"),
-      readRow("driver_maintenance"),
-    ]);
+    // ONE query for both rows instead of two. This endpoint is polled by every
+    // rider/driver app; halving the SELECTs matters on a small DB pool.
+    const rows = await query<{ key: string; value: any }>(
+      `SELECT key, value FROM app_config
+        WHERE key IN ('rider_maintenance', 'driver_maintenance')`
+    );
+    const byKey = new Map(rows.map((r) => [String(r.key), r.value]));
     const value: MaintenanceStatus = {
-      rider: maintenanceSide(rider),
-      driver: maintenanceSide(driver),
+      rider: maintenanceSide(byKey.get("rider_maintenance") ?? null),
+      driver: maintenanceSide(byKey.get("driver_maintenance") ?? null),
     };
     maintenanceCache = { at: Date.now(), value };
     return value;
