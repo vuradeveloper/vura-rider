@@ -1,6 +1,8 @@
 export interface WalletConfig {
     /** Platform commission on the fare, percent (spec default 10). */
     commission_pct: number;
+    /** Hard cap on the platform commission per ride, in rands (default R5). */
+    commission_cap_rand: number;
     /** VAT slice INSIDE the commission, percent of the commission (SA 15). */
     vat_pct: number;
     /** Fallback Paystack fee, percent of fare — used when the webhook omits it. */

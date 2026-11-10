@@ -36,12 +36,14 @@ exports.backfillDriverLedger = backfillDriverLedger;
 const database_1 = require("../config/database");
 exports.DEFAULT_WALLET_CONFIG = {
     commission_pct: 10,
+    commission_cap_rand: 5,
     vat_pct: 15,
     paystack_fee_fallback_pct: 1.5,
     negative_limit_rand: 200,
 };
 const CONFIG_BOUNDS = {
     commission_pct: [0, 50],
+    commission_cap_rand: [0, 100],
     vat_pct: [0, 30],
     paystack_fee_fallback_pct: [0, 5],
     negative_limit_rand: [0, 10000],
@@ -116,7 +118,11 @@ async function putWalletConfig(patch, actorId) {
  */
 function commissionSplit(fareRands, cfg, paystackFeeCents) {
     const fare = Math.max(0, toCents(fareRands));
-    const commission = Math.round((fare * cfg.commission_pct) / 100);
+    const rawCommission = Math.round((fare * cfg.commission_pct) / 100);
+    // HARD CAP: Vura never takes more than the configured rand cap per ride.
+    // Default R5. This is the number the driver ledger and the Paystack split
+    // must both use; a percentage-only split would take R10 on a R100 fare.
+    const commission = Math.min(rawCommission, toCents(cfg.commission_cap_rand));
     const vat = Math.round((commission * cfg.vat_pct) / (100 + cfg.vat_pct));
     const feeFallback = Math.round((fare * cfg.paystack_fee_fallback_pct) / 100);
     const fee = paystackFeeCents != null && Number.isFinite(paystackFeeCents) && paystackFeeCents >= 0
