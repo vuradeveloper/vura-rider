@@ -62,6 +62,9 @@ const DDL: string[] = [
   `CREATE TABLE IF NOT EXISTS driver_wallets (driver_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, balance_cents BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
   `CREATE TABLE IF NOT EXISTS wallet_ledger (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), driver_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, ride_id UUID REFERENCES rides(id) ON DELETE SET NULL, type TEXT NOT NULL CHECK (type IN ('card_credit_pending','card_credit','commission_debit','reversal','payout','adjustment')), amount_cents BIGINT NOT NULL, balance_after_cents BIGINT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'posted' CHECK (status IN ('pending','posted','void')), paystack_fee_cents BIGINT NOT NULL DEFAULT 0, vat_cents BIGINT NOT NULL DEFAULT 0, margin_cents BIGINT NOT NULL DEFAULT 0, commission_cents BIGINT NOT NULL DEFAULT 0, ledger_ref_id UUID REFERENCES wallet_ledger(id), payout_id UUID, note TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (ride_id, type))`,
   `CREATE INDEX IF NOT EXISTS idx_wallet_ledger_driver ON wallet_ledger (driver_id, created_at DESC)`,
+  // Rides created before this column existed still need the capped commission
+  // written for the driver's trip summary and /api/earnings.
+  `ALTER TABLE rides ADD COLUMN IF NOT EXISTS platform_fee NUMERIC(10,2)`,
 ];
 
 let ensured = false;
@@ -239,6 +242,16 @@ export async function recordRideCompletion(
   const platformPaid = ["card", "pay_later"].includes(
     String(paymentMethod || "").trim().toLowerCase()
   );
+
+  // The driver app's trip summary and /api/earnings read rides.platform_fee.
+  // Write the SAME capped commission the ledger uses, otherwise a R100 ride
+  // would still display a R10 "service fee" (or no fee at all) while the
+  // wallet correctly took R5.
+  await execute(
+    `UPDATE rides SET platform_fee = $2
+      WHERE id = $1 AND (platform_fee IS NULL OR platform_fee <> $2)`,
+    [rideId, toRands(split.commission_cents)]
+  ).catch(() => { });
 
   // Admin screen truth: one row per ride, real fee/net (upsert — legacy rows
   // had fee=0, net=fare).
