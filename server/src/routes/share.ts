@@ -1,10 +1,59 @@
 import { Router, Request, Response } from "express";
+import path from "path";
 import { query, queryOne, execute } from "../config/database";
 import { attachVehicleImages } from "../services/vehicleImages";
 import { CAR_ICON_DATA_URI } from "./shareCarIcon";
 
 const router = Router();
 import { shareTileProvider } from "../services/providerSeams";
+
+// The public wordmark used on the share page. Served from this route so the
+// page has no third-party image dependency (and the CSP can stay tight).
+const VURA_LOGO_PATH = path.join(__dirname, "..", "..", "assets", "vura-logo.png");
+
+const FINAL_RIDE_STATUSES = new Set(["completed", "cancelled", "expired"]);
+
+/**
+ * A completed/cancelled trip (or a rider who pressed "Stop sharing") must never
+ * expose the driver's live position. The page also hides the car marker, but the
+ * API is the real boundary: no coordinates leave the server once the trip is
+ * over. Pure function so the privacy rule is unit-testable.
+ */
+export function shareLocationHidden(status: unknown, sharingEnded: boolean): boolean {
+  return sharingEnded || FINAL_RIDE_STATUSES.has(String(status ?? "").toLowerCase());
+}
+
+/** Build the public payload, stripping live coordinates as soon as the trip is over. */
+export function shareRidePayload(ride: any, sharingEnded: boolean) {
+  const status = String(ride?.status || "").toLowerCase();
+  const tripDone = status === "completed";
+  const hideLocation = shareLocationHidden(status, sharingEnded);
+  return {
+    id: ride.id,
+    status,
+    tripDone,
+    hasDriver: !!ride.driver_id,
+    pickupAddress: ride.pickup_address,
+    pickup: ride.pickup_lat != null ? [Number(ride.pickup_lat), Number(ride.pickup_lng)] : null,
+    destinationAddress: ride.destination_address,
+    destination: ride.destination_lat != null ? [Number(ride.destination_lat), Number(ride.destination_lng)] : null,
+    createdAt: ride.created_at,
+    driverName: ride.driver_name || "Your driver",
+    driverPhotoUrl: ride.driver_photo_url || null,
+    driverRating: Number(ride.driver_rating) || 0,
+    vehicleMake: ride.vehicle_make,
+    vehicleModel: ride.vehicle_model,
+    vehicleColor: ride.vehicle_color,
+    vehicleImageUrl: ride.vehicle_image_url,
+    licensePlate: ride.license_plate,
+    // Privacy boundary: once the trip is complete (or sharing stopped) the
+    // driver's coordinates are never sent to a public page again.
+    driverLat: hideLocation || ride.driver_lat == null ? null : Number(ride.driver_lat),
+    driverLng: hideLocation || ride.driver_lng == null ? null : Number(ride.driver_lng),
+    driverHeading: hideLocation || ride.driver_heading == null ? null : Number(ride.driver_heading),
+    sharingEnded,
+  };
+}
 
 // Ensure safety tables exist (best-effort) — a share GET must not 500 if the
 // table hasn't been created yet (e.g. first share before any POST ran).
@@ -23,6 +72,15 @@ async function ensureShareTables(): Promise<void> {
     /* ignore */
   }
 }
+
+// GET /api/share/logo.png — public Vura wordmark for the share page.
+router.get("/logo.png", (_req: Request, res: Response) => {
+  res.set("Cache-Control", "public, max-age=86400");
+  res.type("png");
+  res.sendFile(VURA_LOGO_PATH, (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
 
 // GET /api/share/:token — Public live-trip tracking data (no auth). The token
 // was stored in safety_events when the rider pressed "Share trip".
@@ -45,7 +103,7 @@ router.get("/:token", async (req: Request, res: Response) => {
     // The shared photo resolver owns the answer, so a public share link can never
     // disagree with what the rider's own app is showing.
     const ride = await queryOne<any>(
-      `SELECT r.id, r.status, r.pickup_address, r.pickup_lat, r.pickup_lng,
+      `SELECT r.id, r.status, r.driver_id, r.pickup_address, r.pickup_lat, r.pickup_lng,
               r.destination_address, r.destination_lat, r.destination_lng, r.created_at,
               u.full_name AS driver_name, u.profile_photo_url AS driver_photo_url,
               dp.vehicle_make, dp.vehicle_model, dp.vehicle_color, dp.vehicle_year, NULL::text AS vehicle_image_url, dp.license_plate,
@@ -68,30 +126,9 @@ router.get("/:token", async (req: Request, res: Response) => {
       [evt.ride_id]
     );
 
+    const sharingEnded = !!ended?.ended;
     await attachVehicleImages(ride);
-    res.json({
-      ride: {
-        id: ride.id,
-        status: ride.status,
-        pickupAddress: ride.pickup_address,
-        pickup: ride.pickup_lat != null ? [Number(ride.pickup_lat), Number(ride.pickup_lng)] : null,
-        destinationAddress: ride.destination_address,
-        destination: ride.destination_lat != null ? [Number(ride.destination_lat), Number(ride.destination_lng)] : null,
-        createdAt: ride.created_at,
-        driverName: ride.driver_name || "Your driver",
-        driverPhotoUrl: ride.driver_photo_url || null,
-        driverRating: Number(ride.driver_rating) || 0,
-        vehicleMake: ride.vehicle_make,
-        vehicleModel: ride.vehicle_model,
-        vehicleColor: ride.vehicle_color,
-        vehicleImageUrl: ride.vehicle_image_url,
-        licensePlate: ride.license_plate,
-        driverLat: ride.driver_lat != null ? Number(ride.driver_lat) : null,
-        driverLng: ride.driver_lng != null ? Number(ride.driver_lng) : null,
-        driverHeading: ride.driver_heading != null ? Number(ride.driver_heading) : null,
-        sharingEnded: !!ended?.ended,
-      },
-    });
+    res.json({ ride: shareRidePayload(ride, sharingEnded) });
   } catch (err: any) {
     console.error("Share API error:", err);
     res.status(500).json({ error: "Something went wrong" });
@@ -144,53 +181,72 @@ function sharePageHtml(token: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Vura Ride — Live Trip</title>
+<meta name="theme-color" content="#ffffff">
+<title>Vura — Live trip</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-  body{background:#fff;color:#2e1e1a;min-height:100vh}
-  .header{background:linear-gradient(135deg,#e04e2f,#c13a1e);color:#fff;padding:22px 20px 26px;border-radius:0 0 24px 24px}
-  .header h1{font-size:19px;font-weight:800;line-height:1.3}
-  .header p{font-size:13px;opacity:.9;margin-top:4px}
-  .status{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.18);border-radius:999px;padding:5px 12px;font-size:12px;font-weight:700;margin-top:12px}
-  .status .dot{width:8px;height:8px;border-radius:50%;background:#4ade80;animation:pulse 1.6s infinite}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-  .map-wrap{height:42vh;min-height:240px;width:100%;position:relative}
-  #map{width:100%;height:100%}
-  .leaflet-container{background:#f8f9fa}
-  .tile-grayscale{filter:grayscale(1) contrast(1.08) brightness(1.02)}
-  .vura-roam-car-icon{background:transparent!important;border:0!important;transition:transform .8s linear}
-  .vura-roam-car{width:56px;height:56px;display:flex;align-items:center;justify-content:center;pointer-events:none}
-  .vura-roam-car img{width:52px;height:52px;object-fit:contain;transform-origin:50% 50%;transition:transform .45s linear;filter:drop-shadow(0 2px 5px rgba(0,0,0,.30))}
-  .vura-route-pin{background:transparent!important;border:0!important}
-  .driver-card{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid #f1ebe7}
-  .avatar{width:46px;height:46px;border-radius:50%;background:#fdeeea;display:flex;align-items:center;justify-content:center;font-size:20px;overflow:hidden;flex-shrink:0}
-  .avatar img{width:100%;height:100%;object-fit:cover}
-  .driver-main{min-width:0;flex:1}
-  .driver-name{display:flex;align-items:center;gap:6px;min-width:0}
-  .driver-name b{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .rating{font-size:11px;font-weight:700;color:#b26a00;background:#fff7e6;border-radius:999px;padding:2px 6px;flex-shrink:0}
-  .driver-card span{font-size:12.5px;color:#80716b;display:block}
-  .plate{display:inline-block;margin-top:5px;background:#111;color:#fff;border-radius:6px;padding:2px 7px;font:700 11.5px/1.2 ui-monospace,monospace;letter-spacing:.5px;width:max-content}
-  .car-photo{width:74px;height:54px;object-fit:contain;border-radius:8px;background:#f7f7f7;flex-shrink:0}
-  .info{display:flex;justify-content:space-between;align-items:center;padding:16px 20px}
-  .info .big{font-size:13px;color:#80716b}
-  .info .eta{font-size:24px;font-weight:800}
-  .addr{padding:4px 20px 8px;display:flex;align-items:flex-start;gap:10px}
-  .addr .pin{width:10px;height:10px;border-radius:50%;margin-top:5px;flex-shrink:0}
-  .addr b{font-size:14px;display:block}
-  .addr span{font-size:12.5px;color:#80716b}
-  .footer{text-align:center;padding:18px;color:#b7a49b;font-size:11.5px}
-  .ended-banner{background:#dc2626;color:#fff;text-align:center;padding:12px;font-weight:700;font-size:14px}
-  .load{display:flex;align-items:center;justify-content:center;height:60vh;color:#80716b;font-size:14px}
-  .err{padding:40px 24px;text-align:center}
-  .err h2{font-size:18px;margin-bottom:8px}
-  .err p{color:#80716b;font-size:13px}
+:root{--ink:#161616;--muted:#7c7c7c;--line:#ececec;--soft:#f7f7f7;--brand:#e04e2f;--green:#12805c}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#fff}
+body{color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased}
+.shell{max-width:560px;margin:0 auto;padding:18px 20px 34px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:2px 0 22px}
+.brand{height:30px;width:auto;display:block}
+.live{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#8a8a8a;white-space:nowrap}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 4px rgba(224,78,47,.10)}
+.live.ended .live-dot{background:#b5b5b5;box-shadow:none}
+.status-block{padding:2px 0 20px}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 10px;font-size:10.5px;font-weight:800;letter-spacing:.10em;text-transform:uppercase;color:#5f5f5f}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--brand);animation:pulse 1.8s ease-in-out infinite}
+.pill.done{color:var(--green);border-color:#d7efe5;background:#f4fbf7}
+.pill.done .dot{background:var(--green);animation:none}
+.pill.ended{color:#8a8a8a;border-color:var(--line);background:#fafafa}
+.pill.ended .dot{background:#b5b5b5;animation:none}
+h1{font-size:26px;line-height:1.18;letter-spacing:-.02em;font-weight:800;margin-top:14px}
+.sub{font-size:13.5px;line-height:1.5;color:var(--muted);margin-top:7px;max-width:430px}
+.map-card{position:relative;height:300px;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:var(--soft);margin-bottom:14px}
+#map{width:100%;height:100%}
+.leaflet-container{background:var(--soft);font:inherit}
+.tile-grayscale{filter:grayscale(1) contrast(1.05) brightness(1.03)}
+.vura-roam-car-icon{background:transparent!important;border:0!important;transition:transform .8s linear}
+.vura-roam-car{width:56px;height:56px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.vura-roam-car img{width:52px;height:52px;object-fit:contain;transform-origin:50% 50%;transition:transform .45s linear;filter:drop-shadow(0 2px 5px rgba(0,0,0,.30))}
+.vura-route-pin{background:transparent!important;border:0!important}
+.map-note{position:absolute;right:12px;top:12px;z-index:500;background:rgba(255,255,255,.95);border:1px solid var(--line);border-radius:999px;padding:7px 11px;font-size:11px;font-weight:700;color:#6f6f6f;box-shadow:0 4px 14px rgba(0,0,0,.06)}
+.card{border:1px solid var(--line);border-radius:18px;background:#fff;padding:16px;margin-bottom:14px}
+.card-label{font-size:10.5px;font-weight:800;letter-spacing:.13em;text-transform:uppercase;color:#9a9a9a;margin-bottom:14px}
+.driver{display:flex;align-items:center;gap:13px}
+.avatar{width:46px;height:46px;border-radius:50%;background:#f3f3f3;overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;color:#8a8a8a}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.driver-main{min-width:0;flex:1}
+.driver-name{display:flex;align-items:center;gap:7px;min-width:0}
+.driver-name b{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rating{font-size:10.5px;font-weight:800;color:#a16207;background:#fffbeb;border-radius:999px;padding:2px 7px;flex-shrink:0}
+.vehicle{font-size:12.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plate{display:inline-block;margin-top:6px;background:#111;color:#fff;border-radius:5px;padding:2px 7px;font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px}
+.car-photo{width:66px;height:48px;object-fit:contain;border-radius:9px;background:var(--soft);flex-shrink:0}
+.route-row{display:grid;grid-template-columns:18px minmax(0,1fr);gap:12px;position:relative;padding-bottom:22px}
+.route-row:last-child{padding-bottom:0}
+.route-row:not(:last-child):before{content:"";position:absolute;left:8px;top:16px;bottom:0;width:1px;background:#e6e6e6}
+.route-marker{display:flex;justify-content:center;padding-top:3px}
+.route-dot{width:12px;height:12px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px #d9d9d9;background:#111;flex-shrink:0}
+.route-dot.drop{background:var(--brand);box-shadow:0 0 0 1px #f0c9c0}
+.route-label{font-size:10.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#9a9a9a;margin-bottom:4px}
+.route-address{font-size:14.5px;line-height:1.45;font-weight:650;color:var(--ink);overflow-wrap:anywhere}
+.footer{text-align:center;padding:12px 0 0;color:#a3a3a3;font-size:11px;line-height:1.6}
+.load{display:flex;align-items:center;justify-content:center;gap:9px;height:62vh;color:var(--muted);font-size:13px}
+.spinner{width:15px;height:15px;border:2px solid #e6e6e6;border-top-color:var(--brand);border-radius:50%;animation:spin .8s linear infinite}
+.err-card{padding:24px;text-align:center}
+.err-card h2{font-size:19px;letter-spacing:-.01em;margin-bottom:8px}
+.err-card p{color:var(--muted);font-size:13px;line-height:1.5}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (max-width:420px){.shell{padding:14px 16px 28px}.brand{height:27px}h1{font-size:23px}.map-card{height:260px}.car-photo{width:56px;height:42px}}
 </style>
 </head>
 <body>
-<div id="app"><div class="load">Loading your trip…</div></div>
+<div id="app"><div class="load"><span class="spinner"></span>Loading your trip…</div></div>
 
 <script>
 (function(){
@@ -198,6 +254,7 @@ function sharePageHtml(token: string): string {
   var app = document.getElementById('app');
   var map = null;
   var carMarker = null, routeLine = null, routeCasing = null;
+  var timer = null;
   var PICKUP = [ -26.2041, 28.0473 ];
   var DROPOFF = [ -26.2041, 28.0473 ];
 
@@ -209,45 +266,94 @@ function sharePageHtml(token: string): string {
       case 'accepted': return 'Driver on the way';
       case 'driver_arrived': return 'Driver has arrived';
       case 'in_progress': return 'Trip in progress';
-      case 'completed': return 'Trip completed';
+      case 'completed': return 'Trip is done';
       case 'cancelled': return 'Trip cancelled';
-      default: return s || 'Active trip';
+      case 'expired': return 'Trip ended';
+      default: return s || 'Live trip';
     }
   }
 
-  function buildCard(r){
-    var ended = r.sharingEnded;
+  function isDone(r){ return r && (r.tripDone === true || String(r.status||'').toLowerCase() === 'completed'); }
+  function isCancelled(r){ var s=String((r&&r.status)||'').toLowerCase(); return s==='cancelled'||s==='expired'; }
+  function isFinal(r){ return isDone(r) || isCancelled(r) || (r && r.sharingEnded === true); }
+
+  function statusSub(r){
+    if(isDone(r)) return 'This trip has ended. Live location sharing is off.';
+    if(r && r.sharingEnded) return 'The rider has stopped sharing live location.';
+    if(isCancelled(r)) return 'This trip was cancelled. Live location sharing is off.';
+    return 'Live location shared by your rider. Updates automatically.';
+  }
+
+  function statusPill(r){
+    if(isDone(r)) return '<span class="pill done"><span class="dot"></span>Completed</span>';
+    if(r && r.sharingEnded) return '<span class="pill ended"><span class="dot"></span>Sharing ended</span>';
+    if(isCancelled(r)) return '<span class="pill ended"><span class="dot"></span>Cancelled</span>';
+    return '<span class="pill"><span class="dot"></span>Live</span>';
+  }
+
+  function driverCard(r){
+    if(!r.hasDriver) return '';
+    var initial = String(r.driverName || 'V').trim().charAt(0).toUpperCase();
     var photo = r.driverPhotoUrl
       ? '<img src="' + escapeHtml(r.driverPhotoUrl) + '" alt="">'
-      : '🚗';
+      : escapeHtml(initial);
     var carImg = '<img class="car-photo" src="' + escapeHtml(r.vehicleImageUrl || '${CAR_ICON_DATA_URI}') + '" alt="">';
     var rating = Number(r.driverRating) > 0
-      ? '<span class="rating">★ ' + Number(r.driverRating).toFixed(1) + '</span>'
+      ? '<span class="rating">\\u2605 ' + Number(r.driverRating).toFixed(1) + '</span>'
       : '';
     var plate = r.licensePlate
       ? '<span class="plate">' + escapeHtml(r.licensePlate) + '</span>'
       : '';
-    return '<div class="header">' +
-      '<h1>I\\'m on a Vura ride!<br>Track my trip live</h1>' +
-      '<p>Live location shared by your rider</p>' +
-      (ended
-        ? '<div class="status" style="background:#dc2626"><span>Sharing ended</span></div>'
-        : '<div class="status"><span class="dot"></span><span>' + statusText(r.status) + '</span></div>') +
-      '</div>' +
-      (ended ? '<div class="ended-banner">This rider has stopped sharing their trip.</div>' : '') +
-      '<div class="map-wrap"><div id="map"></div></div>' +
-      '<div class="driver-card">' +
+    return '<div class="card">' +
+      '<div class="card-label">Your driver</div>' +
+      '<div class="driver">' +
         '<div class="avatar">' + photo + '</div>' +
         '<div class="driver-main">' +
           '<div class="driver-name"><b>' + escapeHtml(r.driverName) + '</b>' + rating + '</div>' +
-          '<span>' + escapeHtml(vehicleText(r)) + '</span>' +
+          '<div class="vehicle">' + escapeHtml(vehicleText(r)) + '</div>' +
           plate +
         '</div>' +
         carImg +
       '</div>' +
-      '<div class="info"><div><div class="big">Ride from</div><div class="addr"><div class="pin" style="background:#22c55e"></div><div><b>' + escapeHtml(r.pickupAddress||'Pickup') + '</b></div></div></div></div>' +
-      '<div class="addr" style="margin-top:-12px"><div class="pin" style="background:#ef4444"></div><div><b>' + escapeHtml(r.destinationAddress||'Destination') + '</b></div></div>' +
-      '<div class="footer">Vura Ride • Powered by Ridevura</div>';
+    '</div>';
+  }
+
+  function routeCard(r){
+    var from = r.pickupAddress || 'Pickup location not provided';
+    var to = r.destinationAddress || 'Drop-off location not provided';
+    return '<div class="card">' +
+      '<div class="card-label">Trip route</div>' +
+      '<div class="route-row">' +
+        '<div class="route-marker"><span class="route-dot"></span></div>' +
+        '<div><div class="route-label">Pickup</div><div class="route-address">' + escapeHtml(from) + '</div></div>' +
+      '</div>' +
+      '<div class="route-row">' +
+        '<div class="route-marker"><span class="route-dot drop"></span></div>' +
+        '<div><div class="route-label">Drop-off</div><div class="route-address">' + escapeHtml(to) + '</div></div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function buildCard(r){
+    var final = isFinal(r);
+    var over = isDone(r) || isCancelled(r);
+    var liveLabel = over ? 'Trip summary' : (r.sharingEnded ? 'Sharing ended' : 'Live trip');
+    var note = final ? '<div class="map-note">Live location sharing is off</div>' : '';
+    return '<div class="shell">' +
+      '<div class="topbar">' +
+        '<img class="brand" src="/api/share/logo.png" alt="Vura">' +
+        '<span class="live' + (final ? ' ended' : '') + '"><span class="live-dot"></span>' + liveLabel + '</span>' +
+      '</div>' +
+      '<section class="status-block">' +
+        statusPill(r) +
+        '<h1>' + escapeHtml(statusText(r.status)) + '</h1>' +
+        '<p class="sub">' + escapeHtml(statusSub(r)) + '</p>' +
+      '</section>' +
+      '<div class="map-card"><div id="map"></div>' + note + '</div>' +
+      driverCard(r) +
+      routeCard(r) +
+      '<div class="footer">Shared securely with Vura<br>ridevura.com</div>' +
+    '</div>';
   }
 
   function vehicleText(r){
@@ -255,23 +361,24 @@ function sharePageHtml(token: string): string {
     if(r.vehicleMake) parts.push(r.vehicleMake);
     if(r.vehicleModel) parts.push(r.vehicleModel);
     if(r.vehicleColor) parts.push(r.vehicleColor);
-    return parts.length ? parts.join(' • ') : 'Private driver';
+    return parts.length ? parts.join(' · ') : 'Private driver';
   }
 
   function escapeHtml(s){
-    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
   function initMap(r){
+    var finished = isFinal(r);
     var hasPickup = r.pickup && r.pickup.length===2;
     var hasDrop = r.destination && r.destination.length===2;
-    var hasDriver = r.driverLat!=null && r.driverLng!=null;
-    // Center on pickup if we have it, else the driver's live location, else the
-    // destination — so the trip ALWAYS renders even mid-search / pre-driver.
+    var hasDriver = !finished && r.driverLat!=null && r.driverLng!=null;
+    // Center on pickup if we have it, else the destination, else the driver's
+    // live location. A finished trip never centres on the driver.
     var center = null;
     if(hasPickup) center = r.pickup;
-    else if (hasDriver) center = [r.driverLat, r.driverLng];
     else if (hasDrop) center = r.destination;
+    else if (hasDriver) center = [r.driverLat, r.driverLng];
     else return;
     PICKUP = hasPickup ? r.pickup : center;
     DROPOFF = hasDrop ? r.destination : r.pickup || center;
@@ -335,6 +442,12 @@ function sharePageHtml(token: string): string {
     if(img && carAnim.heading != null) img.style.transform = 'rotate(' + carAnim.heading.toFixed(1) + 'deg)';
   }
 
+  function removeCar(){
+    if(carMarker && map){ try{ map.removeLayer(carMarker); }catch(e){} }
+    carMarker = null;
+    carAnim = { lat: null, lng: null, heading: null };
+  }
+
   function loadRoute(){
     if(!map || !PICKUP || !DROPOFF) return;
     if(Math.abs(DROPOFF[0]-PICKUP[0])<1e-9 && Math.abs(DROPOFF[1]-PICKUP[1])<1e-9) return;
@@ -356,19 +469,61 @@ function sharePageHtml(token: string): string {
 
   function updateCar(r){
     if(!map) return;
+    if(isFinal(r)){ removeCar(); return; }
     if(r.driverLat!=null && r.driverLng!=null){
       setCar(Number(r.driverLat), Number(r.driverLng), r.driverHeading);
     }
   }
 
-var first = true;
+  function updateMapNote(r){
+    var card = document.querySelector('.map-card');
+    if(!card) return;
+    var note = card.querySelector('.map-note');
+    if(isFinal(r)){
+      if(!note) card.insertAdjacentHTML('beforeend','<div class="map-note">Live location sharing is off</div>');
+    } else if(note){ note.remove(); }
+  }
+
+  function updateStatus(r){
+    var block = document.querySelector('.status-block');
+    if(!block) return;
+    block.innerHTML = statusPill(r) +
+      '<h1>' + escapeHtml(statusText(r.status)) + '</h1>' +
+      '<p class="sub">' + escapeHtml(statusSub(r)) + '</p>';
+  }
+
+  function updateTopbar(r){
+    var live = document.querySelector('.live');
+    if(!live) return;
+    var final = isFinal(r);
+    var over = isDone(r) || isCancelled(r);
+    var label = over ? 'Trip summary' : (r.sharingEnded ? 'Sharing ended' : 'Live trip');
+    live.className = 'live' + (final ? ' ended' : '');
+    live.innerHTML = '<span class="live-dot"></span>' + label;
+  }
+
+  function updateTitle(r){
+    document.title = isDone(r)
+      ? 'Vura — Trip completed'
+      : isCancelled(r)
+        ? 'Vura — Trip ended'
+        : (r.sharingEnded ? 'Vura — Sharing ended' : 'Vura — Live trip');
+  }
+
+  var first = true;
   var failedCount = 0;
+
+  function stopPolling(){
+    if(timer){ clearInterval(timer); timer = null; }
+  }
+
   function tick(){
     fetch('/api/share/'+token)
       .then(function(res){ if(!res.ok) throw new Error('nf'); return res.json(); })
       .then(function(data){
         failedCount = 0;
         var r = data.ride;
+        updateTitle(r);
         if(first){
           first = false;
           app.innerHTML = buildCard(r);
@@ -377,21 +532,26 @@ var first = true;
           // .catch() that replaces the whole page with "link isn't available".
           try { initMap(r); } catch (e) { /* keep the card without the map */ }
         } else {
-          var st = document.querySelector('.status');
-          if(st && !r.sharingEnded){ st.innerHTML = '<span class="dot"></span><span>'+statusText(r.status)+'</span>'; }
-          if(r.sharingEnded && !document.querySelector('.ended-banner')){
-            var hdr = document.querySelector('.header');
-            if(hdr){ hdr.insertAdjacentHTML('beforeend','<div class="ended-banner" style="border-radius:12px;margin-top:12px">This rider has stopped sharing their trip.</div>'); }
-            var st2=document.querySelector('.status'); if(st2){ st2.style.background='#dc2626'; st2.innerHTML='<span>Sharing ended</span>'; }
-          }
+          updateTopbar(r);
+          updateStatus(r);
+          updateMapNote(r);
         }
         updateCar(r);
+        // A completed/cancelled trip is a permanent summary: keep it on screen
+        // exactly as it is and stop asking for updates. A rider who only stopped
+        // live sharing mid-trip keeps the page polling (with no coordinates)
+        // until the trip actually completes, so the link still ends on
+        // "Trip is done" instead of freezing on the old status.
+        if(isDone(r) || isCancelled(r)) stopPolling();
       })
       .catch(function(){
         failedCount++;
         if(first && failedCount >= 4){
           first = false;
-          app.innerHTML = '<div class="err"><h2>This trip link isn\\'t available</h2><p>The share link may have expired or the trip has ended.</p></div>';
+          app.innerHTML = '<div class="shell">' +
+            '<div class="topbar"><img class="brand" src="/api/share/logo.png" alt="Vura"></div>' +
+            '<div class="card err-card"><h2>This trip link isn\\'t available</h2><p>Ask the rider for a new link or open the trip in the Vura app.</p></div>' +
+          '</div>';
         }
       });
   }
@@ -400,7 +560,7 @@ var first = true;
   // "Loading your trip…" placeholder and never called tick(), so every share
   // link stayed on that spinner forever even though the API had the ride.
   tick();
-  setInterval(tick, 3000);
+  timer = setInterval(tick, 3000);
 })();
 
 </script>

@@ -6,7 +6,49 @@
 //   • the poller is started immediately and on a 3 s interval;
 //   • a Leaflet/CDN failure cannot replace the trip card with an error page.
 import { describe, it, expect } from "vitest";
-import { sharePage } from "./share";
+import { shareLocationHidden, sharePage, shareRidePayload } from "./share";
+
+describe("public share page privacy", () => {
+  const ride = {
+    id: "ride-1",
+    status: "in_progress",
+    driver_id: "driver-1",
+    pickup_lat: -26.1,
+    pickup_lng: 28.05,
+    destination_lat: -26.14,
+    destination_lng: 28.24,
+    driver_lat: -26.11,
+    driver_lng: 28.06,
+    driver_heading: 45,
+    driver_name: "Driver",
+    driver_rating: 4.9,
+  };
+
+  it("never exposes driver coordinates after the trip is over or sharing stops", () => {
+    expect(shareLocationHidden("completed", false)).toBe(true);
+    expect(shareLocationHidden("cancelled", false)).toBe(true);
+    expect(shareLocationHidden("expired", false)).toBe(true);
+    expect(shareLocationHidden("in_progress", true)).toBe(true);
+    expect(shareLocationHidden("accepted", false)).toBe(false);
+    expect(shareLocationHidden("in_progress", false)).toBe(false);
+
+    const done = shareRidePayload({ ...ride, status: "completed" }, false);
+    expect(done.tripDone).toBe(true);
+    expect(done.driverLat).toBeNull();
+    expect(done.driverLng).toBeNull();
+    expect(done.driverHeading).toBeNull();
+
+    const stopped = shareRidePayload(ride, true);
+    expect(stopped.driverLat).toBeNull();
+    expect(stopped.driverLng).toBeNull();
+    expect(stopped.driverHeading).toBeNull();
+
+    const live = shareRidePayload(ride, false);
+    expect(live.tripDone).toBe(false);
+    expect(live.driverLat).toBe(-26.11);
+    expect(live.driverLng).toBe(28.06);
+  });
+});
 
 describe("public share page", () => {
   it("parses and starts the live poller", async () => {
@@ -30,6 +72,19 @@ describe("public share page", () => {
     expect(html).toContain("driverPhotoUrl");
     expect(html).toContain("driverRating");
     expect(html).toContain("licensePlate");
+    // Brand + professional layout: white page, Vura wordmark, structured route.
+    expect(html).toContain("/api/share/logo.png");
+    expect(html).toContain("Trip route");
+    expect(html).toContain("Pickup");
+    expect(html).toContain("Drop-off");
+    expect(html).not.toContain(".header{");
+    expect(html).not.toContain("linear-gradient(135deg");
+    // Completed trips keep a permanent "Trip is done" view and drop the car.
+    expect(html).toContain("Trip is done");
+    expect(html).toContain("Trip summary");
+    expect(html).toContain("Vura — Trip completed");
+    expect(html).toContain("Live location sharing is off");
+    expect(html).toContain("removeCar");
     expect(html).toContain("tick();");
     expect(html).toContain("setInterval(tick, 3000);");
     expect(html).toContain("})();");
