@@ -352,8 +352,11 @@ export async function confirmCardRideCredit(
   if (voided) return;
 
   // Catch-up credit for captures that arrive without a pending row.
+  // The FARE, never the captured total: since Option A the capture includes the
+  // 4% booking fee, and commission must be computed on the fare alone.
   const fare = await queryOne<{ fare: number | null; driver_id: string | null }>(
-    `SELECT COALESCE(captured_amount, actual_fare, estimated_fare, 0)::float AS fare, driver_id
+    `SELECT COALESCE(NULLIF(actual_fare, 0), NULLIF(estimated_fare, 0), captured_amount, 0)::float AS fare,
+            driver_id
        FROM rides WHERE id = $1`,
     [rideId]
   ).catch(() => null);
@@ -542,7 +545,8 @@ export async function backfillDriverLedger(driverId: string): Promise<void> {
   ).catch(() => null);
   if (seeded) return;
   const rides = await query<{ id: string; fare: number; method: string }>(
-    `SELECT id, COALESCE(captured_amount, actual_fare, estimated_fare, 0)::float AS fare,
+    `SELECT id,
+            COALESCE(NULLIF(actual_fare, 0), NULLIF(estimated_fare, 0), captured_amount, 0)::float AS fare,
             LOWER(COALESCE(payment_method, '')) AS method
        FROM rides
       WHERE driver_id = $1 AND status = 'completed'

@@ -137,7 +137,7 @@ vi.mock("../config/database", () => ({
       return state.ledger.find((r) => r.payout_id === params[0] && r.type === "payout") ?? null;
     if (sql.includes("SELECT 1 AS one FROM wallet_ledger"))
       return state.ledger.some((r) => r.driver_id === params[0]) ? { one: 1 } : null;
-    if (sql.includes("COALESCE(captured_amount, actual_fare, estimated_fare, 0)")) {
+    if (sql.includes("NULLIF(actual_fare, 0)")) {
       const r = rideOf(params[0]);
       return r ? { fare: r.fare, driver_id: r.driver_id } : null;
     }

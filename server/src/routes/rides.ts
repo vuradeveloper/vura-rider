@@ -985,10 +985,14 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
 // GET /api/rides/:id/receipt — Get ride receipt
 router.get("/:id/receipt", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
+    await ensurePreauthSchema();
     const ride = await queryOne<any>(
       `SELECT r.id, r.id AS ride_id, r.pickup_address, r.destination_address,
               r.distance_km, r.duration_mins,
               COALESCE(NULLIF(r.actual_fare, 0), NULLIF(r.estimated_fare, 0), 0) AS fare,
+              COALESCE(r.booking_fee_cents, 0)::float / 100 AS booking_fee,
+              (COALESCE(NULLIF(r.actual_fare, 0), NULLIF(r.estimated_fare, 0), 0)
+                + COALESCE(r.booking_fee_cents, 0)::numeric / 100) AS total,
               r.platform_fee AS ride_request_fee,
               r.payment_method, r.payment_status,
               r.created_at, r.completed_at,

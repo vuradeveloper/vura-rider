@@ -28,6 +28,9 @@ import {
   verifyPaystackSignature,
   PreauthError,
   createRideHold,
+  captureRideHold,
+  platformSplitFor,
+  DEFAULT_COMMISSION_SUBACCOUNT,
 } from "./preauthorization";
 import { queryOne, execute } from "../config/database";
 
@@ -128,6 +131,55 @@ describe("reservePreauthorization — Reserve by Authorization Code (docs-exact)
       expire_action: "release",
     });
     expect(res.status).toBe("authorized");
+  });
+});
+
+describe("platformSplitFor — exact flat split, never a percentage", () => {
+  it("sends the exact platform cents to the verified Vura Commission subaccount", () => {
+    const split = platformSplitFor(700); // R5 fare: 50c commission + 20c fee
+    expect(split).toEqual({
+      type: "flat",
+      bearer_type: "subaccount",
+      subaccounts: [{ subaccount: DEFAULT_COMMISSION_SUBACCOUNT, share: 700 }],
+      bearer_subaccount: DEFAULT_COMMISSION_SUBACCOUNT,
+    });
+  });
+
+  it("can make the main account bear the Paystack fee instead", () => {
+    const split = platformSplitFor(700, "account");
+    expect(split?.bearer_type).toBe("account");
+    expect(split?.bearer_subaccount).toBeUndefined();
+    expect(split?.subaccounts[0].share).toBe(700);
+  });
+
+  it("returns null when there is nothing to route", () => {
+    expect(platformSplitFor(0)).toBeNull();
+    expect(platformSplitFor(-10)).toBeNull();
+  });
+
+  it("initialize includes the dynamic split when supplied", async () => {
+    const split = platformSplitFor(70)!;
+    await initializePreauthorization({
+      email: "a@b.c",
+      amountRands: 5.2,
+      reference: "VURASPLIT1",
+      split,
+    });
+    expect(lastCall().body.split).toEqual(split);
+    expect(lastCall().body.amount).toBe("520");
+  });
+
+  it("reserve includes the dynamic split when supplied", async () => {
+    const split = platformSplitFor(70)!;
+    await reservePreauthorization({
+      email: "a@b.c",
+      amountRands: 5.2,
+      authorizationCode: "AUTH_x",
+      reference: "VURASPLIT2",
+      split,
+    });
+    expect(lastCall().body.split).toEqual(split);
+    expect(lastCall().body.amount).toBe(520);
   });
 });
 
@@ -232,6 +284,101 @@ describe("createRideHold guards", () => {
     await expect(
       createRideHold({ rideId: "ride-1", userId: "u1", amountRands: 20, email: "a@b.c" })
     ).rejects.toMatchObject({ code: "not_owner", httpStatus: 403 });
+  });
+
+  it("holds fare + 4% fee and attaches the exact R0.70 split for a R5 fare", async () => {
+    const ride = {
+      id: "ride-1",
+      passenger_id: "u1",
+      driver_id: null,
+      payment_method: "card",
+      status: "searching",
+      estimated_fare: 5,
+      actual_fare: null,
+      payment_status: "NONE",
+      preauth_reference: null,
+      hold_checkout_url: null,
+      hold_expires_at: null,
+      hold_amount_cents: null,
+      captured_amount: null,
+      booking_fee_cents: null,
+      platform_share_cents: null,
+      split_applied: null,
+    };
+    vi.mocked(queryOne).mockImplementation(async (sql: any) => {
+      const s = String(sql);
+      if (s.includes("FROM rides WHERE id = $1")) return ride as any;
+      if (s.includes("FROM saved_cards")) return { transaction_index: "AUTH_saved" } as any;
+      return null as any;
+    });
+
+    const hold = await createRideHold({
+      rideId: "ride-1",
+      userId: "u1",
+      amountRands: 5,
+      email: "rider@vura.com",
+    });
+
+    expect(hold.paymentStatus).toBe("HOLD_ACTIVE");
+    const c = lastCall();
+    expect(c.url).toContain("/preauthorization/reserve_authorization");
+    // R5 fare + 4% (R0.20) = R5.20 held.
+    expect(c.body.amount).toBe(520);
+    // Exact flat split: min(10% x R5, R5) = R0.50 + R0.20 fee = R0.70.
+    expect(c.body.split).toEqual({
+      type: "flat",
+      bearer_type: "subaccount",
+      subaccounts: [{ subaccount: DEFAULT_COMMISSION_SUBACCOUNT, share: 70 }],
+      bearer_subaccount: DEFAULT_COMMISSION_SUBACCOUNT,
+    });
+
+    // The ride row records the fee and the routed share for reconciliation.
+    const claim = vi
+      .mocked(execute)
+      .mock.calls.find(([sql]) => String(sql).includes("SET payment_status = 'HOLD_PENDING'"));
+    expect(claim?.[1]).toEqual([
+      "ride-1",
+      expect.any(String),
+      expect.any(String),
+      520,
+      20,
+      70,
+      true,
+    ]);
+  });
+
+  it("captures the fare + stored booking fee (R5.20), never the fare alone", async () => {
+    const ride = {
+      id: "ride-1",
+      passenger_id: "u1",
+      driver_id: "drv-1",
+      payment_method: "card",
+      status: "completed",
+      estimated_fare: 5,
+      actual_fare: 5,
+      payment_status: "HOLD_ACTIVE",
+      preauth_reference: "VURA-HOLD-1",
+      hold_checkout_url: null,
+      hold_expires_at: null,
+      hold_amount_cents: 520,
+      captured_amount: null,
+      booking_fee_cents: 20,
+      platform_share_cents: 70,
+      split_applied: true,
+    };
+    vi.mocked(queryOne).mockImplementation(async (sql: any) => {
+      const s = String(sql);
+      if (s.includes("FROM rides WHERE id = $1")) return ride as any;
+      return null as any;
+    });
+
+    const result = await captureRideHold("ride-1");
+    expect(result.captured).toBe(true);
+    expect(result.capturedAmount).toBe(5.2);
+
+    const c = lastCall();
+    expect(c.url).toBe("https://api.paystack.co/preauthorization/capture");
+    expect(c.body.amount).toBe("520");
   });
 });
 
