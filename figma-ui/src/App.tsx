@@ -5498,7 +5498,7 @@ export default function App() {
       }
     };
     void checkMaintenance();
-    const timer = window.setInterval(() => void checkMaintenance(), 10_000);
+    const timer = window.setInterval(() => void checkMaintenance(), 5_000);
     const onVisible = () => {
       if (document.visibilityState === 'visible') void checkMaintenance();
     };
@@ -5895,18 +5895,34 @@ export default function App() {
           />
         )}
         {auth === 'login' && (
-          <LoginScreen
-            onBack={() => setAuth('splash')}
-            onSuccess={() => setAuthed(true)}
-            onSignup={() => setAuth('signup')}
-          />
+          maintenance?.maintenance ? (
+            <Splash
+              onLogin={() => setAuth('login')}
+              onSignup={() => setAuth('signup')}
+              maintenance={maintenance}
+            />
+          ) : (
+            <LoginScreen
+              onBack={() => setAuth('splash')}
+              onSuccess={() => setAuthed(true)}
+              onSignup={() => setAuth('signup')}
+            />
+          )
         )}
         {auth === 'signup' && (
-          <SignupScreen
-            onBack={() => setAuth('splash')}
-            onSuccess={() => setAuthed(true)}
-            onLogin={() => setAuth('login')}
-          />
+          maintenance?.maintenance ? (
+            <Splash
+              onLogin={() => setAuth('login')}
+              onSignup={() => setAuth('signup')}
+              maintenance={maintenance}
+            />
+          ) : (
+            <SignupScreen
+              onBack={() => setAuth('splash')}
+              onSuccess={() => setAuthed(true)}
+              onLogin={() => setAuth('login')}
+            />
+          )
         )}
       </>)}
 
