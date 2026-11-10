@@ -190,11 +190,16 @@ const RIDE_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Premium', ids: ['xl', 'van', 'black'] },
 ]
 
-// Every ride in this build costs a flat R5.00.
+// Every ride in this build costs a flat R5.00 fare.
 // This is the amount the server charges the saved card for real, so the price
 // on the tiers above, the price in the ride request and the price the driver
 // sees are all the same number.
 const RIDE_FARE = 5
+// Option A: card riders pay the fare + a 4% booking fee on top. The server
+// computes the same figure (services/fareFees.ts) — this is display only.
+const BOOKING_FEE_PCT = 4
+const RIDE_BOOKING_FEE = Math.round(RIDE_FARE * BOOKING_FEE_PCT) / 100
+const RIDE_CARD_TOTAL = RIDE_FARE + RIDE_BOOKING_FEE
 
 // ── Date helpers, copied from the React Native app (earnings.tsx / trips.tsx) ──
 
@@ -1293,7 +1298,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     ? 'Pay the driver directly'
     : PAY_LATER_ENABLED && pay === PAY_LATER
       ? (pl ? `${formatRand(pl.available_r)} available to spend` : 'Ride now, pay later')
-      : (cards.find((x) => x.id === pay)?.bank || 'Saved card')
+      : `${cards.find((x) => x.id === pay)?.bank || 'Saved card'} · ${formatRand(RIDE_CARD_TOTAL)} incl. booking fee`
 
   // What the ordered list means for the booking. The first row is the pickup,
   // the last is the drop-off, and every row between them is a stop.
@@ -1594,6 +1599,15 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             </div>
             {IC.chevRight()}
           </button>
+          {/* Option A: the rider always sees the exact total before confirming.
+              Card = fare + 4% booking fee; cash and Pay Later stay fare-only. */}
+          <p className="text-[11.5px] text-[#8A8A8A] text-center mb-2 leading-snug">
+            {pay === PAY_CASH
+              ? `Fare ${formatRand(RIDE_FARE)} · pay the driver in cash`
+              : PAY_LATER_ENABLED && pay === PAY_LATER
+                ? `Fare ${formatRand(RIDE_FARE)} · settle at month-end`
+                : `Fare ${formatRand(RIDE_FARE)} + booking fee ${formatRand(RIDE_BOOKING_FEE)} = ${formatRand(RIDE_CARD_TOTAL)}`}
+          </p>
           <button onClick={() => onConfirm(
             sel,
             pay === PAY_CASH ? 'cash' : PAY_LATER_ENABLED && pay === PAY_LATER ? PAY_LATER : 'card',
@@ -1604,7 +1618,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             destinationOut,
           )}
             className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-3.5 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
-            Confirm {ride.name}
+            Confirm {ride.name} · {formatRand(pay === PAY_CASH || (PAY_LATER_ENABLED && pay === PAY_LATER) ? RIDE_FARE : RIDE_CARD_TOTAL)}
           </button>
           {stopRows.length > 0 && (
             <p className="text-[11px] text-[#ADADAD] text-center mt-2">
@@ -2822,6 +2836,9 @@ function RideScreen({ destination, rideId, onDone, onReceipt }: { destination: s
   }, [done, rideId])
   const paidFare = Number(tripReceipt?.fare ?? ride?.actual_fare ?? ride?.estimated_fare ?? 0)
   const inviteApplied = Number(tripReceipt?.affiliate_credit || 0)
+  // Option A: 4% booking fee charged on top of the fare (card/Paystack rides).
+  const paidBookingFee = Number(tripReceipt?.booking_fee ?? 0)
+  const paidTotal = paidFare + paidBookingFee
 
   // ── Split fare summary ────────────────────────────────────────────────────
   const splitFare =
@@ -3360,7 +3377,7 @@ function RideScreen({ destination, rideId, onDone, onReceipt }: { destination: s
                 Rate {driverName} and add a tip if you would like to.
               </p>
 
-              {(paidFare > 0 || inviteApplied > 0) && (
+              {(paidFare > 0 || paidBookingFee > 0 || inviteApplied > 0) && (
                 <div className="mt-3 bg-[#F7F7F7] rounded-2xl px-4 py-3">
                   <div className="flex items-center justify-between">
                     <span className="text-[12px] text-[#6B6B6B]">Trip fare</span>
@@ -3368,6 +3385,22 @@ function RideScreen({ destination, rideId, onDone, onReceipt }: { destination: s
                       {formatRand(paidFare)}
                     </span>
                   </div>
+                  {paidBookingFee > 0 && (
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-[12px] text-[#6B6B6B]">Booking fee (4%)</span>
+                      <span className="text-[14px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                        {formatRand(paidBookingFee)}
+                      </span>
+                    </div>
+                  )}
+                  {paidBookingFee > 0 && (
+                    <div className="flex items-center justify-between mt-1 pt-1 border-t border-[#EBEBEB]">
+                      <span className="text-[12px] font-semibold text-[#1A1A1A]">Total charged</span>
+                      <span className="text-[14px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                        {formatRand(paidTotal)}
+                      </span>
+                    </div>
+                  )}
                   {inviteApplied > 0 && (
                     <p className="text-[11px] text-[#137333] font-semibold mt-1">
                       R{inviteApplied.toFixed(2)} of it came off your invite credit — thanks for riding with Vura.

@@ -166,7 +166,11 @@ export function ReceiptScreen({
 
   const fare = Number(receipt?.fare || 0)
   const fee = Number(receipt?.ride_request_fee || 0)
-  const total = fare + fee + Number(tipSent || 0)
+  // Option A: the rider-paid 4% booking fee is part of what the card was
+  // charged, so the receipt must show it instead of implying the fare was the
+  // total.
+  const bookingFee = Number(receipt?.booking_fee || 0)
+  const total = fare + bookingFee + fee + Number(tipSent || 0)
   const suggestions = [0.1, 0.15, 0.2, 0.25].map((p) => ({
     label: `${Math.round(p * 100)}%`,
     amount: Math.round(fare * p),
@@ -240,6 +244,7 @@ export function ReceiptScreen({
             {/* Fare breakdown */}
             <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 mt-3 shadow-sm flex flex-col gap-2.5">
               {row('Fare', formatRand(fare))}
+              {bookingFee > 0 && row('Booking fee (4%)', formatRand(bookingFee))}
               {row('Service fee', formatRand(fee))}
               {Number(receipt.affiliate_credit || 0) > 0 &&
                 row('Invite credit (from your balance)', `−${formatRand(Number(receipt.affiliate_credit))}`)}
