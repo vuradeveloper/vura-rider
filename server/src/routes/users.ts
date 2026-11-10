@@ -7,6 +7,7 @@ import { getAuth } from "../config/firebase";
 import { sendPasswordResetEmail } from "../services/adminInvite";
 import { findDuplicateMatches, markUserDuplicate } from "../services/duplicateDetection";
 import { normaliseIdNumber, normalisePhone } from "../lib/identity";
+import { readMaintenanceStatus } from "../services/featureFlags";
 
 const router = Router();
 
@@ -69,6 +70,19 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { role, phone, full_name, id_number, referralCode } = req.body;
     const firebaseUid = req.userId!;
+
+    // Maintenance lock: do not create or revive a rider/driver account while
+    // that side is closed. This is the server-side stop for the app's
+    // sign-in/sign-up flow (Firebase accepts the password, then this refuses).
+    const requestedSide = role === "driver" ? "driver" : "rider";
+    const maint = await readMaintenanceStatus();
+    if (maint[requestedSide].enabled) {
+      res.status(503).json({
+        error: maint[requestedSide].message,
+        code: "maintenance",
+      });
+      return;
+    }
 
     const existing = await queryOne<{ id: string }>(
       "SELECT id FROM users WHERE firebase_uid = $1",

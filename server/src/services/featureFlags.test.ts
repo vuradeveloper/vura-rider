@@ -64,8 +64,10 @@ import {
   disableAllFeatures,
   enableForAccounts,
   invalidateMaintenanceCache,
+  lockMaintenance,
   readFeatures,
   readMaintenanceStatus,
+  unlockMaintenance,
   updateFeature,
   validateField,
 } from "./featureFlags";
@@ -300,7 +302,7 @@ describe("maintenance kill switches", () => {
     expect(db.app_config.get("rider_maintenance").enabled).toBe(true);
 
     let status = await readMaintenanceStatus(true);
-    expect(status.rider).toEqual({ enabled: true, message: "Back at 14:00" });
+    expect(status.rider).toMatchObject({ enabled: true, message: "Back at 14:00" });
     expect(status.driver.enabled).toBe(false);
 
     await updateFeature("rider_maintenance", { enabled: false }, "admin@x");
@@ -308,6 +310,23 @@ describe("maintenance kill switches", () => {
     expect(status.rider.enabled).toBe(false);
     // The operator message is preserved for the next closure.
     expect(status.rider.message).toBe("Back at 14:00");
+  });
+
+  it("lockMaintenance stamps a revoke epoch; unlock keeps old sessions dead", async () => {
+    const locked = await lockMaintenance("rider", "Back at 14:00", "admin@x");
+    expect((locked as any).enabled).toBe(true);
+    const first = (locked as any).revoke_before as string;
+    expect(Number.isFinite(Date.parse(first))).toBe(true);
+
+    let status = await readMaintenanceStatus(true);
+    expect(status.rider.enabled).toBe(true);
+    expect(status.rider.revokeBefore).toBe(first);
+
+    await unlockMaintenance("rider", "admin@x");
+    status = await readMaintenanceStatus(true);
+    expect(status.rider.enabled).toBe(false);
+    // The epoch survives: a token minted before the lock cannot come back.
+    expect(status.rider.revokeBefore).toBe(first);
   });
 
   it("driver maintenance is independent of rider maintenance", async () => {

@@ -66,7 +66,12 @@ import {
   listCampaigns,
   sendCampaign,
 } from "../services/adminMessaging";
-import { FeatureFlagError } from "../services/featureFlags";
+import {
+  FeatureFlagError,
+  lockMaintenance,
+  unlockMaintenance,
+} from "../services/featureFlags";
+import { revokeSessionsForRole } from "../services/sessionAdmin";
 import { reviewDocument } from "../services/adminDocReview";
 import { parseTargetUserIds, ensurePromoTables } from "../services/promos";
 import { getAuth } from "../config/firebase";
@@ -1364,6 +1369,46 @@ router.put("/features/:key", requireAdmin("features.write"), async (req: AuthReq
       }
       throw err;
     }
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/admin/v2/maintenance/:side — close/open one app AND log everyone
+// out. `side` is rider|driver. Enabling writes the maintenance flag + a
+// `revoke_before` epoch (requireAuth rejects every older token) and starts
+// Firebase refresh-token revocation in the background.
+router.post("/maintenance/:side", requireAdmin("features.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const side = req.params.side === "driver" ? "driver" : "rider";
+    const enabled = req.body?.enabled === true;
+    const actor = await resolveAdminActor(req);
+    if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+
+    const flag = enabled
+      ? await lockMaintenance(side, String(req.body?.message || ""), actor.email)
+      : await unlockMaintenance(side, actor.email);
+
+    if (enabled) {
+      // Best-effort: the epoch in requireAuth blocks immediately; this also
+      // kills the refresh tokens so the app must really sign in again.
+      void revokeSessionsForRole(side === "rider" ? "passenger" : "driver").catch((err: any) => {
+        console.warn(`[maintenance] revoke ${side} sessions failed:`, err?.message || err);
+      });
+    }
+
+    await writeAudit(actor, {
+      action: enabled ? "maintenance.lock" : "maintenance.unlock",
+      entityType: "app_config",
+      entityId: `${side}_maintenance`,
+      newValue: { enabled, message: String(req.body?.message || ""), revoke_started: enabled },
+    }).catch(() => {});
+
+    res.json({
+      maintenance: flag,
+      revokeStarted: enabled,
+      side,
+    });
   } catch (err) {
     sendError(res, err);
   }
