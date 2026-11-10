@@ -190,7 +190,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
 
     // Admin maintenance switch: stop NEW bookings immediately, before the ride
     // row (and any card hold) is created. Existing trips are unaffected.
-    const riderMaint = (await readMaintenanceStatus()).rider;
+    const riderMaint = (await readMaintenanceStatus(true)).rider;
     if (riderMaint.enabled) {
       res.status(503).json({ error: riderMaint.message, code: "maintenance" });
       return;
@@ -1082,7 +1082,7 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     // Admin maintenance switch: no new reservations while the rider app is off.
-    const scheduleMaint = (await readMaintenanceStatus()).rider;
+    const scheduleMaint = (await readMaintenanceStatus(true)).rider;
     if (scheduleMaint.enabled) {
       res.status(503).json({ error: scheduleMaint.message, code: "maintenance" });
       return;

@@ -325,7 +325,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         // Admin maintenance switch: refuse NEW bookings immediately. Existing
         // trips continue; the ack reason is what the rider app shows.
-        const socketRiderMaint = (await readMaintenanceStatus()).rider;
+        const socketRiderMaint = (await readMaintenanceStatus(true)).rider;
         if (socketRiderMaint.enabled) {
           socket.emit("ride:requested:ack", {
             success: false,
@@ -1126,7 +1126,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // Admin maintenance switch: never mark a driver available while the
         // driver app is off. Existing trips continue.
         if (online === true) {
-          const driverMaint = (await readMaintenanceStatus()).driver;
+          const driverMaint = (await readMaintenanceStatus(true)).driver;
           if (driverMaint.enabled) {
             await execute(
               `UPDATE driver_profiles SET is_online = FALSE, status = 'offline', updated_at = NOW()

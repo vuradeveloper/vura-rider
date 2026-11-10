@@ -298,7 +298,7 @@ function maintenanceSide(row: Record<string, unknown> | null): MaintenanceSide {
 
 /** Current rider/driver maintenance state (5 s cache). Never throws. */
 export async function readMaintenanceStatus(force = false): Promise<MaintenanceStatus> {
-  if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 5_000) {
+  if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 1_000) {
     return maintenanceCache.value;
   }
   try {
