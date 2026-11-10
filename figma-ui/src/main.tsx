@@ -5,6 +5,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
+import { MaintenanceGate } from './components/MaintenanceGate'
 import { installGlobalErrorScreens, installWebviewGuard } from './lib/webviewGuard'
 import './index.css'
 import './legacy-compat.css'
@@ -23,7 +24,9 @@ if (guard.ok) {
       {/* Without this a render error unmounts the tree and the app is just a white
           screen with nothing to diagnose (reported from the field 27 Sep 2026). */}
       <ErrorBoundary app="rider">
-        <App />
+        <MaintenanceGate>
+          <App />
+        </MaintenanceGate>
       </ErrorBoundary>
     </React.StrictMode>,
   )

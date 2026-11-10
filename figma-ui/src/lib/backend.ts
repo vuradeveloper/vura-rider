@@ -509,6 +509,18 @@ export async function apiFetch<T = any>(
   return json as T;
 }
 
+// ── Public app status / maintenance ──────────────────────────────────────────
+// GET /api/app-status needs no auth. The rider app shows a full-screen
+// maintenance notice while `rider.maintenance` is true; the server also blocks
+// new bookings, so an old app cannot slip through.
+export interface AppStatus {
+  rider: { maintenance: boolean; message: string };
+  driver: { maintenance: boolean; message: string };
+  server_build?: string;
+}
+
+export const getAppStatus = () => apiFetch<AppStatus>("/api/app-status");
+
 // ── Socket.IO (same server, same events as the React Native driver app) ──────
 
 type Listener = (data: any) => void;
