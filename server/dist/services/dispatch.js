@@ -1072,12 +1072,23 @@ function tierLabel(tier) {
     }
 }
 const RESERVE_PROTECT_MINUTES = Math.max(15, Math.min(120, Number(process.env.RESERVE_PROTECT_MINUTES || 60)));
-async function driverReservationWithin(driverId) {
-    return (0, database_1.queryOne)(`SELECT id, scheduled_at FROM rides
+async function driverReservationWithin(driverId, client) {
+    const sql = `SELECT id, scheduled_at FROM rides
       WHERE driver_id = $1 AND status = 'scheduled'
         AND scheduled_at > NOW()
         AND scheduled_at <= NOW() + make_interval(mins => $2)
-      ORDER BY scheduled_at ASC LIMIT 1`, [driverId, RESERVE_PROTECT_MINUTES]).catch(() => null);
+      ORDER BY scheduled_at ASC LIMIT 1`;
+    const params = [driverId, RESERVE_PROTECT_MINUTES];
+    try {
+        if (client) {
+            const res = await client.query(sql, params);
+            return res.rows[0] ?? null;
+        }
+        return await (0, database_1.queryOne)(sql, params);
+    }
+    catch {
+        return null;
+    }
 }
 async function acceptRide(io, params) {
     const { rideId, driverId } = params;
@@ -1107,6 +1118,29 @@ async function acceptRide(io, params) {
             ok: false,
             error: "This vehicle is suspended. Contact support or link another car before accepting rides.",
         };
+    }
+    // ACCEPT-TIME CASH BLOCK — run BEFORE the transaction. These wallet reads use
+    // the pool; doing them inside a transaction that already holds a connection
+    // can deadlock the pool under concurrent accepts (each waiter blocks for
+    // connectionTimeoutMillis = 10 s). The payment method is immutable.
+    const preRide = await (0, database_1.queryOne)("SELECT payment_method FROM rides WHERE id = $1", [rideId]).catch(() => null);
+    if (String(preRide?.payment_method || "").trim().toLowerCase() === "cash") {
+        try {
+            const { cashRideBlocked, getBalanceCents, getWalletConfig } = await Promise.resolve().then(() => __importStar(require("./walletService")));
+            const cfg = await getWalletConfig();
+            const balance = await getBalanceCents(driverId);
+            if (cashRideBlocked(balance, cfg)) {
+                return {
+                    ok: false,
+                    error: `Your balance is R${(balance / 100).toFixed(2)} — below the ` +
+                        `R${cfg.negative_limit_rand} limit, so cash rides are paused. ` +
+                        `Take card rides to clear your balance.`,
+                };
+            }
+        }
+        catch (e) {
+            console.warn(`[wallet] cash-guard check failed driver=${driverId}:`, e?.message || e);
+        }
     }
     const result = await (0, database_1.withTransaction)(async (client) => {
         const rideRes = await client.query(`SELECT id, status, passenger_id, estimated_fare, COALESCE(version, 0) AS version, driver_id,
@@ -1145,7 +1179,8 @@ async function acceptRide(io, params) {
         // candidate SQL already excludes these drivers; this guard covers the
         // REST/twin accept path and a stale offer still on screen.
         if (!reserving) {
-            const near = await driverReservationWithin(driverId);
+            // Use THIS transaction's client — never a second pool connection.
+            const near = await driverReservationWithin(driverId, client);
             if (near) {
                 const at = new Date(near.scheduled_at).toLocaleTimeString("en-ZA", {
                     timeZone: "Africa/Johannesburg",
@@ -1190,32 +1225,7 @@ async function acceptRide(io, params) {
                     `for that ride class, so it cannot be accepted.`,
             };
         }
-        // ── Commission spec: ACCEPT-TIME CASH BLOCK ────────────────────────────
-        // A wallet below the configured negative limit refuses NEW CASH rides —
-        // cash commission is charged at completion with no webhook to gate it,
-        // so an unbounded debt would keep growing. CARD rides stay open: they are
-        // exactly how a negative balance recovers. (Card acceptance is never
-        // blocked — the wallet can't go further negative on a card ride.)
-        if (String(ride.payment_method || "").trim().toLowerCase() === "cash") {
-            try {
-                const { cashRideBlocked, getBalanceCents, getWalletConfig } = await Promise.resolve().then(() => __importStar(require("./walletService")));
-                const cfg = await getWalletConfig();
-                const balance = await getBalanceCents(driverId);
-                if (cashRideBlocked(balance, cfg)) {
-                    return {
-                        ok: false,
-                        error: `Your balance is R${(balance / 100).toFixed(2)} — below the ` +
-                            `R${cfg.negative_limit_rand} limit, so cash rides are paused. ` +
-                            `Take card rides to clear your balance.`,
-                    };
-                }
-            }
-            catch (e) {
-                // Fail OPEN on wallet-read errors: never strand a driver out of work
-                // because a config read glitched (the completion hook still charges).
-                console.warn(`[wallet] cash-guard check failed driver=${driverId}:`, e?.message || e);
-            }
-        }
+        // (The accept-time cash block runs BEFORE this transaction — see above.)
         // Claim this driver's offer if they have a live one.
         const offerUpd = await client.query(`UPDATE ride_offers SET status = 'accepted', updated_at = NOW()
         WHERE ride_id = $1 AND driver_id = $2 AND status = 'pending' AND expires_at > NOW()`, [rideId, driverId]);
