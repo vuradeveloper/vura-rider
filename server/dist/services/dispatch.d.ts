@@ -207,10 +207,17 @@ export declare function cancelPendingOffers(io: SocketIOServer, rideId: string, 
  * online moments later gets the ride, and a parked ride is un-parked back to
  * 'searching' when it is offered again.
  *
- * Guards: only rides younger than 15 minutes, with no live offer, and not retried
- * in the last ~6 seconds (prevents churn/loops), newest first.
+ * Guards: only rides younger than the configured window (60 minutes by default),
+ * with no live offer, and not retried in the last ~6 seconds (prevents
+ * churn/loops), newest first.
+ *
+ * WHY 60, NOT 15: a rider often books a few minutes before the driver taps
+ * Online. With the old 15-minute cutoff the worker stopped reviving the ride
+ * while the rider was still waiting, so the driver who came online later never
+ * saw it. One hour covers the real "book, then get the driver online" gap while
+ * still letting genuinely abandoned requests age out.
  */
-export declare function reviveWaitingRides(io: SocketIOServer, limit?: number): Promise<number>;
+export declare function reviveWaitingRides(io: SocketIOServer, limit?: number, maxAgeMinutes?: number): Promise<number>;
 /** Driver is free again (trip finished / driver cancelled). */
 export declare function releaseDriver(driverId: string): Promise<void>;
 export {};

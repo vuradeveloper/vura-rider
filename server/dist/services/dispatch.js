@@ -1607,23 +1607,31 @@ async function cancelPendingOffers(io, rideId, reason = "cancelled") {
  * online moments later gets the ride, and a parked ride is un-parked back to
  * 'searching' when it is offered again.
  *
- * Guards: only rides younger than 15 minutes, with no live offer, and not retried
- * in the last ~6 seconds (prevents churn/loops), newest first.
+ * Guards: only rides younger than the configured window (60 minutes by default),
+ * with no live offer, and not retried in the last ~6 seconds (prevents
+ * churn/loops), newest first.
+ *
+ * WHY 60, NOT 15: a rider often books a few minutes before the driver taps
+ * Online. With the old 15-minute cutoff the worker stopped reviving the ride
+ * while the rider was still waiting, so the driver who came online later never
+ * saw it. One hour covers the real "book, then get the driver online" gap while
+ * still letting genuinely abandoned requests age out.
  */
-async function reviveWaitingRides(io, limit = 5) {
+async function reviveWaitingRides(io, limit = 5, maxAgeMinutes = 60) {
+    const age = Math.max(5, Math.min(24 * 60, Math.round(Number(maxAgeMinutes) || 60)));
     const waiting = await (0, database_1.query)(`SELECT r.id, r.status FROM rides r
       WHERE r.status IN ('searching', 'no_drivers')
         -- A scheduled ride may have been created days ago; once it enters the
         -- matching pool at T-15 it must stay eligible for revive/offer until
-        -- pickup. Fresh on-demand rides keep the 15-minute guard.
-        AND (r.created_at > NOW() - INTERVAL '15 minutes' OR r.scheduled_at IS NOT NULL)
+        -- pickup. On-demand rides use the configured window.
+        AND (r.created_at > NOW() - make_interval(mins => $2) OR r.scheduled_at IS NOT NULL)
         AND NOT EXISTS (
               SELECT 1 FROM ride_offers ro
                WHERE ro.ride_id = r.id AND ro.status = 'pending' AND ro.expires_at > NOW())
         AND COALESCE(r.no_drivers_at, r.created_at) < NOW() - INTERVAL '6 seconds'
       ORDER BY CASE WHEN r.scheduled_at IS NOT NULL THEN 0 ELSE 1 END,
                r.created_at DESC
-      LIMIT $1`, [limit]).catch(() => []);
+      LIMIT $1`, [limit, age]).catch(() => []);
     let revived = 0;
     for (const ride of waiting) {
         // Round restarts at 1: every driver gets a fresh chance, because the reason the
