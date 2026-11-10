@@ -52,7 +52,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
         WHERE ro.driver_id = $1 AND ro.status = 'pending' AND ro.expires_at > NOW()
           AND (
             (r.status IN ('searching', 'no_drivers')
-              AND r.created_at > NOW() - INTERVAL '${SEARCH_REVIVE_WINDOW_MINUTES} minutes')
+              AND r.created_at > NOW() - INTERVAL '${dispatch_1.SEARCH_REVIVE_WINDOW_MINUTES} minutes')
             OR (r.status = 'scheduled' AND r.scheduled_at > NOW())
           )
         ORDER BY ro.created_at DESC
@@ -76,7 +76,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
           AND r.status IN ('searching', 'no_drivers', 'accepted', 'driver_arrived', 'in_progress')
           AND (
             (r.status IN ('searching', 'no_drivers')
-              AND r.created_at > NOW() - INTERVAL '${SEARCH_REVIVE_WINDOW_MINUTES} minutes')
+              AND r.created_at > NOW() - INTERVAL '${dispatch_1.SEARCH_REVIVE_WINDOW_MINUTES} minutes')
             OR (r.status IN ('accepted', 'driver_arrived')
               AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes')
             -- A started trip is exempt from the 4-hour search window: a long
@@ -434,12 +434,10 @@ function mapRide(row) {
 // show "Trip in progress" → "Back to ride". We treat anything older than this as
 // dead so a fresh login never resurrects an ancient ride.
 const ACTIVE_RIDE_MAX_AGE_MINUTES = 240; // 4 hours
-// How long a still-unmatched request stays visible/restorable. This MUST match
-// dispatch.reviveWaitingRides' default window (60 min): if this is shorter, the
-// rider who backgrounded the app comes back to an empty home screen while the
-// server is still trying to match the very same ride, and a driver coming
-// online late can never see it in /rides/available.
-const SEARCH_REVIVE_WINDOW_MINUTES = 60;
+// SEARCH_REVIVE_WINDOW_MINUTES is imported from dispatch: the revive worker,
+// the rider restore path and the driver /available feed must all use the SAME
+// window, otherwise the rider waits on a ride the server is still matching but
+// the driver can no longer see (or vice versa).
 // A started trip is not "stale" on the same clock as an unmatched request. It is
 // measured from its last status update instead, so a genuinely long drive stays
 // restorable while an abandoned in_progress row still gets reaped eventually.
@@ -480,7 +478,7 @@ router.get("/me/active", auth_1.requireAuth, async (req, res) => {
            -- a search is NOT cancellation, and excluding it here is why a rider
            -- who backgrounded the app came back to an empty home screen.
            (r.status IN ('searching', 'no_drivers')
-             AND r.created_at > NOW() - INTERVAL '${SEARCH_REVIVE_WINDOW_MINUTES} minutes')
+             AND r.created_at > NOW() - INTERVAL '${dispatch_1.SEARCH_REVIVE_WINDOW_MINUTES} minutes')
            OR (r.status IN ('accepted', 'driver_arrived')
              AND r.created_at > NOW() - INTERVAL '${ACTIVE_RIDE_MAX_AGE_MINUTES} minutes')
            OR r.status = 'in_progress'
@@ -666,7 +664,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
          FROM rides r
          LEFT JOIN users u ON u.id = r.passenger_id
         WHERE ((r.status IN ('searching', 'no_drivers')
-                AND (r.created_at > NOW() - INTERVAL '${SEARCH_REVIVE_WINDOW_MINUTES} minutes' OR r.scheduled_at IS NOT NULL))
+                AND (r.created_at > NOW() - INTERVAL '${dispatch_1.SEARCH_REVIVE_WINDOW_MINUTES} minutes' OR r.scheduled_at IS NOT NULL))
            OR (r.status = 'scheduled' AND r.scheduled_at > NOW()))
           -- RIDE CLASS: only requests this car's recorded categories can serve.
           -- Before this line the 2-second poll returned every nearby ride,

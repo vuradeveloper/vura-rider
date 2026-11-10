@@ -7,6 +7,13 @@ export declare const LOCATION_FRESH_SECONDS = 20;
 /** Stop offering after this many rounds so a ride can't churn forever. */
 export declare const MAX_OFFER_ROUNDS = 12;
 /**
+ * How long a still-unmatched on-demand ride stays matchable after booking.
+ * Shared with routes/rides.ts so the rider's restore path and the driver feed
+ * never use a shorter window than the revive worker: 15 minutes was too short
+ * for "rider books, driver taps Online later" and stranded the request.
+ */
+export declare const SEARCH_REVIVE_WINDOW_MINUTES = 60;
+/**
  * Does the driver's personal room hold a connected socket RIGHT NOW?
  *
  * The truthful replacement for the old `Boolean(firebase_uid)` guess: a uid

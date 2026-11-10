@@ -54,7 +54,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DRIVER_STALE_SECONDS = exports.MAX_OFFER_ROUNDS = exports.LOCATION_FRESH_SECONDS = exports.OFFER_TTL_SECONDS = void 0;
+exports.DRIVER_STALE_SECONDS = exports.SEARCH_REVIVE_WINDOW_MINUTES = exports.MAX_OFFER_ROUNDS = exports.LOCATION_FRESH_SECONDS = exports.OFFER_TTL_SECONDS = void 0;
 exports.hasLiveSocket = hasLiveSocket;
 exports.logRideEvent = logRideEvent;
 exports.emitRide = emitRide;
@@ -98,6 +98,13 @@ exports.OFFER_TTL_SECONDS = 15;
 exports.LOCATION_FRESH_SECONDS = 20;
 /** Stop offering after this many rounds so a ride can't churn forever. */
 exports.MAX_OFFER_ROUNDS = 12;
+/**
+ * How long a still-unmatched on-demand ride stays matchable after booking.
+ * Shared with routes/rides.ts so the rider's restore path and the driver feed
+ * never use a shorter window than the revive worker: 15 minutes was too short
+ * for "rider books, driver taps Online later" and stranded the request.
+ */
+exports.SEARCH_REVIVE_WINDOW_MINUTES = 60;
 /**
  * Does the driver's personal room hold a connected socket RIGHT NOW?
  *
@@ -1617,7 +1624,7 @@ async function cancelPendingOffers(io, rideId, reason = "cancelled") {
  * saw it. One hour covers the real "book, then get the driver online" gap while
  * still letting genuinely abandoned requests age out.
  */
-async function reviveWaitingRides(io, limit = 5, maxAgeMinutes = 60) {
+async function reviveWaitingRides(io, limit = 5, maxAgeMinutes = exports.SEARCH_REVIVE_WINDOW_MINUTES) {
     const age = Math.max(5, Math.min(24 * 60, Math.round(Number(maxAgeMinutes) || 60)));
     const waiting = await (0, database_1.query)(`SELECT r.id, r.status FROM rides r
       WHERE r.status IN ('searching', 'no_drivers')
