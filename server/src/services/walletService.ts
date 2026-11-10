@@ -18,6 +18,8 @@ import { query, queryOne, execute } from "../config/database";
 export interface WalletConfig {
   /** Platform commission on the fare, percent (spec default 10). */
   commission_pct: number;
+  /** Hard cap on the platform commission per ride, in rands (default R5). */
+  commission_cap_rand: number;
   /** VAT slice INSIDE the commission, percent of the commission (SA 15). */
   vat_pct: number;
   /** Fallback Paystack fee, percent of fare — used when the webhook omits it. */
@@ -28,6 +30,7 @@ export interface WalletConfig {
 
 export const DEFAULT_WALLET_CONFIG: WalletConfig = {
   commission_pct: 10,
+  commission_cap_rand: 5,
   vat_pct: 15,
   paystack_fee_fallback_pct: 1.5,
   negative_limit_rand: 200,
@@ -35,6 +38,7 @@ export const DEFAULT_WALLET_CONFIG: WalletConfig = {
 
 const CONFIG_BOUNDS: Record<keyof WalletConfig, [number, number]> = {
   commission_pct: [0, 50],
+  commission_cap_rand: [0, 100],
   vat_pct: [0, 30],
   paystack_fee_fallback_pct: [0, 5],
   negative_limit_rand: [0, 10000],
@@ -134,7 +138,11 @@ export function commissionSplit(
   paystackFeeCents?: number | null
 ): CommissionSplit {
   const fare = Math.max(0, toCents(fareRands));
-  const commission = Math.round((fare * cfg.commission_pct) / 100);
+  const rawCommission = Math.round((fare * cfg.commission_pct) / 100);
+  // HARD CAP: Vura never takes more than the configured rand cap per ride.
+  // Default R5. This is the number the driver ledger and the Paystack split
+  // must both use; a percentage-only split would take R10 on a R100 fare.
+  const commission = Math.min(rawCommission, toCents(cfg.commission_cap_rand));
   const vat = Math.round((commission * cfg.vat_pct) / (100 + cfg.vat_pct));
   const feeFallback = Math.round((fare * cfg.paystack_fee_fallback_pct) / 100);
   const fee =

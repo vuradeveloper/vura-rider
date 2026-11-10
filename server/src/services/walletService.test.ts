@@ -258,11 +258,11 @@ describe("commissionSplit — the 10% split (spec §2)", () => {
   it("splits a R100 fare: commission 10%, VAT carved OUT of it, Paystack fee from it", () => {
     const s = commissionSplit(100, cfg);
     expect(s.fare_cents).toBe(10000);
-    expect(s.commission_cents).toBe(1000); // 10% of R100
-    expect(s.vat_cents).toBe(130); // 1000 × 15/115 (VAT-inclusive, part of OUR 10%)
+    expect(s.commission_cents).toBe(500); // 10% capped at R5
+    expect(s.vat_cents).toBe(65); // 500 × 15/115 (VAT-inclusive, part of OUR 10%)
     expect(s.paystack_fee_cents).toBe(150); // fallback 1.5% of fare
-    expect(s.margin_cents).toBe(1000 - 130 - 150); // remainder to the platform
-    expect(s.net_cents).toBe(9000); // driver earns R90
+    expect(s.margin_cents).toBe(500 - 65 - 150); // remainder to the platform
+    expect(s.net_cents).toBe(9500); // driver earns R95
     // The driver's view is exactly ONE commission figure.
     expect(s.commission_cents).toBe(s.vat_cents + s.paystack_fee_cents + s.margin_cents);
   });
@@ -270,8 +270,8 @@ describe("commissionSplit — the 10% split (spec §2)", () => {
   it("uses Paystack's REAL fee from the webhook when provided", () => {
     const s = commissionSplit(100, cfg, 350); // R3.50 actual fee
     expect(s.paystack_fee_cents).toBe(350);
-    expect(s.margin_cents).toBe(1000 - 130 - 350);
-    expect(s.net_cents).toBe(9000); // the fee never touches the driver
+    expect(s.margin_cents).toBe(500 - 65 - 350);
+    expect(s.net_cents).toBe(9500); // the fee never touches the driver
   });
 
   it("handles a small fare without inventing money", () => {
@@ -279,6 +279,14 @@ describe("commissionSplit — the 10% split (spec §2)", () => {
     expect(s.commission_cents).toBe(150);
     expect(s.net_cents).toBe(1350);
     expect(s.margin_cents).toBe(s.commission_cents - s.vat_cents - s.paystack_fee_cents);
+  });
+
+  it("never takes more than R5, no matter how large the fare", () => {
+    for (const fare of [50, 100, 250, 1000]) {
+      const s = commissionSplit(fare, cfg);
+      expect(s.commission_cents).toBe(500);
+      expect(s.net_cents).toBe(Math.round(fare * 100) - 500);
+    }
   });
 });
 
@@ -289,16 +297,16 @@ describe("card ride — pending until the Paystack webhook (spec §3)", () => {
 
     const entry = findRideEntry("r1", "card_credit_pending");
     expect(entry?.status).toBe("pending");
-    expect(entry?.amount_cents).toBe(9000);
+    expect(entry?.amount_cents).toBe(9500);
     expect(balance()).toBe(0); // wallet untouched before capture confirmation
 
     await confirmCardRideCredit(DRV, "r1", 350);
     expect(findRideEntry("r1", "card_credit")?.status).toBe("posted");
-    expect(balance()).toBe(9000);
+    expect(balance()).toBe(9500);
     expect(findRideEntry("r1", "card_credit")?.paystack_fee_cents).toBe(350);
 
     await confirmCardRideCredit(DRV, "r1", 350); // duplicate webhook delivery
-    expect(balance()).toBe(9000); // still exactly one credit
+    expect(balance()).toBe(9500); // still exactly one credit
   });
 
   it("a repeated completion can't double-post either (UNIQUE ride+type)", async () => {
@@ -306,13 +314,13 @@ describe("card ride — pending until the Paystack webhook (spec §3)", () => {
     await recordRideCompletion(DRV, "r1", 100, "card");
     await recordRideCompletion(DRV, "r1", 100, "card");
     expect(state.ledger.filter((r) => r.ride_id === "r1")).toHaveLength(1);
-    expect(state.earnings.get("r1")).toEqual({ driver_id: DRV, gross: 100, fee: 10, net: 90 });
+    expect(state.earnings.get("r1")).toEqual({ driver_id: DRV, gross: 100, fee: 5, net: 95 });
   });
 
   it("keeps driver_earnings truthful: fee = commission, net = fare − commission", async () => {
     seedRide("r2", 250, "card");
     await recordRideCompletion(DRV, "r2", 250, "card");
-    expect(state.earnings.get("r2")).toEqual({ driver_id: DRV, gross: 250, fee: 25, net: 225 });
+    expect(state.earnings.get("r2")).toEqual({ driver_id: DRV, gross: 250, fee: 5, net: 245 });
   });
 });
 
@@ -320,29 +328,29 @@ describe("cash ride — commission debited immediately, wallet may go negative (
   it("debits 10% at completion and lands below zero when the wallet was empty", async () => {
     seedRide("c1", 100, "cash");
     await recordRideCompletion(DRV, "c1", 100, "cash");
-    expect(balance()).toBe(-1000); // −R10 commission, no webhook involved
+    expect(balance()).toBe(-500); // −R5 capped commission, no webhook involved
     const e = findRideEntry("c1", "commission_debit");
     expect(e?.status).toBe("posted");
-    expect(e?.amount_cents).toBe(-1000);
-    expect(state.earnings.get("c1")).toEqual({ driver_id: DRV, gross: 100, fee: 10, net: 90 });
+    expect(e?.amount_cents).toBe(-500);
+    expect(state.earnings.get("c1")).toEqual({ driver_id: DRV, gross: 100, fee: 5, net: 95 });
 
     // Another cash ride deepens the debt — the spec's intended behaviour.
     seedRide("c2", 250, "cash");
     await recordRideCompletion(DRV, "c2", 250, "cash");
-    expect(balance()).toBe(-1000 - 2500); // −R35
+    expect(balance()).toBe(-500 - 500); // two R5 capped commissions
   });
 
   it("recovers when a later card ride's credit lands (pure arithmetic)", async () => {
     seedRide("c1", 100, "cash");
     await recordRideCompletion(DRV, "c1", 100, "cash");
-    expect(balance()).toBe(-1000);
+    expect(balance()).toBe(-500);
 
     seedRide("k1", 200, "card");
     await recordRideCompletion(DRV, "k1", 200, "card");
-    expect(balance()).toBe(-1000); // pending — still nothing until capture
+    expect(balance()).toBe(-500); // pending — still nothing until capture
     await confirmCardRideCredit(DRV, "k1", null);
-    expect(balance()).toBe(-1000 + 18000); // R180 net clears the R10 debt → +R170
-    expect(balance()).toBe(17000);
+    expect(balance()).toBe(-500 + 19500); // R195 net clears the R5 debt → +R190
+    expect(balance()).toBe(19000);
   });
 });
 
@@ -359,20 +367,19 @@ describe("accept-time cash block (spec §4)", () => {
 
   it("a driver deep in debt can still take card rides to recover", async () => {
     const cfg = { ...DEFAULT_WALLET_CONFIG, negative_limit_rand: 20 };
-    // −R30 balance vs a R20 limit → cash blocked…
-    seedRide("c1", 100, "cash");
-    await recordRideCompletion(DRV, "c1", 100, "cash"); // −R10
-    seedRide("c2", 100, "cash");
-    await recordRideCompletion(DRV, "c1b", 100, "cash"); // −R20
-    seedRide("c3", 100, "cash");
-    await recordRideCompletion(DRV, "c3", 100, "cash"); // −R30
+    // Five R5 capped commissions = -R25, below the -R20 limit -> cash blocked.
+    for (const id of ["c1", "c2", "c3", "c4", "c5"]) {
+      seedRide(id, 100, "cash");
+      await recordRideCompletion(DRV, id, 100, "cash");
+    }
+    expect(balance()).toBe(-2500);
     expect(cashRideBlocked(balance(), cfg)).toBe(true);
 
     // Card ride stays allowed and clears the debt on webhook confirmation.
     seedRide("k1", 100, "card");
     await recordRideCompletion(DRV, "k1", 100, "card");
-    await confirmCardRideCredit(DRV, "k1", null); // +R90
-    expect(balance()).toBe(-3000 + 9000);
+    await confirmCardRideCredit(DRV, "k1", null); // +R95
+    expect(balance()).toBe(-2500 + 9500);
     expect(cashRideBlocked(balance(), cfg)).toBe(false);
   });
 });
@@ -381,11 +388,11 @@ describe("reversals, payouts, voids — append-only audit (§3)", () => {
   it("reverses a posted cash commission ONCE when the ride ends without completing", async () => {
     seedRide("c1", 100, "cash");
     await recordRideCompletion(DRV, "c1", 100, "cash");
-    expect(balance()).toBe(-1000);
+    expect(balance()).toBe(-500);
 
     await closeRideWalletEntries("c1", "rider_cancelled");
     expect(balance()).toBe(0); // commission refunded to the driver
-    expect(findRideEntry("c1", "reversal")?.amount_cents).toBe(1000);
+    expect(findRideEntry("c1", "reversal")?.amount_cents).toBe(500);
 
     await closeRideWalletEntries("c1", "rider_cancelled"); // replayed cancel
     expect(balance()).toBe(0); // still one reversal only
@@ -395,11 +402,11 @@ describe("reversals, payouts, voids — append-only audit (§3)", () => {
     seedRide("k1", 100, "card");
     await recordRideCompletion(DRV, "k1", 100, "card");
     await confirmCardRideCredit(DRV, "k1", null);
-    expect(balance()).toBe(9000);
+    expect(balance()).toBe(9500);
 
     await closeRideWalletEntries("k1", "rider_refunded");
     expect(balance()).toBe(0);
-    expect(findRideEntry("k1", "reversal")?.amount_cents).toBe(-9000);
+    expect(findRideEntry("k1", "reversal")?.amount_cents).toBe(-9500);
     expect(findRideEntry("k1", "reversal")?.ledger_ref_id).toBe(findRideEntry("k1", "card_credit")?.id);
   });
 
@@ -417,11 +424,11 @@ describe("reversals, payouts, voids — append-only audit (§3)", () => {
   it("debits the wallet exactly once per successful payout", async () => {
     seedRide("k1", 100, "card");
     await recordRideCompletion(DRV, "k1", 100, "card");
-    await confirmCardRideCredit(DRV, "k1", null); // +R90
+    await confirmCardRideCredit(DRV, "k1", null); // +R95
     await recordPayoutDebit(DRV, "pay-1", 50); // cash out R50
-    expect(balance()).toBe(9000 - 5000);
+    expect(balance()).toBe(9500 - 5000);
     await recordPayoutDebit(DRV, "pay-1", 50); // retried success
-    expect(await getBalanceCents(DRV)).toBe(4000); // still a single debit
+    expect(await getBalanceCents(DRV)).toBe(4500); // still a single debit
   });
 });
 
@@ -430,15 +437,15 @@ describe("wallet view + config (spec §5–§6)", () => {
     seedRide("c1", 100, "cash");
     await recordRideCompletion(DRV, "c1", 100, "cash");
     const view = await getWalletView(DRV);
-    expect(view.balance_cents).toBe(-1000);
+    expect(view.balance_cents).toBe(-500);
     expect(view.commission_pct).toBe(10);
     expect(view.entries).toHaveLength(1);
     expect(view.entries[0]).toMatchObject({
       ride_id: "c1",
       type: "commission_debit",
       payment_method: "cash",
-      amount_cents: -1000,
-      commission_cents: 1000,
+      amount_cents: -500,
+      commission_cents: 500,
     });
   });
 
