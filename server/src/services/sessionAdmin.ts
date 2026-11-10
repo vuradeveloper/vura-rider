@@ -11,7 +11,7 @@
 // never stop the rest. Runs in small batches to stay under rate limits.
 // ─────────────────────────────────────────────────────────────────────────────
 import { getAuth } from "../config/firebase";
-import { query } from "../config/database";
+import { execute, query } from "../config/database";
 
 export interface RevokeResult {
   total: number;
@@ -62,4 +62,30 @@ export async function revokeSessionsForRole(
     `[maintenance] revoked ${revoked}/${rows.length} ${role} refresh tokens (${failed} failed)`
   );
   return { total: rows.length, revoked, failed };
+}
+
+/**
+ * Driver lock: force every available/break driver offline and tell the live
+ * sockets. Drivers already `on_trip` are left alone so an active trip can be
+ * finished; they simply cannot go available or accept anything new.
+ */
+export async function forceAllDriversOffline(message: string): Promise<number> {
+  let affected = 0;
+  try {
+    const res = await execute(
+      `UPDATE driver_profiles
+          SET is_online = FALSE, status = 'offline', updated_at = NOW()
+        WHERE COALESCE(status, 'offline') IN ('available', 'break')`
+    );
+    affected = Number(res?.rowCount || 0);
+  } catch (err: any) {
+    console.warn("[maintenance] force drivers offline failed:", err?.message || err);
+  }
+  try {
+    const io = (global as any).__vuraIo;
+    if (io) io.to("drivers").emit("driver:maintenance", { message });
+  } catch {
+    /* sockets are best-effort */
+  }
+  return affected;
 }

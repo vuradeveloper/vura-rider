@@ -71,7 +71,10 @@ import {
   lockMaintenance,
   unlockMaintenance,
 } from "../services/featureFlags";
-import { revokeSessionsForRole } from "../services/sessionAdmin";
+import {
+  forceAllDriversOffline,
+  revokeSessionsForRole,
+} from "../services/sessionAdmin";
 import { reviewDocument } from "../services/adminDocReview";
 import { parseTargetUserIds, ensurePromoTables } from "../services/promos";
 import { getAuth } from "../config/firebase";
@@ -1395,6 +1398,9 @@ router.post("/maintenance/:side", requireAdmin("features.write"), async (req: Au
       void revokeSessionsForRole(side === "rider" ? "passenger" : "driver").catch((err: any) => {
         console.warn(`[maintenance] revoke ${side} sessions failed:`, err?.message || err);
       });
+      if (side === "driver") {
+        void forceAllDriversOffline(String(req.body?.message || "")).catch(() => {});
+      }
     }
 
     await writeAudit(actor, {
