@@ -33,10 +33,12 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MIN_HOLD_CENTS = exports.PreauthError = exports.RIDE_PAYMENT_STATUSES = void 0;
+exports.DEFAULT_COMMISSION_SUBACCOUNT = exports.MIN_HOLD_CENTS = exports.PreauthError = exports.RIDE_PAYMENT_STATUSES = void 0;
 exports.normalizePaymentStatus = normalizePaymentStatus;
 exports.holdAmountCents = holdAmountCents;
 exports.captureAmountCents = captureAmountCents;
+exports.paystackCommissionSubaccount = paystackCommissionSubaccount;
+exports.platformSplitFor = platformSplitFor;
 exports.newPreauthReference = newPreauthReference;
 exports.preauthExpireDays = preauthExpireDays;
 exports.stuckSearchMinutes = stuckSearchMinutes;
@@ -102,6 +104,8 @@ const crypto_1 = require("crypto");
 const paystackPayment_1 = require("./paystackPayment");
 const database_1 = require("../config/database");
 const splitFareService_1 = require("./splitFareService");
+const walletService_1 = require("./walletService");
+const fareFees_1 = require("./fareFees");
 exports.RIDE_PAYMENT_STATUSES = [
     "NONE",
     "HOLD_PENDING",
@@ -165,6 +169,119 @@ function holdAmountCents(fareRands) {
 function captureAmountCents(fareRands) {
     return Math.round(Number(fareRands) * 100);
 }
+// ── Paystack dynamic split (Option A) ────────────────────────────────────────
+/**
+ * Vura Commission's verified Paystack subaccount. The environment variable is
+ * an override; the code is not a secret and keeping a default means a deploy
+ * cannot silently stop routing commission just because a variable is missing.
+ */
+exports.DEFAULT_COMMISSION_SUBACCOUNT = "ACCT_qcb4c9pbjl3q1h6";
+function paystackCommissionSubaccount() {
+    const code = String(process.env.PAYSTACK_COMMISSION_SUBACCOUNT || exports.DEFAULT_COMMISSION_SUBACCOUNT).trim();
+    return /^ACCT_[A-Za-z0-9]+$/.test(code) ? code : "";
+}
+/**
+ * A flat dynamic split that sends EXACTLY `platformCents` to the Vura
+ * Commission subaccount and leaves the rest in the main Paystack balance.
+ *
+ * Flat, not percentage: a 10% split would send R10 on a R100 fare, breaking
+ * the R5 cap. The share is in the currency subunit (cents), per Paystack's
+ * multi-split docs.
+ */
+function platformSplitFor(platformCents, bearer = "subaccount") {
+    const subaccount = paystackCommissionSubaccount();
+    const share = Math.max(0, Math.round(Number(platformCents) || 0));
+    if (!subaccount || share <= 0)
+        return null;
+    return {
+        type: "flat",
+        bearer_type: bearer,
+        subaccounts: [{ subaccount, share }],
+        ...(bearer === "subaccount" ? { bearer_subaccount: subaccount } : {}),
+    };
+}
+/** True only for a Paystack refusal that mentions split/subaccount/bearer. */
+function isSplitRejection(err) {
+    const msg = String(err?.message || err || "").toLowerCase();
+    return msg.includes("split") || msg.includes("subaccount") || msg.includes("bearer");
+}
+/**
+ * The dynamic split is documented for /preauthorization/initialize, not for
+ * /reserve_authorization. A reserve refusal that mentions the split must not
+ * block a returning rider's booking: retry with the main account bearing the
+ * Paystack fee (same Vura share), then with no split at all. `split_applied`
+ * tells the ledger whether the platform share was actually routed.
+ */
+async function reserveWithSplitFallback(input) {
+    const split = input.split ?? null;
+    if (!split) {
+        return { reserved: await reservePreauthorization({ ...input, split: null }), splitApplied: false };
+    }
+    try {
+        return { reserved: await reservePreauthorization(input), splitApplied: true };
+    }
+    catch (err) {
+        if (!isSplitRejection(err))
+            throw err;
+        console.warn(`[preauth] reserve split rejected (${err?.message || err}) - retrying with the main account as fee bearer`);
+        try {
+            const accountSplit = platformSplitFor(split.subaccounts[0]?.share || 0, "account");
+            if (accountSplit) {
+                return {
+                    reserved: await reservePreauthorization({ ...input, split: accountSplit }),
+                    splitApplied: true,
+                };
+            }
+        }
+        catch (err2) {
+            if (!isSplitRejection(err2))
+                throw err2;
+            console.warn(`[preauth] reserve split (account bearer) rejected (${err2?.message || err2})`);
+        }
+        console.warn("[preauth] reserve does not accept a split - placing an unsplit hold");
+        return {
+            reserved: await reservePreauthorization({ ...input, split: null }),
+            splitApplied: false,
+        };
+    }
+}
+/** Same fallback chain for the hosted-checkout initialize endpoint. */
+async function initializeWithSplitFallback(input) {
+    const split = input.split ?? null;
+    if (!split) {
+        return {
+            initialized: await initializePreauthorization({ ...input, split: null }),
+            splitApplied: false,
+        };
+    }
+    try {
+        return { initialized: await initializePreauthorization(input), splitApplied: true };
+    }
+    catch (err) {
+        if (!isSplitRejection(err))
+            throw err;
+        console.warn(`[preauth] initialize split rejected (${err?.message || err}) - retrying with the main account as fee bearer`);
+        try {
+            const accountSplit = platformSplitFor(split.subaccounts[0]?.share || 0, "account");
+            if (accountSplit) {
+                return {
+                    initialized: await initializePreauthorization({ ...input, split: accountSplit }),
+                    splitApplied: true,
+                };
+            }
+        }
+        catch (err2) {
+            if (!isSplitRejection(err2))
+                throw err2;
+            console.warn(`[preauth] initialize split (account bearer) rejected (${err2?.message || err2})`);
+        }
+        console.warn("[preauth] initialize does not accept a split - placing an unsplit hold");
+        return {
+            initialized: await initializePreauthorization({ ...input, split: null }),
+            splitApplied: false,
+        };
+    }
+}
 /** Docs: unique, case-sensitive, only -, ., = and alphanumeric. */
 function newPreauthReference(prefix = "VURA") {
     // 48 bits of CSPRNG entropy on top of the millisecond clock. The unique DB
@@ -199,6 +316,12 @@ async function ensurePreauthSchema() {
         await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS hold_amount_cents INTEGER`);
         await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS captured_amount NUMERIC(10,2)`);
         await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`);
+        // Option A money trail: the rider-paid 4% booking fee and the exact amount
+        // the dynamic Paystack split sends to Vura Commission. Both are in cents so
+        // they can never drift through a numeric(10,2) round-trip.
+        await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS booking_fee_cents INTEGER`);
+        await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS platform_share_cents INTEGER`);
+        await (0, database_1.execute)(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS split_applied BOOLEAN DEFAULT FALSE`);
         await (0, database_1.execute)(`CREATE UNIQUE INDEX IF NOT EXISTS rides_preauth_reference_key
          ON rides (preauth_reference) WHERE preauth_reference IS NOT NULL`);
         // One row per webhook event instance → replayed deliveries are dropped here
@@ -278,6 +401,7 @@ async function initializePreauthorization(input) {
             expire_after_days: input.expireAfterDays ?? preauthExpireDays(),
             expire_action: input.expireAction ?? "release",
             ...(input.callbackUrl ? { callback_url: input.callbackUrl } : {}),
+            ...(input.split ? { split: input.split } : {}),
         }),
     });
     const url = String(data?.data?.authorization_url || "");
@@ -312,6 +436,7 @@ async function reservePreauthorization(input) {
             ...(input.reference ? { reference: input.reference } : {}),
             expire_after_days: input.expireAfterDays ?? preauthExpireDays(),
             expire_action: input.expireAction ?? "release",
+            ...(input.split ? { split: input.split } : {}),
         }),
     });
     return {
@@ -359,7 +484,8 @@ async function loadRide(rideId) {
     return await (0, database_1.queryOne)(`SELECT id, passenger_id, driver_id, payment_method, status,
             estimated_fare, actual_fare, payment_status,
             preauth_reference, hold_checkout_url, hold_expires_at,
-            hold_amount_cents, captured_amount
+            hold_amount_cents, captured_amount,
+            booking_fee_cents, platform_share_cents, split_applied
        FROM rides WHERE id = $1`, [rideId]).catch(() => null);
 }
 /**
@@ -400,6 +526,14 @@ async function createRideHold(input) {
     if (!Number.isFinite(fareRands) || fareRands <= 0) {
         throw new PreauthError("no_fare", "This ride has no estimated fare to hold against.", 400);
     }
+    // Option A: the rider is held for the fare PLUS the 4% booking fee. The
+    // driver's share still comes out of the fare alone, and the platform share
+    // (capped commission + booking fee) is the exact flat amount sent to the
+    // Vura Commission subaccount.
+    const cfg = await (0, walletService_1.getWalletConfig)();
+    const fees = (0, fareFees_1.rideFareBreakdown)(fareRands, cfg);
+    const holdRands = (0, walletService_1.toRands)(fees.rider_total_cents);
+    const split = platformSplitFor(fees.platform_cents);
     const reference = newPreauthReference();
     const expiresAt = new Date(Date.now() + preauthExpireDays() * 86_400_000).toISOString();
     // ATOMIC CLAIM — only one writer can move a ride out of its non-hold state.
@@ -409,8 +543,19 @@ async function createRideHold(input) {
             hold_expires_at = $3::timestamptz,
             hold_amount_cents = $4,
             hold_checkout_url = NULL,
+            booking_fee_cents = $5,
+            platform_share_cents = $6,
+            split_applied = $7,
             updated_at = NOW()
-      WHERE id = $1 AND ${HOLD_CLAIMABLE}`, [ride.id, reference, expiresAt, holdAmountCents(fareRands)]);
+      WHERE id = $1 AND ${HOLD_CLAIMABLE}`, [
+        ride.id,
+        reference,
+        expiresAt,
+        holdAmountCents(holdRands),
+        fees.booking_fee_cents,
+        fees.platform_cents,
+        Boolean(split),
+    ]);
     if (!claim || claim.rowCount === 0) {
         const again = await loadRide(ride.id);
         const st = normalizePaymentStatus(again?.payment_status);
@@ -426,7 +571,9 @@ async function createRideHold(input) {
     const rollbackClaim = async () => {
         await (0, database_1.execute)(`UPDATE rides
           SET payment_status = 'NONE', preauth_reference = NULL,
-              hold_expires_at = NULL, hold_amount_cents = NULL, updated_at = NOW()
+              hold_expires_at = NULL, hold_amount_cents = NULL,
+              booking_fee_cents = NULL, platform_share_cents = NULL,
+              split_applied = FALSE, updated_at = NOW()
         WHERE id = $1 AND payment_status = 'HOLD_PENDING' AND preauth_reference = $2`, [ride.id, reference]).catch(() => { });
     };
     try {
@@ -435,18 +582,20 @@ async function createRideHold(input) {
         WHERE user_id = $1 AND transaction_index IS NOT NULL
         ORDER BY is_default DESC, created_at DESC LIMIT 1`, [input.userId]).catch(() => null);
         if (card?.transaction_index) {
-            const reserved = await reservePreauthorization({
+            const { reserved, splitApplied } = await reserveWithSplitFallback({
                 email: input.email,
-                amountRands: fareRands,
+                amountRands: holdRands,
                 authorizationCode: card.transaction_index,
                 reference,
+                split,
             });
             await (0, database_1.execute)(`UPDATE rides
             SET payment_status = 'HOLD_ACTIVE',
                 preauth_reference = $3,
                 hold_expires_at = COALESCE($4::timestamptz, hold_expires_at),
+                split_applied = $5,
                 updated_at = NOW()
-          WHERE id = $1 AND payment_status = 'HOLD_PENDING' AND preauth_reference = $2`, [ride.id, reference, reserved.reference || reference, reserved.expiryDate]);
+          WHERE id = $1 AND payment_status = 'HOLD_PENDING' AND preauth_reference = $2`, [ride.id, reference, reserved.reference || reference, reserved.expiryDate, splitApplied]);
             return {
                 rideId: ride.id,
                 reference: reserved.reference || reference,
@@ -458,19 +607,21 @@ async function createRideHold(input) {
         }
         // First-time rider → hosted checkout; funds stay in their account until
         // capture, and expire_action "release" frees the hold if they never finish.
-        const init = await initializePreauthorization({
+        const { initialized, splitApplied } = await initializeWithSplitFallback({
             email: input.email,
-            amountRands: fareRands,
+            amountRands: holdRands,
             reference,
+            split,
         });
         await (0, database_1.execute)(`UPDATE rides
-          SET preauth_reference = $3, hold_checkout_url = $4, updated_at = NOW()
-        WHERE id = $1 AND payment_status = 'HOLD_PENDING' AND preauth_reference = $2`, [ride.id, reference, init.reference, init.authorizationUrl]);
+          SET preauth_reference = $3, hold_checkout_url = $4,
+              split_applied = $5, updated_at = NOW()
+        WHERE id = $1 AND payment_status = 'HOLD_PENDING' AND preauth_reference = $2`, [ride.id, reference, initialized.reference, initialized.authorizationUrl, splitApplied]);
         return {
             rideId: ride.id,
-            reference: init.reference,
+            reference: initialized.reference,
             paymentStatus: "HOLD_PENDING",
-            authorizationUrl: init.authorizationUrl,
+            authorizationUrl: initialized.authorizationUrl,
             holdExpiresAt: expiresAt,
             alreadyHeld: false,
         };
@@ -514,18 +665,28 @@ async function captureRideHold(rideId, opts = {}) {
     if (current === "RELEASED" || current === "HOLD_EXPIRED") {
         throw new PreauthError("hold_released", "This ride's hold was already released — no funds are held to capture.", 409);
     }
-    const grossFareRands = Number(opts.amountRands) > 0
+    const explicitCapture = Number(opts.amountRands) > 0;
+    const grossFareRands = explicitCapture
         ? Number(opts.amountRands)
         : Number(ride.actual_fare) > 0
             ? Number(ride.actual_fare)
             : Number(ride.estimated_fare || 0);
+    // Option A: capture the fare PLUS the 4% booking fee that was held at
+    // booking. Legacy holds (created before the fee existed) stored no fee, so
+    // they keep capturing exactly the fare they held. An explicit amountRands is
+    // treated as "capture exactly this total" and never has a fee added.
+    const cfg = await (0, walletService_1.getWalletConfig)();
+    const fees = (0, fareFees_1.rideFareBreakdown)(grossFareRands, cfg);
+    const bookedFeeCents = ride.booking_fee_cents == null ? 0 : Math.max(0, Number(ride.booking_fee_cents));
+    const riderTotalRands = explicitCapture
+        ? grossFareRands
+        : (0, walletService_1.toRands)(fees.fare_cents + bookedFeeCents);
     // Split fare: co-riders pay their shares directly as separate Paystack
     // charges before the trip ends. Capture only what the booking rider still
     // owes. With no splits this is 0 and the flow is byte-for-byte the same as
-    // before. An explicit amountRands (if ever passed) means "capture exactly
-    // this" and is left alone.
+    // before.
     let splitPaidRands = 0;
-    if (!(Number(opts.amountRands) > 0)) {
+    if (!explicitCapture) {
         // Never capture while a co-rider's share is mid-charge: that share could
         // otherwise be collected twice (from their card and from this hold).
         const stillPaying = await (0, splitFareService_1.waitForPayingSplits)(ride.id, 30000);
@@ -534,7 +695,7 @@ async function captureRideHold(rideId, opts = {}) {
         }
         splitPaidRands = await (0, splitFareService_1.paidSplitTotalRands)(ride.id).catch(() => 0);
     }
-    const fareRands = (0, splitFareService_1.primaryRemainderRands)(grossFareRands, splitPaidRands);
+    const fareRands = (0, splitFareService_1.primaryRemainderRands)(riderTotalRands, splitPaidRands);
     const cents = captureAmountCents(fareRands);
     if (!Number.isFinite(cents) || cents <= 0) {
         if (splitPaidRands > 0) {
@@ -563,6 +724,18 @@ async function captureRideHold(rideId, opts = {}) {
         WHERE id = $1 AND payment_status = 'HOLD_ACTIVE'`, [ride.id]).catch(() => { });
         console.error(`[preauth] capture EXCEEDS hold ride=${rideId} final=${cents}c > held=${held}c`);
         throw new PreauthError("capture_exceeds_hold", `Final fare (R${(cents / 100).toFixed(2)}) exceeds the held amount (R${(held / 100).toFixed(2)}).`, 409);
+    }
+    // A flat split share cannot exceed the captured amount (Paystack rejects it).
+    // If the final fare fell below the booked platform share, fail honestly and
+    // let ops reconcile instead of taking the driver's money or double-charging.
+    const routedPlatformCents = ride.split_applied
+        ? Math.max(0, Number(ride.platform_share_cents || 0))
+        : 0;
+    if (routedPlatformCents > 0 && cents < routedPlatformCents) {
+        await (0, database_1.execute)(`UPDATE rides SET payment_status = 'PAYMENT_FAILED', updated_at = NOW()
+        WHERE id = $1 AND payment_status = 'HOLD_ACTIVE'`, [ride.id]).catch(() => { });
+        console.error(`[preauth] capture BELOW split share ride=${rideId} capture=${cents}c < platform=${routedPlatformCents}c`);
+        throw new PreauthError("capture_below_split", "The final fare is lower than the platform share already configured for this hold. Support must reconcile this ride.", 409);
     }
     // Claim the transition BEFORE calling Paystack. The socket and REST completion
     // paths (or a retry) can fire at the same time; without this guard both would
@@ -895,8 +1068,13 @@ async function handlePreauthorizationEvent(event, payload) {
                 // wallet credit (pending → posted). Idempotent — a duplicate delivery
                 // promotes nothing. The webhook's real Paystack fee refines the split.
                 try {
-                    const feeCents = data.fee != null && Number.isFinite(Number(data.fee))
-                        ? Math.round(Number(data.fee))
+                    // The docs sample exposes `fees` on the preauthorization and on the
+                    // nested transaction; older payloads used `fee`. Accept all three so
+                    // the ledger's fee slice is the real Paystack charge, not the 1.5%
+                    // fallback.
+                    const rawFee = data.fees ?? data.fee ?? data.transaction?.fees;
+                    const feeCents = rawFee != null && Number.isFinite(Number(rawFee))
+                        ? Math.round(Number(rawFee))
                         : null;
                     const { confirmCardRideCredit } = await Promise.resolve().then(() => __importStar(require("../services/walletService")));
                     await confirmCardRideCredit(ride.driver_id ?? "", ride.id, feeCents);

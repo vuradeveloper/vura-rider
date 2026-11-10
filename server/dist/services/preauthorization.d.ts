@@ -4,7 +4,7 @@ export declare const RIDE_PAYMENT_STATUSES: readonly RidePaymentStatus[];
 export declare function normalizePaymentStatus(raw: unknown): RidePaymentStatus;
 /** Typed failure so routes map onto honest HTTP statuses in one catch. */
 export declare class PreauthError extends Error {
-    code: "ride_not_found" | "not_owner" | "no_fare" | "not_configured" | "hold_failed" | "no_hold" | "hold_incomplete" | "hold_released" | "capture_exceeds_hold" | "capture_failed" | "split_payment_processing" | "release_failed";
+    code: "ride_not_found" | "not_owner" | "no_fare" | "not_configured" | "hold_failed" | "no_hold" | "hold_incomplete" | "hold_released" | "capture_exceeds_hold" | "capture_below_split" | "capture_failed" | "split_payment_processing" | "release_failed";
     httpStatus: number;
     constructor(code: PreauthError["code"], message: string, httpStatus: number);
 }
@@ -25,6 +25,32 @@ export declare const MIN_HOLD_CENTS = 500;
 export declare function holdAmountCents(fareRands: number): number;
 /** Amount to CAPTURE, in cents — the final fare, exact (never rounded up). */
 export declare function captureAmountCents(fareRands: number): number;
+/**
+ * Vura Commission's verified Paystack subaccount. The environment variable is
+ * an override; the code is not a secret and keeping a default means a deploy
+ * cannot silently stop routing commission just because a variable is missing.
+ */
+export declare const DEFAULT_COMMISSION_SUBACCOUNT = "ACCT_qcb4c9pbjl3q1h6";
+export declare function paystackCommissionSubaccount(): string;
+export interface PaystackDynamicSplit {
+    type: "flat" | "percentage";
+    bearer_type: "account" | "subaccount" | "all" | "all-proportional";
+    bearer_subaccount?: string;
+    subaccounts: Array<{
+        subaccount: string;
+        share: number;
+    }>;
+    reference?: string;
+}
+/**
+ * A flat dynamic split that sends EXACTLY `platformCents` to the Vura
+ * Commission subaccount and leaves the rest in the main Paystack balance.
+ *
+ * Flat, not percentage: a 10% split would send R10 on a R100 fare, breaking
+ * the R5 cap. The share is in the currency subunit (cents), per Paystack's
+ * multi-split docs.
+ */
+export declare function platformSplitFor(platformCents: number, bearer?: "subaccount" | "account"): PaystackDynamicSplit | null;
 /** Docs: unique, case-sensitive, only -, ., = and alphanumeric. */
 export declare function newPreauthReference(prefix?: string): string;
 /** Days until expire_action runs. Docs: min 1, default 5 — we default to 1. */
@@ -43,6 +69,8 @@ export declare function initializePreauthorization(input: {
     expireAfterDays?: number;
     expireAction?: "capture" | "release";
     callbackUrl?: string | null;
+    /** Dynamic flat split to Vura Commission (see platformSplitFor). */
+    split?: PaystackDynamicSplit | null;
 }): Promise<{
     reference: string;
     authorizationUrl: string;
@@ -55,6 +83,8 @@ export declare function reservePreauthorization(input: {
     reference?: string;
     expireAfterDays?: number;
     expireAction?: "capture" | "release";
+    /** Dynamic flat split to Vura Commission (see platformSplitFor). */
+    split?: PaystackDynamicSplit | null;
 }): Promise<{
     reference: string;
     status: string;
