@@ -28,6 +28,7 @@ import { resolveDriverPhotoUrl } from "./driverPhoto";
 import { trace, startTrace } from "./trace";
 import { mintRidePin } from "./pinService";
 import { destinationFit, FitThresholds } from "./destinationFit";
+import { readMaintenanceStatus } from "./featureFlags";
 import { getDestinationConfig } from "./config";
 import { getConfig } from "./config";
 import { breakTierTies } from "./performanceTier";
@@ -1312,6 +1313,13 @@ export async function acceptRide(
   params: { rideId: string; driverId: string }
 ): Promise<AcceptResult> {
   const { rideId, driverId } = params;
+
+  // Admin maintenance switch: no new accepts while the driver app is off.
+  // Existing trips continue; the driver app shows this exact message.
+  const driverMaintenance = (await readMaintenanceStatus()).driver;
+  if (driverMaintenance.enabled) {
+    return { ok: false, error: driverMaintenance.message };
+  }
 
   // The driver's recorded car classes: explicit CarScan grant first, then a
   // derivation from seats/body, then economy. Read BEFORE the transaction so a

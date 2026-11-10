@@ -13,6 +13,7 @@ import { getFirebaseApp } from "./config/firebase";
 
 // ── Import routes ──
 import usersRouter from "./routes/users";
+import appStatusRouter from "./routes/appStatus";
 import ridesRouter, { cleanupStaleRides } from "./routes/rides";
 import paymentsRouter from "./routes/payments";
 import driversRouter from "./routes/drivers";
@@ -267,6 +268,7 @@ app.get("/", (_req, res) => {
 });
 
 // ── Routes ──
+app.use("/api/app-status", appStatusRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/rides", ridesRouter);
 app.use("/api/payments", paymentsRouter);

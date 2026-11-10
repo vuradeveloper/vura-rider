@@ -23,6 +23,7 @@ import { noteIndexUpsertFailure, bump } from "../services/metrics";
 import { activateDestination, clearDestination, getDestinationStatus, onDriverPingPosition, noteDestinationTripCompleted } from "../services/destinationSession";
 import { computeTierStatus } from "../services/performanceTier";
 import { assertRiderCanBook } from "../services/adminRiders";
+import { readMaintenanceStatus } from "../services/featureFlags";
 import { applyPromoToFare, promoUsableFor, recordPromoUse, ridePromoFor } from "../services/promos";
 import { canonicalTier } from "../services/rideCategories";
 import { logRidePoint } from "../services/locationLog";
@@ -318,6 +319,18 @@ export function setupSocketHandlers(io: SocketIOServer) {
           socket.emit("ride:requested:ack", {
             success: false,
             reason: gateErr.message || "Account not allowed",
+          });
+          return;
+        }
+
+        // Admin maintenance switch: refuse NEW bookings immediately. Existing
+        // trips continue; the ack reason is what the rider app shows.
+        const socketRiderMaint = (await readMaintenanceStatus()).rider;
+        if (socketRiderMaint.enabled) {
+          socket.emit("ride:requested:ack", {
+            success: false,
+            reason: socketRiderMaint.message,
+            code: "maintenance",
           });
           return;
         }
@@ -1110,6 +1123,21 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const { online } = data || {};
         const dbUserId = await getDbUserId();
         if (!dbUserId) return;
+        // Admin maintenance switch: never mark a driver available while the
+        // driver app is off. Existing trips continue.
+        if (online === true) {
+          const driverMaint = (await readMaintenanceStatus()).driver;
+          if (driverMaint.enabled) {
+            await execute(
+              `UPDATE driver_profiles SET is_online = FALSE, status = 'offline', updated_at = NOW()
+                WHERE user_id = $1`,
+              [dbUserId]
+            ).catch(() => {});
+            socket.leave("drivers");
+            socket.emit("driver:maintenance", { message: driverMaint.message });
+            return;
+          }
+        }
         // Auto-create driver_profiles if missing (first time going online).
         let existing = await queryOne<{
           id: string;

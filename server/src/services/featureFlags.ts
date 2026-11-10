@@ -34,6 +34,15 @@ import { getBuildCommit } from "./offerWorker";
 export type FeatureKey = "matching" | "destination" | "performance_tier";
 export const FEATURE_KEYS: FeatureKey[] = ["matching", "destination", "performance_tier"];
 
+/**
+ * The two service-wide kill switches. These are NOT rollout flags: they stop
+ * new rider bookings / driver offers immediately and are shown by the apps as
+ * a maintenance screen. They do not remove anything from Google Play.
+ */
+export type MaintenanceKey = "rider_maintenance" | "driver_maintenance";
+export const MAINTENANCE_KEYS: MaintenanceKey[] = ["rider_maintenance", "driver_maintenance"];
+export type AnyFeatureKey = FeatureKey | MaintenanceKey;
+
 export class FeatureFlagError extends Error {
   code: "validation" | "no_row" | "not_found";
   constructor(code: FeatureFlagError["code"], message: string) {
@@ -42,10 +51,10 @@ export class FeatureFlagError extends Error {
   }
 }
 
-type FieldType = "boolean" | "string[]" | "mode" | "percent";
+type FieldType = "boolean" | "string[]" | "mode" | "percent" | "text";
 
 /** THE allow-list of settable fields. Anything else ⇒ 400 validation error. */
-const SETTABLE: Record<FeatureKey, Record<string, FieldType>> = {
+const SETTABLE: Record<AnyFeatureKey, Record<string, FieldType>> = {
   matching: {
     h3_matching_enabled: "boolean",
     h3_rollout_mode: "mode",
@@ -62,14 +71,23 @@ const SETTABLE: Record<FeatureKey, Record<string, FieldType>> = {
     performance_tier_rollout_mode: "mode",
     performance_tier_rollout_driver_ids: "string[]",
   },
+  rider_maintenance: { enabled: "boolean", message: "text" },
+  driver_maintenance: { enabled: "boolean", message: "text" },
 };
 
 const H3_MODES = ["off", "allowlist", "percent", "all"];
 /** destination / tier only need these two — no percent bucketing for drivers. */
 const DRIVER_ROLLOUT_MODES = ["allowlist", "all"];
 
-function isFeatureKey(k: unknown): k is FeatureKey {
-  return typeof k === "string" && (FEATURE_KEYS as string[]).includes(k);
+function isFeatureKey(k: unknown): k is AnyFeatureKey {
+  return (
+    typeof k === "string" &&
+    ((FEATURE_KEYS as string[]).includes(k) || (MAINTENANCE_KEYS as string[]).includes(k))
+  );
+}
+
+function isMaintenanceKey(k: AnyFeatureKey): k is MaintenanceKey {
+  return (MAINTENANCE_KEYS as string[]).includes(k);
 }
 
 function normId(id: unknown): string {
@@ -86,7 +104,7 @@ function normIds(ids: unknown): string[] {
 }
 
 /** Validate one field against SETTABLE; throws FeatureFlagError on anything unexpected. */
-export function validateField(key: FeatureKey, field: string, value: unknown): unknown {
+export function validateField(key: AnyFeatureKey, field: string, value: unknown): unknown {
   const type = SETTABLE[key]?.[field];
   if (!type) {
     throw new FeatureFlagError(
@@ -115,6 +133,12 @@ export function validateField(key: FeatureKey, field: string, value: unknown): u
       }
       return Math.floor(value);
     }
+    case "text": {
+      if (typeof value !== "string") throw new FeatureFlagError("validation", `${field} must be text`);
+      const text = value.trim();
+      if (text.length > 500) throw new FeatureFlagError("validation", `${field} must be 500 characters or fewer`);
+      return text;
+    }
   }
 }
 
@@ -131,7 +155,7 @@ function audit(actor: string, action: string, detail: Record<string, unknown>): 
   );
 }
 
-async function readRow(key: FeatureKey): Promise<Record<string, unknown> | null> {
+async function readRow(key: AnyFeatureKey): Promise<Record<string, unknown> | null> {
   try {
     const row = await queryOne<{ value: any }>("SELECT value FROM app_config WHERE key = $1", [key]);
     if (!row) return null;
@@ -143,7 +167,15 @@ async function readRow(key: FeatureKey): Promise<Record<string, unknown> | null>
 }
 
 /** Project the raw JSONB row into the operator-facing section (or explain why absent). */
-function section(key: FeatureKey, row: Record<string, unknown> | null): Record<string, unknown> {
+function section(key: AnyFeatureKey, row: Record<string, unknown> | null): Record<string, unknown> {
+  if (isMaintenanceKey(key)) {
+    return {
+      exists: true,
+      enabled: row?.enabled === true,
+      message: typeof row?.message === "string" ? row.message : "",
+      updated_at: typeof row?.updated_at === "string" ? row.updated_at : null,
+    };
+  }
   if (!row) return { exists: false, error: "config row missing — apply the migration" };
   if (key === "matching") {
     return {
@@ -212,32 +244,115 @@ async function recentMatchingPaths(): Promise<Array<Record<string, unknown>>> {
 
 /** Full operator view: all three flags/allowlists + last rides + server build. */
 export async function readFeatures(): Promise<Record<string, unknown>> {
-  const [m, d, t] = await Promise.all([readRow("matching"), readRow("destination"), readRow("performance_tier")]);
+  const [m, d, t, riderMaint, driverMaint] = await Promise.all([
+    readRow("matching"),
+    readRow("destination"),
+    readRow("performance_tier"),
+    readRow("rider_maintenance"),
+    readRow("driver_maintenance"),
+  ]);
   return {
     server_build: getBuildCommit(),
     flags: {
       matching: section("matching", m),
       destination: section("destination", d),
       performance_tier: section("performance_tier", t),
+      rider_maintenance: section("rider_maintenance", riderMaint),
+      driver_maintenance: section("driver_maintenance", driverMaint),
     },
     recent_matching_paths: await recentMatchingPaths(),
   };
 }
 
+// ── Maintenance kill switches ────────────────────────────────────────────────
+// Cached for 5 s so every booking does not pay for two extra SELECTs; the
+// writer invalidates it immediately, so an admin toggle is visible on the
+// next request in this process.
+export interface MaintenanceSide {
+  enabled: boolean;
+  message: string;
+}
+export interface MaintenanceStatus {
+  rider: MaintenanceSide;
+  driver: MaintenanceSide;
+}
+
+const DEFAULT_MAINTENANCE_MESSAGE = "Vura is under maintenance. We'll be back shortly.";
+let maintenanceCache: { at: number; value: MaintenanceStatus } | null = null;
+
+export function invalidateMaintenanceCache(): void {
+  maintenanceCache = null;
+}
+
+function maintenanceSide(row: Record<string, unknown> | null): MaintenanceSide {
+  const message = typeof row?.message === "string" ? row.message.trim() : "";
+  return {
+    enabled: row?.enabled === true,
+    message: message || DEFAULT_MAINTENANCE_MESSAGE,
+  };
+}
+
+/** Current rider/driver maintenance state (5 s cache). Never throws. */
+export async function readMaintenanceStatus(force = false): Promise<MaintenanceStatus> {
+  if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 5_000) {
+    return maintenanceCache.value;
+  }
+  try {
+    const [rider, driver] = await Promise.all([
+      readRow("rider_maintenance"),
+      readRow("driver_maintenance"),
+    ]);
+    const value: MaintenanceStatus = {
+      rider: maintenanceSide(rider),
+      driver: maintenanceSide(driver),
+    };
+    maintenanceCache = { at: Date.now(), value };
+    return value;
+  } catch {
+    const value: MaintenanceStatus = {
+      rider: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE },
+      driver: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE },
+    };
+    maintenanceCache = { at: Date.now(), value };
+    return value;
+  }
+}
+
 /** Read-modify-write one app_config row with validated patches; audit + invalidate. */
 async function writeFeatureValue(
-  key: FeatureKey,
+  key: AnyFeatureKey,
   patch: Record<string, unknown>,
   actor: string,
   action: string,
 ): Promise<Record<string, unknown>> {
+  const maintenance = isMaintenanceKey(key);
   const row = await readRow(key);
-  if (!row) throw new FeatureFlagError("no_row", `app_config row '${key}' missing — run migrations first (RUN_MIGRATIONS_ON_BOOT=true)`);
-  const next = { ...row, ...patch };
-  await execute("UPDATE app_config SET value = $2::jsonb WHERE key = $1", [
-    key,
-    JSON.stringify(next),
-  ]);
+  if (!row && !maintenance) {
+    throw new FeatureFlagError(
+      "no_row",
+      `app_config row '${key}' missing �?" run migrations first (RUN_MIGRATIONS_ON_BOOT=true)`
+    );
+  }
+  const next = {
+    ...(row ?? {}),
+    ...patch,
+    ...(maintenance ? { updated_at: new Date().toISOString() } : {}),
+  };
+  if (maintenance) {
+    // First use creates the row; ON CONFLICT keeps every subsequent toggle a
+    // single write. This is the only place this service may create a row.
+    await execute(
+      `INSERT INTO app_config (key, value) VALUES ($1, $2::jsonb)
+       ON CONFLICT (key) DO UPDATE SET value = $2::jsonb`,
+      [key, JSON.stringify(next)]
+    );
+    invalidateMaintenanceCache();
+  } else {
+    await execute("UPDATE app_config SET value = $2::jsonb WHERE key = $1", [
+      key,
+      JSON.stringify(next),
+    ]);
+  }
   invalidateConfigCache();
   audit(actor, action, { key, patch });
   return section(key, next);

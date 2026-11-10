@@ -47,7 +47,7 @@ vi.mock("../config/database", () => ({
     return []; // ride_events / recent paths
   },
   execute: async (sql: string, params?: any[]) => {
-    if (sql.includes("UPDATE app_config")) {
+    if (sql.includes("UPDATE app_config") || sql.includes("INSERT INTO app_config")) {
       db.app_config.set(String(params?.[0]), JSON.parse(String(params?.[1])));
       return { rowCount: 1, rows: [] };
     }
@@ -63,7 +63,9 @@ import {
   FeatureFlagError,
   disableAllFeatures,
   enableForAccounts,
+  invalidateMaintenanceCache,
   readFeatures,
+  readMaintenanceStatus,
   updateFeature,
   validateField,
 } from "./featureFlags";
@@ -73,6 +75,7 @@ let logSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   db.reset();
   invalidate.mockClear();
+  invalidateMaintenanceCache();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 });
 afterEach(() => logSpy.mockRestore());
@@ -273,5 +276,60 @@ describe("rollout modes — destination/tier 'all', matching keeps its ladder", 
       .map((c) => String(c[0]))
       .find((l) => l.includes('"action":"disable"'));
     expect(auditLine).toContain('"actor":"admin@x"');
+  });
+});
+
+describe("maintenance kill switches", () => {
+  it("defaults OFF when no row exists (never a migration error)", async () => {
+    const status = await readMaintenanceStatus(true);
+    expect(status.rider.enabled).toBe(false);
+    expect(status.driver.enabled).toBe(false);
+    expect(status.rider.message).toMatch(/maintenance/i);
+  });
+
+  it("creates the row on first toggle and turns the rider app off/on", async () => {
+    const off = await updateFeature(
+      "rider_maintenance",
+      { enabled: true, message: "  Back at 14:00  " },
+      "admin@x"
+    );
+    expect((off.flags as any).rider_maintenance).toMatchObject({
+      enabled: true,
+      message: "Back at 14:00",
+    });
+    expect(db.app_config.get("rider_maintenance").enabled).toBe(true);
+
+    let status = await readMaintenanceStatus(true);
+    expect(status.rider).toEqual({ enabled: true, message: "Back at 14:00" });
+    expect(status.driver.enabled).toBe(false);
+
+    await updateFeature("rider_maintenance", { enabled: false }, "admin@x");
+    status = await readMaintenanceStatus(true);
+    expect(status.rider.enabled).toBe(false);
+    // The operator message is preserved for the next closure.
+    expect(status.rider.message).toBe("Back at 14:00");
+  });
+
+  it("driver maintenance is independent of rider maintenance", async () => {
+    await updateFeature("driver_maintenance", { enabled: true }, "admin@x");
+    const status = await readMaintenanceStatus(true);
+    expect(status.driver.enabled).toBe(true);
+    expect(status.rider.enabled).toBe(false);
+  });
+
+  it("validates the message and the enabled boolean", async () => {
+    expect(validateField("rider_maintenance", "enabled", true)).toBe(true);
+    expect(() => validateField("rider_maintenance", "enabled", "yes")).toThrow(/true\/false/);
+    expect(validateField("rider_maintenance", "message", "  hi  ")).toBe("hi");
+    expect(() => validateField("rider_maintenance", "message", 42)).toThrow(/text/);
+    expect(() =>
+      validateField("rider_maintenance", "message", "x".repeat(501))
+    ).toThrow(/500/);
+  });
+
+  it("readFeatures exposes both maintenance sections to the admin", async () => {
+    const out = (await readFeatures()) as any;
+    expect(out.flags.rider_maintenance).toMatchObject({ enabled: false, message: "" });
+    expect(out.flags.driver_maintenance).toMatchObject({ enabled: false, message: "" });
   });
 });

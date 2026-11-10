@@ -8,6 +8,7 @@ import { attachVehicleImages } from "../services/vehicleImages";
 import { resolveDriverPhotoUrl } from "../services/driverPhoto";
 import { trace, startTrace } from "../services/trace";
 import { assertRiderCanBook } from "../services/adminRiders";
+import { readMaintenanceStatus } from "../services/featureFlags";
 import { canonicalTier, effectiveCategories, rideTiersForCategories } from "../services/rideCategories";
 import {
   captureRideHold,
@@ -184,6 +185,14 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
       await assertRiderCanBook(rider.id);
     } catch (gateErr: any) {
       res.status(gateErr.status || 403).json({ error: gateErr.message || "Account not allowed" });
+      return;
+    }
+
+    // Admin maintenance switch: stop NEW bookings immediately, before the ride
+    // row (and any card hold) is created. Existing trips are unaffected.
+    const riderMaint = (await readMaintenanceStatus()).rider;
+    if (riderMaint.enabled) {
+      res.status(503).json({ error: riderMaint.message, code: "maintenance" });
       return;
     }
 
@@ -1071,6 +1080,13 @@ router.post("/schedule", requireAuth, async (req: AuthRequest, res: Response) =>
       [firebaseUid]
     );
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    // Admin maintenance switch: no new reservations while the rider app is off.
+    const scheduleMaint = (await readMaintenanceStatus()).rider;
+    if (scheduleMaint.enabled) {
+      res.status(503).json({ error: scheduleMaint.message, code: "maintenance" });
+      return;
+    }
 
     // The upfront price is stored at booking time and is locked for the
     // reservation (a reserved fare does not change later, like Uber Reserve).
