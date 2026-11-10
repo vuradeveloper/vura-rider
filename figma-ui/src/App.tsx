@@ -1282,6 +1282,25 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     setDragIndex(null)
   }
 
+  // What the server will actually charge: the promo discount is applied first,
+  // then any invite credit, then the 4% booking fee on the resulting fare.
+  // The server remains authoritative; this is the number the rider sees.
+  const quoteFare = (() => {
+    let f = RIDE_FARE
+    if (promo && promoOn && promo.usable !== false) {
+      const pct = Number(promo.discount_pct) || 0
+      const fixed = Number(promo.discount_fixed) || 0
+      const discount = Math.min(f, pct > 0 ? (f * pct) / 100 : fixed)
+      f = Math.round((f - discount) * 100) / 100
+    }
+    if (inviteOn && inviteBalance > 0) {
+      f = Math.round(Math.max(0, f - Math.min(inviteBalance, f)) * 100) / 100
+    }
+    return f
+  })()
+  const quoteBookingFee = Math.round(quoteFare * BOOKING_FEE_PCT) / 100
+  const quoteTotal = Math.round((quoteFare + quoteBookingFee) * 100) / 100
+
   const payLabel = pay === PAY_CASH
     ? 'Cash'
     : PAY_LATER_ENABLED && pay === PAY_LATER
@@ -1298,7 +1317,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     ? 'Pay the driver directly'
     : PAY_LATER_ENABLED && pay === PAY_LATER
       ? (pl ? `${formatRand(pl.available_r)} available to spend` : 'Ride now, pay later')
-      : `${cards.find((x) => x.id === pay)?.bank || 'Saved card'} · ${formatRand(RIDE_CARD_TOTAL)} incl. booking fee`
+      : `${cards.find((x) => x.id === pay)?.bank || 'Saved card'} · ${formatRand(quoteTotal)} incl. booking fee`
 
   // What the ordered list means for the booking. The first row is the pickup,
   // the last is the drop-off, and every row between them is a stop.
@@ -1603,10 +1622,10 @@ function BookingScreen({ destination, onBack, onConfirm }: {
               Card = fare + 4% booking fee; cash and Pay Later stay fare-only. */}
           <p className="text-[11.5px] text-[#8A8A8A] text-center mb-2 leading-snug">
             {pay === PAY_CASH
-              ? `Fare ${formatRand(RIDE_FARE)} · pay the driver in cash`
+              ? `Fare ${formatRand(quoteFare)} · pay the driver in cash`
               : PAY_LATER_ENABLED && pay === PAY_LATER
-                ? `Fare ${formatRand(RIDE_FARE)} · settle at month-end`
-                : `Fare ${formatRand(RIDE_FARE)} + booking fee ${formatRand(RIDE_BOOKING_FEE)} = ${formatRand(RIDE_CARD_TOTAL)}`}
+                ? `Fare ${formatRand(quoteFare)} · settle at month-end`
+                : `Fare ${formatRand(quoteFare)} + booking fee ${formatRand(quoteBookingFee)} = ${formatRand(quoteTotal)}`}
           </p>
           <button onClick={() => onConfirm(
             sel,
@@ -1618,7 +1637,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
             destinationOut,
           )}
             className="w-full bg-[#EA4335] active:bg-[#C5221F] text-white font-semibold text-[15px] py-3.5 rounded-2xl transition-all shadow-sm shadow-[#EA4335]/30">
-            Confirm {ride.name} · {formatRand(pay === PAY_CASH || (PAY_LATER_ENABLED && pay === PAY_LATER) ? RIDE_FARE : RIDE_CARD_TOTAL)}
+            Confirm {ride.name} · {formatRand(pay === PAY_CASH || (PAY_LATER_ENABLED && pay === PAY_LATER) ? quoteFare : quoteTotal)}
           </button>
           {stopRows.length > 0 && (
             <p className="text-[11px] text-[#ADADAD] text-center mt-2">
