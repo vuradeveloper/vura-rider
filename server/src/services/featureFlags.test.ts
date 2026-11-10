@@ -40,6 +40,10 @@ vi.mock("../config/database", () => ({
     return null;
   },
   query: async (sql: string, params?: any[]) => {
+    if (sql.includes("FROM app_config")) {
+      // readMaintenanceStatus reads BOTH maintenance rows in one query.
+      return [...db.app_config.entries()].map(([key, value]) => ({ key, value }));
+    }
     if (sql.includes("FROM users")) {
       const [emails, phones] = params as [string[], string[]];
       return db.matchUsers(emails, phones);

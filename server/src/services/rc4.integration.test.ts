@@ -260,6 +260,20 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS hold_amount_cents INTEGER;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS captured_amount NUMERIC(10,2);
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS card_auth_code VARCHAR(100);
+-- Booking-fee split (4% rider fee + capped commission) columns written by
+-- preauthorization.ts and selected by rides.ts. production adds them in the
+-- same idempotent way at boot, so the inventory must see them too.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS booking_fee_cents INTEGER;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS platform_share_cents INTEGER;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS split_applied BOOLEAN DEFAULT FALSE;
+-- 012 promos / 013 vehicle categories: rides.ts selects promo_id and dispatch
+-- reads driver_profiles.vehicle_categories. Same additive posture as prod.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS promo_id UUID;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS promo_code TEXT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS promo_discount NUMERIC(10,2) NOT NULL DEFAULT 0;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_categories JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_seats INTEGER;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_suspended BOOLEAN NOT NULL DEFAULT FALSE;
 `;
 
 function migrationSql(file: string): string {
@@ -880,6 +894,43 @@ describe.skipIf(!enabled)("dispatch loop statements (offer / accept / expire / r
     expect(pending.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("still revives a ride booked 40 minutes ago when the driver comes online late", async () => {
+    // REGRESSION: the revive window used to be hard-coded to 15 minutes. A rider
+    // who booked while every driver was offline was parked as `no_drivers`, and
+    // once 15 minutes passed the worker stopped reviving it — so the driver who
+    // tapped Online afterwards NEVER received the request. The rider was still
+    // waiting on the matching screen. The window is 60 minutes now; 40 is well
+    // inside it and well outside the old cutoff.
+    const io = makeIo().io as any;
+    const ride = await seedRide({ lat: SANDTON.lat, lng: SANDTON.lng, status: "no_drivers" });
+    const driver = await seedDriver({ lat: -26.1176, lng: 28.0567, rating: 5 });
+    await demoteOthers([driver]);
+    await execute(
+      `UPDATE rides SET status = 'expired'
+        WHERE status IN ('searching', 'no_drivers') AND id <> $1`,
+      [ride.rideId]
+    );
+    await execute(
+      `UPDATE rides
+          SET created_at = NOW() - interval '40 minutes',
+              no_drivers_at = NOW() - interval '40 minutes'
+        WHERE id = $1`,
+      [ride.rideId]
+    );
+
+    const revived = await reviveWaitingRides(io, 5);
+    expect(revived).toBeGreaterThanOrEqual(1);
+    const pending = await query<{ driver_id: string }>(
+      `SELECT driver_id FROM ride_offers WHERE ride_id = $1 AND status = 'pending'`,
+      [ride.rideId]
+    );
+    expect(pending.map((o) => o.driver_id)).toContain(driver);
+    const after = await queryOne<{ status: string }>(`SELECT status FROM rides WHERE id = $1`, [
+      ride.rideId,
+    ]);
+    expect(after?.status).toBe("searching");
+  });
+
   it("demotes a silent driver and parks a ride with no drivers (sweep + no_drivers SQL)", async () => {
     const io = makeIo().io as any;
     const silent = await seedDriver({ lat: SANDTON.lat, lng: SANDTON.lng });
@@ -940,6 +991,7 @@ function extractSqlLiterals(src: string): string[] {
       // rides.ts interpolates numeric consts into INTERVAL '… minutes'.
       .replace(/\$\{ACTIVE_RIDE_MAX_AGE_MINUTES\}/g, "240")
       .replace(/\$\{IN_PROGRESS_MAX_AGE_MINUTES\}/g, "720")
+      .replace(/\$\{SEARCH_REVIVE_WINDOW_MINUTES\}/g, "60")
       .trim();
     if (/^\s*--[^\n]*\n/i.test(sql)) sql = sql.replace(/^\s*--[^\n]*\n/gm, "").trim();
     if (!/^(SELECT|INSERT|UPDATE|DELETE|WITH|ALTER|CREATE)\b/i.test(sql)) continue;
