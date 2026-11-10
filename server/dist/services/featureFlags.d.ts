@@ -19,6 +19,8 @@ export declare function readFeatures(): Promise<Record<string, unknown>>;
 export interface MaintenanceSide {
     enabled: boolean;
     message: string;
+    /** Tokens with auth_time older than this are rejected (a real backend logout). */
+    revokeBefore: string | null;
 }
 export interface MaintenanceStatus {
     rider: MaintenanceSide;
@@ -27,6 +29,16 @@ export interface MaintenanceStatus {
 export declare function invalidateMaintenanceCache(): void;
 /** Current rider/driver maintenance state (5 s cache). Never throws. */
 export declare function readMaintenanceStatus(force?: boolean): Promise<MaintenanceStatus>;
+/**
+ * Close one app AND log every existing session out. The `revoke_before`
+ * timestamp is what makes this a real backend logout: requireAuth rejects any
+ * token whose Firebase `auth_time` predates it, even after the app is turned
+ * back on. A refreshed token keeps the original auth_time, so the user must
+ * actually sign in again.
+ */
+export declare function lockMaintenance(side: "rider" | "driver", message: string, actor: string): Promise<Record<string, unknown>>;
+/** Turn the app back on. Old sessions stay logged out until they sign in again. */
+export declare function unlockMaintenance(side: "rider" | "driver", actor: string): Promise<Record<string, unknown>>;
 /** Validate + apply one flag update. Validated keys only — never a money column. */
 export declare function updateFeature(key: unknown, changes: unknown, actor: string): Promise<Record<string, unknown>>;
 export interface EnableInput {

@@ -9,6 +9,7 @@ const firebase_1 = require("../config/firebase");
 const adminInvite_1 = require("../services/adminInvite");
 const duplicateDetection_1 = require("../services/duplicateDetection");
 const identity_1 = require("../lib/identity");
+const featureFlags_1 = require("../services/featureFlags");
 const router = (0, express_1.Router)();
 // POST /api/users/forgot-password - rider, driver and console "Forgot password?".
 // Emails a Firebase set-password link through Resend. ALWAYS answers success:
@@ -61,6 +62,18 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
     try {
         const { role, phone, full_name, id_number, referralCode } = req.body;
         const firebaseUid = req.userId;
+        // Maintenance lock: do not create or revive a rider/driver account while
+        // that side is closed. This is the server-side stop for the app's
+        // sign-in/sign-up flow (Firebase accepts the password, then this refuses).
+        const requestedSide = role === "driver" ? "driver" : "rider";
+        const maint = await (0, featureFlags_1.readMaintenanceStatus)();
+        if (maint[requestedSide].enabled) {
+            res.status(503).json({
+                error: maint[requestedSide].message,
+                code: "maintenance",
+            });
+            return;
+        }
         const existing = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [firebaseUid]);
         if (existing) {
             const updates = [];

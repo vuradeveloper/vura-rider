@@ -5,6 +5,8 @@ exports.validateField = validateField;
 exports.readFeatures = readFeatures;
 exports.invalidateMaintenanceCache = invalidateMaintenanceCache;
 exports.readMaintenanceStatus = readMaintenanceStatus;
+exports.lockMaintenance = lockMaintenance;
+exports.unlockMaintenance = unlockMaintenance;
 exports.updateFeature = updateFeature;
 exports.disableAllFeatures = disableAllFeatures;
 exports.enableForAccounts = enableForAccounts;
@@ -163,6 +165,7 @@ function section(key, row) {
             exists: true,
             enabled: row?.enabled === true,
             message: typeof row?.message === "string" ? row.message : "",
+            revoke_before: typeof row?.revoke_before === "string" ? row.revoke_before : null,
             updated_at: typeof row?.updated_at === "string" ? row.updated_at : null,
         };
     }
@@ -255,6 +258,7 @@ function maintenanceSide(row) {
     return {
         enabled: row?.enabled === true,
         message: message || DEFAULT_MAINTENANCE_MESSAGE,
+        revokeBefore: typeof row?.revoke_before === "string" ? row.revoke_before : null,
     };
 }
 /** Current rider/driver maintenance state (5 s cache). Never throws. */
@@ -276,12 +280,32 @@ async function readMaintenanceStatus(force = false) {
     }
     catch {
         const value = {
-            rider: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE },
-            driver: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE },
+            rider: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE, revokeBefore: null },
+            driver: { enabled: false, message: DEFAULT_MAINTENANCE_MESSAGE, revokeBefore: null },
         };
         maintenanceCache = { at: Date.now(), value };
         return value;
     }
+}
+/**
+ * Close one app AND log every existing session out. The `revoke_before`
+ * timestamp is what makes this a real backend logout: requireAuth rejects any
+ * token whose Firebase `auth_time` predates it, even after the app is turned
+ * back on. A refreshed token keeps the original auth_time, so the user must
+ * actually sign in again.
+ */
+async function lockMaintenance(side, message, actor) {
+    const key = `${side}_maintenance`;
+    return writeFeatureValue(key, {
+        enabled: true,
+        message: String(message || "").trim() || DEFAULT_MAINTENANCE_MESSAGE,
+        revoke_before: new Date().toISOString(),
+    }, actor, "lock");
+}
+/** Turn the app back on. Old sessions stay logged out until they sign in again. */
+async function unlockMaintenance(side, actor) {
+    const key = `${side}_maintenance`;
+    return writeFeatureValue(key, { enabled: false }, actor, "unlock");
 }
 /** Read-modify-write one app_config row with validated patches; audit + invalidate. */
 async function writeFeatureValue(key, patch, actor, action) {

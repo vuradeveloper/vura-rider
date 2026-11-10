@@ -26,6 +26,7 @@ const format_1 = require("../lib/format");
 const identity_1 = require("../lib/identity");
 const adminMessaging_1 = require("../services/adminMessaging");
 const featureFlags_1 = require("../services/featureFlags");
+const sessionAdmin_1 = require("../services/sessionAdmin");
 const adminDocReview_1 = require("../services/adminDocReview");
 const promos_1 = require("../services/promos");
 const firebase_1 = require("../config/firebase");
@@ -1263,6 +1264,45 @@ router.put("/features/:key", (0, adminAuth_1.requireAdmin)("features.write"), as
             }
             throw err;
         }
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/maintenance/:side — close/open one app AND log everyone
+// out. `side` is rider|driver. Enabling writes the maintenance flag + a
+// `revoke_before` epoch (requireAuth rejects every older token) and starts
+// Firebase refresh-token revocation in the background.
+router.post("/maintenance/:side", (0, adminAuth_1.requireAdmin)("features.write"), async (req, res) => {
+    try {
+        const side = req.params.side === "driver" ? "driver" : "rider";
+        const enabled = req.body?.enabled === true;
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const flag = enabled
+            ? await (0, featureFlags_1.lockMaintenance)(side, String(req.body?.message || ""), actor.email)
+            : await (0, featureFlags_1.unlockMaintenance)(side, actor.email);
+        if (enabled) {
+            // Best-effort: the epoch in requireAuth blocks immediately; this also
+            // kills the refresh tokens so the app must really sign in again.
+            void (0, sessionAdmin_1.revokeSessionsForRole)(side === "rider" ? "passenger" : "driver").catch((err) => {
+                console.warn(`[maintenance] revoke ${side} sessions failed:`, err?.message || err);
+            });
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: enabled ? "maintenance.lock" : "maintenance.unlock",
+            entityType: "app_config",
+            entityId: `${side}_maintenance`,
+            newValue: { enabled, message: String(req.body?.message || ""), revoke_started: enabled },
+        }).catch(() => { });
+        res.json({
+            maintenance: flag,
+            revokeStarted: enabled,
+            side,
+        });
     }
     catch (err) {
         sendError(res, err);
