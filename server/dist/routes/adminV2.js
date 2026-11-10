@@ -1291,6 +1291,9 @@ router.post("/maintenance/:side", (0, adminAuth_1.requireAdmin)("features.write"
             void (0, sessionAdmin_1.revokeSessionsForRole)(side === "rider" ? "passenger" : "driver").catch((err) => {
                 console.warn(`[maintenance] revoke ${side} sessions failed:`, err?.message || err);
             });
+            if (side === "driver") {
+                void (0, sessionAdmin_1.forceAllDriversOffline)(String(req.body?.message || "")).catch(() => { });
+            }
         }
         await (0, adminAuth_1.writeAudit)(actor, {
             action: enabled ? "maintenance.lock" : "maintenance.unlock",

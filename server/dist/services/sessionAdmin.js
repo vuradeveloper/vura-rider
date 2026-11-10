@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.revokeSessionsForRole = revokeSessionsForRole;
+exports.forceAllDriversOffline = forceAllDriversOffline;
 // ─────────────────────────────────────────────────────────────────────────────
 // SERVER-SIDE LOGOUT — revoke every Firebase refresh token for one side.
 //
@@ -47,5 +48,31 @@ async function revokeSessionsForRole(role) {
     }
     console.log(`[maintenance] revoked ${revoked}/${rows.length} ${role} refresh tokens (${failed} failed)`);
     return { total: rows.length, revoked, failed };
+}
+/**
+ * Driver lock: force every available/break driver offline and tell the live
+ * sockets. Drivers already `on_trip` are left alone so an active trip can be
+ * finished; they simply cannot go available or accept anything new.
+ */
+async function forceAllDriversOffline(message) {
+    let affected = 0;
+    try {
+        const res = await (0, database_1.execute)(`UPDATE driver_profiles
+          SET is_online = FALSE, status = 'offline', updated_at = NOW()
+        WHERE COALESCE(status, 'offline') IN ('available', 'break')`);
+        affected = Number(res?.rowCount || 0);
+    }
+    catch (err) {
+        console.warn("[maintenance] force drivers offline failed:", err?.message || err);
+    }
+    try {
+        const io = global.__vuraIo;
+        if (io)
+            io.to("drivers").emit("driver:maintenance", { message });
+    }
+    catch {
+        /* sockets are best-effort */
+    }
+    return affected;
 }
 //# sourceMappingURL=sessionAdmin.js.map
