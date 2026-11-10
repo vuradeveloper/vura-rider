@@ -263,7 +263,7 @@ function maintenanceSide(row) {
 }
 /** Current rider/driver maintenance state (5 s cache). Never throws. */
 async function readMaintenanceStatus(force = false) {
-    if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 5_000) {
+    if (!force && maintenanceCache && Date.now() - maintenanceCache.at < 1_000) {
         return maintenanceCache.value;
     }
     try {

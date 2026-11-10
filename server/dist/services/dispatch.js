@@ -1083,7 +1083,7 @@ async function acceptRide(io, params) {
     const { rideId, driverId } = params;
     // Admin maintenance switch: no new accepts while the driver app is off.
     // Existing trips continue; the driver app shows this exact message.
-    const driverMaintenance = (await (0, featureFlags_1.readMaintenanceStatus)()).driver;
+    const driverMaintenance = (await (0, featureFlags_1.readMaintenanceStatus)(true)).driver;
     if (driverMaintenance.enabled) {
         return { ok: false, error: driverMaintenance.message };
     }

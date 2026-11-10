@@ -66,7 +66,7 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
         // that side is closed. This is the server-side stop for the app's
         // sign-in/sign-up flow (Firebase accepts the password, then this refuses).
         const requestedSide = role === "driver" ? "driver" : "rider";
-        const maint = await (0, featureFlags_1.readMaintenanceStatus)();
+        const maint = await (0, featureFlags_1.readMaintenanceStatus)(true);
         if (maint[requestedSide].enabled) {
             res.status(503).json({
                 error: maint[requestedSide].message,
