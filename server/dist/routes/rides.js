@@ -1214,6 +1214,7 @@ async function loadRideForParty(rideId, firebaseUid) {
     const ride = await (0, database_1.queryOne)(`SELECT id, passenger_id, driver_id, status, payment_method, accepted_at,
             payment_status, preauth_reference, hold_checkout_url,
             hold_expires_at, hold_amount_cents, captured_amount, paid_at,
+            booking_fee_cents, platform_share_cents, split_applied,
             estimated_fare, actual_fare,
             COALESCE(NULLIF(actual_fare, 0), estimated_fare) AS fare
        FROM rides WHERE id = $1`, [rideId]).catch(() => null);
@@ -1381,6 +1382,11 @@ router.get("/:id/payment", auth_1.requireAuth, async (req, res) => {
             holdAmountCents: ride.hold_amount_cents ?? null,
             capturedAmount: ride.captured_amount ?? null,
             paidAt: ride.paid_at || null,
+            // Option A reconciliation: exactly what was booked and whether the
+            // dynamic split reached Vura Commission or fell back to the main balance.
+            bookingFeeCents: ride.booking_fee_cents ?? null,
+            platformShareCents: ride.platform_share_cents ?? null,
+            splitApplied: ride.split_applied ?? null,
         });
     }
     catch (err) {
