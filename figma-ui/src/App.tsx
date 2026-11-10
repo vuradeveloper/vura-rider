@@ -5498,7 +5498,7 @@ export default function App() {
       }
     };
     void checkMaintenance();
-    const timer = window.setInterval(() => void checkMaintenance(), 30_000);
+    const timer = window.setInterval(() => void checkMaintenance(), 10_000);
     const onVisible = () => {
       if (document.visibilityState === 'visible') void checkMaintenance();
     };
