@@ -49,6 +49,13 @@ export const OFFER_TTL_SECONDS = 15;
 export const LOCATION_FRESH_SECONDS = 20;
 /** Stop offering after this many rounds so a ride can't churn forever. */
 export const MAX_OFFER_ROUNDS = 12;
+/**
+ * How long a still-unmatched on-demand ride stays matchable after booking.
+ * Shared with routes/rides.ts so the rider's restore path and the driver feed
+ * never use a shorter window than the revive worker: 15 minutes was too short
+ * for "rider books, driver taps Online later" and stranded the request.
+ */
+export const SEARCH_REVIVE_WINDOW_MINUTES = 60;
 
 /**
  * Does the driver's personal room hold a connected socket RIGHT NOW?
@@ -2010,7 +2017,7 @@ export async function cancelPendingOffers(
 export async function reviveWaitingRides(
   io: SocketIOServer,
   limit = 5,
-  maxAgeMinutes = 60
+  maxAgeMinutes = SEARCH_REVIVE_WINDOW_MINUTES
 ): Promise<number> {
   const age = Math.max(5, Math.min(24 * 60, Math.round(Number(maxAgeMinutes) || 60)));
   const waiting = await query<{ id: string; status: string }>(

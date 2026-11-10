@@ -3,7 +3,7 @@ import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import { inviteCreditAvailable, settleFirstRide, spendInviteCredit } from "../services/AffiliateService";
 import { startServerRideSim, stopServerRideSim } from "../services/rideSim";
-import { acceptRide, declineOffer, startDispatch, logRideEvent, cancelPendingOffers, releaseDriver } from "../services/dispatch";
+import { acceptRide, declineOffer, startDispatch, logRideEvent, cancelPendingOffers, releaseDriver, SEARCH_REVIVE_WINDOW_MINUTES } from "../services/dispatch";
 import { attachVehicleImages } from "../services/vehicleImages";
 import { resolveDriverPhotoUrl } from "../services/driverPhoto";
 import { trace, startTrace } from "../services/trace";
@@ -503,12 +503,10 @@ function mapRide(row: any) {
 // show "Trip in progress" → "Back to ride". We treat anything older than this as
 // dead so a fresh login never resurrects an ancient ride.
 const ACTIVE_RIDE_MAX_AGE_MINUTES = 240; // 4 hours
-// How long a still-unmatched request stays visible/restorable. This MUST match
-// dispatch.reviveWaitingRides' default window (60 min): if this is shorter, the
-// rider who backgrounded the app comes back to an empty home screen while the
-// server is still trying to match the very same ride, and a driver coming
-// online late can never see it in /rides/available.
-const SEARCH_REVIVE_WINDOW_MINUTES = 60;
+// SEARCH_REVIVE_WINDOW_MINUTES is imported from dispatch: the revive worker,
+// the rider restore path and the driver /available feed must all use the SAME
+// window, otherwise the rider waits on a ride the server is still matching but
+// the driver can no longer see (or vice versa).
 // A started trip is not "stale" on the same clock as an unmatched request. It is
 // measured from its last status update instead, so a genuinely long drive stays
 // restorable while an abandoned in_progress row still gets reaped eventually.
