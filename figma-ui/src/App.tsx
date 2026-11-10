@@ -62,6 +62,7 @@ import {
   ensureSocketLive,
   formatRand,
   getActiveRide,
+  getAppStatus,
   getDriverStats,
   getDriverServerOnline,
   getEarnings,
@@ -4959,7 +4960,18 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
 // ????????? Auth screens ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 type AuthScreen = 'splash' | 'login' | 'signup' | 'verify'
 
-function Splash({ onLogin, onSignup }: { onLogin: () => void; onSignup: () => void }) {
+function Splash({
+  onLogin,
+  onSignup,
+  maintenance,
+}: {
+  onLogin: () => void
+  onSignup: () => void
+  maintenance?: { maintenance: boolean; message: string } | null
+}) {
+  // The backend lock owns this screen: while maintenance is on, the landing
+  // page is visible but neither button navigates anywhere.
+  const locked = maintenance?.maintenance === true
   return (
     <div className="flex flex-col h-screen bg-white">
       {/* Map hero */}
@@ -4978,16 +4990,39 @@ function Splash({ onLogin, onSignup }: { onLogin: () => void; onSignup: () => vo
           Your ride,<br />your way.
         </h1>
         <p className="text-[15px] text-[#ADADAD] leading-relaxed -mt-1">
-          Fast, reliable rides across the city. Get started in seconds.
+          {locked
+            ? 'Vura is temporarily unavailable. Please check back shortly.'
+            : 'Fast, reliable rides across the city. Get started in seconds.'}
         </p>
 
-        <button onClick={onSignup}
-          className="w-full bg-[#EA4335] text-white font-bold text-[16px] py-4 rounded-2xl mt-2 active:bg-[#C5221F] transition-colors"
-          style={{ boxShadow: '0 4px 16px rgba(234,67,53,0.28)' }}>
+        {locked && (
+          <div className="rounded-2xl border border-[#F5C6C2] bg-[#FCE8E6] px-4 py-3.5 text-center">
+            <p className="text-[13px] font-bold text-[#C5221F]">Vura is under maintenance</p>
+            <p className="text-[12px] text-[#8A3B36] mt-1 leading-relaxed">
+              {maintenance?.message || "We'll be back shortly. Please try again later."}
+            </p>
+          </div>
+        )}
+
+        <button
+          onClick={locked ? undefined : onSignup}
+          disabled={locked}
+          className={`w-full font-bold text-[16px] py-4 rounded-2xl mt-2 transition-colors ${
+            locked
+              ? 'bg-[#F2F2F2] text-[#BDBDBD] cursor-not-allowed'
+              : 'bg-[#EA4335] text-white active:bg-[#C5221F]'
+          }`}
+          style={locked ? {} : { boxShadow: '0 4px 16px rgba(234,67,53,0.28)' }}>
           Create account
         </button>
-        <button onClick={onLogin}
-          className="w-full bg-[#F7F7F7] text-[#1A1A1A] font-bold text-[16px] py-4 rounded-2xl border border-[#EBEBEB] active:bg-[#F0F0F0] transition-colors">
+        <button
+          onClick={locked ? undefined : onLogin}
+          disabled={locked}
+          className={`w-full font-bold text-[16px] py-4 rounded-2xl border transition-colors ${
+            locked
+              ? 'bg-[#FAFAFA] text-[#BDBDBD] border-[#F0F0F0] cursor-not-allowed'
+              : 'bg-[#F7F7F7] text-[#1A1A1A] border-[#EBEBEB] active:bg-[#F0F0F0]'
+          }`}>
           Log in
         </button>
 
@@ -5440,6 +5475,40 @@ export default function App() {
   // if it can't be renewed, drop it and send the driver to the login screen —
   // otherwise every list (documents, earnings, trips) silently comes back empty.
   const [checkingSession, setCheckingSession] = useState(() => !!getStoredUser())
+  // Backend maintenance: while the rider side is locked, every session is
+  // cleared and the app is parked on the landing page with both buttons
+  // disabled. Polled so an admin lock reaches an already-open app.
+  const [maintenance, setMaintenance] = useState<{ maintenance: boolean; message: string } | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const checkMaintenance = async () => {
+      try {
+        const status = await getAppStatus();
+        if (!alive) return;
+        setMaintenance(status.rider);
+        if (status.rider.maintenance) {
+          signOut();
+          setAuthed(false);
+          setCheckingSession(false);
+          setAuth('splash');
+        }
+      } catch {
+        /* fail open — the API itself still enforces the lock */
+      }
+    };
+    void checkMaintenance();
+    const timer = window.setInterval(() => void checkMaintenance(), 30_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void checkMaintenance();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true
@@ -5822,6 +5891,7 @@ export default function App() {
           <Splash
             onLogin={() => setAuth('login')}
             onSignup={() => setAuth('signup')}
+            maintenance={maintenance}
           />
         )}
         {auth === 'login' && (
