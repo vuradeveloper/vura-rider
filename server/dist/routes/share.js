@@ -91,6 +91,25 @@ async function sharePage(req, res) {
     // bad deploy; always serve the current version so a fixed poller is not hidden
     // behind a stale "Loading your trip…" copy.
     res.set("Cache-Control", "no-store, max-age=0");
+    // Helmet's global policy is `script-src 'self'`, which BLOCKS this page's
+    // inline poller (and Leaflet from unpkg). The browser then never runs
+    // tick(), so every share link sits on "Loading your trip…" forever. This
+    // route owns its policy: same-origin API calls + the two CDN assets + the
+    // inline bootstrap. No user data is accepted by this page.
+    res.set("Content-Security-Policy", [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "font-src 'self' https: data:",
+        "form-action 'self'",
+        "frame-ancestors 'self'",
+        "img-src 'self' data: https:",
+        "object-src 'none'",
+        "script-src 'self' 'unsafe-inline' https://unpkg.com",
+        "script-src-attr 'none'",
+        "style-src 'self' https: 'unsafe-inline'",
+        "connect-src 'self'",
+        "upgrade-insecure-requests",
+    ].join("; "));
     res.send(sharePageHtml(token));
 }
 function sharePageHtml(token) {
