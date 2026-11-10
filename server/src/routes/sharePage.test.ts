@@ -19,6 +19,11 @@ describe("public share page", () => {
     await sharePage({ params: { token: "test-token" } } as any, res);
 
     expect(headers["Cache-Control"]).toContain("no-store");
+    // Helmet's default script-src 'self' blocked the inline poller + Leaflet,
+    // which is what made every live link sit on "Loading your trip…".
+    expect(headers["Content-Security-Policy"]).toContain("'unsafe-inline'");
+    expect(headers["Content-Security-Policy"]).toContain("https://unpkg.com");
+    expect(headers["Content-Security-Policy"]).toContain("connect-src 'self'");
     expect(html).toContain("Loading your trip");
     expect(html).toContain("tile-grayscale");
     expect(html).toContain("vura-roam-car");
