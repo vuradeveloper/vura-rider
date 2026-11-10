@@ -10,6 +10,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 type ShareLinkPlugin = {
   copy(options: { text: string }): Promise<{ copied: boolean; error?: string }>
   share(options: { url: string; title?: string; text?: string }): Promise<{ shared: boolean; error?: string }>
+  exitApp(): Promise<void>
 }
 
 const ShareLink = registerPlugin<ShareLinkPlugin>('ShareLink')
@@ -58,4 +59,21 @@ export async function openShareSheet(url: string): Promise<boolean> {
     /* user dismissed the chooser, or no share target is installed */
   }
   return false
+}
+
+/**
+ * Close the Android task. Used by the maintenance lock: a rider who was
+ * signed in is logged out and the app is closed immediately; the next launch
+ * shows the landing page with Login/Create account disabled.
+ */
+export async function closeApp(): Promise<void> {
+  try {
+    if (Capacitor.isNativePlatform()) {
+      await ShareLink.exitApp()
+      return
+    }
+    window.close()
+  } catch {
+    /* the landing page is still shown if the native close is unavailable */
+  }
 }

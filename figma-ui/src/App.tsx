@@ -134,7 +134,7 @@ import {
   triggerSos
 } from './lib/backend'
 import { startCardSetup } from './lib/cardSetup'
-import { copyToClipboard, openShareSheet } from './lib/share'
+import { closeApp, copyToClipboard, openShareSheet } from './lib/share'
 import { passwordError, passwordIsStrong, passwordRules } from './lib/passwordPolicy'
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
@@ -5488,10 +5488,17 @@ export default function App() {
         if (!alive) return;
         setMaintenance(status.rider);
         if (status.rider.maintenance) {
+          // If this phone had a session, log it out and close the task
+          // immediately. On the next launch there is no session, so the app
+          // stays on the landing page with both buttons disabled.
+          const hadSession = Boolean(getStoredUser());
           signOut();
           setAuthed(false);
           setCheckingSession(false);
           setAuth('splash');
+          if (hadSession) {
+            setTimeout(() => { void closeApp(); }, 250);
+          }
         }
       } catch {
         /* fail open — the API itself still enforces the lock */

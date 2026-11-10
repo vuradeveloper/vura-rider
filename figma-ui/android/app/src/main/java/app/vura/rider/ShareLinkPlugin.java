@@ -51,6 +51,18 @@ public class ShareLinkPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void exitApp(PluginCall call) {
+        // Maintenance lock: close the task so a logged-in rider is not left on
+        // a cached screen. The landing page is shown on the next launch.
+        call.resolve();
+        if (getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                if (getActivity() != null) getActivity().finishAndRemoveTask();
+            });
+        }
+    }
+
+    @PluginMethod
     public void share(PluginCall call) {
         String url = call.getString("url", "");
         String title = call.getString("title", "Track my Vura ride");
