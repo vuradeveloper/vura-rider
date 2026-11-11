@@ -36,6 +36,16 @@ export declare function ridePromoFor(side: "rider" | "driver", idOrCode: string 
  */
 export declare function promoUsableFor(promo: RidePromo, userId: string): Promise<boolean>;
 /**
+ * Multi-account promo abuse guard.
+ *
+ * A promo budget is per USER, so one person could otherwise create several
+ * accounts and burn the same promo repeatedly. The device id recorded on every
+ * ride is the practical link: if this promo was already used on this phone by a
+ * DIFFERENT account, do not discount again. A family member sharing the phone
+ * simply pays the normal fare. Never blocks the booking itself.
+ */
+export declare function promoUsedByAnotherAccountOnDevice(promoId: string, deviceId: string, userId: string): Promise<boolean>;
+/**
  * Burn one redemption for this user: the N-DAYS window starts at the FIRST
  * use (expires_at stamped once, then frozen) and rides_used counts up to
  * rides_limit. Fire-and-forget safe — a tracking failure must never break

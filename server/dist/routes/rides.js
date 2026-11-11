@@ -236,11 +236,19 @@ router.post("/request", auth_1.requireAuth, async (req, res) => {
         if (rideFare != null && (req.body?.promoId || req.body?.promoCode)) {
             try {
                 const promo = await (0, promos_1.ridePromoFor)("rider", String(req.body.promoId || req.body.promoCode), rider.id);
-                if (promo && (await (0, promos_1.promoUsableFor)(promo, rider.id))) {
+                const usable = promo ? await (0, promos_1.promoUsableFor)(promo, rider.id) : false;
+                // Same-device multi-account promo abuse guard as the socket path.
+                const promoReusedOnDevice = promo && usable
+                    ? await (0, promos_1.promoUsedByAnotherAccountOnDevice)(promo.id, String(deviceId || ""), rider.id)
+                    : false;
+                if (promo && usable && !promoReusedOnDevice) {
                     const applied = (0, promos_1.applyPromoToFare)(rideFare, promo);
                     rideFare = applied.fare;
                     appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
                     promoForRecord = promo;
+                }
+                else if (promoReusedOnDevice) {
+                    console.warn(`[promo] blocked cross-account reuse promo=${promo?.id} device=${String(deviceId).slice(0, 12)} user=${rider.id}`);
                 }
             }
             catch {

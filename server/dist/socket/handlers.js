@@ -444,11 +444,21 @@ function setupSocketHandlers(io) {
                     try {
                         const promo = await (0, promos_1.ridePromoFor)("rider", String(data.promoId || data.promoCode), dbUserId);
                         const usable = promo ? await (0, promos_1.promoUsableFor)(promo, dbUserId) : false;
-                        if (promo && usable) {
+                        // Multi-account promo abuse: the same phone (device_id, recorded on
+                        // every ride) cannot burn one promo across different accounts. A
+                        // family member on the same phone can still pay the normal fare.
+                        const bookingDevice = String(deviceId || socket.deviceId || "").trim();
+                        const promoReusedOnDevice = promo && usable
+                            ? await (0, promos_1.promoUsedByAnotherAccountOnDevice)(promo.id, bookingDevice, dbUserId)
+                            : false;
+                        if (promo && usable && !promoReusedOnDevice) {
                             const applied = (0, promos_1.applyPromoToFare)(rideFare, promo);
                             rideFare = applied.fare;
                             appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
                             void (0, promos_1.recordPromoUse)(promo, dbUserId).catch(() => { });
+                        }
+                        else if (promoReusedOnDevice) {
+                            console.warn(`[promo] blocked cross-account reuse promo=${promo?.id} device=${bookingDevice.slice(0, 12)} user=${dbUserId}`);
                         }
                     }
                     catch {

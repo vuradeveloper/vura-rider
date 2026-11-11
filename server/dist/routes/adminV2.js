@@ -25,6 +25,7 @@ const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
 const identity_1 = require("../lib/identity");
 const userSecurity_1 = require("../services/userSecurity");
+const paymentEvidence_1 = require("../services/paymentEvidence");
 const adminMessaging_1 = require("../services/adminMessaging");
 const featureFlags_1 = require("../services/featureFlags");
 const sessionAdmin_1 = require("../services/sessionAdmin");
@@ -953,6 +954,35 @@ router.post("/users/:id/reset-2fa", (0, adminAuth_1.requireAdmin)("settings.writ
             reason: req.body?.reason ? String(req.body.reason).slice(0, 500) : "Support 2FA reset",
         });
         res.json({ ok: true, ...result });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// GET /api/admin/v2/payments/:reference/evidence — the chargeback/refund pack.
+// Read-only and audited; it gathers facts already stored (payment, trip, fare,
+// card fingerprint, verified Paystack webhooks) so support can answer a bank
+// dispute without guessing. Money movement stays in Paystack.
+router.get("/payments/:reference/evidence", (0, adminAuth_1.requireAdmin)("tickets.read"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const reference = String(req.params.reference || "").trim();
+        const evidence = await (0, paymentEvidence_1.buildPaymentEvidence)(reference);
+        if (!evidence) {
+            res.status(404).json({ error: "Payment not found" });
+            return;
+        }
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "payment.evidence",
+            entityType: "payment",
+            entityId: reference,
+            reason: "Chargeback / refund evidence pack",
+        });
+        res.json({ evidence });
     }
     catch (err) {
         sendError(res, err);

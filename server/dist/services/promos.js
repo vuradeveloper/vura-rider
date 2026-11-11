@@ -5,6 +5,7 @@ exports.ensurePromoTables = ensurePromoTables;
 exports.activePromosForSide = activePromosForSide;
 exports.ridePromoFor = ridePromoFor;
 exports.promoUsableFor = promoUsableFor;
+exports.promoUsedByAnotherAccountOnDevice = promoUsedByAnotherAccountOnDevice;
 exports.recordPromoUse = recordPromoUse;
 exports.applyPromoToFare = applyPromoToFare;
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,6 +162,24 @@ async function promoUsableFor(promo, userId) {
         return false;
     }
     return true;
+}
+/**
+ * Multi-account promo abuse guard.
+ *
+ * A promo budget is per USER, so one person could otherwise create several
+ * accounts and burn the same promo repeatedly. The device id recorded on every
+ * ride is the practical link: if this promo was already used on this phone by a
+ * DIFFERENT account, do not discount again. A family member sharing the phone
+ * simply pays the normal fare. Never blocks the booking itself.
+ */
+async function promoUsedByAnotherAccountOnDevice(promoId, deviceId, userId) {
+    const device = String(deviceId || "").trim();
+    if (!promoId || !device)
+        return false;
+    const row = await (0, database_1.queryOne)(`SELECT id FROM rides
+      WHERE promo_id = $1 AND device_id = $2 AND passenger_id <> $3
+      LIMIT 1`, [promoId, device, userId]).catch(() => null);
+    return !!row;
 }
 /**
  * Burn one redemption for this user: the N-DAYS window starts at the FIRST
