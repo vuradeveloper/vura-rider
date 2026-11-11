@@ -84,6 +84,7 @@ const trace_1 = require("./trace");
 const pinService_1 = require("./pinService");
 const destinationFit_1 = require("./destinationFit");
 const featureFlags_1 = require("./featureFlags");
+const fareFees_1 = require("./fareFees");
 const config_1 = require("./config");
 const config_2 = require("./config");
 const performanceTier_1 = require("./performanceTier");
@@ -889,6 +890,11 @@ async function offerToNextDriver(io, rideId, round, opts) {
             rideId,
             nextRound,
         ]).catch(() => undefined);
+        // The DRIVER-facing money breakdown, computed by the same function that
+        // writes the wallet. Sending `fare` alone made drivers mentally subtract
+        // commission and guess; the request screen now shows the exact net.
+        const offerFare = ride.estimated_fare != null ? Number(ride.estimated_fare) : 0;
+        const earnings = (0, fareFees_1.driverOfferBreakdown)(offerFare);
         const payload = {
             id: rideId,
             offerId: res.id,
@@ -907,7 +913,12 @@ async function offerToNextDriver(io, rideId, round, opts) {
             // socket frame queued behind a cancellation).
             status: ride.status,
             createdAt: ride.created_at,
-            fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
+            fare: offerFare,
+            earnings,
+            driverEarnings: earnings.driverNet,
+            vuraFee: earnings.commission,
+            bookingFee: earnings.bookingFee,
+            riderTotal: earnings.riderTotal,
             paymentMethod: ride.payment_method || "cash",
             waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
             stops: Array.isArray(ride.waypoints) ? ride.waypoints : [],

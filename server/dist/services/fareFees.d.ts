@@ -16,12 +16,26 @@ export interface RideFareBreakdown {
     platform_cents: number;
     driver_net_cents: number;
 }
+/** Rand-denominated breakdown the driver app can display before accepting. */
+export interface DriverOfferBreakdown {
+    fare: number;
+    commission: number;
+    bookingFee: number;
+    riderTotal: number;
+    driverNet: number;
+}
 /**
  * Complete money breakdown for one fare. `commissionSplit` is the same
  * function the driver wallet uses, so the number sent to Paystack and the
  * number shown to the driver can never disagree.
  */
 export declare function rideFareBreakdown(fareRands: number, cfg?: WalletConfig, bookingFeePercent?: number): RideFareBreakdown;
+/**
+ * The driver-facing version of the same calculation, in rands. Used by the
+ * offer payload and the driver feed so the number on the request screen is the
+ * exact number that will be written to the wallet after the trip.
+ */
+export declare function driverOfferBreakdown(fareRands: number, cfg?: WalletConfig, bookingFeePercent?: number): DriverOfferBreakdown;
 /** The amount Vura keeps from one fare, in cents (commission + booking fee). */
 export declare function platformShareCents(fareRands: number, cfg?: WalletConfig): number;
 //# sourceMappingURL=fareFees.d.ts.map

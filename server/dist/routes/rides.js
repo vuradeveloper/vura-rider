@@ -12,6 +12,7 @@ const driverPhoto_1 = require("../services/driverPhoto");
 const trace_1 = require("../services/trace");
 const adminRiders_1 = require("../services/adminRiders");
 const featureFlags_1 = require("../services/featureFlags");
+const fareFees_1 = require("../services/fareFees");
 const rideCategories_1 = require("../services/rideCategories");
 const preauthorization_1 = require("../services/preauthorization");
 const PayLaterService_1 = require("../services/PayLaterService");
@@ -108,7 +109,7 @@ router.get("/me/active-state", auth_1.requireAuth, async (req, res) => {
                     round: offer.round,
                     expiresAt: offer.expires_at,
                     secondsRemaining: offer.seconds_remaining,
-                    ride: mapRide(offer),
+                    ride: withDriverEarnings(offer),
                 }
                 : null,
             ride: ridePayload,
@@ -428,6 +429,25 @@ function mapRide(row) {
         stops: Array.isArray(row.waypoints) ? row.waypoints : null,
     };
 }
+/**
+ * Driver-facing money fields. Applied only to driver payloads (offer, available
+ * feed, reservations) so the rider APIs keep their existing shape.
+ */
+function withDriverEarnings(row) {
+    const mapped = mapRide(row);
+    if (!mapped)
+        return mapped;
+    const fare = Number(mapped.fare ?? 0);
+    const earnings = (0, fareFees_1.driverOfferBreakdown)(fare);
+    return {
+        ...mapped,
+        earnings,
+        driverEarnings: earnings.driverNet,
+        vuraFee: earnings.commission,
+        bookingFee: earnings.bookingFee,
+        riderTotal: earnings.riderTotal,
+    };
+}
 // A ride is only "active" if it was created recently. If the app/server crashed
 // mid-ride (or a demo/test ride was never finished), a stuck "driver_arrived"
 // or "in_progress" row would otherwise be returned FOREVER and every login would
@@ -699,7 +719,7 @@ router.get("/available", auth_1.requireAuth, async (_req, res) => {
             // The app reads distance_km (nearest-ride card, offer sheet): publish
             // the COMPUTED pickup distance under the historical name, falling back
             // to the stored fare distance only when this run measured nothing.
-            rides: (rows || []).map((row) => mapRide({ ...row, distance_km: row.pickup_distance_km ?? row.distance_km })),
+            rides: (rows || []).map((row) => withDriverEarnings({ ...row, distance_km: row.pickup_distance_km ?? row.distance_km })),
             // Lets the app and debug distinguish "nothing near you" from "you have no
             // GPS fix, so this list is unfiltered".
             scoped: hasCoords,
@@ -759,7 +779,13 @@ router.get("/driver/reservations", auth_1.requireAuth, async (req, res) => {
          FROM rides
         WHERE driver_id = $1 AND status = 'scheduled' AND scheduled_at > NOW()
         ORDER BY scheduled_at ASC`, [user.id]);
-        res.json({ reservations: rows });
+        res.json({
+            reservations: rows.map((row) => {
+                const fare = Number(row.estimated_fare ?? 0);
+                const earnings = (0, fareFees_1.driverOfferBreakdown)(fare);
+                return { ...row, earnings, driverEarnings: earnings.driverNet, vuraFee: earnings.commission };
+            }),
+        });
     }
     catch (err) {
         res.status(500).json({ error: err?.message || "Could not load reservations" });

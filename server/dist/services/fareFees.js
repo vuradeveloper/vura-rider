@@ -24,6 +24,7 @@ exports.DEFAULT_BOOKING_FEE_PCT = void 0;
 exports.bookingFeePct = bookingFeePct;
 exports.bookingFeeCentsFor = bookingFeeCentsFor;
 exports.rideFareBreakdown = rideFareBreakdown;
+exports.driverOfferBreakdown = driverOfferBreakdown;
 exports.platformShareCents = platformShareCents;
 const walletService_1 = require("./walletService");
 /** Default booking fee, percent of the fare. Rider-paid, on top of the fare. */
@@ -61,6 +62,21 @@ function rideFareBreakdown(fareRands, cfg = walletService_1.DEFAULT_WALLET_CONFI
         commission_cents: commissionCents,
         platform_cents: platformCents,
         driver_net_cents: fareCents - commissionCents,
+    };
+}
+/**
+ * The driver-facing version of the same calculation, in rands. Used by the
+ * offer payload and the driver feed so the number on the request screen is the
+ * exact number that will be written to the wallet after the trip.
+ */
+function driverOfferBreakdown(fareRands, cfg = walletService_1.DEFAULT_WALLET_CONFIG, bookingFeePercent = bookingFeePct()) {
+    const b = rideFareBreakdown(fareRands, cfg, bookingFeePercent);
+    return {
+        fare: b.fare_cents / 100,
+        commission: b.commission_cents / 100,
+        bookingFee: b.booking_fee_cents / 100,
+        riderTotal: b.rider_total_cents / 100,
+        driverNet: b.driver_net_cents / 100,
     };
 }
 /** The amount Vura keeps from one fare, in cents (commission + booking fee). */
