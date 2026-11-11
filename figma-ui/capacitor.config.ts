@@ -19,7 +19,8 @@ const config: CapacitorConfig = {
   },
   android: {
     // Let Waze / dialler / mail links leave the WebView and open the real app.
-    allowMixedContent: true,
+    // Everything the app talks to is HTTPS; never allow mixed HTTP content.
+    allowMixedContent: false,
   },
   plugins: {
     // ─────────────────────────────────────────────────────────────────────────

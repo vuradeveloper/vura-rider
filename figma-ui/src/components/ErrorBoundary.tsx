@@ -23,8 +23,7 @@ import type { ErrorInfo, ReactNode } from 'react'
 type Props = { children: ReactNode; app?: 'rider' | 'driver' }
 type State = { error: Error | null; where: string }
 
-const DEVLOG_KEY = (import.meta as any).env?.VITE_DEVLOG_KEY as string | undefined
-const DEVLOG_URL = 'https://api.ridevura.com/api/dev/logs'
+const DEVLOG_URL = 'https://api.ridevura.com/api/dev/logs/crash'
 
 function deviceId() {
   try {
@@ -52,11 +51,10 @@ function report(app: string, err: Error, where: string) {
     const prev = JSON.parse(localStorage.getItem('vura.lastCrash') || '[]')
     localStorage.setItem('vura.lastCrash', JSON.stringify([entry, ...prev].slice(0, 5)))
   } catch { /* storage full or unavailable */ }
-  if (!DEVLOG_KEY) return
   try {
     fetch(DEVLOG_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-dev-log-key': DEVLOG_KEY },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries: [entry] }),
       keepalive: true,
     }).catch(() => { /* never let reporting throw */ })
