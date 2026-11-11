@@ -45,12 +45,16 @@ function safeEmails(contacts) {
         .map((c) => String(c.email || "").trim().toLowerCase())
         .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))));
 }
+function safeSubject(value) {
+    return String(value || "").replace(/[\r\n]+/g, " ").slice(0, 150);
+}
 async function sendToMany(emails, subject, html) {
     if (!emails.length)
         return 0;
+    const cleanSubject = safeSubject(subject);
     let sent = 0;
     await Promise.all(emails.map(async (to) => {
-        const res = await (0, adminInvite_1.sendResendEmail)({ to, subject, html }).catch(() => ({ ok: false }));
+        const res = await (0, adminInvite_1.sendResendEmail)({ to, subject: cleanSubject, html }).catch(() => ({ ok: false }));
         if (res.ok)
             sent++;
     }));
