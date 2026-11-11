@@ -112,7 +112,7 @@ const IDENTITY = "https://identitytoolkit.googleapis.com/v1/accounts";
 
 const TOKEN_KEY = "vura.idToken";
 const STEPUP_KEY = "vura.security.stepUp";
-export const APP_VERSION = "1.5.22";
+export const APP_VERSION = "1.5.23";
 
 /**
  * Stable per-install identifier for the device list. It is not a secret and
@@ -2187,6 +2187,8 @@ export type EmergencyContact = {
   id?: string;
   name: string;
   phone: string;
+  /** Optional. This is how Vura emails them during an SOS. */
+  email?: string | null;
   relationship: string;
 };
 
@@ -2200,6 +2202,7 @@ export const addEmergencyContact = (c: EmergencyContact) =>
     body: JSON.stringify({
       name: c.name,
       phone: c.phone,
+      email: c.email || null,
       relationship: c.relationship || "Other",
     }),
   });
@@ -2216,7 +2219,16 @@ export const sosRest = (rideId: string, opts?: {
   location?: { lat: number; lng: number } | null;
   role?: "rider" | "driver";
 }) =>
-  apiFetch<{ success: boolean; id: string; message: string; ride_id: string | null }>("/api/safety/sos", {
+  apiFetch<{
+    success: boolean;
+    id: string;
+    message: string;
+    ride_id: string | null;
+    share_url?: string | null;
+    contacts_notified?: number;
+    safety_team_notified?: boolean;
+    duplicate?: boolean;
+  }>("/api/safety/sos", {
     method: "POST",
     body: JSON.stringify({
       rideId,

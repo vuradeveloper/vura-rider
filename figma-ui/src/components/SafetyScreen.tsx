@@ -79,6 +79,7 @@ export function SafetyScreen({
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
   const [relation, setRelation] = useState('')
 
   useEffect(() => {
@@ -119,10 +120,18 @@ export function SafetyScreen({
     try {
       // REST records it and alerts the trusted contacts; the socket event is
       // what the driver + ops dashboard in the live session react to.
-      await sosRest(activeId)
+      const res = await sosRest(activeId)
       await triggerSos(activeId).catch(() => {})
       setSosArmed(false)
-      flash('SOS sent — your emergency contacts and our safety team have been alerted.')
+      if (res?.share_url && !share) {
+        const info: ShareInfo = { url: res.share_url }
+        setShare(info)
+        try { localStorage.setItem(shareKey(activeId), JSON.stringify(info)) } catch { /* ignore */ }
+      }
+      flash(
+        res?.message ||
+          'SOS sent — Vura’s safety team has your details and live location.'
+      )
     } catch (e: any) {
       setError(`Could not send SOS: ${e?.message || 'unknown error'}`)
     } finally { setBusy('') }
@@ -197,15 +206,17 @@ export function SafetyScreen({
       const created = await addEmergencyContact({
         name: name.trim(),
         phone: phone.trim(),
+        email: email.trim() || null,
         relationship: relation.trim() || 'Other',
       })
       // The server answers with the stored row; keep a local echo as a fallback
       // so the list still updates if a proxy strips the body.
       setContacts((prev) => [...prev, {
         id: created?.id || `local-${Date.now()}`,
-        name: name.trim(), phone: phone.trim(), relationship: relation.trim() || 'Other',
+        name: name.trim(), phone: phone.trim(), email: email.trim() || null,
+        relationship: relation.trim() || 'Other',
       }])
-      setName(''); setPhone(''); setRelation(''); setAdding(false)
+      setName(''); setPhone(''); setEmail(''); setRelation(''); setAdding(false)
       flash('Emergency contact added.')
     } catch (e: any) {
       setError(`Could not save the contact: ${e?.message || 'unknown error'}`)
@@ -354,6 +365,11 @@ export function SafetyScreen({
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-semibold text-[#1A1A1A] truncate">{c.name}</p>
                     <p className="text-[11px] text-[#ADADAD] truncate">{c.relationship || 'Contact'} · {c.phone}</p>
+                    {c.email ? (
+                      <p className="text-[10.5px] text-[#ADADAD] truncate">{c.email} · gets SOS emails</p>
+                    ) : (
+                      <p className="text-[10.5px] text-[#B26A00]">Add an email so we can alert them automatically</p>
+                    )}
                   </div>
                   <a href={`tel:${c.phone}`} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#F7F7F7] shrink-0">
                     <Sv inner={CALL} c="#1A1A1A" size={15} />
@@ -374,10 +390,14 @@ export function SafetyScreen({
             <div className="mt-4 pt-4 border-t border-[#F5F5F5] flex flex-col gap-3">
               <Field label="Name *" value={name} onChange={setName} placeholder="e.g. Thandi Mokoena" />
               <Field label="Phone *" value={phone} onChange={setPhone} placeholder="+27 82 111 2222" />
+              <Field label="Email (for SOS alerts)" value={email} onChange={setEmail} placeholder="thandi@example.com" />
+              <p className="-mt-2 text-[10.5px] text-[#ADADAD] leading-relaxed px-1">
+                We can only email them automatically if you add an email. Their phone is shown to our safety team so they can call.
+              </p>
               <Field label="Relationship" value={relation} onChange={setRelation} placeholder="Sister, friend, spouse…" />
               <div className="flex gap-2 pt-1">
                 <button
-                  onClick={() => { setAdding(false); setName(''); setPhone(''); setRelation('') }}
+                  onClick={() => { setAdding(false); setName(''); setPhone(''); setEmail(''); setRelation('') }}
                   className="flex-1 border border-[#EBEBEB] text-[#4A4A4A] font-semibold text-[13px] py-3 rounded-xl active:bg-[#F7F7F7]"
                 >
                   Cancel
