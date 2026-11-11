@@ -54,13 +54,30 @@ async function buildPaymentEvidence(reference) {
           WHERE r.id = $1
           LIMIT 1`, [row.ride_id]).catch(() => null)
         : null;
+    const raw = row.raw_response || {};
+    const auth = raw?.authorization || {};
+    // The card that actually paid is the one whose authorization code is stamped
+    // on the ride. Fall back to Paystack's own response for that charge — NOT the
+    // rider's current default card, which may be a different card entirely.
     const cardToken = ride?.card_auth_code || null;
-    const card = await (0, database_1.queryOne)(`SELECT card_type, last4, bank, exp_month, exp_year, signature
-       FROM saved_cards
-      WHERE user_id = $1
-        AND ($2::text IS NULL OR transaction_index = $2)
-      ORDER BY is_default DESC, created_at DESC
-      LIMIT 1`, [row.rider_id, cardToken]).catch(() => null);
+    const storedCard = cardToken
+        ? await (0, database_1.queryOne)(`SELECT card_type, last4, bank, exp_month, exp_year, signature
+           FROM saved_cards
+          WHERE user_id = $1 AND transaction_index = $2
+          ORDER BY is_default DESC, created_at DESC
+          LIMIT 1`, [row.rider_id, cardToken]).catch(() => null)
+        : null;
+    const card = storedCard ||
+        (auth?.last4
+            ? {
+                card_type: auth.brand || null,
+                last4: auth.last4,
+                bank: auth.bank || null,
+                exp_month: auth.exp_month || null,
+                exp_year: auth.exp_year || null,
+                signature: null,
+            }
+            : null);
     const timeline = await (0, database_1.query)(`SELECT event, received_at,
             data->>'reference' AS reference,
             data->>'amount' AS amount,
@@ -69,8 +86,6 @@ async function buildPaymentEvidence(reference) {
       WHERE data->>'reference' = $1
       ORDER BY received_at ASC
       LIMIT 100`, [ref]).catch(() => []);
-    const raw = row.raw_response || {};
-    const auth = raw?.authorization || {};
     const paystack = {
         gateway_response: raw?.gateway_response || null,
         channel: raw?.channel || null,
