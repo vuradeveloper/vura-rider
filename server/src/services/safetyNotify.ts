@@ -77,16 +77,21 @@ function safeEmails(contacts: SafetyContact[]): string[] {
   );
 }
 
+function safeSubject(value: string): string {
+  return String(value || "").replace(/[\r\n]+/g, " ").slice(0, 150);
+}
+
 async function sendToMany(
   emails: string[],
   subject: string,
   html: string
 ): Promise<number> {
   if (!emails.length) return 0;
+  const cleanSubject = safeSubject(subject);
   let sent = 0;
   await Promise.all(
     emails.map(async (to) => {
-      const res = await sendResendEmail({ to, subject, html }).catch(() => ({ ok: false }));
+      const res = await sendResendEmail({ to, subject: cleanSubject, html }).catch(() => ({ ok: false }));
       if (res.ok) sent++;
     })
   );
