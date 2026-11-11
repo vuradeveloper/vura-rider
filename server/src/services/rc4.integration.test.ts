@@ -867,7 +867,8 @@ describe.skipIf(!enabled)("dispatch loop statements (offer / accept / expire / r
   });
 
   it("revives a waiting ride that was never offered (revive scan + offer SQL)", async () => {
-    const io = makeIo().io as any;
+    const harness = makeIo();
+    const io = harness.io as any;
     // reviveWaitingRides scans waiting rides newest-first LIMIT 5 — leftover
     // 'searching' rides from earlier tests would crowd our fixture out. Park
     // them all so this fixture is the only waiting ride. The ride must also be
@@ -881,9 +882,13 @@ describe.skipIf(!enabled)("dispatch loop statements (offer / accept / expire / r
         WHERE status IN ('searching', 'no_drivers') AND id <> $1`,
       [ride.rideId]
     );
-    await execute(`UPDATE rides SET created_at = NOW() - interval '30 seconds' WHERE id = $1`, [
-      ride.rideId,
-    ]);
+    await execute(
+      `UPDATE rides
+          SET created_at = NOW() - interval '30 seconds',
+              estimated_fare = 100
+        WHERE id = $1`,
+      [ride.rideId]
+    );
 
     const revived = await reviveWaitingRides(io, 5);
     expect(revived).toBeGreaterThanOrEqual(1);
@@ -892,6 +897,20 @@ describe.skipIf(!enabled)("dispatch loop statements (offer / accept / expire / r
       [ride.rideId]
     );
     expect(pending.length).toBeGreaterThanOrEqual(1);
+
+    // The offer the driver's phone receives carries the wallet-exact split:
+    // R100 fare, R5 capped commission, R4 rider-paid booking fee, R95 net.
+    const offerEvent = harness.emitted.find(
+      (e) => e.event === "ride:offer" && String(e.payload?.id) === String(ride.rideId)
+    );
+    expect(offerEvent?.payload?.earnings).toEqual({
+      fare: 100,
+      commission: 5,
+      bookingFee: 4,
+      riderTotal: 104,
+      driverNet: 95,
+    });
+    expect(offerEvent?.payload?.driverEarnings).toBe(95);
   });
 
   it("still revives a ride booked 40 minutes ago when the driver comes online late", async () => {
