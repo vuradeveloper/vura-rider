@@ -17,6 +17,12 @@ exports.verifyAdminMfa = verifyAdminMfa;
 exports.disableAdminMfa = disableAdminMfa;
 exports.resetAdminMfa = resetAdminMfa;
 exports.adminMfaTokenValid = adminMfaTokenValid;
+exports.securityKeyMaterial = securityKeyMaterial;
+exports.sealSecret = sealSecret;
+exports.openSecret = openSecret;
+exports.generateRecoveryCodeSet = generateRecoveryCodeSet;
+exports.hashRecoveryCode = hashRecoveryCode;
+exports.constantTimeEqual = constantTimeEqual;
 const crypto_1 = require("crypto");
 const fs_1 = require("fs");
 const database_1 = require("../config/database");
@@ -421,5 +427,28 @@ async function adminMfaTokenValid(uid, token) {
     if (!gate.enabled)
         return false;
     return verifyAdminMfaToken(uid, token, gate.epoch);
+}
+// ── Primitives shared with rider/driver account security ────────────────────
+// The rider/driver TOTP implementation uses the SAME audited crypto as the
+// admin console: AES-256-GCM secret storage, SHA-1 TOTP 6 digits / 30 s / ±1,
+// and SHA-256 recovery-code hashes. Keeping one implementation avoids a second,
+// subtly-different verifier becoming the weak link.
+function securityKeyMaterial() {
+    return baseSecret();
+}
+function sealSecret(secret) {
+    return encryptSecret(secret);
+}
+function openSecret(value) {
+    return decryptSecret(value);
+}
+function generateRecoveryCodeSet() {
+    return generateRecoveryCodes();
+}
+function hashRecoveryCode(code) {
+    return hashCode(code);
+}
+function constantTimeEqual(a, b) {
+    return safeEqual(a, b);
 }
 //# sourceMappingURL=adminMfa.js.map

@@ -83,6 +83,9 @@ const vehicleReview_1 = require("./services/vehicleReview");
 const duplicateDetection_1 = require("./services/duplicateDetection");
 const adminReports_1 = require("./services/adminReports");
 const adminMfa_1 = require("./services/adminMfa");
+const userSecurity_1 = __importDefault(require("./routes/userSecurity"));
+const userSessions_1 = __importDefault(require("./routes/userSessions"));
+const userSecurity_2 = require("./services/userSecurity");
 const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const adminLiveSupport_1 = __importDefault(require("./routes/adminLiveSupport"));
@@ -181,7 +184,17 @@ app.use((0, cors_1.default)({
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "x-admin-mfa", "x-dev-log-key"],
+    allowedHeaders: [
+        "Authorization",
+        "Content-Type",
+        "x-admin-mfa",
+        "x-dev-log-key",
+        // Account security: device identity and the 2FA step-up proof. Without
+        // these a browser preflight blocks every authenticated call after 2FA is
+        // switched on.
+        "x-vura-device",
+        "x-vura-2fa",
+    ],
     maxAge: 86_400,
 }));
 // ── Paystack card-preauthorization webhook ──
@@ -252,6 +265,10 @@ app.use("/api", vehicleImagesAdmin_1.default);
 // Admin TOTP 2FA table. Created at boot so requireAdmin can fail closed with a
 // clear 503 instead of a raw missing-relation error.
 (0, adminMfa_1.ensureAdminMfaSchema)().catch((err) => console.error("[adminMfa] schema ensure failed:", err?.message || err));
+// Rider/driver 2FA, device registry and security activity. Additive and
+// idempotent; a failure must not stop the API (the gate falls back to the
+// users table and fails open on infrastructure errors).
+(0, userSecurity_2.ensureUserSecuritySchema)().catch((err) => console.error("[userSecurity] schema ensure failed:", err?.message || err));
 function safeRateLimit(name, options) {
     try {
         return (0, express_rate_limit_1.default)(options);
@@ -316,6 +333,8 @@ app.get("/", (_req, res) => {
 });
 // ── Routes ──
 app.use("/api/app-status", appStatus_1.default);
+app.use("/api/users/security", userSecurity_1.default);
+app.use("/api/users/sessions", userSessions_1.default);
 app.use("/api/users", users_1.default);
 app.use("/api/rides", rides_1.default);
 app.use("/api/payments", payments_1.default);

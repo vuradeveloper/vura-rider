@@ -10,6 +10,8 @@ const adminInvite_1 = require("../services/adminInvite");
 const duplicateDetection_1 = require("../services/duplicateDetection");
 const identity_1 = require("../lib/identity");
 const featureFlags_1 = require("../services/featureFlags");
+const userSecurity_1 = require("../services/userSecurity");
+const adminInvite_2 = require("../services/adminInvite");
 const router = (0, express_1.Router)();
 // POST /api/users/forgot-password - rider, driver and console "Forgot password?".
 // Emails a Firebase set-password link through Resend. ALWAYS answers success:
@@ -62,10 +64,15 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
     try {
         const { role, phone, full_name, id_number, referralCode } = req.body;
         const firebaseUid = req.userId;
+        // Never trust the client's role string. Before this check, a rider could
+        // POST role:"admin" to /sync and the row was written verbatim. The only
+        // valid self-service roles are passenger and driver; admin is granted in
+        // the back office, never by an app.
+        const requestedRole = role === "driver" ? "driver" : role === "passenger" || role === "rider" ? "passenger" : undefined;
         // Maintenance lock: do not create or revive a rider/driver account while
         // that side is closed. This is the server-side stop for the app's
         // sign-in/sign-up flow (Firebase accepts the password, then this refuses).
-        const requestedSide = role === "driver" ? "driver" : "rider";
+        const requestedSide = requestedRole === "driver" ? "driver" : "rider";
         const maint = await (0, featureFlags_1.readMaintenanceStatus)(true);
         if (maint[requestedSide].enabled) {
             res.status(503).json({
@@ -85,8 +92,8 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
             // driver out of their own documents (403 "Insufficient permissions") and out
             // of GET /api/rides/available, which is how rides reach them at all.
             // Added 27 Sep 2026 after exactly that was reported from the field.
-            let effectiveRole = role;
-            if (role === "passenger") {
+            let effectiveRole = requestedRole;
+            if (requestedRole === "passenger") {
                 const current = await (0, database_1.queryOne)(`SELECT u.role,
                   EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = u.id) AS has_profile
              FROM users u WHERE u.firebase_uid = $1`, [firebaseUid]);
@@ -185,7 +192,7 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
                 req.user?.email || null,
                 phone || null,
                 id_number || null,
-                role || "passenger",
+                requestedRole || "passenger",
                 req.user?.picture || null,
             ]);
             let duplicateFlagged = false;
@@ -221,6 +228,26 @@ router.put("/profile", auth_1.requireAuth, async (req, res) => {
     try {
         const { full_name, email, phone, id_number } = req.body;
         const firebaseUid = req.userId;
+        // Email and ID number are account-recovery/identity fields. A stolen
+        // unlocked session must not be able to repoint the account to a new
+        // address. Require a password sign-in from the last five minutes
+        // (Firebase auth_time) before either can change. The rider UI never edits
+        // email, so normal profile saves are unaffected.
+        const current = await (0, database_1.queryOne)(`SELECT email, id_number FROM users WHERE firebase_uid = $1`, [firebaseUid]);
+        const emailChanged = email !== undefined &&
+            String(email || "").trim().toLowerCase() !== String(current?.email || "").trim().toLowerCase();
+        const idChanged = id_number !== undefined &&
+            String((0, identity_1.normaliseIdNumber)(id_number) || "") !== String((0, identity_1.normaliseIdNumber)(current?.id_number) || "");
+        if (emailChanged || idChanged) {
+            const ageSeconds = Math.floor(Date.now() / 1000) - Number(req.authTime || 0);
+            if (!req.authTime || ageSeconds > 300) {
+                res.status(401).json({
+                    error: "Confirm your password before changing the email or ID on your account.",
+                    code: "reauth_required",
+                });
+                return;
+            }
+        }
         const updates = [];
         const params = [];
         let idx = 1;
@@ -247,6 +274,25 @@ router.put("/profile", auth_1.requireAuth, async (req, res) => {
         updates.push(`updated_at = NOW()`);
         params.push(firebaseUid);
         await (0, database_1.execute)(`UPDATE users SET ${updates.join(", ")} WHERE firebase_uid = $${idx}`, params);
+        if (emailChanged) {
+            await (0, userSecurity_1.logSecurityEvent)(firebaseUid, "email_changed", {
+                from: current?.email || null,
+                to: String(email || "").trim().toLowerCase(),
+            });
+            // Tell the OLD address, not the new one: if an attacker changed it, the
+            // real owner finds out even after losing access to the account.
+            if (current?.email) {
+                void (0, adminInvite_2.sendResendEmail)({
+                    to: current.email,
+                    subject: "Your Vura account email was changed",
+                    html: `<p>Your Vura account email was changed to <b>${String(email || "")
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")}</b>.</p>
+            <p>If you did not make this change, reset your password immediately and contact support.</p>`,
+                }).catch(() => undefined);
+            }
+        }
         const updated = await (0, database_1.queryOne)("SELECT id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name FROM users WHERE firebase_uid = $1", [firebaseUid]);
         let duplicateFlagged = false;
         if (updated?.id) {

@@ -8,6 +8,12 @@ export interface AuthRequest extends Request {
         name?: string;
         picture?: string;
     };
+    /** Firebase `auth_time` (seconds). Used to require a fresh password check. */
+    authTime?: number;
+    /** Firebase `iat` (seconds). Used for the per-user token cutoff. */
+    tokenIssuedAt?: number;
+    /** Stable app-generated device id, sent as X-Vura-Device. */
+    deviceId?: string;
 }
 /**
  * Middleware: Verifies Firebase ID token from Authorization header.

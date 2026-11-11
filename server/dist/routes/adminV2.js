@@ -24,6 +24,7 @@ const adminTrips_1 = require("../services/adminTrips");
 const adminRiders_1 = require("../services/adminRiders");
 const format_1 = require("../lib/format");
 const identity_1 = require("../lib/identity");
+const userSecurity_1 = require("../services/userSecurity");
 const adminMessaging_1 = require("../services/adminMessaging");
 const featureFlags_1 = require("../services/featureFlags");
 const sessionAdmin_1 = require("../services/sessionAdmin");
@@ -918,6 +919,40 @@ router.post("/riders/:id/notes", (0, adminAuth_1.requireAdmin)("riders.write"), 
             newValue: { note },
         });
         res.status(201).json({ ok: true });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/users/:id/reset-2fa — support recovery for a rider or
+// driver who lost both their authenticator and recovery codes. Only after the
+// account owner has been identity-verified by a human. This ALSO kills every
+// device session, so a stolen phone cannot keep using an old token.
+router.post("/users/:id/reset-2fa", (0, adminAuth_1.requireAdmin)("settings.write"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const user = await (0, database_1.queryOne)(`SELECT id, firebase_uid, role FROM users WHERE id = $1`, [String(req.params.id)]);
+        if (!user) {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
+        if (!user.firebase_uid) {
+            res.status(409).json({ error: "This account has no Firebase identity to reset." });
+            return;
+        }
+        const result = await (0, userSecurity_1.resetUserSecurity)(user.firebase_uid, actor.email);
+        await (0, adminAuth_1.writeAudit)(actor, {
+            action: "user.reset_2fa",
+            entityType: "user",
+            entityId: user.id,
+            newValue: { role: user.role, sessions_revoked: result.sessions_revoked },
+            reason: req.body?.reason ? String(req.body.reason).slice(0, 500) : "Support 2FA reset",
+        });
+        res.json({ ok: true, ...result });
     }
     catch (err) {
         sendError(res, err);

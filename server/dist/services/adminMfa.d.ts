@@ -48,5 +48,14 @@ export declare function disableAdminMfa(uid: string, code: string): Promise<void
 export declare function resetAdminMfa(uid: string): Promise<void>;
 /** True when the request carries a valid token for the current MFA epoch. */
 export declare function adminMfaTokenValid(uid: string, token: string): Promise<boolean>;
+export declare function securityKeyMaterial(): string;
+export declare function sealSecret(secret: string): string;
+export declare function openSecret(value: string | null): string | null;
+export declare function generateRecoveryCodeSet(): {
+    plain: string[];
+    hashes: string[];
+};
+export declare function hashRecoveryCode(code: string): string;
+export declare function constantTimeEqual(a: string, b: string): boolean;
 export {};
 //# sourceMappingURL=adminMfa.d.ts.map

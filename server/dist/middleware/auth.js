@@ -5,6 +5,7 @@ exports.optionalAuth = optionalAuth;
 const firebase_1 = require("../config/firebase");
 const database_1 = require("../config/database");
 const featureFlags_1 = require("../services/featureFlags");
+const userSecurity_1 = require("../services/userSecurity");
 // The DB role is only needed while a maintenance lock / revoke epoch is in
 // play. Cached briefly so a locked platform does not add one SELECT per request.
 const roleCache = new Map();
@@ -82,9 +83,54 @@ async function requireAuth(req, res, next) {
             res.status(401).json({ error: blocked.message, code: blocked.code });
             return;
         }
-        req.userId = decoded.uid;
+        const uid = String(decoded.uid || "");
+        const issuedAt = Number(decoded.iat || decoded.auth_time || 0);
+        const deviceId = String(req.headers["x-vura-device"] || "").trim();
+        // Per-user "sign out everywhere" cutoff. This is separate from the
+        // platform-wide maintenance cutoff above: one rider signing out all of
+        // their devices must not affect anybody else.
+        const gate = await (0, userSecurity_1.getUserSecurityGate)(uid);
+        if (gate.sessionsValidAfter && issuedAt > 0 && issuedAt < gate.sessionsValidAfter) {
+            res.status(401).json({
+                error: "Your session was ended. Please sign in again.",
+                code: "session_revoked",
+            });
+            return;
+        }
+        // A device signed out from the device list stops working on its next call.
+        // Session routes handle their own state (heartbeat must be able to REPORT
+        // a revoke; start is how a fresh login re-registers).
+        const path = String(req.originalUrl || req.url || "").split("?")[0];
+        const isSessionRoute = path.startsWith("/api/users/sessions");
+        if (deviceId && !isSessionRoute && (await (0, userSecurity_1.isDeviceRevoked)(uid, deviceId))) {
+            res.status(401).json({
+                error: "This device was signed out from another device. Please sign in again.",
+                code: "session_revoked",
+            });
+            return;
+        }
+        // Account 2FA gate. Only the calls needed to complete the challenge (and
+        // the harmless profile sync that tells the app who is signed in) pass
+        // while the second factor is outstanding. Everything else is refused.
+        const twoFactorExempt = /^\/api\/users\/sync\/?$/.test(path) ||
+            /^\/api\/users\/security\/status\/?$/.test(path) ||
+            /^\/api\/users\/security\/2fa\/verify\/?$/.test(path);
+        if (gate.enabled && !twoFactorExempt) {
+            const proof = String(req.headers["x-vura-2fa"] || "");
+            if (!(0, userSecurity_1.verifyUserStepUpToken)(uid, proof, gate.epoch)) {
+                res.status(403).json({
+                    error: "Enter the code from your authenticator app to continue.",
+                    code: "two_factor_required",
+                });
+                return;
+            }
+        }
+        req.userId = uid;
+        req.authTime = tokenAuthTime(decoded);
+        req.tokenIssuedAt = issuedAt;
+        req.deviceId = deviceId || undefined;
         req.user = {
-            uid: decoded.uid,
+            uid,
             email: decoded.email,
             phone_number: decoded.phone_number,
             name: decoded.name,
