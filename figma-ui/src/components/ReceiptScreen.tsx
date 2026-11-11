@@ -20,10 +20,14 @@ import {
  *
  * Contracts (server source + live probes):
  *   GET  /api/rides/:id/receipt -> { receipt: { id, ride_id, pickup_address,
- *        destination_address, distance_km, duration_mins, fare,
- *        ride_request_fee, payment_method, payment_status, created_at,
- *        completed_at, driver_name, driver_phone, vehicle_make, vehicle_model,
- *        license_plate, receipt_number } }
+ *        destination_address, pickup_lat, pickup_lng, destination_lat,
+ *        destination_lng, waypoints, route_data, distance_km, duration_mins,
+ *        fare, booking_fee, ride_request_fee, payment_method, payment_status,
+ *        created_at, completed_at, driver_name, driver_phone,
+ *        driver_photo_url, driver_rating, vehicle_make, vehicle_model,
+ *        vehicle_color, vehicle_year, vehicle_body_type, vehicle_image_url,
+ *        license_plate, receipt_number } } — private to the rider/driver on
+ *        that ride; the endpoint rejects everyone else.
  *   POST /api/ratings            -> { rideId, score, comment }
  *   POST /api/tips               -> { rideId, amount, paymentMethodId? } and the
  *        server really charges the saved card: with no card it answers 400
