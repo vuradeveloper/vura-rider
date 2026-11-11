@@ -54,6 +54,7 @@ const promos_1 = require("../services/promos");
 const rideCategories_1 = require("../services/rideCategories");
 const locationLog_1 = require("../services/locationLog");
 const pinService_1 = require("../services/pinService");
+const sosService_1 = require("../services/sosService");
 const userSecurity_1 = require("../services/userSecurity");
 const pendingRequest = new WeakMap();
 /** Stamp the rider's tap. Returns the clock so the caller can keep it. */
@@ -885,10 +886,35 @@ function setupSocketHandlers(io) {
         // ── Safety ──
         socket.on("safety:sos", async (data) => {
             try {
-                const { rideId } = data;
-                await (0, database_1.execute)("INSERT INTO safety_events (ride_id, type, data) VALUES ($1, 'sos', $2)", [rideId, JSON.stringify({ triggered_by: socket.userId, timestamp: new Date().toISOString() })]);
-                io.to(`ride:${rideId}`).emit("safety:sos:dispatched", {
-                    rideId, message: "SOS alert triggered for this ride",
+                const rideId = data?.rideId ? String(data.rideId) : null;
+                const dbUser = await getDbUserId();
+                if (!dbUser)
+                    return;
+                // An SOS must be a real party on the ride, never a third account
+                // guessing a ride id.
+                if (rideId) {
+                    const ride = await (0, database_1.queryOne)("SELECT passenger_id, driver_id FROM rides WHERE id = $1", [rideId]).catch(() => null);
+                    if (!ride ||
+                        (String(ride.passenger_id) !== dbUser && String(ride.driver_id) !== dbUser)) {
+                        return;
+                    }
+                }
+                const role = String(data?.role || socket.userRole || "") === "driver" ? "driver" : "rider";
+                const loc = data?.location &&
+                    Number.isFinite(Number(data.location.lat)) &&
+                    Number.isFinite(Number(data.location.lng))
+                    ? { lat: Number(data.location.lat), lng: Number(data.location.lng) }
+                    : null;
+                const result = await (0, sosService_1.triggerSos)({
+                    rideId,
+                    byUserId: dbUser,
+                    byRole: role,
+                    location: loc,
+                });
+                io.to(`ride:${rideId || "none"}`).emit("safety:sos:dispatched", {
+                    rideId,
+                    sosId: result.id,
+                    message: result.message,
                 });
             }
             catch (err) {
@@ -897,22 +923,20 @@ function setupSocketHandlers(io) {
         });
         socket.on("share:generate", async (data) => {
             try {
-                const { rideId } = data;
-                if (!rideId)
+                const rideId = data?.rideId ? String(data.rideId) : "";
+                const dbUser = await getDbUserId();
+                if (!rideId || !dbUser)
                     return;
-                const shareToken = Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-                // Persist the token so the public /share/:token page resolves it. If we
-                // only emit it, opening the link 404s because no safety_events row has
-                // the token (the shop side must be able to look it up).
-                await (0, database_1.execute)(`CREATE TABLE IF NOT EXISTS safety_events (
-             id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-             ride_id UUID REFERENCES rides(id),
-             type VARCHAR(50) NOT NULL,
-             data JSONB,
-             created_at TIMESTAMPTZ DEFAULT NOW()
-           )`).catch(() => undefined);
-                await (0, database_1.execute)("INSERT INTO safety_events (ride_id, type, data) VALUES ($1, 'share_started', $2)", [rideId, JSON.stringify({ shareToken, timestamp: new Date().toISOString() })]).catch(() => undefined);
-                io.to(`ride:${rideId}`).emit("share:generated", { rideId, shareToken, shareUrl: `/share/${shareToken}` });
+                const ride = await (0, database_1.queryOne)("SELECT passenger_id, driver_id FROM rides WHERE id = $1", [rideId]).catch(() => null);
+                if (!ride ||
+                    (String(ride.passenger_id) !== dbUser && String(ride.driver_id) !== dbUser)) {
+                    return;
+                }
+                const shareToken = await (0, sosService_1.ensureShareToken)(rideId);
+                if (!shareToken)
+                    return;
+                const shareUrl = `${(0, sosService_1.publicBaseUrl)()}/share/${shareToken}`;
+                io.to(`ride:${rideId}`).emit("share:generated", { rideId, shareToken, shareUrl });
             }
             catch (err) {
                 console.error("share:generate error:", err?.message);

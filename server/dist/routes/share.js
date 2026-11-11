@@ -112,7 +112,15 @@ router.get("/:token", async (req, res) => {
             res.status(404).json({ error: "Ride not found" });
             return;
         }
-        const ended = await (0, database_1.queryOne)(`SELECT EXISTS(SELECT 1 FROM safety_events WHERE ride_id = $1 AND type = 'share_ended') AS ended`, [evt.ride_id]);
+        // The LATEST share event decides. The old query treated any historical
+        // share_ended as final, so stopping sharing once made every later start
+        // look ended and the live page stayed dead.
+        const ended = await (0, database_1.queryOne)(`SELECT COALESCE(
+         (SELECT type = 'share_ended' FROM safety_events
+           WHERE ride_id = $1 AND type IN ('share_started', 'share_ended')
+           ORDER BY created_at DESC LIMIT 1),
+         FALSE
+       ) AS ended`, [evt.ride_id]);
         const sharingEnded = !!ended?.ended;
         await (0, vehicleImages_1.attachVehicleImages)(ride);
         res.json({ ride: shareRidePayload(ride, sharingEnded) });
