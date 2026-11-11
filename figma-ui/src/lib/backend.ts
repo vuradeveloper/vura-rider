@@ -730,6 +730,14 @@ export function on(event: string, fn: Listener): () => void {
   return () => listeners.get(event)?.delete(fn);
 }
 
+function socketAuth(token?: string | null) {
+  return {
+    token: token ?? getToken(),
+    stepUp: getStepUpToken(),
+    deviceId: getDeviceId(),
+  };
+}
+
 /** Connect (or reuse) the socket, authenticated with the Firebase idToken. */
 export async function getSocket(): Promise<any> {
   if (socket?.connected) return socket;
@@ -745,7 +753,7 @@ export async function getSocket(): Promise<any> {
       // meant that on a network that blocks the upgrade the socket never connected,
       // so "Confirm" silently never reached a driver.
       transports: ["websocket", "polling"],
-      auth: { token: getToken() },
+      auth: socketAuth(),
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: 10,
@@ -794,7 +802,7 @@ export async function getSocket(): Promise<any> {
     let lastForcedRetry = 0;
     socket.on("connect_error", async () => {
       const fresh = await refreshIdToken().catch(() => null);
-      if (fresh) socket.auth = { token: fresh };
+      if (fresh) socket.auth = socketAuth(fresh);
       const now = Date.now();
       if (fresh && now - lastForcedRetry > 2000) {
         lastForcedRetry = now;
@@ -807,12 +815,23 @@ export async function getSocket(): Promise<any> {
     });
 
     socket.on("connect", () => {
-      const t = getToken();
-      if (t) socket.auth = { token: t };
+      socket.auth = socketAuth();
       // Register as a PASSENGER. This used to emit "driver:online", which is the
       // driver's event — it writes driver_profiles.is_online for whoever sends it,
       // so a rider was marking themselves as an available driver.
       socket.emit("passenger:connect");
+    });
+    // A server-side disconnect is deliberate (remote sign-out, 2FA turned on,
+    // maintenance). Refresh the handshake payload before retrying so a 2FA
+    // step-up token issued after the disconnect is actually sent. If the
+    // session was revoked the retry is refused and the REST gate signs the app
+    // out on its next call.
+    socket.on("disconnect", (reason: string) => {
+      if (reason !== "io server disconnect") return;
+      socket.auth = socketAuth();
+      setTimeout(() => {
+        try { socket.connect(); } catch { /* next foreground retry */ }
+      }, 800);
     });
   }
   if (!socket.connected) await new Promise<void>((resolve) => {
