@@ -501,6 +501,10 @@ export async function enableTwoFactor(
   );
   invalidateUserSecurityCache(uid);
   await logSecurityEvent(uid, "2fa_enabled");
+  // Existing sockets authenticated before 2FA was switched on must not keep
+  // receiving ride events. They can reconnect with the step-up token the app
+  // just received (or with a code on any other device).
+  disconnectDeviceSockets(uid);
   return { recovery_codes: recovery.plain, token: issueUserStepUpToken(uid, epoch) };
 }
 
@@ -794,6 +798,23 @@ export async function listSessions(
   }));
 }
 
+/**
+ * An open Socket.IO connection authenticated before the revoke would otherwise
+ * keep receiving events. Drop it now; the handshake gate will refuse a retry
+ * until the device has a fresh login (and a 2FA proof when enabled).
+ */
+function disconnectDeviceSockets(uid: string, deviceId?: string): void {
+  try {
+    const io = (global as any).__vuraIo;
+    if (!io) return;
+    const room = deviceId ? `device:${uid}:${deviceId}` : `user:${uid}`;
+    io.to(room).emit("session:revoked", {});
+    io.in(room).disconnectSockets(true);
+  } catch {
+    /* sockets are best-effort; the REST gate is authoritative */
+  }
+}
+
 export async function revokeSession(
   uid: string,
   sessionId: string,
@@ -811,6 +832,7 @@ export async function revokeSession(
   if (!row) throw new UserSecurityError("Device not found.", 404, "session_not_found");
 
   invalidateDeviceCache(uid, row.device_id);
+  disconnectDeviceSockets(uid, row.device_id);
   await logSecurityEvent(uid, "device_signed_out", {
     device_id: row.device_id.slice(0, 12),
     current: row.device_id === currentDeviceId,
@@ -849,6 +871,7 @@ export async function revokeAllSessions(
   } catch (err: any) {
     console.warn("[user-security] refresh revoke failed:", err?.code || err?.message || err);
   }
+  disconnectDeviceSockets(uid);
 
   await logSecurityEvent(uid, "all_sessions_revoked", {
     reason,

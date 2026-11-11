@@ -28,6 +28,11 @@ import { applyPromoToFare, promoUsableFor, recordPromoUse, ridePromoFor } from "
 import { canonicalTier } from "../services/rideCategories";
 import { logRidePoint } from "../services/locationLog";
 import { verifyRidePin } from "../services/pinService";
+import {
+  getUserSecurityGate,
+  isDeviceRevoked,
+  verifyUserStepUpToken,
+} from "../services/userSecurity";
 
 /**
  * `request_received` must be timestamped at the rider's TAP, but the ride row (and
@@ -141,6 +146,7 @@ interface AuthSocket extends Socket {
   userId?: string;
   dbUserId?: string;
   userRole?: string;
+  deviceId?: string;
 }
 
 export function setupSocketHandlers(io: SocketIOServer) {
@@ -151,7 +157,26 @@ export function setupSocketHandlers(io: SocketIOServer) {
       if (!token) return next(new Error("Authentication required"));
 
       const decoded = await getAuth().verifyIdToken(token);
+
+      // The socket is the other half of the API: without these checks a device
+      // that was signed out (or is still waiting for its 2FA code) could keep
+      // receiving ride events and emitting actions over an open connection.
+      const deviceId = String(socket.handshake.auth?.deviceId || "").trim();
+      const stepUp = String(socket.handshake.auth?.stepUp || "");
+      const issuedAt = Number(decoded.iat || 0);
+      const gate = await getUserSecurityGate(decoded.uid);
+      if (gate.sessionsValidAfter && issuedAt > 0 && issuedAt < gate.sessionsValidAfter) {
+        return next(new Error("Session ended. Sign in again."));
+      }
+      if (deviceId && (await isDeviceRevoked(decoded.uid, deviceId))) {
+        return next(new Error("Session ended. Sign in again."));
+      }
+      if (gate.enabled && !verifyUserStepUpToken(decoded.uid, stepUp, gate.epoch)) {
+        return next(new Error("Two-factor authentication required."));
+      }
+
       socket.userId = decoded.uid;
+      socket.deviceId = deviceId || undefined;
 
       const user = await queryOne<{ id: string; role: string }>(
         "SELECT id, role FROM users WHERE firebase_uid = $1",
@@ -171,7 +196,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
     const socket = rawSocket as AuthSocket;
     console.log(`🔌 Socket: ${socket.id} (user: ${socket.userId})`);
 
-    if (socket.userId) socket.join(`user:${socket.userId}`);
+    if (socket.userId) {
+      socket.join(`user:${socket.userId}`);
+      if (socket.deviceId) socket.join(`device:${socket.userId}:${socket.deviceId}`);
+    }
 
     const getDbUserId = async (): Promise<string | undefined> => {
       if (socket.dbUserId) return socket.dbUserId;
