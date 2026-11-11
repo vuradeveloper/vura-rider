@@ -16,8 +16,9 @@ const { fcmMock, expoMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/database", async () => (await import("./testHarness")).db);
-vi.mock("../config/firebase", () => ({
-  getFirebaseApp: () => ({ messaging: () => ({ sendEachForMulticast: fcmMock }) }),
+vi.mock("../config/firebase", () => ({ getFirebaseApp: () => ({}) }));
+vi.mock("firebase-admin/messaging", () => ({
+  getMessaging: () => ({ sendEachForMulticast: fcmMock }),
 }));
 vi.mock("./push", () => ({ sendPushToUser: expoMock }));
 

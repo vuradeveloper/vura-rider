@@ -13,10 +13,13 @@ import { query, execute } from "../config/database";
 //   DEV_LOG_WRITE_KEY   (default "vura-devlog-key")
 //   DEV_LOG_READ_KEY    (default DEV_LOG_WRITE_KEY)
 
-const WRITE_KEY = process.env.DEV_LOG_WRITE_KEY || "vura-devlog-key";
+const configuredWriteKey = String(process.env.DEV_LOG_WRITE_KEY || "").trim();
+// In production the key MUST come from the environment. A hard-coded default
+// is a public secret the moment an APK is unpacked.
+const WRITE_KEY = configuredWriteKey || (process.env.NODE_ENV === "production" ? "" : "vura-devlog-key");
 // Exported so the other dev-only routes (see devDiag.ts) share ONE read key instead
 // of each re-reading DEV_LOG_READ_KEY and drifting apart.
-export const READ_KEY = process.env.DEV_LOG_READ_KEY || WRITE_KEY;
+export const READ_KEY = String(process.env.DEV_LOG_READ_KEY || "").trim() || WRITE_KEY;
 
 const LEVELS = new Set(["info", "warn", "error", "event"]);
 
@@ -36,7 +39,56 @@ async function pruneDevLogs() {
 
 const router = Router();
 
+/**
+ * Public CRASH sink. Deliberately un-authenticated (a crash can happen before
+ * login), but tightly limited: only rider/driver, max 5 entries, 2 KB message,
+ * 8 KB data, 256 KB body (mounted in index.ts) and a small per-IP limiter.
+ * No write key is embedded in any APK anymore.
+ */
+router.post("/crash", async (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const app = String(body.app || "").toLowerCase();
+    if (app !== "rider" && app !== "driver") {
+      res.status(400).json({ error: "invalid app" });
+      return;
+    }
+    const raw = Array.isArray(body.entries) ? body.entries.slice(0, 5) : [body];
+    const entries = raw
+      .filter((e: any) => e && typeof e === "object")
+      .map((e: any) => ({
+        app,
+        deviceId: String(e.deviceId || "").slice(0, 120),
+        level: "error",
+        tag: "app-crash",
+        message: String(e.message || "").slice(0, 2000),
+        data: e.data == null ? null : JSON.stringify(e.data).slice(0, 8000),
+      }))
+      .filter((e: any) => e.message);
+    if (entries.length === 0) {
+      res.status(204).end();
+      return;
+    }
+    for (const e of entries) {
+      await execute(
+        `INSERT INTO dev_logs (app, device_id, level, tag, message, data)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [e.app, e.deviceId, e.level, e.tag, e.message, e.data]
+      );
+    }
+    if (Math.random() < 0.05) void pruneDevLogs();
+    res.status(204).end();
+  } catch {
+    // A crash report must never break the caller.
+    res.status(204).end();
+  }
+});
+
 router.post("/", async (req: Request, res: Response) => {
+  if (!WRITE_KEY) {
+    res.status(503).json({ error: "log sink disabled" });
+    return;
+  }
   const key = (req.headers["x-dev-log-key"] || "").toString();
   if (!key || key !== WRITE_KEY) {
     res.status(401).json({ error: "bad log key" });
@@ -91,6 +143,10 @@ router.get("/", async (req: Request, res: Response) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
 
+  if (!READ_KEY) {
+    res.status(503).json({ error: "log viewer disabled" });
+    return;
+  }
   const key = String(req.query.key || "");
   if (!key || key !== READ_KEY) {
     res.status(401).json({ error: "bad read key" });

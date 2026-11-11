@@ -1,8 +1,9 @@
-import admin from "firebase-admin";
+import { initializeApp, cert, type App } from "firebase-admin/app";
+import { getAuth as getAdminAuth, type Auth } from "firebase-admin/auth";
 
-let firebaseApp: admin.app.App | null = null;
+let firebaseApp: App | null = null;
 
-export function getFirebaseApp(): admin.app.App {
+export function getFirebaseApp(): App {
   if (firebaseApp) return firebaseApp;
 
   // Two ways to authenticate (chosen in order):
@@ -24,9 +25,9 @@ export function getFirebaseApp(): admin.app.App {
   const projectId = process.env.FIREBASE_PROJECT_ID || "vura-f667d";
 
   if (clientEmail && privateKey) {
-    firebaseApp = admin.initializeApp({
+    firebaseApp = initializeApp({
       projectId,
-      credential: admin.credential.cert({
+      credential: cert({
         projectId,
         clientEmail,
         // Env vars arrive with literal "\n" sequences; expand them to real
@@ -35,7 +36,7 @@ export function getFirebaseApp(): admin.app.App {
       }),
     });
   } else {
-    firebaseApp = admin.initializeApp({
+    firebaseApp = initializeApp({
       projectId,
     });
   }
@@ -44,6 +45,6 @@ export function getFirebaseApp(): admin.app.App {
   return firebaseApp;
 }
 
-export function getAuth(): admin.auth.Auth {
-  return getFirebaseApp().auth();
+export function getAuth(): Auth {
+  return getAdminAuth(getFirebaseApp());
 }

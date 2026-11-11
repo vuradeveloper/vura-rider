@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getFirebaseApp } from "../config/firebase";
+import { getMessaging } from "firebase-admin/messaging";
 import { query, execute } from "../config/database";
 import { sendPushToUser as sendExpoPush } from "./push";
 
@@ -151,8 +152,7 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
     );
 
     if (tokens.length > 0) {
-      const app = getFirebaseApp();
-      const res = await app.messaging().sendEachForMulticast({
+      const res = await getMessaging(getFirebaseApp()).sendEachForMulticast({
         tokens: tokens.map((t) => t.push_token),
         notification: { title: msg.title, body: msg.body },
         data,
@@ -180,7 +180,7 @@ export async function sendPushToUsers(userIds: string[], msg: RidePush): Promise
 
       sent += res.successCount;
       const dead: string[] = [];
-      res.responses.forEach((r, i) => {
+      res.responses.forEach((r: any, i: number) => {
         const code = (r.error as any)?.code as string | undefined;
         if (!r.success && code && DEAD_TOKEN_CODES.has(code)) dead.push(tokens[i].push_token);
       });

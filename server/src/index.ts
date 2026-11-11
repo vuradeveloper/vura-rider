@@ -36,7 +36,7 @@ import shareRouter, { sharePage } from "./routes/share";
 import payoutsRouter from "./routes/payouts";
 import documentsRouter from "./routes/documents";
 import faceRouter from "./routes/face";
-import devLogsRouter from "./routes/devLogs";
+import devLogsRouter, { READ_KEY as DEV_READ_KEY } from "./routes/devLogs";
 import devDispatchRouter from "./routes/devDispatch";
 import devDiagRouter from "./routes/devDiag";
 import debugTraceRouter from "./routes/debugTrace";
@@ -74,6 +74,10 @@ import { execute, queryOne } from "./config/database";
 const app = express();
 const server = http.createServer(app);
 
+// Never advertise the framework. Helmet hides some headers, but Express only
+// stops sending X-Powered-By when this is set.
+app.disable("x-powered-by");
+
 // Production chain (verified: deploy/ACCOUNT.md — "EB serves HTTP only —
 // Cloudflare terminates TLS for api.ridevura.com", "api proxied"; gotcha 9
 // "behind nginx/Cloudflare"):
@@ -97,18 +101,63 @@ const server = http.createServer(app);
 app.set("trust proxy", 2);
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081,http://localhost:8082,http://localhost:19006").split(",");
+const configuredOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081,http://localhost:8082,http://localhost:19006")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+// Credentials + wildcard is an invalid and dangerous combination. Never let a
+// stale env var turn the API into a cross-origin free-for-all.
+const allowedOrigins = configuredOrigins.filter((origin) => origin !== "*");
+if (configuredOrigins.includes("*")) {
+  console.warn("[security] ALLOWED_ORIGINS contained '*' — wildcard removed because credentials=true");
+}
 
 // ── Middleware ──
 
-// Security headers
-app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+// Security headers. The API is JSON, but Helmet also protects the few HTML
+// surfaces (the share page overrides its own CSP). HSTS is set here even though
+// Cloudflare terminates TLS: the header is what browsers remember.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": ["'self'"],
+        "img-src": ["'self'", "data:", "https:"],
+        "script-src": ["'self'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "connect-src": ["'self'"],
+        "object-src": ["'none'"],
+        "frame-ancestors": ["'none'"],
+      },
+    },
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    referrerPolicy: { policy: "no-referrer" },
+    frameguard: { action: "deny" },
+    hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: false },
+  })
+);
+app.use((_req, res, next) => {
+  // The API does not need device capabilities.
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
 
-// CORS
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-}));
+// CORS: explicit allowlist. Native apps and server-to-server callers send no
+// Origin and are unaffected; browsers only get a CORS header for the listed
+// origins. `credentials: true` keeps Firebase/admin calls working.
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      return callback(null, allowedOrigins.includes(origin));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Authorization", "Content-Type", "x-admin-mfa", "x-dev-log-key"],
+    maxAge: 86_400,
+  })
+);
 
 // ── Paystack card-preauthorization webhook ──
 // Mounted BEFORE express.json with express.raw: x-paystack-signature is the
@@ -120,6 +169,18 @@ app.use(
   express.raw({ type: "application/json", limit: "1mb" })
 );
 app.use("/api/paystack", paystackWebhookRouter);
+
+// Device-log sink gets its OWN 256 KB body limit and a small limiter, BEFORE
+// the 30 MB JSON parser. A public crash log must never be able to allocate a
+// 30 MB body or flood the log table.
+const devLogLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: parseInt(process.env.DEV_LOG_RATE_MAX || "120", 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many log requests" },
+});
+app.use("/api/dev/logs", devLogLimiter, express.json({ limit: "256kb" }), devLogsRouter);
 
 // Body parsing — 30MB so base64 document uploads (≤15MB binary → ~20MB)
 // fit without a 413. Regular API calls are tiny; the extra headroom is cheap.
@@ -137,7 +198,7 @@ app.use(morgan(process.env.LOG_LEVEL === "debug" ? "dev" : "combined"));
 // Device-log endpoint sits BEFORE the global limiter — logging must never
 // steal from the app's request budget (which caused 429 storms) nor be
 // throttled itself. The write/read key header still gates it.
-app.use("/api/dev/logs", devLogsRouter);
+
 
 // Dispatch inspector (read-only, same read key): see the whole offer trail for a
 // ride without digging through CloudWatch — GET /api/dev/dispatch?key=…&rideId=…
@@ -254,7 +315,18 @@ app.get("/health", (_req, res) => {
 app.get("/api/osm-places/status", (_req, res) => {
   res.json({ ...getOsmSyncStatus(), area: "Johannesburg metro", intervalH: 6 });
 });
-app.post("/api/osm-places/sync", async (_req, res) => {
+// Triggering a full OSM sync is an operator action, not a public endpoint.
+// Accept the same dev read key via header or query (the local ops page already
+// uses it); fail closed when no key is configured.
+const requireDevKey: express.RequestHandler = (req, res, next) => {
+  const key = String(req.headers["x-dev-log-key"] || req.query.key || "");
+  if (!DEV_READ_KEY || key !== DEV_READ_KEY) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  next();
+};
+app.post("/api/osm-places/sync", requireDevKey, async (_req, res) => {
   try {
     const result = await syncOsmPlaces();
     res.json(result);
