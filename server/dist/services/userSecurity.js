@@ -389,6 +389,10 @@ async function enableTwoFactor(uid, code) {
       WHERE user_id = $1`, [user.id, epoch, JSON.stringify(recovery.hashes)]);
     invalidateUserSecurityCache(uid);
     await logSecurityEvent(uid, "2fa_enabled");
+    // Existing sockets authenticated before 2FA was switched on must not keep
+    // receiving ride events. They can reconnect with the step-up token the app
+    // just received (or with a code on any other device).
+    disconnectDeviceSockets(uid);
     return { recovery_codes: recovery.plain, token: issueUserStepUpToken(uid, epoch) };
 }
 async function verifyTwoFactor(uid, code) {
@@ -603,6 +607,24 @@ async function listSessions(uid, currentDeviceId) {
         current: !!currentDeviceId && row.device_id === currentDeviceId,
     }));
 }
+/**
+ * An open Socket.IO connection authenticated before the revoke would otherwise
+ * keep receiving events. Drop it now; the handshake gate will refuse a retry
+ * until the device has a fresh login (and a 2FA proof when enabled).
+ */
+function disconnectDeviceSockets(uid, deviceId) {
+    try {
+        const io = global.__vuraIo;
+        if (!io)
+            return;
+        const room = deviceId ? `device:${uid}:${deviceId}` : `user:${uid}`;
+        io.to(room).emit("session:revoked", {});
+        io.in(room).disconnectSockets(true);
+    }
+    catch {
+        /* sockets are best-effort; the REST gate is authoritative */
+    }
+}
 async function revokeSession(uid, sessionId, currentDeviceId) {
     const user = await userRow(uid);
     if (!user)
@@ -614,6 +636,7 @@ async function revokeSession(uid, sessionId, currentDeviceId) {
     if (!row)
         throw new UserSecurityError("Device not found.", 404, "session_not_found");
     invalidateDeviceCache(uid, row.device_id);
+    disconnectDeviceSockets(uid, row.device_id);
     await logSecurityEvent(uid, "device_signed_out", {
         device_id: row.device_id.slice(0, 12),
         current: row.device_id === currentDeviceId,
@@ -641,6 +664,7 @@ async function revokeAllSessions(uid, currentDeviceId, reason = "user_request") 
     catch (err) {
         console.warn("[user-security] refresh revoke failed:", err?.code || err?.message || err);
     }
+    disconnectDeviceSockets(uid);
     await logSecurityEvent(uid, "all_sessions_revoked", {
         reason,
         count: Number(res?.rowCount || 0),

@@ -54,6 +54,7 @@ const promos_1 = require("../services/promos");
 const rideCategories_1 = require("../services/rideCategories");
 const locationLog_1 = require("../services/locationLog");
 const pinService_1 = require("../services/pinService");
+const userSecurity_1 = require("../services/userSecurity");
 const pendingRequest = new WeakMap();
 /** Stamp the rider's tap. Returns the clock so the caller can keep it. */
 function markRequestReceived(socket) {
@@ -139,7 +140,24 @@ function setupSocketHandlers(io) {
             if (!token)
                 return next(new Error("Authentication required"));
             const decoded = await (0, firebase_1.getAuth)().verifyIdToken(token);
+            // The socket is the other half of the API: without these checks a device
+            // that was signed out (or is still waiting for its 2FA code) could keep
+            // receiving ride events and emitting actions over an open connection.
+            const deviceId = String(socket.handshake.auth?.deviceId || "").trim();
+            const stepUp = String(socket.handshake.auth?.stepUp || "");
+            const issuedAt = Number(decoded.iat || 0);
+            const gate = await (0, userSecurity_1.getUserSecurityGate)(decoded.uid);
+            if (gate.sessionsValidAfter && issuedAt > 0 && issuedAt < gate.sessionsValidAfter) {
+                return next(new Error("Session ended. Sign in again."));
+            }
+            if (deviceId && (await (0, userSecurity_1.isDeviceRevoked)(decoded.uid, deviceId))) {
+                return next(new Error("Session ended. Sign in again."));
+            }
+            if (gate.enabled && !(0, userSecurity_1.verifyUserStepUpToken)(decoded.uid, stepUp, gate.epoch)) {
+                return next(new Error("Two-factor authentication required."));
+            }
             socket.userId = decoded.uid;
+            socket.deviceId = deviceId || undefined;
             const user = await (0, database_1.queryOne)("SELECT id, role FROM users WHERE firebase_uid = $1", [decoded.uid]);
             if (user) {
                 socket.dbUserId = user.id;
@@ -154,8 +172,11 @@ function setupSocketHandlers(io) {
     io.on("connection", (rawSocket) => {
         const socket = rawSocket;
         console.log(`🔌 Socket: ${socket.id} (user: ${socket.userId})`);
-        if (socket.userId)
+        if (socket.userId) {
             socket.join(`user:${socket.userId}`);
+            if (socket.deviceId)
+                socket.join(`device:${socket.userId}:${socket.deviceId}`);
+        }
         const getDbUserId = async () => {
             if (socket.dbUserId)
                 return socket.dbUserId;
