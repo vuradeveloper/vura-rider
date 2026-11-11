@@ -502,10 +502,14 @@ export async function enableTwoFactor(
   invalidateUserSecurityCache(uid);
   await logSecurityEvent(uid, "2fa_enabled");
   // Existing sockets authenticated before 2FA was switched on must not keep
-  // receiving ride events. They can reconnect with the step-up token the app
-  // just received (or with a code on any other device). This is not a
-  // "session revoked" event: the current user must stay signed in.
-  disconnectDeviceSockets(uid, undefined, "security:2fa-enabled");
+  // receiving ride events. Delay long enough for THIS request's response to
+  // reach the app and store its step-up token, otherwise the enabling device
+  // would reconnect without a proof and bounce itself to the challenge screen.
+  const timer = setTimeout(
+    () => disconnectDeviceSockets(uid, undefined, "security:2fa-enabled"),
+    3000
+  );
+  (timer as any).unref?.();
   return { recovery_codes: recovery.plain, token: issueUserStepUpToken(uid, epoch) };
 }
 
