@@ -391,8 +391,9 @@ async function enableTwoFactor(uid, code) {
     await logSecurityEvent(uid, "2fa_enabled");
     // Existing sockets authenticated before 2FA was switched on must not keep
     // receiving ride events. They can reconnect with the step-up token the app
-    // just received (or with a code on any other device).
-    disconnectDeviceSockets(uid);
+    // just received (or with a code on any other device). This is not a
+    // "session revoked" event: the current user must stay signed in.
+    disconnectDeviceSockets(uid, undefined, "security:2fa-enabled");
     return { recovery_codes: recovery.plain, token: issueUserStepUpToken(uid, epoch) };
 }
 async function verifyTwoFactor(uid, code) {
@@ -534,6 +535,11 @@ async function startSession(uid, raw) {
         throw new UserSecurityError("User not found", 404, "user_not_found");
     await ensureUserSecuritySchema();
     const existing = await (0, database_1.queryOne)(`SELECT id, revoked_at FROM user_sessions WHERE user_id = $1 AND device_id = $2`, [user.id, input.deviceId]);
+    // Do not email the whole user base on the first launch after this feature
+    // ships. The FIRST device is not a suspicious sign-in; later ones are.
+    const hadAnyDevice = existing
+        ? true
+        : Boolean(await (0, database_1.queryOne)(`SELECT id FROM user_sessions WHERE user_id = $1 LIMIT 1`, [user.id]));
     // A remotely signed-out device must not re-register itself just by relaunching
     // the app with the old token. Only a fresh password sign-in (Firebase
     // auth_time within 10 minutes) may clear the revoke.
@@ -566,7 +572,8 @@ async function startSession(uid, raw) {
             platform: input.platform,
             app: input.app,
         }, input.ip);
-        void sendNewDeviceAlert(user.email, input);
+        if (hadAnyDevice)
+            void sendNewDeviceAlert(user.email, input);
     }
     if (!session)
         throw new UserSecurityError("Could not record this device.", 500, "session_write_failed");
@@ -612,13 +619,13 @@ async function listSessions(uid, currentDeviceId) {
  * keep receiving events. Drop it now; the handshake gate will refuse a retry
  * until the device has a fresh login (and a 2FA proof when enabled).
  */
-function disconnectDeviceSockets(uid, deviceId) {
+function disconnectDeviceSockets(uid, deviceId, event = "session:revoked") {
     try {
         const io = global.__vuraIo;
         if (!io)
             return;
         const room = deviceId ? `device:${uid}:${deviceId}` : `user:${uid}`;
-        io.to(room).emit("session:revoked", {});
+        io.to(room).emit(event, {});
         io.in(room).disconnectSockets(true);
     }
     catch {
