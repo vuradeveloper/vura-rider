@@ -6,7 +6,8 @@
 import type { Server as SocketIOServer } from "socket.io";
 import { query, queryOne, execute } from "../config/database";
 import { ensureSafetyTables, getSafetySettings } from "./safetyConfig";
-import { triggerSos } from "./sosService";
+import { ensureShareToken, publicBaseUrl, triggerSos } from "./sosService";
+import { notifyCheckinTimeout } from "./safetyNotify";
 
 const TYPE_LABEL: Record<string, string> = {
   deviation: "your driver may be off the expected route",
@@ -153,6 +154,39 @@ export async function timeoutCheckins(): Promise<string[]> {
       "INSERT INTO safety_events (ride_id, type, data) VALUES ($1, 'checkin_escalated', $2)",
       [c.ride_id, JSON.stringify({ checkin_id: c.id, at: new Date().toISOString() })]
     ).catch(() => { });
+    // The console queue is the responder, but an unopened tab is not an alert.
+    // Email the on-call inbox with the route, both people and a live trip link.
+    const detail = await queryOne<any>(
+      `SELECT r.pickup_address, r.destination_address,
+              pu.full_name AS rider_name, pu.phone AS rider_phone,
+              du.full_name AS driver_name, du.phone AS driver_phone,
+              dp.license_plate
+         FROM rides r
+         LEFT JOIN users pu ON pu.id = r.passenger_id
+         LEFT JOIN users du ON du.id = r.driver_id
+         LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+        WHERE r.id = $1`,
+      [c.ride_id]
+    ).catch(() => null);
+    const token = await ensureShareToken(c.ride_id).catch(() => null);
+    void notifyCheckinTimeout({
+      rideId: c.ride_id,
+      payload: {
+        triggered_at: new Date().toISOString(),
+        role: "rider",
+        ride_id: c.ride_id,
+        checkin_id: c.id,
+        pickup_address: detail?.pickup_address ?? null,
+        destination_address: detail?.destination_address ?? null,
+        rider: { name: detail?.rider_name ?? null, phone: detail?.rider_phone ?? null },
+        driver: {
+          name: detail?.driver_name ?? null,
+          phone: detail?.driver_phone ?? null,
+          plate: detail?.license_plate ?? null,
+        },
+      },
+      shareUrl: token ? `${publicBaseUrl()}/share/${token}` : null,
+    }).catch(() => undefined);
     console.error(`🚨 [safety] CHECK-IN NO RESPONSE — ride ${c.ride_id} (admin team alerted)`);
   }
   return overdue.map((c) => c.ride_id);

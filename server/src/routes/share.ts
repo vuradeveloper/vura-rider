@@ -121,8 +121,16 @@ router.get("/:token", async (req: Request, res: Response) => {
       return;
     }
 
+    // The LATEST share event decides. The old query treated any historical
+    // share_ended as final, so stopping sharing once made every later start
+    // look ended and the live page stayed dead.
     const ended = await queryOne<{ ended: boolean }>(
-      `SELECT EXISTS(SELECT 1 FROM safety_events WHERE ride_id = $1 AND type = 'share_ended') AS ended`,
+      `SELECT COALESCE(
+         (SELECT type = 'share_ended' FROM safety_events
+           WHERE ride_id = $1 AND type IN ('share_started', 'share_ended')
+           ORDER BY created_at DESC LIMIT 1),
+         FALSE
+       ) AS ended`,
       [evt.ride_id]
     );
 

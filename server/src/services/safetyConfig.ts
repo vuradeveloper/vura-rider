@@ -67,6 +67,24 @@ const DDL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sos_alerts_status ON sos_alerts (status, created_at DESC)`,
   `ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS gender VARCHAR(10)`,
   `ALTER TABLE rides ADD COLUMN IF NOT EXISTS trip_started_at TIMESTAMPTZ`,
+  `CREATE TABLE IF NOT EXISTS emergency_contacts (
+     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     name VARCHAR(255) NOT NULL,
+     phone VARCHAR(50) NOT NULL,
+     email VARCHAR(255),
+     relationship VARCHAR(100),
+     created_at TIMESTAMPTZ DEFAULT NOW()
+   )`,
+  `ALTER TABLE emergency_contacts ADD COLUMN IF NOT EXISTS email VARCHAR(255)`,
+  `CREATE INDEX IF NOT EXISTS idx_emergency_contacts_user ON emergency_contacts (user_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS safety_events (
+     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+     ride_id UUID REFERENCES rides(id),
+     type VARCHAR(50) NOT NULL,
+     data JSONB,
+     created_at TIMESTAMPTZ DEFAULT NOW()
+   )`,
 ];
 
 let ensured = false;

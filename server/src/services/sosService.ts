@@ -5,9 +5,11 @@
 // console drives) AND journaled into safety_events. No emergency service is
 // contacted automatically — the admin team is the responder.
 // ─────────────────────────────────────────────────────────────────────────────
-import { queryOne, execute } from "../config/database";
+import { randomBytes } from "crypto";
+import { query, queryOne, execute } from "../config/database";
 import { ensureSafetyTables } from "./safetyConfig";
 import { lastRidePoint } from "./locationLog";
+import { notifySos, type SafetyContact } from "./safetyNotify";
 
 export interface SosInput {
   rideId?: string | null;
@@ -21,11 +23,92 @@ export interface SosResult {
   id: string;
   message: string;
   ride_id: string | null;
+  share_url: string | null;
+  contacts_notified: number;
+  safety_team_notified: boolean;
+  duplicate: boolean;
+}
+
+export function publicBaseUrl(): string {
+  return (
+    process.env.PUBLIC_BASE_URL ||
+    "https://api.ridevura.com"
+  ).replace(/\/+$/, "");
+}
+
+/** Reuse the ride's existing live-trip token, or mint one for this SOS. */
+export async function ensureShareToken(rideId: string): Promise<string | null> {
+  await ensureSafetyTables();
+  const last = await queryOne<{ type: string; token: string | null }>(
+    `SELECT type, data->>'shareToken' AS token FROM safety_events
+      WHERE ride_id = $1 AND type IN ('share_started', 'share_ended')
+      ORDER BY created_at DESC LIMIT 1`,
+    [rideId]
+  ).catch(() => null);
+  // Reuse the live token. After a stop, mint a NEW one so an old link cannot
+  // silently come back to life.
+  if (last?.type === "share_started" && last.token) return last.token;
+
+  const token = randomBytes(16).toString("hex");
+  await execute(
+    "INSERT INTO safety_events (ride_id, type, data) VALUES ($1, 'share_started', $2)",
+    [rideId, JSON.stringify({ shareToken: token, timestamp: new Date().toISOString(), reason: "sos" })]
+  ).catch(() => undefined);
+  return token;
+}
+
+async function contactsFor(userId: string): Promise<SafetyContact[]> {
+  return query<SafetyContact>(
+    `SELECT name, phone, email FROM emergency_contacts
+      WHERE user_id = $1 ORDER BY created_at ASC LIMIT 10`,
+    [userId]
+  ).catch(() => []);
 }
 
 export async function triggerSos(input: SosInput): Promise<SosResult> {
   await ensureSafetyTables();
   const rideId = input.rideId || null;
+
+  // Two presses in a row (or an accidental repeat) must not create a pile of
+  // active alerts or spam the contacts. Update the active one with the latest
+  // location instead.
+  const recent = await queryOne<{ id: string; payload: any }>(
+    `SELECT id, payload FROM sos_alerts
+      WHERE triggered_by = $1 AND status = 'active'
+        AND created_at > NOW() - INTERVAL '2 minutes'
+      ORDER BY created_at DESC LIMIT 1`,
+    [input.byUserId]
+  ).catch(() => null);
+  if (recent) {
+    const merged = {
+      ...(recent.payload || {}),
+      last_repeat_at: new Date().toISOString(),
+      ...(input.location
+        ? {
+            location: {
+              lat: input.location.lat,
+              lng: input.location.lng,
+              at: new Date().toISOString(),
+              source: "phone",
+            },
+          }
+        : {}),
+    };
+    await execute(
+      "UPDATE sos_alerts SET payload = $2::jsonb WHERE id = $1",
+      [recent.id, JSON.stringify(merged)]
+    ).catch(() => undefined);
+    return {
+      id: recent.id,
+      ride_id: rideId,
+      share_url: null,
+      contacts_notified: 0,
+      safety_team_notified: false,
+      duplicate: true,
+      message:
+        "Your SOS is already active — the safety team has your latest location. Stay on this screen.",
+    };
+  }
 
   let payload: Record<string, unknown> = {
     triggered_at: new Date().toISOString(),
@@ -80,6 +163,17 @@ export async function triggerSos(input: SosInput): Promise<SosResult> {
     payload.location = { lat: input.location.lat, lng: input.location.lng, at: new Date().toISOString() };
   }
 
+  // Emergency contacts belong to the person who pressed SOS (rider or driver).
+  const contacts = await contactsFor(input.byUserId);
+  const shareToken = rideId ? await ensureShareToken(rideId) : null;
+  const shareUrl = shareToken ? `${publicBaseUrl()}/share/${shareToken}` : null;
+  payload.emergency_contacts = contacts.map((c) => ({
+    name: c.name,
+    phone: c.phone,
+    email: c.email,
+  }));
+  payload.share_url = shareUrl;
+
   const row = await queryOne<{ id: string }>(
     `INSERT INTO sos_alerts (ride_id, triggered_by, triggered_by_role, payload)
      VALUES ($1, $2, $3, $4::jsonb) RETURNING id`,
@@ -96,11 +190,31 @@ export async function triggerSos(input: SosInput): Promise<SosResult> {
     `plate=${(payload.driver as any)?.plate ?? "-"} loc=${payload.location ? `${(payload.location as any).lat},${(payload.location as any).lng}` : "none"}`
   );
 
+  // The SOS row is already recorded before this runs, so a mail outage can only
+  // reduce the reach of the alert — never lose it.
+  const notified = await notifySos({ payload, contacts, shareUrl }).catch(() => ({
+    contacts_notified: 0,
+    safety_team_notified: false,
+  }));
+
+  const contactLine =
+    notified.contacts_notified > 0
+      ? `${notified.contacts_notified} emergency contact${notified.contacts_notified === 1 ? "" : "s"} and `
+      : "";
   return {
     id: row!.id,
     ride_id: rideId,
+    share_url: shareUrl,
+    contacts_notified: notified.contacts_notified,
+    safety_team_notified: notified.safety_team_notified,
+    duplicate: false,
     message:
-      "Help alerted — Vura's safety team has your details and live location. " +
-      "Stay on this screen; they can see your trip moving in real time.",
+      "Help alerted — " +
+      contactLine +
+      "Vura's safety team has your details and live location. " +
+      "Stay on this screen; they can see your trip moving in real time." +
+      (notified.contacts_notified === 0
+        ? " Add an email to an emergency contact so they are alerted automatically next time."
+        : ""),
   };
 }
