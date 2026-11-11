@@ -13,9 +13,11 @@
   "dependencies": {
     "@capacitor/android": "^8.5.2",
     "@capacitor/browser": "^8.0.4",
+    "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "^8.5.2",
     "@capacitor/ios": "^8.5.2",
     "@capacitor/push-notifications": "^8.1.2",
+    "@capacitor/share": "^8.0.3",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

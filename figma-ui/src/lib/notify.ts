@@ -61,7 +61,7 @@ export async function initPushNotifications(): Promise<boolean> {
       try {
         await apiFetch('/api/notifications/device', {
           method: 'POST',
-          body: JSON.stringify({ token: token.value, platform: 'android' }),
+          body: JSON.stringify({ token: token.value, platform: Capacitor.getPlatform() }),
         })
         console.log('[push] device registered')
       } catch (err) {

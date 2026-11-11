@@ -6,6 +6,8 @@
 // own small Capacitor plugin (Java 17) that writes the real Android clipboard
 // and opens the ACTION_SEND chooser.
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { Clipboard } from '@capacitor/clipboard'
+import { Share } from '@capacitor/share'
 
 type ShareLinkPlugin = {
   copy(options: { text: string }): Promise<{ copied: boolean; error?: string }>
@@ -18,8 +20,12 @@ const ShareLink = registerPlugin<ShareLinkPlugin>('ShareLink')
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
     if (Capacitor.isNativePlatform()) {
-      const res = await ShareLink.copy({ text })
-      return res?.copied === true
+      if (Capacitor.getPlatform() === 'android') {
+        const res = await ShareLink.copy({ text })
+        return res?.copied === true
+      }
+      await Clipboard.write({ string: text })
+      return true
     }
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text)
@@ -43,12 +49,20 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 export async function openShareSheet(url: string): Promise<boolean> {
   try {
     if (Capacitor.isNativePlatform()) {
-      const res = await ShareLink.share({
-        url,
+      if (Capacitor.getPlatform() === 'android') {
+        const res = await ShareLink.share({
+          url,
+          title: 'Track my Vura ride',
+          text: 'Follow my trip live:',
+        })
+        return res?.shared === true
+      }
+      await Share.share({
         title: 'Track my Vura ride',
         text: 'Follow my trip live:',
+        url,
       })
-      return res?.shared === true
+      return true
     }
     const nav: any = navigator
     if (typeof nav?.share === 'function') {

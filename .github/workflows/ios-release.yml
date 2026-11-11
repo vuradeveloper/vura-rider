@@ -12,8 +12,8 @@ permissions:
 env:
   APP_APPLE_ID: "6830309972"
   APP_BUNDLE_ID: "app.vura.rider"
-  APP_VERSION: "1.5.1"
-  APP_BUILD: "10"
+  APP_VERSION: "1.5.24"
+  APP_BUILD: "11"
 
 jobs:
   build:
@@ -39,6 +39,11 @@ jobs:
 
       - name: Build web bundle
         working-directory: figma-ui
+        env:
+          # Pay Later is part of this iOS release (the owner approved parity
+          # with Android). Keep the flag explicit so a future default cannot
+          # silently remove it from the App Store build.
+          VITE_PAY_LATER_ENABLED: "true"
         run: npm run build
 
       - name: Sync iOS

@@ -23,7 +23,7 @@ import DriverVehicleCard from './components/DriverVehicleCard'
 import CountrySelect from './components/CountrySelect'
 import type { LatLng, MapCar } from './components/LeafletMap'
 import LeafletMap from './components/LeafletMap'
-import { HelpCenter, ReportIssue, SettingsScreen } from './components/SettingsScreen'
+import { HelpCenter, ReportIssue, SettingsScreen, SUPPORT_EMAIL } from './components/SettingsScreen'
 import PaymentMethods from './components/PaymentMethods'
 import PayLaterScreen from './components/PayLaterScreen'
 import RidePaymentStatus from './components/RidePaymentStatus'
@@ -2492,6 +2492,12 @@ function ChatSheet({ rideId, peer, senderRole, onClose }: {
 }) {
   const [msgs, setMsgs] = useState<any[] | null>(null)
   const [text, setText] = useState('')
+  const [menu, setMenu] = useState(false)
+  const [notice, setNotice] = useState('')
+  const blockKey = `vura.chat.blocked.${rideId}`
+  const [blocked, setBlocked] = useState(() => {
+    try { return localStorage.getItem(blockKey) === '1' } catch { return false }
+  })
   const endRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -2512,12 +2518,42 @@ function ChatSheet({ rideId, peer, senderRole, onClose }: {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs?.length])
 
+  useEffect(() => {
+    if (!blocked) return
+    getSocket().then((s) => s.emit('chat:leave', { rideId })).catch(() => {})
+  }, [blocked, rideId])
+
   const send = async () => {
     const t = text.trim()
-    if (!t) return
+    if (!t || blocked) return
     setText('')
     const s = await getSocket().catch(() => null)
     if (s) s.emit('chat:send', { rideId, message: t.slice(0, 500) })
+  }
+
+  const report = () => {
+    const body = [
+      `Ride ID: ${rideId}`,
+      `Driver: ${peer}`,
+      '',
+      'I want to report this conversation.',
+    ].join('\n')
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+      'Report a conversation'
+    )}&body=${encodeURIComponent(body)}`
+    setMenu(false)
+    setNotice('Your report is ready in your email app — press send and our safety team will review it.')
+  }
+
+  const block = () => {
+    try { localStorage.setItem(blockKey, '1') } catch { /* storage unavailable */ }
+    setBlocked(true)
+    setMenu(false)
+  }
+
+  const unblock = () => {
+    try { localStorage.removeItem(blockKey) } catch { /* storage unavailable */ }
+    setBlocked(false)
   }
 
   return (
@@ -2530,55 +2566,89 @@ function ChatSheet({ rideId, peer, senderRole, onClose }: {
         <div className="w-8 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-3" />
         <div className="flex items-center justify-between mb-2">
           <span className="text-[15px] font-bold text-[#1A1A1A]">Chat · {peer}</span>
-          <button onClick={onClose} className="text-[13px] font-semibold text-[#6B6B6B] px-2 py-1">
-            Close
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setMenu((v) => !v)} aria-label="Conversation options"
+              className="text-[16px] font-bold text-[#6B6B6B] px-2 py-1">⋯</button>
+            <button onClick={onClose} className="text-[13px] font-semibold text-[#6B6B6B] px-2 py-1">
+              Close
+            </button>
+          </div>
         </div>
-        <div
-          className="overflow-y-auto px-3 py-3"
-          style={{ background: '#FAFAFA', borderRadius: 12, minHeight: 180, maxHeight: '52vh' }}
-        >
-          {msgs === null && <p className="text-[12px] text-[#ADADAD]">Loading conversation…</p>}
-          {msgs?.length === 0 && (
-            <p className="text-[12px] text-[#ADADAD]">
-              No messages yet — only you and {peer} can see this conversation.
-            </p>
-          )}
-          {(msgs || []).map((m) => {
-            const mine = (m.sender_role || 'rider') === senderRole
-            return (
-              <div key={m.id} className={`flex mb-2 ${mine ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[75%] px-3 py-2 rounded-2xl text-[13px] leading-snug break-words ${
-                    mine
-                      ? 'bg-[#1A1A1A] text-white rounded-br-md'
-                      : 'bg-white border border-[#EBEBEB] text-[#1A1A1A] rounded-bl-md'
-                  }`}
-                >
-                  {String(m.message)}
-                </div>
-              </div>
-            )
-          })}
-          <div ref={endRef} />
-        </div>
-        <div className="flex gap-2 mt-3">
-          <input
-            className="flex-1 border border-[#EBEBEB] rounded-xl px-3 py-2.5 text-[14px] outline-none focus:border-[#1A1A1A]"
-            placeholder="Type a message…"
-            value={text}
-            maxLength={500}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void send() }}
-          />
-          <button
-            className="px-4 rounded-xl bg-[#1A1A1A] text-white font-semibold text-[13px] disabled:opacity-40"
-            disabled={!text.trim()}
-            onClick={() => void send()}
-          >
-            Send
-          </button>
-        </div>
+
+        {menu && (
+          <div className="flex gap-2 mb-2">
+            <button onClick={report}
+              className="flex-1 border border-[#EBEBEB] rounded-xl py-2 text-[12px] font-semibold text-[#1A1A1A] active:bg-[#F7F7F7]">
+              Report conversation
+            </button>
+            <button onClick={block}
+              className="flex-1 border border-[#F5C6C2] rounded-xl py-2 text-[12px] font-semibold text-[#C5221F] active:bg-[#FCE8E6]">
+              Block driver
+            </button>
+          </div>
+        )}
+
+        {notice && (
+          <div className="rounded-xl bg-[#E6F4EA] border border-[#CEEAD6] px-3 py-2 mb-2">
+            <p className="text-[11px] font-semibold text-[#137333]">{notice}</p>
+          </div>
+        )}
+
+        {blocked ? (
+          <div className="rounded-xl bg-[#F7F7F7] border border-[#EBEBEB] px-4 py-6 text-center">
+            <p className="text-[14px] font-semibold text-[#1A1A1A]">You blocked {peer}.</p>
+            <p className="text-[12px] text-[#ADADAD] mt-1">This conversation is closed for the rest of the ride.</p>
+            <button onClick={unblock} className="mt-3 text-[12px] font-semibold text-[#EA4335]">Unblock</button>
+          </div>
+        ) : (
+          <>
+            <div
+              className="overflow-y-auto px-3 py-3"
+              style={{ background: '#FAFAFA', borderRadius: 12, minHeight: 180, maxHeight: '52vh' }}
+            >
+              {msgs === null && <p className="text-[12px] text-[#ADADAD]">Loading conversation…</p>}
+              {msgs?.length === 0 && (
+                <p className="text-[12px] text-[#ADADAD]">
+                  No messages yet — only you and {peer} can see this conversation.
+                </p>
+              )}
+              {(msgs || []).map((m) => {
+                const mine = (m.sender_role || 'rider') === senderRole
+                return (
+                  <div key={m.id} className={`flex mb-2 ${mine ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[75%] px-3 py-2 rounded-2xl text-[13px] leading-snug break-words ${
+                        mine
+                          ? 'bg-[#1A1A1A] text-white rounded-br-md'
+                          : 'bg-white border border-[#EBEBEB] text-[#1A1A1A] rounded-bl-md'
+                      }`}
+                    >
+                      {String(m.message)}
+                    </div>
+                  </div>
+                )
+              })}
+              <div ref={endRef} />
+            </div>
+            <div className="flex gap-2 mt-3">
+              <input
+                className="flex-1 border border-[#EBEBEB] rounded-xl px-3 py-2.5 text-[14px] outline-none focus:border-[#1A1A1A]"
+                placeholder="Type a message…"
+                value={text}
+                maxLength={500}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void send() }}
+              />
+              <button
+                className="px-4 rounded-xl bg-[#1A1A1A] text-white font-semibold text-[13px] disabled:opacity-40"
+                disabled={!text.trim()}
+                onClick={() => void send()}
+              >
+                Send
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
