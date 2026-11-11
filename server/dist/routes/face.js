@@ -80,6 +80,11 @@ router.post("/verify", async (req, res) => {
             res.status(400).json({ error: "A selfie image (base64) is required" });
             return;
         }
+        // A selfie is one image, not a file-dump. 12 MB of base64 is ~9 MB binary.
+        if (selfie.length > 12_000_000) {
+            res.status(413).json({ error: "Selfie image is too large" });
+            return;
+        }
         await ensureFaceSchema();
         const me = await driverRow(req);
         if (!me) {

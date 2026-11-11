@@ -1,1 +1,1 @@
-{"version":3,"file":"devLogs.d.ts","sourceRoot":"","sources":["../../src/routes/devLogs.ts"],"names":[],"mappings":"AAkBA,eAAO,MAAM,QAAQ,QAA4C,CAAC;AAkBlE,QAAA,MAAM,MAAM,4CAAW,CAAC;AAqGxB,eAAe,MAAM,CAAC"}
+{"version":3,"file":"devLogs.d.ts","sourceRoot":"","sources":["../../src/routes/devLogs.ts"],"names":[],"mappings":"AAqBA,eAAO,MAAM,QAAQ,QAAiE,CAAC;AAkBvF,QAAA,MAAM,MAAM,4CAAW,CAAC;AA0JxB,eAAe,MAAM,CAAC"}

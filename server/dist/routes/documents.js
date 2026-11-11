@@ -7,6 +7,7 @@ const auth_1 = require("../middleware/auth");
 const adminDocReview_1 = require("../services/adminDocReview");
 const docVerification_1 = require("../services/docVerification");
 const s3_1 = require("../lib/s3");
+const uploadGuard_1 = require("../services/uploadGuard");
 // Driver document storage — S3 + Postgres metadata.
 //   POST   /api/documents/upload     driver uploads a document
 //   GET    /api/documents/mine       driver lists their own documents
@@ -68,13 +69,15 @@ router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, 
             res.status(400).json({ error: `Invalid document type. Allowed: ${type ? String(type) : "missing"}` });
             return;
         }
-        if (typeof data !== "string" || data.length === 0) {
-            res.status(400).json({ error: "Document data (base64) is required" });
+        const check = (0, uploadGuard_1.validateDocumentUpload)(data, mimeType);
+        if (!check.ok) {
+            res.status(check.status).json({ error: check.error });
             return;
         }
+        const safeMime = check.mime;
         const id = (0, node_crypto_1.randomUUID)();
         const key = (0, s3_1.documentKey)(dbUser.id, type, String(fileName || "document"), id);
-        const uploaded = await (0, s3_1.uploadToS3)(key, data, String(mimeType || "application/octet-stream"));
+        const uploaded = await (0, s3_1.uploadToS3)(key, data, safeMime);
         const rows = await (0, database_1.query)(`INSERT INTO driver_documents
          (id, driver_id, doc_type, file_name, mime_type, s3_key, s3_bucket, size_bytes, status, note)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_review', $9)
@@ -83,7 +86,7 @@ router.post("/upload", roleGuard(["driver", "admin", "passenger"]), async (req, 
             dbUser.id,
             type,
             String(fileName || "document"),
-            String(mimeType || "application/octet-stream"),
+            safeMime,
             uploaded.key,
             uploaded.bucket,
             uploaded.size,

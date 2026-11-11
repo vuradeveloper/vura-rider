@@ -28,6 +28,7 @@ exports.OFFER_CHANNEL_ID = void 0;
 exports.sendPushToUsers = sendPushToUsers;
 exports.sendPushToUser = sendPushToUser;
 const firebase_1 = require("../config/firebase");
+const messaging_1 = require("firebase-admin/messaging");
 const database_1 = require("../config/database");
 const push_1 = require("./push");
 exports.OFFER_CHANNEL_ID = "vura_ride_offers";
@@ -98,8 +99,7 @@ async function sendPushToUsers(userIds, msg) {
         console.log(`[push] "${msg.title}" users=${ids.length} tokens=${tokens.length}` +
             (tokens.length ? ` platforms=${tokens.map((t) => t.platform).join(",")}` : ""));
         if (tokens.length > 0) {
-            const app = (0, firebase_1.getFirebaseApp)();
-            const res = await app.messaging().sendEachForMulticast({
+            const res = await (0, messaging_1.getMessaging)((0, firebase_1.getFirebaseApp)()).sendEachForMulticast({
                 tokens: tokens.map((t) => t.push_token),
                 notification: { title: msg.title, body: msg.body },
                 data,
