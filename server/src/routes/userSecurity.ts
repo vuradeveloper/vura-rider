@@ -38,6 +38,12 @@ function fail(res: Response, err: any, fallback: string): void {
     res.status(err.statusCode).json({ error: err.message, code: err.code });
     return;
   }
+  // AdminMfaError: the encryption key is not configured (503). Surfacing it
+  // honestly is better than a generic 500 that looks like a code bug.
+  if (err && typeof err.statusCode === "number" && typeof err.code === "string") {
+    res.status(err.statusCode).json({ error: err.message, code: err.code });
+    return;
+  }
   console.error(`[user-security] ${fallback}:`, err?.message || err);
   res.status(500).json({ error: fallback });
 }
