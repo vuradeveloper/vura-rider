@@ -31,6 +31,7 @@ const featureFlags_1 = require("../services/featureFlags");
 const sessionAdmin_1 = require("../services/sessionAdmin");
 const adminDocReview_1 = require("../services/adminDocReview");
 const promos_1 = require("../services/promos");
+const emailCampaigns_1 = require("../services/emailCampaigns");
 const firebase_1 = require("../config/firebase");
 const adminInvite_1 = require("../services/adminInvite");
 const adminMoney_1 = require("../services/adminMoney");
@@ -1954,6 +1955,11 @@ router.post("/promos", (0, adminAuth_1.requireAdmin)("settings.write"), async (r
                 active,
             },
         });
+        // The app shows a live promo on its next refresh; the email announcement
+        // goes out through the same queue. Only a live promo is announced.
+        if (row?.active) {
+            await (0, emailCampaigns_1.queuePromoEmail)(row, actor.email).catch((err) => console.warn("[promo] email announcement skipped:", err?.message || err));
+        }
         res.status(201).json({ promo: row });
     }
     catch (err) {
@@ -2088,6 +2094,11 @@ router.patch("/promos/:id", (0, adminAuth_1.requireAdmin)("settings.write"), asy
                 active: next.active,
             },
         });
+        // Activation (or the first edit of an unannounced live promo) emails the
+        // audience. queuePromoEmail claims email_sent_at, so later edits are quiet.
+        if (row?.active) {
+            await (0, emailCampaigns_1.queuePromoEmail)(row, actor.email).catch((err) => console.warn("[promo] email announcement skipped:", err?.message || err));
+        }
         res.json({ promo: row });
     }
     catch (err) {

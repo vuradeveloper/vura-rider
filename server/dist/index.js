@@ -91,6 +91,8 @@ const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const adminLiveSupport_1 = __importDefault(require("./routes/adminLiveSupport"));
 const adminReports_2 = __importDefault(require("./routes/adminReports"));
 const adminMfa_2 = __importDefault(require("./routes/adminMfa"));
+const adminEmail_1 = __importDefault(require("./routes/adminEmail"));
+const emailCampaigns_1 = require("./services/emailCampaigns");
 const safetyAdmin_1 = __importDefault(require("./routes/safetyAdmin"));
 const walletAdmin_1 = __importDefault(require("./routes/walletAdmin"));
 const SchedulingService_1 = require("./services/SchedulingService");
@@ -269,6 +271,9 @@ app.use("/api", vehicleImagesAdmin_1.default);
 // idempotent; a failure must not stop the API (the gate falls back to the
 // users table and fails open on infrastructure errors).
 (0, userSecurity_2.ensureUserSecuritySchema)().catch((err) => console.error("[userSecurity] schema ensure failed:", err?.message || err));
+// Admin email broadcasts / promo announcements. Queued rows are sent by a
+// small background worker so the console request never waits on Resend.
+(0, emailCampaigns_1.startEmailCampaignWorker)();
 function safeRateLimit(name, options) {
     try {
         return (0, express_rate_limit_1.default)(options);
@@ -361,6 +366,7 @@ app.use("/api/admin", admin_1.default);
 // to mount at /api/admin which 404'd every console call - fixed 2026-10-14).
 // Live Support: the chat inbox is mounted BEFORE the general admin router so
 // /api/admin/v2/live-chats never depends on adminV2's route table.
+app.use("/api/admin/v2/email", adminEmail_1.default);
 app.use("/api/admin/v2/live-chats", adminLiveSupport_1.default);
 // Admin TOTP 2FA enrollment/verification. Mounted before the MFA-gated admin
 // routers because these endpoints must be reachable before enrollment.
