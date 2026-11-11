@@ -24,7 +24,13 @@ import { activateDestination, clearDestination, getDestinationStatus, onDriverPi
 import { computeTierStatus } from "../services/performanceTier";
 import { assertRiderCanBook } from "../services/adminRiders";
 import { readMaintenanceStatus } from "../services/featureFlags";
-import { applyPromoToFare, promoUsableFor, recordPromoUse, ridePromoFor } from "../services/promos";
+import {
+  applyPromoToFare,
+  promoUsableFor,
+  promoUsedByAnotherAccountOnDevice,
+  recordPromoUse,
+  ridePromoFor,
+} from "../services/promos";
 import { canonicalTier } from "../services/rideCategories";
 import { logRidePoint } from "../services/locationLog";
 import { verifyRidePin } from "../services/pinService";
@@ -500,11 +506,25 @@ export function setupSocketHandlers(io: SocketIOServer) {
           try {
             const promo = await ridePromoFor("rider", String(data.promoId || data.promoCode), dbUserId);
             const usable = promo ? await promoUsableFor(promo, dbUserId) : false;
-            if (promo && usable) {
+
+            // Multi-account promo abuse: the same phone (device_id, recorded on
+            // every ride) cannot burn one promo across different accounts. A
+            // family member on the same phone can still pay the normal fare.
+            const bookingDevice = String(deviceId || socket.deviceId || "").trim();
+            const promoReusedOnDevice =
+              promo && usable
+                ? await promoUsedByAnotherAccountOnDevice(promo.id, bookingDevice, dbUserId)
+                : false;
+
+            if (promo && usable && !promoReusedOnDevice) {
               const applied = applyPromoToFare(rideFare, promo);
               rideFare = applied.fare;
               appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
               void recordPromoUse(promo, dbUserId).catch(() => {});
+            } else if (promoReusedOnDevice) {
+              console.warn(
+                `[promo] blocked cross-account reuse promo=${promo?.id} device=${bookingDevice.slice(0, 12)} user=${dbUserId}`
+              );
             }
           } catch {
             /* a promo lookup must never block booking */

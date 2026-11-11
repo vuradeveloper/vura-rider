@@ -20,7 +20,13 @@ import {
   PreauthError,
 } from "../services/preauthorization";
 import { onRideCompletedPayLater, takePayLaterRide } from "../services/PayLaterService";
-import { applyPromoToFare, promoUsableFor, recordPromoUse, ridePromoFor } from "../services/promos";
+import {
+  applyPromoToFare,
+  promoUsableFor,
+  promoUsedByAnotherAccountOnDevice,
+  recordPromoUse,
+  ridePromoFor,
+} from "../services/promos";
 import { sendPushToUser } from "../services/notify";
 import type { Server as SocketIOServer } from "socket.io";
 
@@ -279,11 +285,21 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
           String(req.body.promoId || req.body.promoCode),
           rider.id
         );
-        if (promo && (await promoUsableFor(promo, rider.id))) {
+        const usable = promo ? await promoUsableFor(promo, rider.id) : false;
+        // Same-device multi-account promo abuse guard as the socket path.
+        const promoReusedOnDevice =
+          promo && usable
+            ? await promoUsedByAnotherAccountOnDevice(promo.id, String(deviceId || ""), rider.id)
+            : false;
+        if (promo && usable && !promoReusedOnDevice) {
           const applied = applyPromoToFare(rideFare, promo);
           rideFare = applied.fare;
           appliedPromo = { id: promo.id, code: promo.code, discount: applied.discount };
           promoForRecord = promo;
+        } else if (promoReusedOnDevice) {
+          console.warn(
+            `[promo] blocked cross-account reuse promo=${promo?.id} device=${String(deviceId).slice(0, 12)} user=${rider.id}`
+          );
         }
       } catch {
         /* promo lookup never blocks booking */

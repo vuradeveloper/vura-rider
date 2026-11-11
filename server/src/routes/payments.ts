@@ -1,4 +1,5 @@
 import { Router, Response } from "express";
+import rateLimit from "express-rate-limit";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import { query, queryOne, execute } from "../config/database";
 import {
@@ -12,6 +13,58 @@ import {
 import { ensurePayoutsTable } from "./payouts";
 
 const router = Router();
+
+// ── Card-testing / carding limits ───────────────────────────────────────────
+// A stolen account must not be able to hammer Paystack with new cards. These
+// are per signed-in user (the route always runs after requireAuth), so a shared
+// office IP is not punished for one abuser.
+const byUser = (req: any) => String(req.userId || "anonymous");
+const cardAttemptLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 6,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: byUser,
+  message: {
+    error: "Too many card attempts. Try again in an hour or use your bank app.",
+    code: "card_attempts_limited",
+  },
+});
+const chargeAttemptLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: byUser,
+  message: {
+    error: "Too many payment attempts. Please wait a few minutes.",
+    code: "payment_attempts_limited",
+  },
+});
+const verifyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 150,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: byUser,
+  message: { error: "Slow down.", code: "verify_rate_limited" },
+});
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Keep at most five saved cards per account; drop the oldest non-default first.
+async function pruneSavedCards(userId: string): Promise<void> {
+  await execute(
+    `DELETE FROM saved_cards
+      WHERE id IN (
+        SELECT id FROM saved_cards
+         WHERE user_id = $1
+         ORDER BY is_default ASC, created_at ASC
+         OFFSET 4
+      )`,
+    [userId]
+  ).catch(() => {});
+}
 
 // Ensure the payments table exists (one-time, per server)
 async function ensurePaymentsTable() {
@@ -107,6 +160,7 @@ router.post("/methods", requireAuth, async (req: AuthRequest, res: Response) => 
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
     await ensureSavedCardsTable();
+    await pruneSavedCards(user.id);
 
     const { card_type, last4, bank, exp_month, exp_year } = req.body;
 
@@ -158,7 +212,7 @@ router.delete("/methods/:id", requireAuth, async (req: AuthRequest, res: Respons
 // the Inline script cannot load inside the WebView. It uses the same R1
 // verification charge, NOT the old R5 preauthorization hold, so the rider is
 // never asked for R5 while adding a card.
-router.post("/card-register", requireAuth, async (req: AuthRequest, res: Response) => {
+router.post("/card-register", requireAuth, cardAttemptLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const user = await queryOne<{ id: string; full_name: string; email: string; phone: string }>(
       "SELECT id, full_name, email, phone FROM users WHERE firebase_uid = $1",
@@ -210,7 +264,7 @@ router.post("/card-register", requireAuth, async (req: AuthRequest, res: Respons
 // This is the IN-APP card form: the rider never leaves Vura; Paystack's own
 // modal collects the card. The R1 verification charge is refunded by /verify or
 // the charge.success webhook (whichever arrives first).
-router.post("/card-intent", requireAuth, async (req: AuthRequest, res: Response) => {
+router.post("/card-intent", requireAuth, cardAttemptLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const user = await queryOne<{ id: string; email: string }>(
       "SELECT id, email FROM users WHERE firebase_uid = $1",
@@ -255,12 +309,16 @@ router.post("/card-intent", requireAuth, async (req: AuthRequest, res: Response)
 // OR return a hosted-checkout URL when the rider has no saved card yet.
 // The saved card's Paystack authorization_code (stored as transaction_index)
 // lets us charge without re-entering card details.
-router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) => {
+router.post("/initiate", requireAuth, chargeAttemptLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { amountRands, rideId } = req.body;
-    const amount = Number(amountRands);
+    let amount = Number(amountRands);
     if (!amount || amount < 0.2 || amount > 5000) {
       res.status(400).json({ error: "Amount must be between R0.20 and R5 000" });
+      return;
+    }
+    if (rideId != null && !UUID_RE.test(String(rideId))) {
+      res.status(400).json({ error: "Invalid ride reference." });
       return;
     }
 
@@ -269,6 +327,72 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
       [req.userId!]
     );
     if (!user) { res.status(401).json({ error: "User not found" }); return; }
+
+    await ensurePaymentsTable();
+
+    // Repeated card declines are a card-testing signal. Five failed RIDE charges
+    // in an hour pauses new charges; a successful card registration is a
+    // separate flow and does not trip this.
+    const failures = await queryOne<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM payments
+        WHERE user_id = $1 AND ride_id IS NOT NULL AND status = 'failed'
+          AND created_at > NOW() - INTERVAL '1 hour'`,
+      [user.id]
+    ).catch(() => null);
+    if ((failures?.n ?? 0) >= 5) {
+      res.status(429).json({
+        error: "Too many failed card payments. Try again later, or add a different card.",
+        code: "charge_attempts_limited",
+      });
+      return;
+    }
+
+    // The amount is SERVER-AUTHORITATIVE for a ride. Before this guard the app
+    // could send any amount (or another rider's ride id) and charge its own
+    // saved card up to R5 000. The ride's fare now wins; the client number is
+    // only a hint and a mismatch is corrected, not trusted.
+    let amountCorrected = false;
+    if (rideId) {
+      const ride = await queryOne<{
+        passenger_id: string;
+        estimated_fare: string | number | null;
+        actual_fare: string | number | null;
+        status: string | null;
+        payment_status: string | null;
+      }>(
+        `SELECT passenger_id, estimated_fare, actual_fare, status, payment_status
+           FROM rides WHERE id = $1`,
+        [String(rideId)]
+      ).catch(() => null);
+      if (!ride) {
+        res.status(404).json({ error: "Ride not found", code: "ride_not_found" });
+        return;
+      }
+      if (String(ride.passenger_id) !== String(user.id)) {
+        res.status(403).json({ error: "That trip is not on your account.", code: "not_ride_owner" });
+        return;
+      }
+      const rideStatus = String(ride.status || "").toLowerCase();
+      if (["cancelled", "expired", "no_drivers"].includes(rideStatus)) {
+        res.status(409).json({
+          error: "This trip is no longer chargeable.",
+          code: "ride_not_chargeable",
+        });
+        return;
+      }
+      const fare = Number(ride.actual_fare ?? ride.estimated_fare);
+      if (!Number.isFinite(fare) || fare <= 0) {
+        res.status(400).json({ error: "This trip has no chargeable fare yet.", code: "no_fare" });
+        return;
+      }
+      if (Math.abs(fare - amount) > 0.01) {
+        console.warn(
+          `[payments] amount corrected user=${user.id} ride=${rideId} sent=${amount} fare=${fare}`
+        );
+        amount = Math.round(fare * 100) / 100;
+        amountCorrected = true;
+      }
+    }
 
     // Card preauthorization: when this ride already carries a real hold (or the
     // capture/paid states), DO NOT charge on top of it — the hold is captured
@@ -322,7 +446,14 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
         `UPDATE payments SET status = 'completed', updated_at = NOW() WHERE reference = $1`,
         [reference]
       ).catch(() => {});
-      res.json({ reference, live: false, mock: true, status: "success" });
+      res.json({
+        reference,
+        live: false,
+        mock: true,
+        status: "success",
+        amount,
+        amount_corrected: amountCorrected,
+      });
       return;
     }
 
@@ -344,8 +475,10 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
       // Record the charged fare on the ride so drivers see the correct earnings,
       // and stamp WHICH card paid it (Pay Later same-card eligibility provenance).
       if (charge.success && rideId) {
+        // Never overwrite the quoted/actual fare with the charge amount: the
+        // fare is the source of truth for the driver wallet and the receipt.
         await execute(
-          `UPDATE rides SET estimated_fare = $1, actual_fare = $1, payment_status = 'paid', payment_method = 'card',
+          `UPDATE rides SET payment_status = 'paid', payment_method = 'card',
            card_auth_code = $3, updated_at = NOW() WHERE id = $2`,
           [amount, rideId, savedCard.transaction_index]
         ).catch(() => {});
@@ -357,6 +490,8 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
         status: charge.success ? "success" : "failed",
         message: charge.message,
         usesSavedCard: true,
+        amount,
+        amount_corrected: amountCorrected,
       });
       return;
     }
@@ -381,6 +516,8 @@ router.post("/initiate", requireAuth, async (req: AuthRequest, res: Response) =>
       reference,
       status: "pending",
       authorizationUrl: init.authorizationUrl,
+      amount,
+      amount_corrected: amountCorrected,
     });
   } catch (err: any) {
     console.error("Payment initiate error:", err);
@@ -468,7 +605,7 @@ router.get("/return", async (req: AuthRequest, res: Response) => {
 // GET /api/payments/verify — Poll payment status by reference. The app's
 // WebView polls this; for hosted checkouts we call Paystack's verify endpoint
 // to get the authoritative result and tokenise the card on success.
-router.get("/verify", async (req: AuthRequest, res: Response) => {
+router.get("/verify", requireAuth, verifyLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { reference } = req.query;
     if (!reference || typeof reference !== "string") {
@@ -476,16 +613,26 @@ router.get("/verify", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    const user = await getOrCreateUser(req.userId!);
+    if (!user) { res.status(401).json({ status: "error", error: "User not found" }); return; }
+
     const payment = await queryOne<{
+      user_id: string;
       status: string;
       authorization_url: string | null;
       ride_id: string | null;
     }>(
-      "SELECT status, authorization_url, ride_id FROM payments WHERE reference = $1 LIMIT 1",
+      "SELECT user_id, status, authorization_url, ride_id FROM payments WHERE reference = $1 LIMIT 1",
       [reference]
     );
     if (!payment) {
       res.json({ status: "pending", reference });
+      return;
+    }
+    // Reference values are not guessable, but ownership is still checked so a
+    // leaked reference cannot tell another account what happened on this trip.
+    if (String(payment.user_id) !== String(user.id)) {
+      res.status(404).json({ status: "error", error: "Payment not found" });
       return;
     }
 
@@ -623,6 +770,7 @@ async function storeAuthorizationCard(userId: string, verified: any) {
         [token, auth.card_type || null, auth.bank || null, auth.exp_month || null, auth.exp_year || null, byLast4.id]
       ).catch(() => {});
     } else {
+      await pruneSavedCards(userId);
       await execute(
         `INSERT INTO saved_cards (user_id, card_type, last4, transaction_index, exp_month, exp_year, bank, is_default)
          VALUES ($1, $2, $3, $4, $5, $6, $7, true)`,
@@ -650,48 +798,20 @@ router.post("/initialize", requireAuth, async (req: AuthRequest, res: Response) 
   }
 });
 
-// POST /api/payments/refund — Refund a payment. Uses Paystack's refund API
-// when the transaction reference is available.
-router.post("/refund", requireAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const { rideId, reference } = req.body;
-    const user = await getOrCreateUser(req.userId!);
-    if (!user) { res.status(404).json({ error: "User not found" }); return; }
-
-    let payment: any = null;
-    if (reference) {
-      payment = await queryOne(
-        "SELECT * FROM payments WHERE reference = $1 AND user_id = $2",
-        [reference, user.id]
-      ).catch(() => null);
-    } else if (rideId) {
-      payment = await queryOne(
-        "SELECT * FROM payments WHERE ride_id = $1 AND user_id = $2",
-        [rideId, user.id]
-      ).catch(() => null);
-    }
-
-    if (!payment) { res.json({ success: true, note: "No payment to refund" }); return; }
-    if (payment.status === "refunded") { res.json({ success: true, amount: Number(payment.amount), note: "Already refunded" }); return; }
-
-    if (payment.provider === "paystack" && payment.status === "completed") {
-      try {
-        const refund = await refundTransaction(payment.reference, Number(payment.amount));
-        console.log("Paystack refund result:", refund);
-      } catch (err: any) {
-        console.warn("Paystack refund failed (recording locally):", err.message);
-      }
-    }
-
-    await execute(
-      "UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1",
-      [payment.id]
-    );
-    res.json({ success: true, amount: Number(payment.amount) });
-  } catch (err: any) {
-    console.error("Refund error:", err);
-    res.status(500).json({ error: err.message });
-  }
+// POST /api/payments/refund — DISABLED for app users.
+//
+// This route used to refund any completed payment owned by the caller. That let
+// a rider pay for a real trip, immediately refund it, and keep the service while
+// the driver's wallet was already credited. Refunds are now a support decision:
+// the rider opens Report an Issue, an admin reviews the trip and records the
+// Paystack refund reference in the Reports queue. Money movement stays in
+// Paystack; this endpoint no longer moves any.
+router.post("/refund", requireAuth, async (_req: AuthRequest, res: Response) => {
+  res.status(403).json({
+    error:
+      "Refunds are reviewed by Vura support. Open Report an Issue with the trip reference and we will help.",
+    code: "refund_requires_support",
+  });
 });
 
 // GET /api/payments/banks — List supported banks

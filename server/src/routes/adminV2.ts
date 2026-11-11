@@ -59,6 +59,7 @@ import {
 import { maskPhone } from "../lib/format";
 import { maskEmail } from "../lib/identity";
 import { resetUserSecurity } from "../services/userSecurity";
+import { buildPaymentEvidence } from "../services/paymentEvidence";
 import {
   CAMPAIGN_AUDIENCES,
   createCampaign,
@@ -1083,6 +1084,36 @@ router.post(
         reason: req.body?.reason ? String(req.body.reason).slice(0, 500) : "Support 2FA reset",
       });
       res.json({ ok: true, ...result });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
+// GET /api/admin/v2/payments/:reference/evidence — the chargeback/refund pack.
+// Read-only and audited; it gathers facts already stored (payment, trip, fare,
+// card fingerprint, verified Paystack webhooks) so support can answer a bank
+// dispute without guessing. Money movement stays in Paystack.
+router.get(
+  "/payments/:reference/evidence",
+  requireAdmin("tickets.read"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      const reference = String(req.params.reference || "").trim();
+      const evidence = await buildPaymentEvidence(reference);
+      if (!evidence) {
+        res.status(404).json({ error: "Payment not found" });
+        return;
+      }
+      await writeAudit(actor, {
+        action: "payment.evidence",
+        entityType: "payment",
+        entityId: reference,
+        reason: "Chargeback / refund evidence pack",
+      });
+      res.json({ evidence });
     } catch (err) {
       sendError(res, err);
     }

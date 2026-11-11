@@ -25,6 +25,7 @@ import {
   ensurePromoTables,
   parseTargetUserIds,
   promoUsableFor,
+  promoUsedByAnotherAccountOnDevice,
   recordPromoUse,
   ridePromoFor,
   type RidePromo,
@@ -53,6 +54,28 @@ beforeEach(() => {
   vi.mocked(query).mockResolvedValue([] as any);
   vi.mocked(queryOne).mockResolvedValue(null as any);
   vi.mocked(execute).mockResolvedValue({ rowCount: 1, rows: [] } as any);
+});
+
+describe("promoUsedByAnotherAccountOnDevice — multi-account abuse", () => {
+  it("blocks when this promo was used on the same phone by another account", async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: "ride-prior" } as any);
+    await expect(
+      promoUsedByAnotherAccountOnDevice(promo().id, "device-12345678", UUID_A)
+    ).resolves.toBe(true);
+    expect(queryOne).toHaveBeenCalledWith(
+      expect.stringContaining("promo_id = $1 AND device_id = $2 AND passenger_id <> $3"),
+      [promo().id, "device-12345678", UUID_A]
+    );
+  });
+
+  it("allows the first account on a device, and never blocks without a device id", async () => {
+    vi.mocked(queryOne).mockResolvedValue(null as any);
+    await expect(
+      promoUsedByAnotherAccountOnDevice(promo().id, "device-12345678", UUID_A)
+    ).resolves.toBe(false);
+    await expect(promoUsedByAnotherAccountOnDevice(promo().id, "", UUID_A)).resolves.toBe(false);
+    expect(queryOne).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("applyPromoToFare — 012-exact maths (unchanged)", () => {
