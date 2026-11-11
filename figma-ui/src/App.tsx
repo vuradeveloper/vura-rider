@@ -438,9 +438,17 @@ function MapCanvas({
 
 // ????????? RIDER ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 function RiderNav({ active, go }: { active: RiderScreen; go: (s: RiderScreen) => void }) {
+  // Ride Now, Pay Later sits in the middle of the bar, immediately after
+  // Activity, so riders reach the credit product without digging into Account.
+  const items = [
+    ['home', 'Home', IC.home],
+    ['activity', 'Activity', IC.clock],
+    ...(PAY_LATER_ENABLED ? [['paylater', 'Pay Later', IC.wallet]] : []),
+    ['account', 'Account', IC.user],
+  ] as [RiderScreen, string, (c: string) => ReactNode][]
   return (
     <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-white border-t border-[#EBEBEB] flex z-50">
-      {([['home', 'Home', IC.home], ['activity', 'Activity', IC.clock], ['account', 'Account', IC.user]] as [RiderScreen, string, (c: string) => ReactNode][]).map(([id, label, Icon]) => (
+      {items.map(([id, label, Icon]) => (
         <button key={id} onClick={() => go(id)} className={`flex-1 flex flex-col items-center pt-3 pb-4 gap-[5px] transition-colors ${active === id ? 'text-[#EA4335]' : 'text-[#ADADAD]'}`}>
           {Icon(active === id ? '#EA4335' : '#ADADAD')}
           <span className="text-[10px] font-semibold tracking-wider uppercase">{label}</span>
@@ -3631,7 +3639,18 @@ function RiderActivity({ onReceipt }: { onReceipt: (rideId: string) => void }) {
             const mine = rating && rating.rideId === t.id ? rating.score : Number(t.rating ?? t.rating_score ?? 0)
             return (
               <div key={t.id} className="bg-white rounded-2xl border border-[#F0F0F0] px-4 py-4 shadow-sm">
-                <div className="flex items-center gap-3 mb-3">
+                <div
+                  className="flex items-center gap-3 mb-3 cursor-pointer active:opacity-70"
+                  onClick={() => onReceipt(String(t.id))}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(ev) => {
+                    if (ev.key === 'Enter' || ev.key === ' ') {
+                      ev.preventDefault()
+                      onReceipt(String(t.id))
+                    }
+                  }}
+                >
                   <div className="flex flex-col items-center gap-1 shrink-0">
                     <div className="w-2 h-2 rounded-full bg-[#1A1A1A]" />
                     <div className="w-px h-6 bg-[#E8E8E8]" />
@@ -3663,19 +3682,18 @@ function RiderActivity({ onReceipt }: { onReceipt: (rideId: string) => void }) {
 
                 <div className="flex items-center justify-between pt-3 border-t border-[#F5F5F5]">
                   <p className="text-[12px] text-[#ADADAD]">{fmtTripTime(t.date || t.completed_at || t.created_at)}</p>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => onReceipt(String(t.id))}
-                      className="text-[12px] font-semibold text-[#EA4335]"
-                    >
-                      Receipt
-                    </button>
-                    <div className="flex items-center gap-1">
-                      <span className="text-[12px] text-[#ADADAD]">with</span>
-                      <span className="text-[12px] text-[#6B6B6B] font-semibold truncate max-w-[110px]">{driver}</span>
-                    </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[12px] text-[#ADADAD]">with</span>
+                    <span className="text-[12px] text-[#6B6B6B] font-semibold truncate max-w-[130px]">{driver}</span>
                   </div>
                 </div>
+                <button
+                  onClick={() => onReceipt(String(t.id))}
+                  className="mt-2.5 w-full h-10 rounded-xl border border-[#EBEBEB] bg-[#FAFAFA] flex items-center justify-center gap-1.5 text-[12px] font-bold text-[#1A1A1A] active:bg-[#F0F0F0]"
+                >
+                  View receipt
+                  {IC.chevRight('#1A1A1A')}
+                </button>
 
                 {/* Rate the driver — real POST /api/ratings, only for completed trips
                     that the rider hasn't already rated. */}
@@ -6018,7 +6036,7 @@ export default function App() {
     return () => { offs.forEach((f) => f()) }
   }, [mode, req?.id])
 
-  const riderNav = rScreen === 'home' || rScreen === 'activity' || rScreen === 'account'
+  const riderNav = rScreen === 'home' || rScreen === 'activity' || rScreen === 'account' || rScreen === 'paylater'
   const driverNav = dScreen === 'driverHome' || dScreen === 'earnings' || dScreen === 'driverAccount'
 
   return (
@@ -6100,7 +6118,7 @@ export default function App() {
       {/* ?????? App flow ?????? */}
       {authed && (<>
         {mode === 'rider' && (<>
-          {rScreen === 'home' && <RiderHome onBook={book} mode={mode} onMode={switchMode} onScheduled={() => goScheduled('home')} onPayLater={() => setRScreen('paylater')} />}
+          {rScreen === 'home' && <RiderHome onBook={book} mode={mode} onMode={switchMode} onScheduled={() => goScheduled('home')} onPayLater={() => riderGo('paylater')} />}
           {rScreen === 'booking' && (
             <BookingScreen
               destination={dest}
@@ -6193,7 +6211,7 @@ export default function App() {
           )}
           {rScreen === 'profile' && <RiderProfile onBack={() => setRScreen('account')} />}
           {rScreen === 'payments' && <PaymentMethods onBack={() => setRScreen('account')} />}
-          {PAY_LATER_ENABLED && rScreen === 'paylater' && <PayLaterScreen onBack={() => setRScreen('account')} />}
+          {PAY_LATER_ENABLED && rScreen === 'paylater' && <PayLaterScreen onBack={() => riderGo('account')} />}
           {rScreen === 'promos' && <PromosScreen onBack={() => setRScreen('account')} />}
           {rScreen === 'safety' && <SafetyScreen onBack={() => setRScreen('account')} onReportIssue={() => openReport(null)} />}
           {rScreen === 'guidelines' && <Guidelines onBack={() => setRScreen('account')} />}
@@ -6208,7 +6226,7 @@ export default function App() {
             />
           )}
           {/* Keep the bottom nav visible on the rider tabs only. */}
-          {riderNav && <RiderNav active={rNav} go={riderGo} />}
+          {riderNav && <RiderNav active={rScreen === 'paylater' ? 'paylater' : rNav} go={riderGo} />}
         </>)}
 
         {mode === 'driver' && (<>

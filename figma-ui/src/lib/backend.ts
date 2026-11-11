@@ -112,7 +112,7 @@ const IDENTITY = "https://identitytoolkit.googleapis.com/v1/accounts";
 
 const TOKEN_KEY = "vura.idToken";
 const STEPUP_KEY = "vura.security.stepUp";
-export const APP_VERSION = "1.5.23";
+export const APP_VERSION = "1.5.24";
 
 /**
  * Stable per-install identifier for the device list. It is not a secret and

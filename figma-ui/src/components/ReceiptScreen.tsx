@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Header } from './SettingsScreen'
+import LeafletMap, { type LatLng } from './LeafletMap'
+import VehicleImage, { resolveVehicleImage } from './vehicle/VehicleImage'
 import {
   formatRand,
   getPaymentMethods,
   getRideReceipt,
+  getRoute,
   reportLostItem,
   sendTip,
   submitRating,
@@ -52,6 +55,111 @@ function when(iso?: string | null) {
   return d.toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+function coord(lat: any, lng: any): LatLng | null {
+  const a = Number(lat)
+  const b = Number(lng)
+  return Number.isFinite(a) && Number.isFinite(b) ? { lat: a, lng: b } : null
+}
+
+/** Stops are stored as JSONB, but an older row may still be a JSON string. */
+function parseStops(raw: any): LatLng[] {
+  let list = raw
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list) } catch { list = [] }
+  }
+  if (!Array.isArray(list)) return []
+  return list
+    .map((p: any) => coord(p?.lat ?? p?.latitude, p?.lng ?? p?.longitude))
+    .filter((p): p is LatLng => !!p)
+}
+
+/** The driver's road-following polyline, when the ride has one saved. */
+function parseRoute(raw: any): LatLng[] {
+  let value = raw
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value) } catch { value = null }
+  }
+  const coords = Array.isArray(value) ? value : value?.coordinates
+  if (!Array.isArray(coords)) return []
+  return coords
+    .map((p: any) => Array.isArray(p)
+      ? coord(p[1], p[0])
+      : coord(p?.lat ?? p?.latitude, p?.lng ?? p?.longitude))
+    .filter((p): p is LatLng => !!p)
+}
+
+/**
+ * The completed trip drawn on the same map the ride used: pickup, every stop
+ * and the drop-off, joined by the road route. This is what makes a receipt in
+ * Activity show WHERE the trip went, not just two lines of text.
+ */
+function ReceiptMap({ receipt }: { receipt: any }) {
+  const pickup = coord(receipt?.pickup_lat, receipt?.pickup_lng)
+  const destination = coord(receipt?.destination_lat, receipt?.destination_lng)
+  const stops = parseStops(receipt?.waypoints ?? receipt?.stops)
+  const saved = parseRoute(receipt?.route_data ?? receipt?.route)
+  const points = [pickup, ...stops, destination].filter((p): p is LatLng => !!p)
+  const key = points.map((p) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`).join('|')
+  const [route, setRoute] = useState<LatLng[]>(saved.length > 1 ? saved : points)
+
+  useEffect(() => {
+    if (points.length < 2) { setRoute([]); return }
+    if (saved.length > 1) { setRoute(saved); return }
+    let alive = true
+    // No saved polyline on this older trip: ask the router once, and fall back
+    // to the direct line rather than showing an empty map.
+    getRoute(points[0], points[points.length - 1], points.slice(1, -1))
+      .then((line) => { if (alive) setRoute(line.length > 1 ? line : points) })
+      .catch(() => { if (alive) setRoute(points) })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+
+  if (!pickup && !destination) return null
+
+  return (
+    <div className="bg-white rounded-2xl border border-[#F0F0F0] p-2 mt-3 shadow-sm">
+      <div className="relative h-44 rounded-xl overflow-hidden bg-[#EEF2F7] isolate">
+        <LeafletMap
+          route={route}
+          pickup={pickup}
+          stops={stops}
+          destination={destination}
+          pickupLabel="Pickup"
+          destinationLabel="Drop-off"
+          fitRoute
+          follow={false}
+          showSelf={false}
+        />
+      </div>
+      <div className="flex items-center justify-between px-2 pt-2 pb-1">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-[#ADADAD]">Trip route</span>
+        <span className="text-[11px] font-semibold text-[#6B6B6B]">
+          {Number(receipt?.distance_km || 0).toFixed(1)} km · {Math.round(Number(receipt?.duration_mins || 0))} min
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/** The car that actually did this trip (approved photo, else neutral drawing). */
+function ReceiptCar({ receipt }: { receipt: any }) {
+  const [broken, setBroken] = useState(false)
+  const spec = resolveVehicleImage(receipt)
+  if (spec.type === 'url' && !broken) {
+    return (
+      <img
+        src={spec.url}
+        alt="Vehicle"
+        className="shrink-0"
+        style={{ width: 86, height: 86, objectFit: 'contain' }}
+        onError={() => setBroken(true)}
+      />
+    )
+  }
+  return <VehicleImage bodyType={receipt?.vehicle_body_type || receipt?.body_type} size={86} />
+}
+
 export function ReceiptScreen({
   rideId,
   onBack,
@@ -66,6 +174,7 @@ export function ReceiptScreen({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
+  const [photoBroken, setPhotoBroken] = useState(false)
 
   // Rating
   const [stars, setStars] = useState(0)
@@ -213,6 +322,9 @@ export function ReceiptScreen({
               <p className="text-[12px] text-[#ADADAD] mt-1">{when(receipt.completed_at || receipt.created_at)}</p>
             </div>
 
+            {/* Where the trip went — the same route the ride showed on the map. */}
+            <ReceiptMap receipt={receipt} />
+
             <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 mt-3 shadow-sm">
               <div className="flex items-start gap-3">
                 <div className="flex flex-col items-center gap-1 pt-1.5 shrink-0">
@@ -257,25 +369,55 @@ export function ReceiptScreen({
               </div>
             </div>
 
-            {/* Driver — real name, vehicle and plate from the ride row. */}
+            {/* Driver — real photo, name, rating and phone from the ride row. */}
             {receipt.driver_name && (
-              <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 mt-3 shadow-sm flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-[#EA4335] flex items-center justify-center shrink-0">
-                  <span className="text-[13px] font-bold text-white">
-                    {String(receipt.driver_name).split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()}
-                  </span>
+              <div className="bg-white rounded-2xl border border-[#F0F0F0] p-4 mt-3 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-[#ADADAD] mb-2.5">Your driver</p>
+                <div className="flex items-center gap-3">
+                  {receipt.driver_photo_url && !photoBroken ? (
+                    <img
+                      src={receipt.driver_photo_url}
+                      alt={receipt.driver_name}
+                      className="w-12 h-12 rounded-full object-cover shrink-0 bg-[#F5F5F5]"
+                      onError={() => setPhotoBroken(true)}
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-[#EA4335] flex items-center justify-center shrink-0">
+                      <span className="text-[14px] font-bold text-white">
+                        {String(receipt.driver_name).split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[15px] font-semibold text-[#1A1A1A] capitalize truncate">{receipt.driver_name}</p>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <Sv inner={STAR} c="#FBBC04" size={12} />
+                      <span className="text-[12px] font-semibold text-[#6B6B6B]">
+                        {Number(receipt.driver_rating || 0) > 0 ? Number(receipt.driver_rating).toFixed(2) : 'New driver'}
+                      </span>
+                    </div>
+                  </div>
+                  {receipt.driver_phone && (
+                    <a href={`tel:${receipt.driver_phone}`} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#F7F7F7] shrink-0">
+                      <Sv inner={CALL} c="#1A1A1A" size={15} />
+                    </a>
+                  )}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[14px] font-semibold text-[#1A1A1A] capitalize truncate">{receipt.driver_name}</p>
-                  <p className="text-[11px] text-[#ADADAD] truncate">
-                    {[receipt.vehicle_make, receipt.vehicle_model, receipt.license_plate].filter(Boolean).join(' · ') || 'Vehicle'}
-                  </p>
+
+                {/* The car that did this trip. */}
+                <div className="flex items-center gap-3 mt-3 pt-3 border-t border-[#F5F5F5]">
+                  <ReceiptCar receipt={receipt} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[14px] font-bold text-[#1A1A1A] tracking-[0.18em]"
+                      style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+                      {receipt.license_plate || '—'}
+                    </p>
+                    <p className="text-[12px] text-[#6B6B6B] font-semibold capitalize truncate">
+                      {[receipt.vehicle_color, receipt.vehicle_make, receipt.vehicle_model, receipt.vehicle_year]
+                        .filter(Boolean).join(' ') || 'Vehicle details'}
+                    </p>
+                  </div>
                 </div>
-                {receipt.driver_phone && (
-                  <a href={`tel:${receipt.driver_phone}`} className="w-9 h-9 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#F7F7F7] shrink-0">
-                    <Sv inner={CALL} c="#1A1A1A" size={15} />
-                  </a>
-                )}
               </div>
             )}
 

@@ -177,7 +177,7 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto pb-10">
+      <div className="flex-1 overflow-y-auto pb-28">
         {loading && (
           <div className="mx-4 mt-5 rounded-2xl bg-white border border-[#F0F0F0] px-4 py-8 text-center">
             <div className="w-6 h-6 mx-auto rounded-full border-2 border-[#D0D0D0] border-t-[#EA4335] animate-spin" />
