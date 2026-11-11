@@ -881,7 +881,18 @@ router.get("/:id", auth_1.requireAuth, async (req, res) => {
 router.get("/:id/receipt", auth_1.requireAuth, async (req, res) => {
     try {
         await (0, preauthorization_1.ensurePreauthSchema)();
-        const ride = await (0, database_1.queryOne)(`SELECT r.id, r.id AS ride_id, r.pickup_address, r.destination_address,
+        // A receipt carries the driver's phone number and the exact trip route, so
+        // it is private to the two people on the trip. The old query filtered only
+        // by ride id, which let any signed-in account read anyone else's receipt.
+        const user = await (0, database_1.queryOne)("SELECT id FROM users WHERE firebase_uid = $1", [req.userId]);
+        if (!user) {
+            res.status(403).json({ error: "Account not synced" });
+            return;
+        }
+        const ride = await (0, database_1.queryOne)(`SELECT r.id, r.id AS ride_id, r.passenger_id, r.driver_id,
+              r.pickup_address, r.destination_address,
+              r.pickup_lat, r.pickup_lng, r.destination_lat, r.destination_lng,
+              r.waypoints, r.route_data,
               r.distance_km, r.duration_mins,
               COALESCE(NULLIF(r.actual_fare, 0), NULLIF(r.estimated_fare, 0), 0) AS fare,
               COALESCE(r.booking_fee_cents, 0)::float / 100 AS booking_fee,
@@ -891,16 +902,29 @@ router.get("/:id/receipt", auth_1.requireAuth, async (req, res) => {
               r.payment_method, r.payment_status,
               r.created_at, r.completed_at,
               d.full_name AS driver_name, d.phone AS driver_phone,
-              dp.vehicle_make, dp.vehicle_model, dp.license_plate,
+              d.profile_photo_url AS driver_photo_url,
+              COALESCE(r.vehicle_make, dp.vehicle_make) AS vehicle_make,
+              COALESCE(r.vehicle_model, dp.vehicle_model) AS vehicle_model,
+              COALESCE(r.vehicle_color, dp.vehicle_color) AS vehicle_color,
+              COALESCE(r.license_plate, dp.license_plate) AS license_plate,
+              dp.vehicle_year,
+              COALESCE(r.vehicle_body_type,
+                       to_jsonb(dp)->>'vehicle_body_type',
+                       to_jsonb(dp)->>'body_type') AS vehicle_body_type,
+              COALESCE(dp.rating_avg, 0) AS driver_rating,
               r.id || '-' || TO_CHAR(r.created_at, 'YYYYMMDD') AS receipt_number
        FROM rides r
        LEFT JOIN users d ON d.id = r.driver_id
        LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
-       WHERE r.id = $1`, [req.params.id]);
+       WHERE r.id = $1 AND (r.passenger_id = $2 OR r.driver_id = $2)`, [req.params.id, user.id]);
         if (!ride) {
             res.status(404).json({ error: "Ride not found" });
             return;
         }
+        // The rider's receipt shows the real car and driver photo, not a generic
+        // placeholder: resolve the same approved vehicle image the live ride uses.
+        await (0, vehicleImages_1.attachVehicleImages)(ride).catch(() => ride);
+        ride.driver_photo_url = await (0, driverPhoto_1.resolveDriverPhotoUrl)(ride.driver_id, ride.driver_photo_url);
         // Invite credit line (019) — read separately so a pre-019 database still
         // answers with the receipt instead of 500ing.
         ride.affiliate_credit = await (0, database_1.queryOne)("SELECT affiliate_credit FROM rides WHERE id = $1", [req.params.id])
