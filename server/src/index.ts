@@ -54,6 +54,8 @@ import adminV2Router from "./routes/adminV2";
 import adminLiveSupportRouter from "./routes/adminLiveSupport";
 import adminReportsRouter from "./routes/adminReports";
 import adminMfaRouter from "./routes/adminMfa";
+import adminEmailRouter from "./routes/adminEmail";
+import { startEmailCampaignWorker } from "./services/emailCampaigns";
 import safetyAdminRouter from "./routes/safetyAdmin";
 import walletAdminRouter from "./routes/walletAdmin";
 import { startScheduler, stopScheduler } from "./services/SchedulingService";
@@ -275,6 +277,10 @@ ensureUserSecuritySchema().catch((err) =>
   console.error("[userSecurity] schema ensure failed:", err?.message || err)
 );
 
+// Admin email broadcasts / promo announcements. Queued rows are sent by a
+// small background worker so the console request never waits on Resend.
+startEmailCampaignWorker();
+
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
 // 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
@@ -389,6 +395,7 @@ app.use("/api/admin", adminRouter);
 // to mount at /api/admin which 404'd every console call - fixed 2026-10-14).
 // Live Support: the chat inbox is mounted BEFORE the general admin router so
 // /api/admin/v2/live-chats never depends on adminV2's route table.
+app.use("/api/admin/v2/email", adminEmailRouter);
 app.use("/api/admin/v2/live-chats", adminLiveSupportRouter);
 // Admin TOTP 2FA enrollment/verification. Mounted before the MFA-gated admin
 // routers because these endpoints must be reachable before enrollment.

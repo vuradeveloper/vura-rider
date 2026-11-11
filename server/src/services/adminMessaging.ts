@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { query, queryOne, execute, isMissingRelation } from "../config/database";
 import { sendPushToUsers } from "./notify";
+import { queueAdminCampaignEmail } from "./emailCampaigns";
 
 export const CAMPAIGN_AUDIENCES = ["riders", "drivers", "all"] as const;
 export type CampaignAudience = (typeof CAMPAIGN_AUDIENCES)[number];
@@ -115,6 +116,33 @@ export async function sendCampaign(id: string, actorEmail: string): Promise<any 
       }
       if (i + BATCH < ids.length) await new Promise((r) => setTimeout(r, 100));
     }
+
+    // Every admin broadcast that reaches the app also reaches the inbox. The
+    // email is queued, so a slow/mail rate-limited fan-out never blocks the
+    // push campaign or the console request.
+    try {
+      const email = await queueAdminCampaignEmail(
+        {
+          name: claimed.name,
+          title: claimed.title,
+          body: claimed.body,
+          audience: claimed.audience,
+        },
+        actorEmail
+      );
+      if (email?.id) {
+        await execute(
+          `ALTER TABLE admin_campaigns ADD COLUMN IF NOT EXISTS email_campaign_id UUID`
+        ).catch(() => undefined);
+        await execute(`UPDATE admin_campaigns SET email_campaign_id = $2 WHERE id = $1`, [
+          id,
+          email.id,
+        ]).catch(() => undefined);
+      }
+    } catch (err: any) {
+      console.warn("[campaign] email leg could not be queued:", err?.message || err);
+    }
+
     const finished = await queryOne(
       `UPDATE admin_campaigns
           SET status = 'sent', sent_count = $2, failed_count = $3,
