@@ -46,6 +46,9 @@ import { ensureVehicleReviewSchema, sweepVehicleClassification } from "./service
 import { ensureDuplicateSchema, sweepDuplicateUsers } from "./services/duplicateDetection";
 import { ensureReportSchema } from "./services/adminReports";
 import { ensureAdminMfaSchema } from "./services/adminMfa";
+import userSecurityRouter from "./routes/userSecurity";
+import userSessionsRouter from "./routes/userSessions";
+import { ensureUserSecuritySchema } from "./services/userSecurity";
 import adminRouter from "./routes/admin";
 import adminV2Router from "./routes/adminV2";
 import adminLiveSupportRouter from "./routes/adminLiveSupport";
@@ -154,7 +157,17 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "x-admin-mfa", "x-dev-log-key"],
+    allowedHeaders: [
+      "Authorization",
+      "Content-Type",
+      "x-admin-mfa",
+      "x-dev-log-key",
+      // Account security: device identity and the 2FA step-up proof. Without
+      // these a browser preflight blocks every authenticated call after 2FA is
+      // switched on.
+      "x-vura-device",
+      "x-vura-2fa",
+    ],
     maxAge: 86_400,
   })
 );
@@ -255,6 +268,13 @@ ensureAdminMfaSchema().catch((err) =>
   console.error("[adminMfa] schema ensure failed:", err?.message || err)
 );
 
+// Rider/driver 2FA, device registry and security activity. Additive and
+// idempotent; a failure must not stop the API (the gate falls back to the
+// users table and fails open on infrastructure errors).
+ensureUserSecuritySchema().catch((err) =>
+  console.error("[userSecurity] schema ensure failed:", err?.message || err)
+);
+
 // Rate limiting — generous limits so the driver's high-frequency polling (1s
 // while online) and socket polling-transport don't 429 the client. The old
 // 300/15min cap was exhausted within 5 minutes by the every-second ride poll,
@@ -341,6 +361,8 @@ app.get("/", (_req, res) => {
 
 // ── Routes ──
 app.use("/api/app-status", appStatusRouter);
+app.use("/api/users/security", userSecurityRouter);
+app.use("/api/users/sessions", userSessionsRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/rides", ridesRouter);
 app.use("/api/payments", paymentsRouter);

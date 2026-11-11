@@ -58,6 +58,7 @@ import {
 } from "../services/adminRiders";
 import { maskPhone } from "../lib/format";
 import { maskEmail } from "../lib/identity";
+import { resetUserSecurity } from "../services/userSecurity";
 import {
   CAMPAIGN_AUDIENCES,
   createCampaign,
@@ -1047,6 +1048,41 @@ router.post(
         newValue: { note },
       });
       res.status(201).json({ ok: true });
+    } catch (err) {
+      sendError(res, err);
+    }
+  }
+);
+
+// POST /api/admin/v2/users/:id/reset-2fa — support recovery for a rider or
+// driver who lost both their authenticator and recovery codes. Only after the
+// account owner has been identity-verified by a human. This ALSO kills every
+// device session, so a stolen phone cannot keep using an old token.
+router.post(
+  "/users/:id/reset-2fa",
+  requireAdmin("settings.write"),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = await resolveAdminActor(req);
+      if (!actor) { res.status(403).json({ error: "Admin only" }); return; }
+      const user = await queryOne<{ id: string; firebase_uid: string | null; role: string | null }>(
+        `SELECT id, firebase_uid, role FROM users WHERE id = $1`,
+        [String(req.params.id)]
+      );
+      if (!user) { res.status(404).json({ error: "User not found" }); return; }
+      if (!user.firebase_uid) {
+        res.status(409).json({ error: "This account has no Firebase identity to reset." });
+        return;
+      }
+      const result = await resetUserSecurity(user.firebase_uid, actor.email);
+      await writeAudit(actor, {
+        action: "user.reset_2fa",
+        entityType: "user",
+        entityId: user.id,
+        newValue: { role: user.role, sessions_revoked: result.sessions_revoked },
+        reason: req.body?.reason ? String(req.body.reason).slice(0, 500) : "Support 2FA reset",
+      });
+      res.json({ ok: true, ...result });
     } catch (err) {
       sendError(res, err);
     }

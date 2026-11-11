@@ -8,6 +8,8 @@ import { sendPasswordResetEmail } from "../services/adminInvite";
 import { findDuplicateMatches, markUserDuplicate } from "../services/duplicateDetection";
 import { normaliseIdNumber, normalisePhone } from "../lib/identity";
 import { readMaintenanceStatus } from "../services/featureFlags";
+import { logSecurityEvent } from "../services/userSecurity";
+import { sendResendEmail } from "../services/adminInvite";
 
 const router = Router();
 
@@ -71,10 +73,17 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
     const { role, phone, full_name, id_number, referralCode } = req.body;
     const firebaseUid = req.userId!;
 
+    // Never trust the client's role string. Before this check, a rider could
+    // POST role:"admin" to /sync and the row was written verbatim. The only
+    // valid self-service roles are passenger and driver; admin is granted in
+    // the back office, never by an app.
+    const requestedRole =
+      role === "driver" ? "driver" : role === "passenger" || role === "rider" ? "passenger" : undefined;
+
     // Maintenance lock: do not create or revive a rider/driver account while
     // that side is closed. This is the server-side stop for the app's
     // sign-in/sign-up flow (Firebase accepts the password, then this refuses).
-    const requestedSide = role === "driver" ? "driver" : "rider";
+    const requestedSide = requestedRole === "driver" ? "driver" : "rider";
     const maint = await readMaintenanceStatus(true);
     if (maint[requestedSide].enabled) {
       res.status(503).json({
@@ -100,8 +109,8 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
       // driver out of their own documents (403 "Insufficient permissions") and out
       // of GET /api/rides/available, which is how rides reach them at all.
       // Added 27 Sep 2026 after exactly that was reported from the field.
-      let effectiveRole = role;
-      if (role === "passenger") {
+      let effectiveRole = requestedRole;
+      if (requestedRole === "passenger") {
         const current = await queryOne<{ role: string | null; has_profile: boolean }>(
           `SELECT u.role,
                   EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = u.id) AS has_profile
@@ -200,7 +209,7 @@ router.post("/sync", requireAuth, async (req: AuthRequest, res: Response) => {
           req.user?.email || null,
           phone || null,
           id_number || null,
-          role || "passenger",
+          requestedRole || "passenger",
           req.user?.picture || null,
         ]
       );
@@ -243,6 +252,33 @@ router.put("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
     const { full_name, email, phone, id_number } = req.body;
     const firebaseUid = req.userId!;
 
+    // Email and ID number are account-recovery/identity fields. A stolen
+    // unlocked session must not be able to repoint the account to a new
+    // address. Require a password sign-in from the last five minutes
+    // (Firebase auth_time) before either can change. The rider UI never edits
+    // email, so normal profile saves are unaffected.
+    const current = await queryOne<{ email: string | null; id_number: string | null }>(
+      `SELECT email, id_number FROM users WHERE firebase_uid = $1`,
+      [firebaseUid]
+    );
+    const emailChanged =
+      email !== undefined &&
+      String(email || "").trim().toLowerCase() !== String(current?.email || "").trim().toLowerCase();
+    const idChanged =
+      id_number !== undefined &&
+      String(normaliseIdNumber(id_number) || "") !== String(normaliseIdNumber(current?.id_number) || "");
+
+    if (emailChanged || idChanged) {
+      const ageSeconds = Math.floor(Date.now() / 1000) - Number(req.authTime || 0);
+      if (!req.authTime || ageSeconds > 300) {
+        res.status(401).json({
+          error: "Confirm your password before changing the email or ID on your account.",
+          code: "reauth_required",
+        });
+        return;
+      }
+    }
+
     const updates: string[] = [];
     const params: any[] = [];
     let idx = 1;
@@ -258,6 +294,26 @@ router.put("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
       `UPDATE users SET ${updates.join(", ")} WHERE firebase_uid = $${idx}`,
       params
     );
+
+    if (emailChanged) {
+      await logSecurityEvent(firebaseUid, "email_changed", {
+        from: current?.email || null,
+        to: String(email || "").trim().toLowerCase(),
+      });
+      // Tell the OLD address, not the new one: if an attacker changed it, the
+      // real owner finds out even after losing access to the account.
+      if (current?.email) {
+        void sendResendEmail({
+          to: current.email,
+          subject: "Your Vura account email was changed",
+          html: `<p>Your Vura account email was changed to <b>${String(email || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")}</b>.</p>
+            <p>If you did not make this change, reset your password immediately and contact support.</p>`,
+        }).catch(() => undefined);
+      }
+    }
 
     const updated = await queryOne<any>(
       "SELECT id, firebase_uid, full_name, email, phone, role, profile_photo_url, id_number, id_document_name, license_document_name FROM users WHERE firebase_uid = $1",

@@ -497,3 +497,32 @@ export async function adminMfaTokenValid(uid: string, token: string): Promise<bo
   if (!gate.enabled) return false;
   return verifyAdminMfaToken(uid, token, gate.epoch);
 }
+
+// ── Primitives shared with rider/driver account security ────────────────────
+// The rider/driver TOTP implementation uses the SAME audited crypto as the
+// admin console: AES-256-GCM secret storage, SHA-1 TOTP 6 digits / 30 s / ±1,
+// and SHA-256 recovery-code hashes. Keeping one implementation avoids a second,
+// subtly-different verifier becoming the weak link.
+export function securityKeyMaterial(): string {
+  return baseSecret();
+}
+
+export function sealSecret(secret: string): string {
+  return encryptSecret(secret);
+}
+
+export function openSecret(value: string | null): string | null {
+  return decryptSecret(value);
+}
+
+export function generateRecoveryCodeSet(): { plain: string[]; hashes: string[] } {
+  return generateRecoveryCodes();
+}
+
+export function hashRecoveryCode(code: string): string {
+  return hashCode(code);
+}
+
+export function constantTimeEqual(a: string, b: string): boolean {
+  return safeEqual(a, b);
+}

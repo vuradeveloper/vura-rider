@@ -2,6 +2,11 @@ import { Request, Response, NextFunction } from "express";
 import { getAuth } from "../config/firebase";
 import { queryOne } from "../config/database";
 import { readMaintenanceStatus } from "../services/featureFlags";
+import {
+  getUserSecurityGate,
+  isDeviceRevoked,
+  verifyUserStepUpToken,
+} from "../services/userSecurity";
 
 export interface AuthRequest extends Request {
   userId?: string;
@@ -12,6 +17,12 @@ export interface AuthRequest extends Request {
     name?: string;
     picture?: string;
   };
+  /** Firebase `auth_time` (seconds). Used to require a fresh password check. */
+  authTime?: number;
+  /** Firebase `iat` (seconds). Used for the per-user token cutoff. */
+  tokenIssuedAt?: number;
+  /** Stable app-generated device id, sent as X-Vura-Device. */
+  deviceId?: string;
 }
 
 // The DB role is only needed while a maintenance lock / revoke epoch is in
@@ -108,9 +119,59 @@ export async function requireAuth(
       return;
     }
 
-    req.userId = decoded.uid;
+    const uid = String(decoded.uid || "");
+    const issuedAt = Number(decoded.iat || decoded.auth_time || 0);
+    const deviceId = String(req.headers["x-vura-device"] || "").trim();
+
+    // Per-user "sign out everywhere" cutoff. This is separate from the
+    // platform-wide maintenance cutoff above: one rider signing out all of
+    // their devices must not affect anybody else.
+    const gate = await getUserSecurityGate(uid);
+    if (gate.sessionsValidAfter && issuedAt > 0 && issuedAt < gate.sessionsValidAfter) {
+      res.status(401).json({
+        error: "Your session was ended. Please sign in again.",
+        code: "session_revoked",
+      });
+      return;
+    }
+
+    // A device signed out from the device list stops working on its next call.
+    // Session routes handle their own state (heartbeat must be able to REPORT
+    // a revoke; start is how a fresh login re-registers).
+    const path = String(req.originalUrl || req.url || "").split("?")[0];
+    const isSessionRoute = path.startsWith("/api/users/sessions");
+    if (deviceId && !isSessionRoute && (await isDeviceRevoked(uid, deviceId))) {
+      res.status(401).json({
+        error: "This device was signed out from another device. Please sign in again.",
+        code: "session_revoked",
+      });
+      return;
+    }
+
+    // Account 2FA gate. Only the calls needed to complete the challenge (and
+    // the harmless profile sync that tells the app who is signed in) pass
+    // while the second factor is outstanding. Everything else is refused.
+    const twoFactorExempt =
+      /^\/api\/users\/sync\/?$/.test(path) ||
+      /^\/api\/users\/security\/status\/?$/.test(path) ||
+      /^\/api\/users\/security\/2fa\/verify\/?$/.test(path);
+    if (gate.enabled && !twoFactorExempt) {
+      const proof = String(req.headers["x-vura-2fa"] || "");
+      if (!verifyUserStepUpToken(uid, proof, gate.epoch)) {
+        res.status(403).json({
+          error: "Enter the code from your authenticator app to continue.",
+          code: "two_factor_required",
+        });
+        return;
+      }
+    }
+
+    req.userId = uid;
+    req.authTime = tokenAuthTime(decoded);
+    req.tokenIssuedAt = issuedAt;
+    req.deviceId = deviceId || undefined;
     req.user = {
-      uid: decoded.uid,
+      uid,
       email: decoded.email,
       phone_number: decoded.phone_number,
       name: decoded.name,
