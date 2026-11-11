@@ -111,6 +111,58 @@ const FIREBASE_PROJECT_ID = "vura-f667d";
 const IDENTITY = "https://identitytoolkit.googleapis.com/v1/accounts";
 
 const TOKEN_KEY = "vura.idToken";
+const STEPUP_KEY = "vura.security.stepUp";
+export const APP_VERSION = "1.5.22";
+
+/**
+ * Stable per-install identifier for the device list. It is not a secret and
+ * never authorises anything on its own — every request still carries the
+ * Firebase ID token. It only lets the account owner recognise this phone and
+ * lets the server stop honouring a device that was remotely signed out.
+ *
+ * This is the SAME id the app already sends with bookings (`deviceId()` below),
+ * so a device has one identity everywhere.
+ */
+export function getDeviceId(): string {
+  return deviceId();
+}
+
+export function getStepUpToken(): string | null {
+  try {
+    return localStorage.getItem(STEPUP_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStepUpToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(STEPUP_KEY, token);
+    else localStorage.removeItem(STEPUP_KEY);
+  } catch {
+    /* storage unavailable — the user will be asked again */
+  }
+}
+
+export function hasStepUpToken(): boolean {
+  return !!getStepUpToken();
+}
+
+function requestDeviceName(): string {
+  const ua = typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "";
+  const android = ua.match(/Android[^;]*;\s*([^;)]+)\)/i);
+  if (android?.[1]) return android[1].replace(/Build\/.*$/i, "").trim().slice(0, 80);
+  if (/Android/i.test(ua)) return "Android device";
+  if (/iPhone|iPad/i.test(ua)) return "iPhone / iPad";
+  return "Vura web";
+}
+
+function platformName(): string {
+  const ua = typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "";
+  if (/Android/i.test(ua)) return "android";
+  if (/iPhone|iPad|iPod/i.test(ua)) return "ios";
+  return "web";
+}
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -416,6 +468,7 @@ export async function signUp(
 }
 
 export function signOut() {
+  setStepUpToken(null);
   storeUser(null);
 }
 
@@ -469,8 +522,11 @@ export async function apiFetch<T = any>(
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "X-Vura-Device": getDeviceId(),
     ...((init.headers as Record<string, string>) || {}),
   };
+  const stepUp = getStepUpToken();
+  if (stepUp) headers["X-Vura-2FA"] = stepUp;
   const method = (init.method as string) || "GET";
   const body = typeof init.body === "string" ? init.body : undefined;
 
@@ -504,10 +560,139 @@ export async function apiFetch<T = any>(
     // so screens can react without matching on human text.
     err.code = (json as any)?.code;
     err.payload = json;
+
+    // A 2FA challenge can arrive mid-session (new device, expired proof). Clear
+    // the stale proof and let App switch to the code screen instead of every
+    // list silently failing.
+    if (res.status === 403 && err.code === "two_factor_required") {
+      setStepUpToken(null);
+      try {
+        window.dispatchEvent(new CustomEvent("vura:2fa-required"));
+      } catch { /* non-browser */ }
+    }
+
+    // The server ended this device or every device. Drop the local session so
+    // the app cannot keep showing cached account data.
+    if (res.status === 401 && err.code === "session_revoked") {
+      signOut();
+      try {
+        window.dispatchEvent(new CustomEvent("vura:signed-out"));
+      } catch { /* non-browser */ }
+    }
+
     throw err;
   }
   return json as T;
 }
+
+// ── Account security: 2FA, devices and activity ─────────────────────────────
+
+export interface SecurityStatus {
+  two_factor_enabled: boolean;
+  configured: boolean;
+  recovery_codes_left: number;
+  locked_until: string | null;
+  last_used_at: string | null;
+  available?: boolean;
+}
+
+export interface DeviceSession {
+  id: string;
+  device_id: string;
+  platform: string | null;
+  app: string | null;
+  app_version: string | null;
+  device_name: string | null;
+  created_at: string;
+  last_seen_at: string;
+  current: boolean;
+}
+
+export interface SecurityEvent {
+  id: string;
+  event: string;
+  detail: any;
+  created_at: string;
+}
+
+export const getSecurityStatus = () =>
+  apiFetch<SecurityStatus>("/api/users/security/status");
+
+export const startTwoFactorSetup = () =>
+  apiFetch<{ secret: string; otpauth_uri: string }>("/api/users/security/2fa/setup", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+
+export async function enableTwoFactor(code: string) {
+  const res = await apiFetch<{ recovery_codes: string[]; token: string }>(
+    "/api/users/security/2fa/enable",
+    { method: "POST", body: JSON.stringify({ code }) }
+  );
+  setStepUpToken(res.token);
+  return res;
+}
+
+export async function verifyTwoFactor(code: string) {
+  const res = await apiFetch<{ token: string; used_recovery: boolean }>(
+    "/api/users/security/2fa/verify",
+    { method: "POST", body: JSON.stringify({ code }) }
+  );
+  setStepUpToken(res.token);
+  return res;
+}
+
+export async function disableTwoFactor(code: string) {
+  await apiFetch("/api/users/security/2fa/disable", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+  setStepUpToken(null);
+}
+
+export const regenerateRecoveryCodes = (code: string) =>
+  apiFetch<{ recovery_codes: string[] }>("/api/users/security/recovery/regenerate", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+
+export const getSecurityActivity = () =>
+  apiFetch<{ events: SecurityEvent[] }>("/api/users/security/activity");
+
+export const getDeviceSessions = () =>
+  apiFetch<{ sessions: DeviceSession[] }>(
+    `/api/users/sessions?deviceId=${encodeURIComponent(getDeviceId())}`
+  );
+
+export const startDeviceSession = () =>
+  apiFetch<{ new_device: boolean }>("/api/users/sessions/start", {
+    method: "POST",
+    body: JSON.stringify({
+      deviceId: getDeviceId(),
+      platform: platformName(),
+      app: "rider",
+      appVersion: APP_VERSION,
+      deviceName: requestDeviceName(),
+    }),
+  });
+
+export const heartbeatDeviceSession = () =>
+  apiFetch("/api/users/sessions/heartbeat", {
+    method: "POST",
+    body: JSON.stringify({ deviceId: getDeviceId(), appVersion: APP_VERSION }),
+  });
+
+export const revokeDeviceSession = (sessionId: string) =>
+  apiFetch<{ revoked: boolean; current: boolean }>("/api/users/sessions/revoke", {
+    method: "POST",
+    body: JSON.stringify({ sessionId, deviceId: getDeviceId() }),
+  });
+
+export const revokeAllDeviceSessions = () =>
+  apiFetch<{ revoked: number }>("/api/users/sessions/revoke-all", {
+    method: "POST",
+    body: JSON.stringify({ deviceId: getDeviceId() }),
+  });
 
 // ── Public app status / maintenance ──────────────────────────────────────────
 // GET /api/app-status needs no auth. The rider app shows a full-screen

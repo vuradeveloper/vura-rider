@@ -22,7 +22,7 @@ const PRIVACY_URL = 'https://www.ridevura.com/privacy'
  */
 export default function RiderSettings({
   onBack, onProfile, onPayments, onPromos, onSafety, onNotifications, onHelp, onReport, onGuidelines, onDelete,
-  onScheduled, onChangePassword,
+  onScheduled, onChangePassword, onSecurity,
 }: {
   onBack: () => void
   onProfile: () => void
@@ -36,6 +36,7 @@ export default function RiderSettings({
   onDelete: () => void
   onScheduled: () => void
   onChangePassword: () => void
+  onSecurity: () => void
 }) {
   const sections: { section: string; items: { label: string; sub?: string; action: () => void; danger?: boolean }[] }[] = [
     {
@@ -45,6 +46,7 @@ export default function RiderSettings({
         { label: 'Payment Methods', sub: 'Cards saved on your account', action: onPayments },
         { label: 'Promos & Invites', sub: 'Offers, promo codes and referrals', action: onPromos },
         { label: 'Scheduled rides', sub: 'Reserve a ride up to 90 days ahead', action: onScheduled },
+        { label: 'Security & devices', sub: '2FA, sign-ins and sign-out everywhere', action: onSecurity },
         { label: 'Change password', sub: 'Update the password you sign in with', action: onChangePassword },
       ],
     },

@@ -30,6 +30,7 @@ import RidePaymentStatus from './components/RidePaymentStatus'
 import PromosScreen from './components/PromosScreen'
 import RiderProfile from './components/RiderProfile'
 import RiderSettings, { ChangePassword, DeleteAccount, Guidelines } from './components/RiderSettings'
+import SecurityScreen from './components/SecurityScreen'
 import { SafetyScreen } from './components/SafetyScreen'
 import VehicleLinkScreen from './components/VehicleLinkScreen'
 import { ScheduledRidesScreen } from './components/ScheduledRidesScreen'
@@ -123,6 +124,11 @@ import {
   getSocket,
   signIn,
   signOut,
+  getSecurityStatus,
+  hasStepUpToken,
+  heartbeatDeviceSession,
+  startDeviceSession,
+  verifyTwoFactor,
   getAffiliateSummary,
   getRideReceipt,
   signUp,
@@ -139,7 +145,7 @@ import { passwordError, passwordIsStrong, passwordRules } from './lib/passwordPo
 
 type RiderScreen = 'home' | 'booking' | 'matching' | 'ride' | 'activity' | 'account' | 'notifications'
   | 'settings' | 'profile' | 'payments' | 'promos' | 'safety' | 'guidelines' | 'help' | 'report' | 'paylater' | 'deleteAccount'
-  | 'scheduled' | 'receipt' | 'changePassword' | 'supportChat'
+  | 'scheduled' | 'receipt' | 'changePassword' | 'supportChat' | 'security'
 type DriverScreen = 'driverHome' | 'request' | 'pickup' | 'dropoff' | 'complete' | 'earnings' | 'driverAccount' | 'vehicle' | 'tripHistory' | 'settings' | 'help' | 'report' | 'wallet'
 type AppMode = 'rider' | 'driver'
 
@@ -4958,7 +4964,7 @@ function DriverAccount({ mode, onMode, onLinkCar, onTrips, onSettings, onWallet 
 }
 
 // ????????? Auth screens ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-type AuthScreen = 'splash' | 'login' | 'signup' | 'verify'
+type AuthScreen = 'splash' | 'login' | 'signup' | 'verify' | 'twofactor'
 
 function Splash({
   onLogin,
@@ -5068,7 +5074,88 @@ function InputField({
   )
 }
 
-function LoginScreen({ onBack, onSuccess, onSignup }: { onBack: () => void; onSuccess: () => void; onSignup: () => void }) {
+/**
+ * Second-factor challenge. Shown after the password when the account has 2FA
+ * on. The Firebase token alone cannot reach any data endpoint until this
+ * succeeds, so this is a real gate, not a screen the app can skip.
+ */
+function TwoFactorScreen({ onBack, onSuccess }: { onBack: () => void; onSuccess: () => void }) {
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const email = getStoredUser()?.email || ''
+
+  async function submit() {
+    const value = code.trim()
+    if (value.length < 6) return
+    setBusy(true)
+    setError('')
+    try {
+      await verifyTwoFactor(value)
+      await startDeviceSession().catch(() => undefined)
+      onSuccess()
+    } catch (e: any) {
+      setError(e?.message || 'That code was not accepted')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-screen bg-white overflow-y-auto">
+      <div className="px-5 pt-14 pb-6 flex items-center gap-4">
+        <button onClick={onBack} className="w-10 h-10 rounded-full border border-[#EBEBEB] flex items-center justify-center active:bg-[#F7F7F7]">
+          {IC.chevLeft()}
+        </button>
+        <div>
+          <h1 className="text-[22px] font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Two-step check</h1>
+          <p className="text-[13px] text-[#ADADAD] mt-0.5 truncate">{email || 'Your Vura account'}</p>
+        </div>
+      </div>
+
+      <div className="flex-1 px-5 pb-10">
+        <div className="rounded-2xl bg-[#F7F7F7] border border-[#EBEBEB] p-4">
+          <p className="text-[12.5px] text-[#4A4A4A] leading-relaxed">
+            Open your authenticator app and enter the current 6-digit code for Vura. On a new phone, use one of your
+            saved 8-character recovery codes instead.
+          </p>
+        </div>
+
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase().slice(0, 9))}
+          inputMode="text"
+          autoComplete="one-time-code"
+          placeholder="123456"
+          className="mt-6 w-full h-16 rounded-2xl border border-[#EBEBEB] bg-white text-center font-mono text-[26px] tracking-[0.25em] text-[#1A1A1A] outline-none focus:border-[#EA4335]"
+          onKeyDown={(e) => { if (e.key === 'Enter') void submit() }}
+        />
+
+        {error && (
+          <div className="mt-4 rounded-2xl bg-[#FCE8E6] border border-[#F5C6C2] px-4 py-3">
+            <p className="text-[12px] text-[#C5221F] font-semibold">{error}</p>
+          </div>
+        )}
+
+        <button
+          onClick={() => void submit()}
+          disabled={busy || code.trim().length < 6}
+          className={`mt-5 w-full font-bold text-[16px] py-4 rounded-2xl transition-all ${code.trim().length >= 6 ? 'bg-[#EA4335] text-white active:bg-[#C5221F]' : 'bg-[#F7F7F7] text-[#C4C4C4] border border-[#EBEBEB]'}`}
+          style={code.trim().length >= 6 ? { boxShadow: '0 4px 16px rgba(234,67,53,0.24)' } : {}}
+        >
+          {busy ? 'Checking…' : 'Verify and continue'}
+        </button>
+
+        <p className="mt-5 text-[11px] text-[#ADADAD] leading-relaxed text-center">
+          Lost your authenticator and your recovery codes? Contact support from another device. Vura will verify your
+          identity before resetting 2FA.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function LoginScreen({ onBack, onSuccess, onSignup, onNeedsTwoFactor }: { onBack: () => void; onSuccess: () => void; onSignup: () => void; onNeedsTwoFactor: () => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -5107,6 +5194,22 @@ function LoginScreen({ onBack, onSuccess, onSignup }: { onBack: () => void; onSu
     setError('')
     try {
       await signIn(email, password)
+      // New-device 2FA: the server will refuse every data call until the
+      // authenticator code is entered. Ask now rather than showing a broken
+      // home screen.
+      const security = await getSecurityStatus().catch(() => null)
+      if (security?.two_factor_enabled && !hasStepUpToken()) {
+        onNeedsTwoFactor()
+        return
+      }
+      try {
+        await startDeviceSession()
+      } catch (e: any) {
+        if (e?.code === 'two_factor_required') {
+          onNeedsTwoFactor()
+          return
+        }
+      }
       onSuccess()
     } catch (e: any) {
       setError(e?.message || 'Could not log in')
@@ -5292,6 +5395,7 @@ function SignupScreen({ onBack, onSuccess, onLogin }: { onBack: () => void; onSu
         referralCode: inviteCode.trim() || undefined,
       })
       try { localStorage.removeItem('vura.invite.pending') } catch { /* ignore */ }
+      await startDeviceSession().catch(() => undefined)
       onSuccess()
     } catch (e: any) {
       setError(e?.message || 'Could not create the account')
@@ -5517,16 +5621,69 @@ export default function App() {
     };
   }, []);
 
+  // A 2FA challenge can be raised by any API call (new device, expired proof)
+  // and a remote sign-out can land while the app is open. Both must move the
+  // UI, not leave a home screen full of failed requests.
+  useEffect(() => {
+    const needsTwoFactor = () => {
+      setAuthed(false)
+      setAuth('twofactor')
+    }
+    const signedOut = () => {
+      setAuthed(false)
+      setAuth('login')
+    }
+    window.addEventListener('vura:2fa-required', needsTwoFactor)
+    window.addEventListener('vura:signed-out', signedOut)
+    return () => {
+      window.removeEventListener('vura:2fa-required', needsTwoFactor)
+      window.removeEventListener('vura:signed-out', signedOut)
+    }
+  }, [])
+
+  // Keep the device list's "last seen" honest, and notice a remote sign-out
+  // within five minutes even when the app is sitting on a cached screen.
+  useEffect(() => {
+    if (!authed) return
+    const beat = () => {
+      void heartbeatDeviceSession().catch(() => undefined)
+    }
+    beat()
+    const timer = window.setInterval(beat, 5 * 60 * 1000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') beat()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [authed])
+
   useEffect(() => {
     let alive = true
     ensureSession()
-      .then((ok) => {
+      .then(async (ok) => {
         if (!alive) return
         if (!ok) {
           signOut()
           setAuthed(false)
           setAuth('login')
+          return
         }
+        // 2FA is opt-in. If it is on, do not mark the session usable until the
+        // authenticator (or a recovery code) has been checked.
+        try {
+          const security = await getSecurityStatus()
+          if (security.two_factor_enabled && !hasStepUpToken()) {
+            setAuthed(false)
+            setAuth('twofactor')
+            return
+          }
+        } catch {
+          /* offline or a transient error — the API gate is still authoritative */
+        }
+        await startDeviceSession().catch(() => undefined)
       })
       .finally(() => alive && setCheckingSession(false))
     return () => { alive = false }
@@ -5913,8 +6070,15 @@ export default function App() {
               onBack={() => setAuth('splash')}
               onSuccess={() => setAuthed(true)}
               onSignup={() => setAuth('signup')}
+              onNeedsTwoFactor={() => setAuth('twofactor')}
             />
           )
+        )}
+        {auth === 'twofactor' && (
+          <TwoFactorScreen
+            onBack={() => { signOut(); setAuthed(false); setAuth('login') }}
+            onSuccess={() => setAuthed(true)}
+          />
         )}
         {auth === 'signup' && (
           maintenance?.maintenance ? (
@@ -5994,8 +6158,10 @@ export default function App() {
               onDelete={() => setRScreen('deleteAccount')}
               onScheduled={() => goScheduled('settings')}
               onChangePassword={() => setRScreen('changePassword')}
+              onSecurity={() => setRScreen('security')}
             />
           )}
+          {rScreen === 'security' && <SecurityScreen onBack={() => setRScreen('settings')} />}
           {rScreen === 'scheduled' && (
             <ScheduledRidesScreen
               onTrack={(id, status) => {
