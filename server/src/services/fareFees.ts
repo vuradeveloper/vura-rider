@@ -58,6 +58,15 @@ export interface RideFareBreakdown {
   driver_net_cents: number;
 }
 
+/** Rand-denominated breakdown the driver app can display before accepting. */
+export interface DriverOfferBreakdown {
+  fare: number;
+  commission: number;
+  bookingFee: number;
+  riderTotal: number;
+  driverNet: number;
+}
+
 /**
  * Complete money breakdown for one fare. `commissionSplit` is the same
  * function the driver wallet uses, so the number sent to Paystack and the
@@ -79,6 +88,26 @@ export function rideFareBreakdown(
     commission_cents: commissionCents,
     platform_cents: platformCents,
     driver_net_cents: fareCents - commissionCents,
+  };
+}
+
+/**
+ * The driver-facing version of the same calculation, in rands. Used by the
+ * offer payload and the driver feed so the number on the request screen is the
+ * exact number that will be written to the wallet after the trip.
+ */
+export function driverOfferBreakdown(
+  fareRands: number,
+  cfg: WalletConfig = DEFAULT_WALLET_CONFIG,
+  bookingFeePercent: number = bookingFeePct()
+): DriverOfferBreakdown {
+  const b = rideFareBreakdown(fareRands, cfg, bookingFeePercent);
+  return {
+    fare: b.fare_cents / 100,
+    commission: b.commission_cents / 100,
+    bookingFee: b.booking_fee_cents / 100,
+    riderTotal: b.rider_total_cents / 100,
+    driverNet: b.driver_net_cents / 100,
   };
 }
 

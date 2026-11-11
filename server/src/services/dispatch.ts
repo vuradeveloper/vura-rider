@@ -29,6 +29,7 @@ import { trace, startTrace } from "./trace";
 import { mintRidePin } from "./pinService";
 import { destinationFit, FitThresholds } from "./destinationFit";
 import { readMaintenanceStatus } from "./featureFlags";
+import { driverOfferBreakdown } from "./fareFees";
 import { getDestinationConfig } from "./config";
 import { getConfig } from "./config";
 import { breakTierTies } from "./performanceTier";
@@ -1061,6 +1062,11 @@ export async function offerToNextDriver(
       nextRound,
     ]).catch(() => undefined);
 
+    // The DRIVER-facing money breakdown, computed by the same function that
+    // writes the wallet. Sending `fare` alone made drivers mentally subtract
+    // commission and guess; the request screen now shows the exact net.
+    const offerFare = ride.estimated_fare != null ? Number(ride.estimated_fare) : 0;
+    const earnings = driverOfferBreakdown(offerFare);
     const payload = {
       id: rideId,
       offerId: res.id,
@@ -1079,7 +1085,12 @@ export async function offerToNextDriver(
       // socket frame queued behind a cancellation).
       status: ride.status,
       createdAt: ride.created_at,
-      fare: ride.estimated_fare != null ? Number(ride.estimated_fare) : 0,
+      fare: offerFare,
+      earnings,
+      driverEarnings: earnings.driverNet,
+      vuraFee: earnings.commission,
+      bookingFee: earnings.bookingFee,
+      riderTotal: earnings.riderTotal,
       paymentMethod: ride.payment_method || "cash",
       waypoints: Array.isArray(ride.waypoints) ? ride.waypoints : [],
       stops: Array.isArray(ride.waypoints) ? ride.waypoints : [],

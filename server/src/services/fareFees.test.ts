@@ -10,6 +10,7 @@ import {
   DEFAULT_BOOKING_FEE_PCT,
   bookingFeeCentsFor,
   bookingFeePct,
+  driverOfferBreakdown,
   platformShareCents,
   rideFareBreakdown,
 } from "./fareFees";
@@ -99,5 +100,29 @@ describe("rideFareBreakdown — Option A, commission capped at R5", () => {
   it("exposes the platform share the Paystack flat split must send", () => {
     expect(platformShareCents(5, cfg)).toBe(70); // 50c commission + 20c fee
     expect(platformShareCents(100, cfg)).toBe(900); // 500c + 400c
+  });
+
+  it("driverOfferBreakdown is the same money in rands, ready for the offer screen", () => {
+    expect(driverOfferBreakdown(20, cfg)).toEqual({
+      fare: 20,
+      commission: 2,
+      bookingFee: 0.8,
+      riderTotal: 20.8,
+      driverNet: 18,
+    });
+    expect(driverOfferBreakdown(50, cfg)).toEqual({
+      fare: 50,
+      commission: 5,
+      bookingFee: 2,
+      riderTotal: 52,
+      driverNet: 45,
+    });
+    expect(driverOfferBreakdown(100, cfg)).toEqual({
+      fare: 100,
+      commission: 5,
+      bookingFee: 4,
+      riderTotal: 104,
+      driverNet: 95,
+    });
   });
 });
