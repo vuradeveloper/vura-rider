@@ -800,7 +800,17 @@ export async function getSocket(): Promise<any> {
     // Force a fresh token and retry immediately, as the old apps do, instead of
     // waiting out the backoff — rate-limited so a down server isn't hammered.
     let lastForcedRetry = 0;
-    socket.on("connect_error", async () => {
+    socket.on("connect_error", async (err: any) => {
+      const message = String(err?.message || "");
+      if (/session ended/i.test(message)) {
+        signOut();
+        try { window.dispatchEvent(new CustomEvent("vura:signed-out")); } catch { /* non-browser */ }
+        return;
+      }
+      if (/two-factor/i.test(message)) {
+        try { window.dispatchEvent(new CustomEvent("vura:2fa-required")); } catch { /* non-browser */ }
+        return;
+      }
       const fresh = await refreshIdToken().catch(() => null);
       if (fresh) socket.auth = socketAuth(fresh);
       const now = Date.now();
@@ -832,6 +842,11 @@ export async function getSocket(): Promise<any> {
       setTimeout(() => {
         try { socket.connect(); } catch { /* next foreground retry */ }
       }, 800);
+    });
+    // Sent to exactly the device that was removed from the device list.
+    socket.on("session:revoked", () => {
+      signOut();
+      try { window.dispatchEvent(new CustomEvent("vura:signed-out")); } catch { /* non-browser */ }
     });
   }
   if (!socket.connected) await new Promise<void>((resolve) => {
