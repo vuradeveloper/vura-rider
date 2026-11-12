@@ -13,6 +13,7 @@ const trace_1 = require("../services/trace");
 const adminRiders_1 = require("../services/adminRiders");
 const featureFlags_1 = require("../services/featureFlags");
 const fareFees_1 = require("../services/fareFees");
+const compensation_1 = require("../services/compensation");
 const rideCategories_1 = require("../services/rideCategories");
 const preauthorization_1 = require("../services/preauthorization");
 const PayLaterService_1 = require("../services/PayLaterService");
@@ -899,6 +900,10 @@ router.get("/:id/receipt", auth_1.requireAuth, async (req, res) => {
               (COALESCE(NULLIF(r.actual_fare, 0), NULLIF(r.estimated_fare, 0), 0)
                 + COALESCE(r.booking_fee_cents, 0)::numeric / 100) AS total,
               r.platform_fee AS ride_request_fee,
+              COALESCE(r.wait_fee, 0) AS wait_fee,
+              COALESCE(r.stop_fee, 0) AS stop_fee,
+              COALESCE(r.cancellation_fee, 0) AS cancellation_fee,
+              COALESCE(r.cancel_driver_comp, 0) AS cancel_driver_comp,
               r.payment_method, r.payment_status,
               r.created_at, r.completed_at,
               d.full_name AS driver_name, d.phone AS driver_phone,
@@ -1191,13 +1196,24 @@ router.patch("/:id/status", auth_1.requireAuth, async (req, res) => {
         const params = [status, id];
         if (status === "completed") {
             updates.push("completed_at = NOW()");
-            // Never let a completed ride fall to R0. If the fare is 0/missing use
-            // the estimated fare; if that is also missing, default to the app's
-            // minimum demo fare (R0.20).
-            updates.push("actual_fare = GREATEST(COALESCE(NULLIF(estimated_fare, 0), 0.20), COALESCE(actual_fare, 0))");
+        }
+        if (status === "driver_arrived") {
+            updates.push("arrived_at = COALESCE(arrived_at, NOW())");
+        }
+        if (status === "in_progress") {
+            updates.push("trip_started_at = COALESCE(trip_started_at, NOW())");
         }
         await (0, database_1.execute)(`UPDATE rides SET ${updates.join(", ")} WHERE id = $${params.length}`, params);
         if (status === "completed") {
+            // Waiting + extra-stop compensation is added to the fare exactly once
+            // (services/compensation.ts). The caps and the free waiting window live
+            // there, so the app, the receipt and the wallet agree.
+            const baseRow = await (0, database_1.queryOne)(`SELECT GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare
+           FROM rides WHERE id = $1`, [id]).catch(() => null);
+            const extras = await (0, compensation_1.applyTripExtras)(String(id), Number(baseRow?.fare || 0.2)).catch(() => null);
+            if (extras) {
+                await (0, database_1.execute)("UPDATE rides SET actual_fare = $1 WHERE id = $2", [extras.fareRands, id]).catch(() => undefined);
+            }
             await (0, AffiliateService_1.settleFirstRide)(String(id));
             // Card preauthorization: the ride completing captures the hold for the
             // final fare (no-op when there is no hold; PAID still arrives only via
@@ -1550,6 +1566,9 @@ router.post("/:id/cancel", auth_1.requireAuth, async (req, res) => {
             : null;
         if (ride.driver_id) {
             await (0, dispatch_1.releaseDriver)(String(ride.driver_id)).catch(() => undefined);
+            if (fee > 0) {
+                void (0, compensation_1.creditCancellationComp)(String(rideId), String(ride.driver_id), fee).catch(() => undefined);
+            }
             if (assignedDriver?.firebase_uid) {
                 io?.to(`user:${assignedDriver.firebase_uid}`).emit("ride:cancelled", {
                     rideId,

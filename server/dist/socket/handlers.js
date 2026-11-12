@@ -54,6 +54,7 @@ const promos_1 = require("../services/promos");
 const rideCategories_1 = require("../services/rideCategories");
 const locationLog_1 = require("../services/locationLog");
 const pinService_1 = require("../services/pinService");
+const compensation_1 = require("../services/compensation");
 const sosService_1 = require("../services/sosService");
 const userSecurity_1 = require("../services/userSecurity");
 const pendingRequest = new WeakMap();
@@ -668,6 +669,10 @@ function setupSocketHandlers(io) {
                 const assigned = await (0, database_1.queryOne)("SELECT driver_id FROM rides WHERE id = $1", [rideId]).catch(() => null);
                 if (assigned?.driver_id)
                     await (0, dispatch_1.releaseDriver)(assigned.driver_id);
+                // Late cancel → pay the driver their share of the fee (idempotent).
+                if (fee > 0 && assigned?.driver_id) {
+                    void (0, compensation_1.creditCancellationComp)(String(rideId), String(assigned.driver_id), fee).catch(() => undefined);
+                }
                 // Tell the rider instantly — no waiting on the refund API.
                 io.to(`ride:${rideId}`).emit("ride:cancelled", {
                     rideId,
@@ -1450,7 +1455,7 @@ function setupSocketHandlers(io) {
                 const ride = await (0, database_1.queryOne)("SELECT id, driver_id FROM rides WHERE id = $1 AND driver_id = $2", [rideId, dbUserId]);
                 if (!ride)
                     return;
-                await (0, database_1.execute)("UPDATE rides SET status = 'driver_arrived' WHERE id = $1", [rideId]);
+                await (0, database_1.execute)("UPDATE rides SET status = 'driver_arrived', arrived_at = COALESCE(arrived_at, NOW()) WHERE id = $1", [rideId]);
                 io.to(`ride:${rideId}`).emit("ride:driver:arrived");
                 // Push "driver arrived" to the rider (with the driver's real name + car).
                 (async () => {
@@ -1564,7 +1569,13 @@ function setupSocketHandlers(io) {
                     });
                     return;
                 }
-                await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2", [ride.fare, rideId]);
+                const extras = await (0, compensation_1.applyTripExtras)(String(rideId), Number(ride.fare)).catch(() => ({
+                    fareRands: Number(ride.fare),
+                    waitFeeRands: 0,
+                    stopFeeRands: 0,
+                }));
+                await (0, database_1.execute)("UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2", [extras.fareRands, rideId]);
+                ride.fare = extras.fareRands;
                 console.log(`[complete] ride=${rideId} status=completed fare=${ride.fare}`);
                 // "Invite & earn": the FIRST completed ride of a REFERRED rider pays the
                 // inviter their R5 (idempotent — unique per ride). The REST completion

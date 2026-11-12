@@ -5,6 +5,9 @@
  * strip <style> blocks and flex/grid, so a modern-looking React/CSS email
  * collapses in the inbox. The images are served from our own API (logo and a
  * generated hero), so the design works without third-party tracking pixels.
+ *
+ * Design: Vura white / red / black. Sharp edges, one accent, no rounded card
+ * or pill chrome — the same editorial treatment as the website.
  */
 export declare function emailPublicBase(): string;
 export declare function unsubscribeUrl(userId: string, token: string): string;

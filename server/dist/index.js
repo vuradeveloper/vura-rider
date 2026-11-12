@@ -90,6 +90,7 @@ const admin_1 = __importDefault(require("./routes/admin"));
 const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const adminLiveSupport_1 = __importDefault(require("./routes/adminLiveSupport"));
 const adminReports_2 = __importDefault(require("./routes/adminReports"));
+const adminAnalytics_1 = __importDefault(require("./routes/adminAnalytics"));
 const adminMfa_2 = __importDefault(require("./routes/adminMfa"));
 const adminEmail_1 = __importDefault(require("./routes/adminEmail"));
 const emailCampaigns_1 = require("./services/emailCampaigns");
@@ -374,6 +375,7 @@ app.use("/api/admin/v2/mfa", adminMfa_2.default);
 // Disputes, refund requests and lost-item reports: mounted before adminV2 so
 // the support queue does not depend on the general router's route table.
 app.use("/api/admin/v2", adminReports_2.default);
+app.use("/api/admin/v2/analytics", adminAnalytics_1.default);
 app.use("/api/admin/v2", adminV2_1.default);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
@@ -861,6 +863,18 @@ async function start() {
         ADD COLUMN IF NOT EXISTS no_drivers_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS version INT DEFAULT 0
       `);
+            // Compensation rules (services/compensation.ts): when the driver reached
+            // the pickup, when the trip actually started, and the waiting / extra-stop
+            // fees that were added to the fare. Without arrived_at the server cannot
+            // bill waiting honestly, and without the fee columns a replayed
+            // completion would charge twice.
+            await (0, database_2.execute)(`
+        ALTER TABLE rides
+        ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS wait_fee NUMERIC(10,2) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS stop_fee NUMERIC(10,2) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS cancel_driver_comp NUMERIC(10,2) DEFAULT 0
+      `).catch((err) => console.warn("⚠ compensation columns migration skipped:", err?.message));
             // Backfill so the new status column agrees with the old is_online boolean and
             // with trips already in flight (a driver mid-trip must not look available).
             await (0, database_2.execute)(`

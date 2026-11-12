@@ -4,7 +4,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const path_1 = __importDefault(require("path"));
 const sharp_1 = __importDefault(require("sharp"));
 const database_1 = require("../config/database");
 const emailCampaigns_1 = require("../services/emailCampaigns");
@@ -52,43 +51,27 @@ router.get("/hero/:id.png", async (req, res) => {
         const code = campaign?.promo_code || "";
         const lines = wrapWords(heading, 27, 3);
         const lineSvg = lines
-            .map((line, i) => `<text x="64" y="${238 + i * 62}" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="800">${xml(line)}</text>`)
+            .map((line, i) => `<text x="64" y="${200 + i * 64}" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="800">${xml(line)}</text>`)
             .join("");
         const badge = discount
-            ? `<rect x="64" y="${238 + lines.length * 62 + 18}" width="${Math.min(520, 34 + discount.length * 22)}" height="58" rx="29" fill="#EA4335"/>
-         <text x="${64 + Math.min(520, 34 + discount.length * 22) / 2}" y="${238 + lines.length * 62 + 56}" text-anchor="middle" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700">${xml(discount)}</text>`
+            ? `<rect x="64" y="${200 + lines.length * 64 + 18}" width="${Math.min(560, 34 + discount.length * 22)}" height="54" fill="#E1251B"/>
+         <text x="${64 + 20}" y="${200 + lines.length * 64 + 54}" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">${xml(discount)}</text>`
             : "";
         const codeLine = code
-            ? `<text x="64" y="478" fill="#F6D7D3" font-family="'Courier New', Courier, monospace" font-size="20" letter-spacing="3">CODE ${xml(code)}</text>`
+            ? `<text x="64" y="456" fill="#FFFFFF" opacity="0.72" font-family="'Courier New', Courier, monospace" font-size="18" letter-spacing="3">CODE ${xml(code)}</text>`
             : "";
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520">
-      <defs>
-        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#141414"/>
-          <stop offset="1" stop-color="#2B1513"/>
-        </linearGradient>
-      </defs>
-      <rect width="1200" height="520" fill="url(#bg)"/>
-      <circle cx="1080" cy="40" r="290" fill="#EA4335" opacity="0.32"/>
-      <circle cx="930" cy="470" r="250" fill="#F4B400" opacity="0.16"/>
-      <circle cx="1120" cy="340" r="110" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="22"/>
-      <rect x="50" y="36" width="310" height="98" rx="22" fill="#FFFFFF"/>
+      <rect width="1200" height="520" fill="#0B0B0C"/>
+      <rect x="0" y="0" width="18" height="520" fill="#E1251B"/>
+      <text x="64" y="64" fill="#E1251B" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" letter-spacing="5">VURA / JOHANNESBURG</text>
+      <text x="1130" y="430" text-anchor="middle" fill="#E1251B" opacity="0.16" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="430" font-weight="900">V</text>
+      <line x1="64" y1="96" x2="300" y2="96" stroke="#E1251B" stroke-width="3"/>
       ${lineSvg}
       ${badge}
       ${codeLine}
-      <text x="64" y="66" fill="#EA4335" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" letter-spacing="5">VURA</text>
-      <text x="64" y="500" fill="#FFFFFF" opacity="0.55" font-family="Arial, Helvetica, sans-serif" font-size="16" letter-spacing="2">RIDE MORE, PAY LESS</text>
+      <text x="64" y="500" fill="#FFFFFF" opacity="0.45" font-family="Arial, Helvetica, sans-serif" font-size="15" letter-spacing="3">RIDE THE NIGHT</text>
     </svg>`;
-        let image = (0, sharp_1.default)(Buffer.from(svg)).png();
-        try {
-            const logoPath = path_1.default.join(__dirname, "..", "..", "assets", "vura-logo.png");
-            const logo = await (0, sharp_1.default)(logoPath).resize({ width: 250, withoutEnlargement: true }).png().toBuffer();
-            image = image.composite([{ input: logo, left: 80, top: 57 }]);
-        }
-        catch {
-            /* the hero still works without the logo overlay */
-        }
-        const out = await image.png().toBuffer();
+        const out = await (0, sharp_1.default)(Buffer.from(svg)).png().toBuffer();
         res.set("Cache-Control", "public, max-age=3600");
         res.type("png").send(out);
     }
