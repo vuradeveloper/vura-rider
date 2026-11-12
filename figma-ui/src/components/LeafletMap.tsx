@@ -111,7 +111,7 @@ function ensureMapStyle() {
  * fill storage and break other data (recent searches, saved places, auth).
  */
 function attachCachedTiles(L: any, map: any) {
-  const MAX_TILES = 250
+  const MAX_TILES = 60
 
   function storeTile(url: string, dataUrl: string) {
     try {
@@ -126,7 +126,16 @@ function attachCachedTiles(L: any, map: any) {
       }
       for (const k of del) { try { localStorage.removeItem(k) } catch { /* ignore */ } }
       localStorage.setItem('vura:tile:' + url, dataUrl)
-    } catch { /* storage full or unavailable — caching is best-effort */ }
+    } catch {
+      // Storage is shared with the auth token. Never let map tiles starve it:
+      // drop every cached tile once and leave the session alone.
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i)
+          if (k && k.indexOf('vura:tile:') === 0) localStorage.removeItem(k)
+        }
+      } catch { /* ignore */ }
+    }
   }
 
   const CacheLayer = L.TileLayer.extend({

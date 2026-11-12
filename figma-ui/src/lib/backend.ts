@@ -201,11 +201,31 @@ export function getStoredUser(): AuthUser | null {
 
 function storeUser(u: AuthUser | null) {
   currentUser = u;
+  const raw = u ? JSON.stringify(u) : null;
   try {
-    if (u) localStorage.setItem(TOKEN_KEY, JSON.stringify(u));
+    if (raw) localStorage.setItem(TOKEN_KEY, raw);
+    else localStorage.removeItem(TOKEN_KEY);
+    return;
+  } catch {
+    /* quota full — almost always the map tile cache. Fall through and reclaim. */
+  }
+  // The session is not disposable; cached map tiles are. A full WebView
+  // localStorage used to make the token fail to save, so the app "forgot" the
+  // login on every restart and every authenticated screen 401'd. Drop the
+  // tiles, then retry once.
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf("vura:tile:") === 0) localStorage.removeItem(k);
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (raw) localStorage.setItem(TOKEN_KEY, raw);
     else localStorage.removeItem(TOKEN_KEY);
   } catch {
-    /* storage unavailable — session stays in memory only */
+    /* storage still unavailable — session stays in memory only */
   }
 }
 
