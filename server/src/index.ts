@@ -54,6 +54,7 @@ import adminV2Router from "./routes/adminV2";
 import adminLiveSupportRouter from "./routes/adminLiveSupport";
 import adminReportsRouter from "./routes/adminReports";
 import adminAnalyticsRouter from "./routes/adminAnalytics";
+import adminAppVersionsRouter from "./routes/adminAppVersions";
 import { startAnalyticsAlertWorker } from "./services/analyticsAlerts";
 import adminMfaRouter from "./routes/adminMfa";
 import adminEmailRouter from "./routes/adminEmail";
@@ -406,6 +407,7 @@ app.use("/api/admin/v2/mfa", adminMfaRouter);
 // the support queue does not depend on the general router's route table.
 app.use("/api/admin/v2", adminReportsRouter);
 app.use("/api/admin/v2/analytics", adminAnalyticsRouter);
+app.use("/api/admin/v2/app-versions", adminAppVersionsRouter);
 app.use("/api/admin/v2", adminV2Router);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
