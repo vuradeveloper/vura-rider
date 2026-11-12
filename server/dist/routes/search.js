@@ -1,10 +1,26 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../config/database");
 const providerSeams_1 = require("../services/providerSeams");
 const router = (0, express_1.Router)();
+// Address lookup and reverse geocoding are safe to serve without a token:
+// they return places, never user data. Keeping them public means the booking
+// map and the pickup address still work on installed builds whose session
+// cannot mint a token, instead of every rider seeing an empty search screen.
+// Rate-limited so an anonymous caller cannot burn the HERE quota.
+const publicSearchLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60_000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many searches. Please try again in a minute." },
+});
 // Ensure table exists
 async function ensureTable() {
     await (0, database_1.execute)(`
@@ -240,13 +256,13 @@ async function resolveBias(firebaseUid, lat, lng) {
 // HERE's own order unless the caller explicitly asks for `sort=distance`. OpenStreetMap
 // (Nominatim) answers only when HERE has nothing usable - never because we forgot to send
 // a location, which is what used to turn "Farmers" into a list of farm associations.
-router.get("/geocode", auth_1.requireAuth, async (req, res) => {
+router.get("/geocode", publicSearchLimiter, auth_1.optionalAuth, async (req, res) => {
     const q = String(req.query.q || "").trim();
     const lat = parseFloat(req.query.lat);
     const lng = parseFloat(req.query.lng);
     const limit = Math.max(1, Math.min(15, parseInt(req.query.limit || "10", 10)));
     // Ranked against the rider's own point. Never unranked: see resolveBias().
-    const bias = await resolveBias(req.userId, lat, lng);
+    const bias = await resolveBias(req.userId || "", lat, lng);
     const hasAt = Boolean(bias);
     // Closest-first only when explicitly asked for; the default is HERE's own relevance
     // order, which is already proximity-aware because `at` is always sent.
@@ -363,7 +379,7 @@ router.get("/discover", auth_1.requireAuth, async (req, res) => {
     const lat = parseFloat(req.query.lat);
     const lng = parseFloat(req.query.lng);
     const limit = Math.max(1, Math.min(15, parseInt(req.query.limit || "10", 10)));
-    const bias = await resolveBias(req.userId, lat, lng);
+    const bias = await resolveBias(req.userId || "", lat, lng);
     const hasAt = Boolean(bias);
     const wantsDistance = wantsDistanceSort(req.query.sort, hasAt);
     const inFilter = countryInFilter(req.query.country);
@@ -422,7 +438,7 @@ router.get("/discover", auth_1.requireAuth, async (req, res) => {
 });
 // GET /api/search/reverse?lat=..&lng=..
 // Reverse-geocodes a coordinate to a human address via OSM Nominatim.
-router.get("/reverse", auth_1.requireAuth, async (req, res) => {
+router.get("/reverse", publicSearchLimiter, auth_1.optionalAuth, async (req, res) => {
     const lat = parseFloat(req.query.lat);
     const lng = parseFloat(req.query.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
