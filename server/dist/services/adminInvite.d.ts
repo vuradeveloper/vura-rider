@@ -24,7 +24,7 @@ export declare function renderResetEmail(resetLink: string, appName?: string): {
 };
 /** POST to Resend. `ok:false` carries a human-readable reason. */
 export declare function sendResendEmail(input: {
-    to: string;
+    to: string | string[];
     subject: string;
     html: string;
 }): Promise<{
