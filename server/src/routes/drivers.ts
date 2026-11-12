@@ -1035,4 +1035,281 @@ router.put("/me/preferences", requireAuth, async (req: AuthRequest, res: Respons
   }
 });
 
+// ═════════════════════════════════════════════════════════════════════════════
+// GET /api/drivers/diagnostics — "Why am I not getting trips?"
+//
+// The Facebook research (VURA-DRIVER-PAIN-POINTS.md) found that drivers sit
+// online with no requests and no explanation, so they assume a shadow-ban.
+// Almost every real cause is knowable: account not approved, a rejected
+// document, no vehicle linked, location stale, on a break, already on a trip,
+// outside the service area, push permission missing, or simply no demand.
+//
+// This endpoint turns those into an ordered checklist plus a plain-English
+// verdict, so the app can show the driver what to fix instead of a dead map.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/diagnostics", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const driverId = await driverUserId(req.userId!);
+    if (!driverId) {
+      res.status(404).json({ error: "Driver profile not found" });
+      return;
+    }
+
+    const profile = await queryOne<{
+      status: string | null;
+      is_online: boolean | null;
+      break_until: string | null;
+      current_lat: number | null;
+      current_lng: number | null;
+      last_location_at: string | null;
+      last_heartbeat_at: string | null;
+      vehicle_category: string | null;
+      license_plate: string | null;
+      rating_avg: number | string | null;
+      verification_status: string | null;
+      full_name: string | null;
+    }>(
+      `SELECT dp.status, dp.is_online, dp.break_until, dp.current_lat, dp.current_lng,
+              dp.last_location_at, dp.last_heartbeat_at, dp.vehicle_category,
+              dp.license_plate, dp.rating_avg, u.verification_status, u.full_name
+         FROM driver_profiles dp
+         JOIN users u ON u.id = dp.user_id
+        WHERE dp.user_id = $1`,
+      [driverId]
+    ).catch(() => null);
+
+    if (!profile) {
+      res.status(404).json({ error: "Driver profile not found" });
+      return;
+    }
+
+    const docs = await query<{ doc_type: string; status: string }>(
+      `SELECT DISTINCT ON (doc_type) doc_type, status
+         FROM driver_documents
+        WHERE driver_id = $1
+        ORDER BY doc_type, created_at DESC`,
+      [driverId]
+    ).catch(() => [] as { doc_type: string; status: string }[]);
+
+    const activeRide = await queryOne<{ id: string; status: string }>(
+      `SELECT id, status FROM rides
+        WHERE driver_id = $1 AND status IN ('accepted','driver_arrived','in_progress')
+        ORDER BY created_at DESC LIMIT 1`,
+      [driverId]
+    ).catch(() => null);
+
+    const push = await queryOne<{ id: string }>(
+      `SELECT id FROM device_tokens WHERE user_id = $1 AND is_active LIMIT 1`,
+      [driverId]
+    ).catch(() => null);
+
+    const lat = Number(profile.current_lat);
+    const lng = Number(profile.current_lng);
+    const hasFix = Number.isFinite(lat) && Number.isFinite(lng);
+    const lastFixMs = profile.last_location_at ? new Date(profile.last_location_at).getTime() : 0;
+    const fixAgeMin = lastFixMs ? Math.round((Date.now() - lastFixMs) / 60000) : null;
+
+    // Market: live demand within 10 km vs available supply in the same radius.
+    const radiusSql = `6371 * acos(LEAST(1, GREATEST(-1,
+      cos(radians($1)) * cos(radians(current_lat)) * cos(radians(current_lng) - radians($2))
+      + sin(radians($1)) * sin(radians(current_lat)))))`;
+
+    const market = hasFix
+      ? await queryOne<{ searching: number; available: number }>(
+          `SELECT
+             (SELECT COUNT(*)::int FROM rides
+               WHERE status = 'searching' AND created_at > NOW() - INTERVAL '15 minutes') AS searching,
+             (SELECT COUNT(*)::int FROM driver_profiles
+               WHERE status = 'available' AND current_lat IS NOT NULL
+                 AND ${radiusSql} <= 10) AS available`,
+          [lat, lng]
+        ).catch(() => null)
+      : await queryOne<{ searching: number; available: number }>(
+          `SELECT
+             (SELECT COUNT(*)::int FROM rides
+               WHERE status = 'searching' AND created_at > NOW() - INTERVAL '15 minutes') AS searching,
+             (SELECT COUNT(*)::int FROM driver_profiles WHERE status = 'available') AS available`
+        ).catch(() => null);
+
+    const searching = Number(market?.searching || 0);
+    const available = Number(market?.available || 0);
+
+    type Check = {
+      id: string;
+      label: string;
+      ok: boolean;
+      severity: "blocker" | "warning" | "info";
+      detail: string;
+      action: string | null;
+    };
+    const checks: Check[] = [];
+    const add = (
+      id: string,
+      label: string,
+      ok: boolean,
+      detail: string,
+      action: string | null,
+      severity: Check["severity"] = "blocker"
+    ) => checks.push({ id, label, ok, detail, action, severity: ok ? "info" : severity });
+
+    const status = String(profile.status || "offline");
+    const onBreak = status === "break";
+    const online = status === "available" || status === "on_trip";
+    const verification = String(profile.verification_status || "").toLowerCase();
+    const approved =
+      ["approved", "verified", ""].includes(verification) ||
+      (verification === "" && Boolean(profile.license_plate));
+
+    add(
+      "account",
+      "Account approved",
+      approved,
+      approved
+        ? "Your driver account is active."
+        : `Your account is ${verification || "pending"} verification. You cannot receive requests until it is approved.`,
+      approved ? null : "Open Support → My reports & appeals and request a review."
+    );
+
+    const rejected = docs.filter((d) => d.status === "rejected");
+    const pending = docs.filter((d) => d.status === "pending_review");
+    add(
+      "documents",
+      "Documents accepted",
+      rejected.length === 0,
+      rejected.length
+        ? `${rejected.length} document(s) were rejected: ${rejected.map((d) => d.doc_type).join(", ")}.`
+        : pending.length
+          ? `${pending.length} document(s) are still in review (usually within 12 hours).`
+          : "No document problems.",
+      rejected.length ? "Open Account → Documents and re-upload the rejected file." : null,
+      rejected.length ? "blocker" : "warning"
+    );
+
+    add(
+      "vehicle",
+      "Vehicle linked",
+      Boolean(profile.license_plate),
+      profile.license_plate
+        ? `Linked vehicle: ${profile.license_plate}${profile.vehicle_category ? ` · ${profile.vehicle_category}` : ""}.`
+        : "No vehicle is linked to your account.",
+      profile.license_plate ? null : "Open Account → My vehicle and link your car."
+    );
+
+    add(
+      "online",
+      "Online",
+      online,
+      online
+        ? onBreak
+          ? "You are on a break — dispatch is paused until it ends."
+          : "You are online and visible to dispatch."
+        : "You are offline, so no requests can reach you.",
+      online ? null : "Tap Go online on Home.",
+      "blocker"
+    );
+
+    if (onBreak) {
+      const until = profile.break_until ? new Date(profile.break_until) : null;
+      add(
+        "break",
+        "Break ended",
+        false,
+        until ? `Break ends at ${until.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })}.` : "You are on a break.",
+        "End the break from the Home screen.",
+        "warning"
+      );
+    }
+
+    add(
+      "trip",
+      "Not already on a trip",
+      !activeRide,
+      activeRide ? `You are on an active trip (${activeRide.status}).` : "No trip is holding you.",
+      activeRide ? null : null,
+      "info"
+    );
+
+    add(
+      "location",
+      "Location fresh",
+      hasFix && fixAgeMin != null && fixAgeMin <= 3,
+      hasFix
+        ? fixAgeMin != null
+          ? `Last GPS fix was ${fixAgeMin} minute(s) ago.`
+          : "Location has never been sent."
+        : "This phone has not sent a location yet.",
+      hasFix && fixAgeMin != null && fixAgeMin <= 3
+        ? null
+        : "Turn on location for Vura Driver (Settings → Apps → Vura Driver → Permissions) and keep the app open.",
+      "blocker"
+    );
+
+    add(
+      "push",
+      "Push notifications on",
+      Boolean(push),
+      push
+        ? "This phone is registered for ride offers."
+        : "No push token is registered, so offers cannot wake the app when it is in the background.",
+      push ? null : "Allow notifications in phone settings, then reopen the app.",
+      "warning"
+    );
+
+    const inArea = hasFix
+      ? Math.abs(lat + 26.2041) < 0.6 && Math.abs(lng - 28.0473) < 0.6
+      : false;
+    add(
+      "area",
+      "Inside the service area",
+      inArea,
+      inArea
+        ? "You are inside the Johannesburg service area."
+        : "You are outside the current Johannesburg service area.",
+      inArea ? null : "Move back towards Johannesburg, Sandton, Rosebank or the airport corridor.",
+      "warning"
+    );
+
+    const demandLevel = searching === 0 ? "none" : searching >= available ? "high" : available > searching * 3 ? "low" : "steady";
+    add(
+      "demand",
+      "Demand nearby",
+      searching > 0,
+      searching === 0
+        ? "No riders are searching right now. This is normal at quiet hours."
+        : `${searching} rider request(s) in the last 15 minutes · ${available} available driver(s) nearby.`,
+      searching === 0 ? "Try a busier area or wait for the next wave." : null,
+      "warning"
+    );
+
+    const blockers = checks.filter((c) => !c.ok && c.severity === "blocker");
+    const warnings = checks.filter((c) => !c.ok && c.severity === "warning");
+    const score = Math.max(0, 100 - blockers.length * 35 - warnings.length * 10);
+    const verdict = blockers.length ? "blocked" : warnings.length ? "attention" : "ready";
+
+    res.json({
+      ok: true,
+      generated_at: new Date().toISOString(),
+      verdict,
+      score,
+      headline:
+        verdict === "blocked"
+          ? blockers[0].detail
+          : verdict === "attention"
+            ? warnings[0].detail
+            : "Everything is set up. You are visible to dispatch.",
+      checks,
+      blockers: blockers.map((b) => b.id),
+      market: {
+        searching_rides_15m: searching,
+        available_drivers_10km: available,
+        demand_level: demandLevel,
+        your_status: status,
+        gps_age_minutes: fixAgeMin,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

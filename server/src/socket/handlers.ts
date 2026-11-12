@@ -34,6 +34,7 @@ import {
 import { canonicalTier } from "../services/rideCategories";
 import { logRidePoint } from "../services/locationLog";
 import { verifyRidePin } from "../services/pinService";
+import { applyTripExtras, creditCancellationComp } from "../services/compensation";
 import { ensureShareToken, publicBaseUrl, triggerSos } from "../services/sosService";
 import {
   getUserSecurityGate,
@@ -792,6 +793,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           [rideId]
         ).catch(() => null);
         if (assigned?.driver_id) await releaseDriver(assigned.driver_id);
+        // Late cancel → pay the driver their share of the fee (idempotent).
+        if (fee > 0 && assigned?.driver_id) {
+          void creditCancellationComp(String(rideId), String(assigned.driver_id), fee).catch(() => undefined);
+        }
 
         // Tell the rider instantly — no waiting on the refund API.
         io.to(`ride:${rideId}`).emit("ride:cancelled", {
@@ -1681,7 +1686,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           [rideId, dbUserId]
         );
         if (!ride) return;
-        await execute("UPDATE rides SET status = 'driver_arrived' WHERE id = $1", [rideId]);
+        await execute(
+          "UPDATE rides SET status = 'driver_arrived', arrived_at = COALESCE(arrived_at, NOW()) WHERE id = $1",
+          [rideId]
+        );
         io.to(`ride:${rideId}`).emit("ride:driver:arrived");
         // Push "driver arrived" to the rider (with the driver's real name + car).
         (async () => {
@@ -1817,10 +1825,16 @@ export function setupSocketHandlers(io: SocketIOServer) {
           });
           return;
         }
+        const extras = await applyTripExtras(String(rideId), Number(ride.fare)).catch(() => ({
+          fareRands: Number(ride.fare),
+          waitFeeRands: 0,
+          stopFeeRands: 0,
+        }));
         await execute(
           "UPDATE rides SET status = 'completed', completed_at = NOW(), actual_fare = $1 WHERE id = $2",
-          [ride.fare, rideId]
+          [extras.fareRands, rideId]
         );
+        ride.fare = extras.fareRands as any;
         console.log(`[complete] ride=${rideId} status=completed fare=${ride.fare}`);
         // "Invite & earn": the FIRST completed ride of a REFERRED rider pays the
         // inviter their R5 (idempotent — unique per ride). The REST completion
