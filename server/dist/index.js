@@ -91,6 +91,7 @@ const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const adminLiveSupport_1 = __importDefault(require("./routes/adminLiveSupport"));
 const adminReports_2 = __importDefault(require("./routes/adminReports"));
 const adminAnalytics_1 = __importDefault(require("./routes/adminAnalytics"));
+const adminAppVersions_1 = __importDefault(require("./routes/adminAppVersions"));
 const analyticsAlerts_1 = require("./services/analyticsAlerts");
 const adminMfa_2 = __importDefault(require("./routes/adminMfa"));
 const adminEmail_1 = __importDefault(require("./routes/adminEmail"));
@@ -377,6 +378,7 @@ app.use("/api/admin/v2/mfa", adminMfa_2.default);
 // the support queue does not depend on the general router's route table.
 app.use("/api/admin/v2", adminReports_2.default);
 app.use("/api/admin/v2/analytics", adminAnalytics_1.default);
+app.use("/api/admin/v2/app-versions", adminAppVersions_1.default);
 app.use("/api/admin/v2", adminV2_1.default);
 // Safety surfaces (live map, SOS inbox, anomaly log, config) live under the
 // same admin/v2 tree so role checks + audit behave identically.
