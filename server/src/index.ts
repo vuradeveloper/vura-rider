@@ -56,6 +56,7 @@ import adminReportsRouter from "./routes/adminReports";
 import adminAnalyticsRouter from "./routes/adminAnalytics";
 import adminAppVersionsRouter from "./routes/adminAppVersions";
 import { startAnalyticsAlertWorker } from "./services/analyticsAlerts";
+import { startAppVersionDigestWorker } from "./services/appVersionDigest";
 import adminMfaRouter from "./routes/adminMfa";
 import adminEmailRouter from "./routes/adminEmail";
 import { startEmailCampaignWorker } from "./services/emailCampaigns";
@@ -1002,6 +1003,7 @@ startSafetyWorker(io);
     // ANALYTICS_ALERT_MINUTES=0 disables it (tests/homologation).
     if (process.env.NODE_ENV !== "test") {
       startAnalyticsAlertWorker();
+      startAppVersionDigestWorker();
     }
   });
 }

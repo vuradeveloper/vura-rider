@@ -13,6 +13,12 @@ import { Router, Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import { query, queryOne } from "../config/database";
 import { requireAdmin } from "../services/adminAuth";
+import {
+  emailDriverUpdate,
+  listOutdatedDrivers,
+  sendAppVersionDigest,
+  whatsappLink,
+} from "../services/appVersionDigest";
 
 const router = Router();
 
@@ -26,18 +32,6 @@ const STORE = {
   driver: process.env.DRIVER_STORE_URL || "https://play.google.com/store/apps/details?id=app.vura.driver",
   rider: process.env.RIDER_STORE_URL || "https://play.google.com/store/apps/details?id=app.vura.rider",
 };
-
-function olderThan(version: string | null, latest: string): boolean {
-  if (!version || version === "unknown") return true;
-  const a = version.split(".").map((n) => Number(n) || 0);
-  const b = latest.split(".").map((n) => Number(n) || 0);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] || 0;
-    const y = b[i] || 0;
-    if (x !== y) return x < y;
-  }
-  return false;
-}
 
 router.get("/", requireAdmin("drivers.read"), async (_req: AuthRequest, res: Response) => {
   try {
@@ -55,30 +49,13 @@ router.get("/", requireAdmin("drivers.read"), async (_req: AuthRequest, res: Res
         ORDER BY users DESC`
     ).catch(() => []);
 
-    const drivers = await query<{
-      id: string; name: string | null; email: string | null; status: string | null;
-      version: string | null; platform: string | null; last_seen: string; device: string | null;
-    }>(
-      `SELECT u.id, u.full_name AS name, u.email,
-              dp.status,
-              s.app_version AS version, s.platform,
-              s.last_seen_at AS last_seen, s.device_name AS device
-         FROM user_sessions s
-         JOIN users u ON u.id = s.user_id
-         LEFT JOIN driver_profiles dp ON dp.user_id = u.id
-        WHERE u.role = 'driver'
-          AND s.revoked_at IS NULL
-          AND s.last_seen_at > NOW() - INTERVAL '30 days'
-        ORDER BY s.last_seen_at DESC`
-    ).catch(() => []);
-
-    const driversOutdated = drivers
-      .filter((d) => olderThan(d.version, LATEST.driver))
-      .map((d) => ({
-        ...d,
-        // Mask the address for the list; ops can open the driver profile for full details.
-        email: d.email ? String(d.email).replace(/^(.).*(@.*)$/, "$1***$2") : null,
-      }));
+    const outdated = await listOutdatedDrivers();
+    const driversOutdated = outdated.map((d) => ({
+      ...d,
+      // Mask the address in the list; ops opens the driver profile for details.
+      email: d.email ? String(d.email).replace(/^(.).*(@.*)$/, "$1***$2") : null,
+      whatsapp: whatsappLink(d),
+    }));
 
     const counts = await queryOne<{ drivers: number; riders: number }>(
       `SELECT COUNT(DISTINCT s.user_id) FILTER (WHERE u.role = 'driver')::int AS drivers,
@@ -97,6 +74,36 @@ router.get("/", requireAdmin("drivers.read"), async (_req: AuthRequest, res: Res
       },
       distribution: dist,
       drivers_outdated: driversOutdated,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/digest", requireAdmin("drivers.read"), async (_req: AuthRequest, res: Response) => {
+  try {
+    const out = await sendAppVersionDigest();
+    res.json(out);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/notify", requireAdmin("drivers.read"), async (req: AuthRequest, res: Response) => {
+  try {
+    const ids: string[] = Array.isArray(req.body?.driverIds) ? req.body.driverIds.map(String) : [];
+    const all = await listOutdatedDrivers();
+    const targets = ids.length ? all.filter((d) => ids.includes(d.id)) : all;
+    const results: { id: string; ok: boolean; error?: string }[] = [];
+    for (const d of targets) {
+      const r = await emailDriverUpdate(d).catch((e) => ({ ok: false, error: String(e) }));
+      results.push({ id: d.id, ok: r.ok, error: (r as any).error });
+    }
+    res.json({
+      targets: targets.length,
+      sent: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+      results,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
