@@ -91,6 +91,7 @@ const adminV2_1 = __importDefault(require("./routes/adminV2"));
 const adminLiveSupport_1 = __importDefault(require("./routes/adminLiveSupport"));
 const adminReports_2 = __importDefault(require("./routes/adminReports"));
 const adminAnalytics_1 = __importDefault(require("./routes/adminAnalytics"));
+const analyticsAlerts_1 = require("./services/analyticsAlerts");
 const adminMfa_2 = __importDefault(require("./routes/adminMfa"));
 const adminEmail_1 = __importDefault(require("./routes/adminEmail"));
 const emailCampaigns_1 = require("./services/emailCampaigns");
@@ -947,6 +948,12 @@ async function start() {
         // One line for CloudWatch: what commit is live, and the state of the
         // database, migrations, feature flags and providers (never throws).
         void logSelfCheck(dbConnected);
+        // Analytics alerts: compares the last 24h/7d with the window before it and
+        // emails info@ridevura.com + ridevura@gmail.com when something changes.
+        // ANALYTICS_ALERT_MINUTES=0 disables it (tests/homologation).
+        if (process.env.NODE_ENV !== "test") {
+            (0, analyticsAlerts_1.startAnalyticsAlertWorker)();
+        }
     });
 }
 start().catch((err) => {

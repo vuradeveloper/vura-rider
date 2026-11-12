@@ -14,6 +14,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = require("../config/database");
 const adminAuth_1 = require("../services/adminAuth");
+const analyticsAlerts_1 = require("../services/analyticsAlerts");
 const router = (0, express_1.Router)();
 const RANGES = [7, 30, 90];
 function pct(part, whole) {
@@ -133,6 +134,61 @@ router.get("/overview", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (
          LEFT JOIN driver_profiles dp ON dp.user_id = de.driver_id
         WHERE r.created_at >= NOW() - $1::interval
         GROUP BY u.full_name ORDER BY net DESC LIMIT 8`, [interval]).catch(() => []);
+        // ── Waiting time (driver arrived → trip started) ───────────────────────
+        const waitTimes = await (0, database_1.query)(`SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD') AS day,
+              COALESCE(AVG(EXTRACT(EPOCH FROM (trip_started_at - arrived_at)) / 60), 0) AS avg_minutes,
+              COUNT(*)::int AS trips
+         FROM rides
+        WHERE created_at >= NOW() - $1::interval
+          AND arrived_at IS NOT NULL AND trip_started_at IS NOT NULL
+        GROUP BY 1 ORDER BY 1`, [interval]).catch(() => []);
+        // ── No-driver requests by hour (lost sales) ────────────────────────────
+        const noDriverHourly = await (0, database_1.query)(`SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COUNT(*)::int AS count
+         FROM rides
+        WHERE status = 'no_drivers' AND created_at >= NOW() - $1::interval
+        GROUP BY 1 ORDER BY 1`, [interval]).catch(() => []);
+        // ── Driver earnings per completed trip (distribution) ──────────────────
+        const earningsDist = await (0, database_1.query)(`WITH per_ride AS (
+         SELECT de.driver_id, de.net_amount
+           FROM driver_earnings de
+           JOIN rides r ON r.id = de.ride_id
+          WHERE r.created_at >= NOW() - $1::interval
+       )
+       SELECT CASE
+                WHEN net_amount < 20 THEN 'Under R20'
+                WHEN net_amount < 50 THEN 'R20–R50'
+                WHEN net_amount < 100 THEN 'R50–R100'
+                WHEN net_amount < 200 THEN 'R100–R200'
+                ELSE 'R200+'
+              END AS bucket,
+              COUNT(DISTINCT driver_id)::int AS drivers
+         FROM per_ride GROUP BY 1`, [interval]).catch(() => []);
+        // ── Top riders (repeat demand) ─────────────────────────────────────────
+        const topRiders = await (0, database_1.query)(`SELECT COALESCE(u.full_name, 'Rider') AS name,
+              COUNT(*)::int AS rides,
+              COALESCE(SUM(COALESCE(NULLIF(r.actual_fare, 0), r.estimated_fare, 0)), 0) AS gmv
+         FROM rides r
+         JOIN users u ON u.id = r.passenger_id
+        WHERE r.status = 'completed' AND r.created_at >= NOW() - $1::interval
+        GROUP BY u.id, u.full_name ORDER BY rides DESC LIMIT 8`, [interval]).catch(() => []);
+        // ── Drivers at risk of churning (online but no trip for 7 days) ───────
+        const churnRisk = await (0, database_1.queryOne)(`SELECT COUNT(*)::int AS count
+         FROM driver_profiles dp
+        WHERE dp.status IN ('available','break','offline')
+          AND NOT EXISTS (
+            SELECT 1 FROM rides r
+             WHERE r.driver_id = dp.user_id AND r.status = 'completed'
+               AND r.created_at >= NOW() - INTERVAL '7 days'
+          )`).catch(() => null);
+        // ── Zones with conversion, not just volume ─────────────────────────────
+        const zonesDetail = await (0, database_1.query)(`SELECT COALESCE(NULLIF(SPLIT_PART(COALESCE(pickup_address, ''), ',', 1), ''), 'Unknown') AS area,
+              COUNT(*)::int AS rides,
+              COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+              COUNT(*) FILTER (WHERE status = 'no_drivers')::int AS no_drivers,
+              COALESCE(SUM(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0)) FILTER (WHERE status = 'completed'), 0) AS gmv,
+              COALESCE(AVG(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0)) FILTER (WHERE status = 'completed'), 0) AS avg_fare
+         FROM rides WHERE created_at >= NOW() - $1::interval
+        GROUP BY 1 HAVING COUNT(*) >= 3 ORDER BY rides DESC LIMIT 14`, [interval]).catch(() => []);
         // ── Assemble ────────────────────────────────────────────────────────────
         const t = totals || {};
         const gmv = Number(t.gmv || 0);
@@ -259,7 +315,44 @@ router.get("/overview", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (
             busiest,
             forecast,
             insights,
+            wait_times: waitTimes,
+            no_driver_hourly: noDriverHourly,
+            earnings_distribution: earningsDist,
+            top_riders: topRiders,
+            churn_risk: Number(churnRisk?.count || 0),
+            zones_detail: zonesDetail,
         });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// ── Alerts: the Control Room talking back ─────────────────────────────────
+router.get("/alerts", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (_req, res) => {
+    try {
+        res.json({ alerts: await (0, analyticsAlerts_1.listAlerts)(80), recipients: (0, analyticsAlerts_1.alertRecipients)() });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+router.post("/alerts/scan", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (_req, res) => {
+    try {
+        const created = await (0, analyticsAlerts_1.runAnalyticsScan)();
+        res.json({ ok: true, created });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+router.post("/alerts/test", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (req, res) => {
+    try {
+        const actor = req.adminActor?.email ||
+            req.admin?.email ||
+            req.adminEmail ||
+            "an admin";
+        const out = await (0, analyticsAlerts_1.sendTestAnalyticsEmail)(String(actor));
+        res.json(out);
     }
     catch (err) {
         res.status(500).json({ error: err.message });
