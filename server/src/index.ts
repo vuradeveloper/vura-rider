@@ -54,6 +54,7 @@ import adminV2Router from "./routes/adminV2";
 import adminLiveSupportRouter from "./routes/adminLiveSupport";
 import adminReportsRouter from "./routes/adminReports";
 import adminAnalyticsRouter from "./routes/adminAnalytics";
+import { startAnalyticsAlertWorker } from "./services/analyticsAlerts";
 import adminMfaRouter from "./routes/adminMfa";
 import adminEmailRouter from "./routes/adminEmail";
 import { startEmailCampaignWorker } from "./services/emailCampaigns";
@@ -993,6 +994,13 @@ startSafetyWorker(io);
     // One line for CloudWatch: what commit is live, and the state of the
     // database, migrations, feature flags and providers (never throws).
     void logSelfCheck(dbConnected);
+
+    // Analytics alerts: compares the last 24h/7d with the window before it and
+    // emails info@ridevura.com + ridevura@gmail.com when something changes.
+    // ANALYTICS_ALERT_MINUTES=0 disables it (tests/homologation).
+    if (process.env.NODE_ENV !== "test") {
+      startAnalyticsAlertWorker();
+    }
   });
 }
 
