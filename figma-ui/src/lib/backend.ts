@@ -542,9 +542,11 @@ export async function apiFetch<T = any>(
   // A 401 means the token expired (or was never accepted). Mint a new one once
   // and retry, so a long-lived session keeps working exactly like the native
   // app's SDK-based apiFetch does.
+  let sessionRecovered = true;
   if (res.status === 401) {
     const fresh = await refreshIdToken().catch(() => null);
     if (fresh) res = await send(fresh);
+    else sessionRecovered = false;
   }
 
   const text = res.text;
@@ -573,6 +575,16 @@ export async function apiFetch<T = any>(
 
     // The server ended this device or every device. Drop the local session so
     // the app cannot keep showing cached account data.
+    // The stored session can no longer mint a token (password changed, account
+    // disabled, or the refresh token was revoked). Without this the app keeps
+    // every screen on "Could not load ... Missing or invalid Authorization
+    // header" forever; return to sign-in instead.
+    if (res.status === 401 && !sessionRecovered) {
+      try { signOut() } catch { /* storage unavailable */ }
+      try {
+        window.dispatchEvent(new CustomEvent("vura:signed-out", { detail: { reason: "session_expired" } }));
+      } catch { /* non-browser */ }
+    }
     if (res.status === 401 && err.code === "session_revoked") {
       signOut();
       try {
