@@ -14,6 +14,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = require("../config/database");
 const adminAuth_1 = require("../services/adminAuth");
+const adminInvite_1 = require("../services/adminInvite");
 const appVersionDigest_1 = require("../services/appVersionDigest");
 const router = (0, express_1.Router)();
 /** Versions we consider current. Override with env without a code change. */
@@ -90,6 +91,49 @@ router.post("/notify", (0, adminAuth_1.requireAdmin)("drivers.read"), async (req
             failed: results.filter((r) => !r.ok).length,
             results,
         });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// POST /download-test � send a real download link to one address so the whole
+// delivery path (Resend ? inbox ? phone ? install) can be proven end to end.
+router.post("/download-test", (0, adminAuth_1.requireAdmin)("drivers.read"), async (req, res) => {
+    try {
+        const email = String(req.body?.email || "").trim();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+            res.status(400).json({ error: "Enter a valid email address" });
+            return;
+        }
+        const link = String(req.body?.url || "").trim() ||
+            process.env.RIDER_APK_URL ||
+            "https://www.ridevura.com/downloads/vura-rider-demo.apk";
+        const html = `<!doctype html><html><body style="margin:0;background:#F4F1EC;font-family:Arial,Helvetica,sans-serif;color:#0B0B0C">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 0">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#fff;border:1px solid #E6E1DA">
+            <tr><td style="background:#0B0B0C;padding:18px 24px">
+              <span style="color:#fff;font-size:18px;font-weight:800">VURA</span>
+              <span style="color:#E1251B;font-size:10px;font-weight:800;letter-spacing:.22em;margin-left:10px">DOWNLOAD</span>
+            </td></tr>
+            <tr><td style="padding:24px">
+              <h1 style="margin:0 0 8px;font-size:22px">Your Vura download link</h1>
+              <p style="margin:0 0 18px;color:#6B6560;font-size:13px">Tap the button on your Android phone. The file downloads, then open it to install.</p>
+              <p style="margin:0 0 18px"><a href="${link}" style="display:inline-block;background:#E1251B;color:#fff;text-decoration:none;font-size:13px;font-weight:800;padding:13px 20px">DOWNLOAD VURA</a></p>
+              <p style="margin:0 0 8px;font-size:12px;color:#6B6560">Or copy this link into your phone browser:</p>
+              <p style="margin:0 0 18px;font-size:12px;word-break:break-all;color:#0B0B0C">${link}</p>
+              <p style="margin:0;font-size:12px;color:#6B6560">Android will ask you to allow installs from this source once. After installing, open Vura and sign in as usual.</p>
+              <p style="margin:14px 0 0;font-size:11px;color:#B26A00">This is a demo APK. It does not update itself � the Play version does. Use this link for testing only.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table></body></html>`;
+        const out = await (0, adminInvite_1.sendResendEmail)({
+            to: email,
+            subject: "Your Vura download link",
+            html,
+        });
+        res.json({ ok: out.ok, email, link, error: out.error });
     }
     catch (err) {
         res.status(500).json({ error: err.message });
