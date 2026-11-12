@@ -93,6 +93,7 @@ const adminReports_2 = __importDefault(require("./routes/adminReports"));
 const adminAnalytics_1 = __importDefault(require("./routes/adminAnalytics"));
 const adminAppVersions_1 = __importDefault(require("./routes/adminAppVersions"));
 const analyticsAlerts_1 = require("./services/analyticsAlerts");
+const appVersionDigest_1 = require("./services/appVersionDigest");
 const adminMfa_2 = __importDefault(require("./routes/adminMfa"));
 const adminEmail_1 = __importDefault(require("./routes/adminEmail"));
 const emailCampaigns_1 = require("./services/emailCampaigns");
@@ -955,6 +956,7 @@ async function start() {
         // ANALYTICS_ALERT_MINUTES=0 disables it (tests/homologation).
         if (process.env.NODE_ENV !== "test") {
             (0, analyticsAlerts_1.startAnalyticsAlertWorker)();
+            (0, appVersionDigest_1.startAppVersionDigestWorker)();
         }
     });
 }
