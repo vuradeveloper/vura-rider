@@ -1534,7 +1534,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
                   <div className="flex flex-col gap-2">
                     {options.map(opt => (
                       <button key={opt.id} onClick={() => setSel(opt.id)}
-                        className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl border-2 transition-all transform ${sel === opt.id ? 'border-[#1A1A1A] bg-white scale-110 rotate-6' : 'border-[#F2F2F2] bg-[#F7F7F7] hover:border-[#E0E0E0]'}`}>
+                        className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl border-2 transition-all ${sel === opt.id ? 'border-[#1A1A1A] bg-white shadow-[0_10px_24px_-14px_rgba(0,0,0,0.45)]' : 'border-[#F2F2F2] bg-[#F7F7F7] hover:border-[#E0E0E0]'}`}>
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${sel === opt.id ? 'bg-[#1A1A1A]' : 'bg-white'}`}>
                           <img src={RIDE_IMAGE[opt.icon || opt.id]} alt={opt.name} className="w-8 h-8 object-contain" />
                         </div>
