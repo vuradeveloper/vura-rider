@@ -96,17 +96,27 @@ export function renderResetEmail(
 
 /** POST to Resend. `ok:false` carries a human-readable reason. */
 export async function sendResendEmail(input: {
-  to: string;
+  to: string | string[];
   subject: string;
   html: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const key = process.env.RESEND_API_KEY || "";
   if (!key) return { ok: false, error: "Email service not configured (RESEND_API_KEY)" };
+
+  // Resend validates `to` as an address or an ARRAY of addresses. Passing
+  // "a@x.com,b@y.com" as one string is rejected with "Invalid `to` field", so
+  // every comma/semicolon list is normalised here. This was why the control
+  // room alert emails were failing while single-recipient mail worked.
+  const recipients = (Array.isArray(input.to) ? input.to : String(input.to).split(/[,;]+/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!recipients.length) return { ok: false, error: "No recipients" };
+
   try {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ from: FROM_EMAIL(), to: input.to, subject: input.subject, html: input.html }),
+      body: JSON.stringify({ from: FROM_EMAIL(), to: recipients, subject: input.subject, html: input.html }),
     });
     if (r.ok) return { ok: true };
     const data: any = await r.json().catch(() => ({}));
