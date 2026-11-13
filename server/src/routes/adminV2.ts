@@ -693,6 +693,69 @@ router.post(
   }
 );
 
+// PATCH /api/admin/v2/drivers/:id/vehicle — correct the three vehicle fields
+// the installed driver app shows read-only (number plate, year, colour).
+// Body type and category stay catalogue-derived; only these three are writable
+// here, and every change is audited.
+router.patch("/drivers/:id/vehicle", requireAdmin("drivers.write"), async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = await resolveAdminActor(req);
+    if (!actor) {
+      res.status(403).json({ error: "Admin not found" });
+      return;
+    }
+    const driverId = String(req.params.id);
+    const before = await queryOne<any>(
+      `SELECT license_plate, vehicle_year, vehicle_color FROM driver_profiles WHERE user_id = $1`,
+      [driverId]
+    );
+    if (!before) {
+      res.status(404).json({ error: "Driver profile not found" });
+      return;
+    }
+
+    const plate = String(req.body?.plate ?? before.license_plate ?? "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 12);
+    if (plate && plate.length < 4) {
+      res.status(400).json({ error: "Number plate needs at least 4 letters/numbers" });
+      return;
+    }
+    const rawYear = req.body?.year;
+    const year =
+      rawYear === undefined || rawYear === null || rawYear === ""
+        ? before.vehicle_year ?? null
+        : Number(rawYear);
+    if (year != null && (!Number.isFinite(year) || year < 1980 || year > new Date().getFullYear() + 1)) {
+      res.status(400).json({ error: "Enter a valid vehicle year" });
+      return;
+    }
+    const colour = String(req.body?.colour ?? before.vehicle_color ?? "").trim().slice(0, 40);
+
+    const updated = await queryOne<any>(
+      `UPDATE driver_profiles
+          SET license_plate = $2, vehicle_year = $3, vehicle_color = $4, updated_at = NOW()
+        WHERE user_id = $1
+        RETURNING license_plate, vehicle_year, vehicle_color`,
+      [driverId, plate || null, year, colour || null]
+    );
+
+    await writeAudit(actor, {
+      action: "driver.vehicle.update",
+      entityType: "driver",
+      entityId: driverId,
+      oldValue: before,
+      newValue: updated,
+      reason: String(req.body?.reason || "Support corrected vehicle details"),
+    });
+
+    res.json({ ok: true, vehicle: updated });
+  } catch (err) {
+    sendError(res, err as Error);
+  }
+});
+
 // POST /api/admin/v2/vehicles/:id/suspend - suspend or reactivate ONE car.
 // The driver account stays active; dispatch simply stops offering rides to this
 // vehicle while it is suspended.
