@@ -42,7 +42,7 @@ type DocRow = {
 
 async function loadDbUser(req: AuthRequest): Promise<DbUser | null> {
   if (!req.userId) return null;
-  const rows = await query<DbUser>("SELECT id, role FROM users WHERE firebase_uid = $1", [req.userId]);
+  const rows = await query<DbUser>("SELECT id, role, email FROM users WHERE firebase_uid = $1", [req.userId]);
   return rows[0] ?? null;
 }
 
@@ -56,7 +56,16 @@ function roleGuard(roles: string[]) {
         return;
       }
       (req as any).dbUser = u;
-      if (!roles.includes(u.role)) {
+      // ADMIN_EMAILS is the documented super-admin fallback (services/adminAuth).
+      // The console signs in with those addresses, but their users.role row is
+      // often still 'passenger', so this gate used to 403 the whole Documents
+      // panel ("Insufficient permissions" with 0 everywhere).
+      const allowlist = (process.env.ADMIN_EMAILS || "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      const email = String((u as any).email || "").trim().toLowerCase();
+      if (!roles.includes(u.role) && !allowlist.includes(email)) {
         res.status(403).json({ error: "Insufficient permissions" });
         return;
       }
