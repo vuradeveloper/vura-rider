@@ -932,6 +932,32 @@ async function start() {
            AND NOT EXISTS (SELECT 1 FROM rides r WHERE r.driver_id = driver_profiles.user_id
                             AND r.status IN ('accepted','driver_arrived','in_progress'))
       `);
+      // Resolve any pre-existing duplicate live trips BEFORE the unique index.
+      // IF NOT EXISTS would otherwise skip index creation forever on a database
+      // that already contains a duplicate, silently removing the backstop.
+      try {
+        const dupDrivers = await execute(`
+          UPDATE rides SET status = 'cancelled', updated_at = NOW()
+           WHERE id IN (
+             SELECT id FROM (
+               SELECT id, ROW_NUMBER() OVER (
+                 PARTITION BY driver_id
+                 ORDER BY COALESCE(accepted_at, created_at) DESC, id DESC
+               ) AS rn
+                 FROM rides
+                WHERE driver_id IS NOT NULL
+                  AND status IN ('accepted','driver_arrived','in_progress')
+             ) d WHERE d.rn > 1
+           )
+        `);
+        if (dupDrivers.rowCount) {
+          console.warn(
+            `⚠ cancelled ${dupDrivers.rowCount} duplicate active driver trip(s) before index`
+          );
+        }
+      } catch (err: any) {
+        console.warn("⚠ driver duplicate cleanup skipped:", err?.message);
+      }
       // ── "One driver, one live trip" as a DATABASE invariant, not a convention ──
       // acceptRide already wins the race inside one transaction (FOR UPDATE + a
       // status-guarded UPDATE + expiring the losers), and that stays the mechanism.
@@ -947,6 +973,46 @@ async function start() {
             AND status IN ('accepted','driver_arrived','in_progress')
       `).catch((err: any) =>
         console.warn("⚠ rides one-active-per-driver index skipped:", err?.message)
+      );
+      // Same cleanup for riders BEFORE the passenger unique index: keep the
+      // newest live ride and cancel any historical duplicates.
+      try {
+        const dupRiders = await execute(`
+          UPDATE rides SET status = 'cancelled', updated_at = NOW()
+           WHERE id IN (
+             SELECT id FROM (
+               SELECT id, ROW_NUMBER() OVER (
+                 PARTITION BY passenger_id
+                 ORDER BY created_at DESC, id DESC
+               ) AS rn
+                 FROM rides
+                WHERE passenger_id IS NOT NULL
+                  AND status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
+             ) d WHERE d.rn > 1
+           )
+        `);
+        if (dupRiders.rowCount) {
+          console.warn(
+            `⚠ cancelled ${dupRiders.rowCount} duplicate active rider ride(s) before index`
+          );
+        }
+      } catch (err: any) {
+        console.warn("⚠ rider duplicate cleanup skipped:", err?.message);
+      }
+      // ── "One rider, one live ride" as a DATABASE invariant ────────────────
+      // The socket and REST booking paths both check for an existing ride
+      // before INSERT. Under a double-tap/network retry the check is a TOCTOU
+      // race: two requests can both see none and both insert, producing two
+      // rides two different drivers can accept. This partial index is the
+      // backstop; both paths catch 23505 and return the winning ride instead
+      // of a 500.
+      await execute(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rides_one_active_per_passenger
+          ON rides(passenger_id)
+          WHERE passenger_id IS NOT NULL
+            AND status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
+      `).catch((err: any) =>
+        console.warn("⚠ rides one-active-per-passenger index skipped:", err?.message)
       );
       console.log("✓ Schema up to date");
     } catch (err) {

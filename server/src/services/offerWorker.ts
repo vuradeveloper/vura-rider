@@ -145,7 +145,9 @@ export function startOfferWorker(io: SocketIOServer): void {
         if (expired > 0) console.log(`[offerWorker] expired ${expired} offer(s) and moved them on`);
         // Riders must never be left waiting just because no driver was available at
         // the exact second they booked: retry waiting/parked rides every tick.
-        await reviveWaitingRides(io).catch(() => 0);
+        // 25 per 2s tick drains a 100-rider burst in ~8s; the old 5/tick took
+        // ~40s and left the riders staring at "finding your driver".
+        await reviveWaitingRides(io, 25).catch(() => 0);
         if (ticks % SWEEP_EVERY_TICKS === 0) {
           const demoted = await sweepStaleDrivers(io);
           if (demoted > 0) console.log(`[offerWorker] marked ${demoted} silent driver(s) offline`);

@@ -550,19 +550,48 @@ export function setupSocketHandlers(io: SocketIOServer) {
           `ALTER TABLE rides ADD COLUMN IF NOT EXISTS waypoints JSONB`
         ).then(() => true).catch(() => false);
 
-        const ride = waypointsReady
-          ? await queryOne<any>(
-              `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id, waypoints)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10, $11)
-               RETURNING *`,
-              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null]
-            )
-          : await queryOne<any>(
-              `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
-               RETURNING *`,
-              [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null]
-            );
+        let ride: any;
+        try {
+          ride = waypointsReady
+            ? await queryOne<any>(
+                `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id, waypoints)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10, $11)
+                 RETURNING *`,
+                [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null, rideWaypoints.length ? JSON.stringify(rideWaypoints) : null]
+              )
+            : await queryOne<any>(
+                `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng, destination_address, destination_lat, destination_lng, status, estimated_fare, payment_method, device_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'searching', $8, $9, $10)
+                 RETURNING *`,
+                [dbUserId, pickupAddress, pickupLat, pickupLng, destinationAddress, destinationLat, destinationLng, rideFare, paymentMethod || null, deviceId || null]
+              );
+        } catch (insertErr: any) {
+          // Double-tap/retry race: idx_rides_one_active_per_passenger let only
+          // one INSERT win. Return that ride instead of a generic 500, exactly
+          // like the fast-path existingActive check above.
+          if (String(insertErr?.code) === "23505") {
+            const existing = await queryOne<{ id: string; status: string }>(
+              `SELECT id, status FROM rides
+                WHERE passenger_id = $1
+                  AND status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
+                ORDER BY created_at DESC LIMIT 1`,
+              [dbUserId]
+            ).catch(() => null);
+            if (existing?.id) {
+              socket.emit("ride:requested:ack", {
+                success: true,
+                rideId: existing.id,
+                reused: true,
+              });
+              socket.join(`ride:${existing.id}`);
+              if (["searching", "scheduled"].includes(existing.status)) {
+                await offerToNextDriver(io, existing.id);
+              }
+              return;
+            }
+          }
+          throw insertErr;
+        }
 
         // Remember what was applied (receipts / audits / support). Best-effort:
         // the ride itself is already created and must never fail because of it.

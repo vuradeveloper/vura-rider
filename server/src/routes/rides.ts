@@ -325,32 +325,61 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
       .then(() => true)
       .catch(() => false);
 
-    const ride = await queryOne<any>(
-      tierReady
-        ? `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
-                              destination_address, destination_lat, destination_lng,
-                              status, estimated_fare, payment_method, device_id, waypoints, tier)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11,$12)
-           RETURNING id, status`
-        : `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
-                              destination_address, destination_lat, destination_lng,
-                              status, estimated_fare, payment_method, device_id, waypoints)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
-           RETURNING id, status`,
-      [
-        rider.id,
-        pickupAddress ?? null,
-        Number(pickupLat), Number(pickupLng),
-        destinationAddress ?? null,
-        Number.isFinite(Number(destinationLat)) ? Number(destinationLat) : null,
-        Number.isFinite(Number(destinationLng)) ? Number(destinationLng) : null,
-        rideFare,
-        paymentMethod || null,
-        deviceId || null,
-        rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
-        ...(tierReady ? [rideTier] : []),
-      ]
-    );
+    let ride: any;
+    try {
+      ride = await queryOne<any>(
+        tierReady
+          ? `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                                destination_address, destination_lat, destination_lng,
+                                status, estimated_fare, payment_method, device_id, waypoints, tier)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11,$12)
+             RETURNING id, status`
+          : `INSERT INTO rides (passenger_id, pickup_address, pickup_lat, pickup_lng,
+                                destination_address, destination_lat, destination_lng,
+                                status, estimated_fare, payment_method, device_id, waypoints)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'searching',$8,$9,$10,$11)
+             RETURNING id, status`,
+        [
+          rider.id,
+          pickupAddress ?? null,
+          Number(pickupLat), Number(pickupLng),
+          destinationAddress ?? null,
+          Number.isFinite(Number(destinationLat)) ? Number(destinationLat) : null,
+          Number.isFinite(Number(destinationLng)) ? Number(destinationLng) : null,
+          rideFare,
+          paymentMethod || null,
+          deviceId || null,
+          rideWaypoints.length ? JSON.stringify(rideWaypoints) : null,
+          ...(tierReady ? [rideTier] : []),
+        ]
+      );
+    } catch (insertErr: any) {
+      // Double-tap/retry race: idx_rides_one_active_per_passenger let only one
+      // INSERT win. Reuse it instead of returning a 500.
+      if (String(insertErr?.code) === "23505") {
+        const existing = await queryOne<{ id: string; status: string }>(
+          `SELECT id, status FROM rides
+            WHERE passenger_id = $1
+              AND status IN ('searching','scheduled','accepted','driver_arrived','in_progress')
+            ORDER BY created_at DESC LIMIT 1`,
+          [rider.id]
+        ).catch(() => null);
+        if (existing?.id) {
+          res.status(200).json({
+            rideId: existing.id,
+            status: existing.status,
+            reused: true,
+            ms: Date.now() - t0,
+          });
+          const ioReuse = (global as any).__vuraIo as SocketIOServer | undefined;
+          if (ioReuse && ["searching", "scheduled"].includes(existing.status)) {
+            res.on("finish", () => void startDispatch(ioReuse, existing.id).catch(() => undefined));
+          }
+          return;
+        }
+      }
+      throw insertErr;
+    }
 
     if (!ride?.id) {
       res.status(500).json({ error: "Could not create the ride" });

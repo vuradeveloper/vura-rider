@@ -177,6 +177,10 @@ async function findCandidatesHaversine(
                      COALESCE(dp.last_heartbeat_at, dp.updated_at))
             > NOW() - make_interval(secs => $4::double precision)
         AND u.id <> COALESCE((SELECT passenger_id FROM rides WHERE id = $1), '00000000-0000-0000-0000-000000000000'::uuid)
+        AND NOT EXISTS (
+              SELECT 1 FROM ride_offers ro_pending
+               WHERE ro_pending.driver_id = u.id
+                 AND ro_pending.status = 'pending')
         AND ($6::boolean OR NOT EXISTS (SELECT 1 FROM ride_offers ro WHERE ro.ride_id = $1 AND ro.driver_id = u.id))
         AND NOT EXISTS (
               SELECT 1 FROM rides r
@@ -211,8 +215,13 @@ async function findCandidatesHaversine(
 // The pool returned to offerToNextDriver. Bigger than `limit` (which the old
 // path honours exactly) because the offer loop tries candidates in rank order
 // until one INSERT sticks — a driver who already holds a pending offer for a
-// different ride must not waste the whole round.
-const H3_CANDIDATE_POOL = 20;
+// different ride must not waste the whole round. At a concert/airport burst,
+// one candidate per ride makes every rider target the same closest driver; the
+// pool is what lets the 2nd, 3rd, ... ride walk to the next free driver.
+const H3_CANDIDATE_POOL = Math.max(
+  1,
+  Number(process.env.DISPATCH_CANDIDATE_POOL || 20)
+);
 
 /**
  * How many 15s offer rounds fit inside search_timeout_ms (90s / 15s = 6).
@@ -361,6 +370,10 @@ async function findCandidatesNoFix(
           AND (dp.current_lat IS NULL OR dp.current_lng IS NULL)
           AND COALESCE(dp.last_heartbeat_at, dp.updated_at) > NOW() - INTERVAL '120 seconds'
           AND u.id <> COALESCE((SELECT passenger_id FROM rides WHERE id = $1), '00000000-0000-0000-0000-000000000000'::uuid)
+          AND NOT EXISTS (
+                SELECT 1 FROM ride_offers ro_pending
+                 WHERE ro_pending.driver_id = u.id
+                   AND ro_pending.status = 'pending')
           AND ($2::boolean OR NOT EXISTS (SELECT 1 FROM ride_offers ro WHERE ro.ride_id = $1 AND ro.driver_id = u.id))
           AND NOT EXISTS (
                 SELECT 1 FROM rides r
@@ -593,6 +606,10 @@ async function findCandidatesH3(
                      COALESCE(dp.last_heartbeat_at, dp.updated_at))
             > NOW() - make_interval(secs => $3::double precision)
         AND u.id <> COALESCE((SELECT passenger_id FROM rides WHERE id = $6), '00000000-0000-0000-0000-000000000000'::uuid)
+        AND NOT EXISTS (
+              SELECT 1 FROM ride_offers ro_pending
+               WHERE ro_pending.driver_id = u.id
+                 AND ro_pending.status = 'pending')
         AND ($7::boolean OR NOT EXISTS (SELECT 1 FROM ride_offers ro WHERE ro.ride_id = $6 AND ro.driver_id = u.id))
         AND NOT EXISTS (
               SELECT 1 FROM rides r
@@ -1036,7 +1053,7 @@ export async function offerToNextDriver(
     rideId,
     ride.pickup_lat,
     ride.pickup_lng,
-    1,
+    H3_CANDIDATE_POOL,
     reviving,
     nextRound,
     ride.passenger_id ?? null
@@ -1540,6 +1557,22 @@ export async function acceptRide(
       return { ok: false, error: `Ride is ${ride.status}` };
     }
 
+    // ONE DRIVER, ONE LIVE TRIP — serialize accepts per driver.
+    // Two rides have different ride rows, so without this lock both can pass the
+    // ride-level checks and race into idx_rides_one_active_per_driver. The index
+    // still prevents the double assignment, but it throws a raw unique violation
+    // (a 500 to the socket) instead of a clean "finish your current trip".
+    const driverRow = await client.query<{ status: string | null }>(
+      "SELECT status FROM driver_profiles WHERE user_id = $1 FOR UPDATE",
+      [driverId]
+    );
+    if (!driverRow.rows[0]) {
+      return { ok: false, error: "Driver profile not found." };
+    }
+    if (!reserving && String(driverRow.rows[0].status || "") === "on_trip") {
+      return { ok: false, error: "Finish your current trip before accepting another ride." };
+    }
+
     // Uber Reserve protection: once a driver holds a reservation inside the
     // protected window, on-demand rides must not pull them away from it. The
     // candidate SQL already excludes these drivers; this guard covers the
@@ -1647,6 +1680,15 @@ export async function acceptRide(
         WHERE ride_id = $1 AND status = 'pending' AND driver_id <> $2
         RETURNING driver_id`,
       [rideId, driverId]
+    );
+    // The accepted driver may still hold a stale pending offer for a DIFFERENT
+    // ride (e.g. they tapped Accept from the available list instead of the
+    // offer). Close it now so the other rider is re-dispatched instead of
+    // waiting for the 15s TTL, and the driver is not shown two live requests.
+    await client.query(
+      `UPDATE ride_offers SET status = 'expired', decline_reason = 'driver_on_trip', updated_at = NOW()
+        WHERE driver_id = $1 AND status = 'pending' AND ride_id <> $2`,
+      [driverId, rideId]
     );
     if (!reserving) {
       await client.query(
@@ -2125,6 +2167,14 @@ export async function reviveWaitingRides(
         AND NOT EXISTS (
               SELECT 1 FROM ride_offers ro
                WHERE ro.ride_id = r.id AND ro.status = 'pending' AND ro.expires_at > NOW())
+        -- Never revive a parked ride when the rider already has a newer live
+        -- ride (double-tap + no_drivers + revive would otherwise put two live
+        -- rides on one rider; the passenger unique index is the final backstop).
+        AND NOT EXISTS (
+              SELECT 1 FROM rides active
+               WHERE active.passenger_id = r.passenger_id
+                 AND active.id <> r.id
+                 AND active.status IN ('searching','scheduled','accepted','driver_arrived','in_progress'))
         AND COALESCE(r.no_drivers_at, r.created_at) < NOW() - INTERVAL '6 seconds'
       ORDER BY CASE WHEN r.scheduled_at IS NOT NULL THEN 0 ELSE 1 END,
                r.created_at DESC
