@@ -358,5 +358,106 @@ router.post("/alerts/test", (0, adminAuth_1.requireAdmin)("dashboard.read"), asy
         res.status(500).json({ error: err.message });
     }
 });
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/admin/v2/analytics/installs — the REAL install base.
+//
+// Play Console only counts copies that came through Google Play. Drivers who
+// installed the APK from a download link, from WhatsApp, or from an internal
+// test link never appear there — which is exactly why the console can say
+// "no data" while the fleet is clearly live. We already store the devices:
+// every app launch writes user_sessions (device_id, platform, app_version) and
+// every driver has a push token. This endpoint turns that into the number the
+// Play console cannot show.
+//
+// Read-only, and every block degrades to zeros so a missing table can never
+// take the console down.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/installs", (0, adminAuth_1.requireAdmin)("dashboard.read"), async (_req, res) => {
+    const safe = async (fn, fallback) => {
+        try {
+            return await fn();
+        }
+        catch (err) {
+            console.warn("[analytics/installs] block failed:", err?.message || err);
+            return fallback;
+        }
+    };
+    try {
+        const accounts = await safe(() => (0, database_1.queryOne)(`SELECT COUNT(*)::int AS drivers_total,
+                  COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::int AS new_7d,
+                  COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::int AS new_30d
+             FROM users
+            WHERE role = 'driver'`), { drivers_total: 0, new_7d: 0, new_30d: 0 });
+        const devices = await safe(() => (0, database_1.queryOne)(`SELECT COUNT(DISTINCT s.device_id)::int AS devices_total,
+                  COUNT(DISTINCT s.device_id) FILTER (WHERE s.last_seen_at >= NOW() - INTERVAL '30 days')::int AS devices_30d,
+                  COUNT(DISTINCT s.device_id) FILTER (WHERE LOWER(COALESCE(s.platform, '')) LIKE 'android%')::int AS android,
+                  COUNT(DISTINCT s.device_id) FILTER (WHERE LOWER(COALESCE(s.platform, '')) LIKE 'ios%')::int AS ios,
+                  COUNT(DISTINCT s.device_id) FILTER (WHERE LOWER(COALESCE(s.platform, '')) NOT LIKE 'android%'
+                                                        AND LOWER(COALESCE(s.platform, '')) NOT LIKE 'ios%')::int AS web,
+                  MIN(s.created_at) AS first_seen
+             FROM user_sessions s
+             JOIN users u ON u.id = s.user_id
+            WHERE u.role = 'driver'`), { devices_total: 0, devices_30d: 0, android: 0, ios: 0, web: 0, first_seen: null });
+        const activity = await safe(() => (0, database_1.queryOne)(`SELECT COUNT(*) FILTER (WHERE is_online)::int AS online_now,
+                  COUNT(*) FILTER (WHERE last_heartbeat_at >= NOW() - INTERVAL '24 hours')::int AS active_24h,
+                  COUNT(*) FILTER (WHERE last_heartbeat_at >= NOW() - INTERVAL '7 days')::int AS active_7d,
+                  COUNT(*) FILTER (WHERE last_heartbeat_at >= NOW() - INTERVAL '30 days')::int AS active_30d
+             FROM driver_profiles`), { online_now: 0, active_24h: 0, active_7d: 0, active_30d: 0 });
+        const push = await safe(() => (0, database_1.queryOne)(`SELECT COUNT(DISTINCT d.user_id)::int AS drivers_with_push,
+                  COUNT(*)::int AS active_tokens
+             FROM device_tokens d
+             JOIN users u ON u.id = d.user_id
+            WHERE u.role = 'driver' AND d.is_active = TRUE`), { drivers_with_push: 0, active_tokens: 0 });
+        const versions = await safe(() => (0, database_1.query)(`SELECT version, COUNT(*)::int AS devices, MAX(last_seen_at) AS last_seen
+             FROM (
+                   SELECT DISTINCT ON (s.device_id)
+                          s.device_id,
+                          COALESCE(s.app_version, 'unknown') AS version,
+                          s.last_seen_at
+                     FROM user_sessions s
+                     JOIN users u ON u.id = s.user_id
+                    WHERE u.role = 'driver'
+                    ORDER BY s.device_id, s.last_seen_at DESC
+                  ) latest
+            GROUP BY version
+            ORDER BY devices DESC
+            LIMIT 12`), []);
+        res.json({
+            generated_at: new Date().toISOString(),
+            note: "Counted from Vura's own sessions and push tokens — includes installs Play cannot see (direct APK, WhatsApp, test links).",
+            accounts: {
+                drivers_total: Number(accounts?.drivers_total || 0),
+                new_7d: Number(accounts?.new_7d || 0),
+                new_30d: Number(accounts?.new_30d || 0),
+            },
+            devices: {
+                total: Number(devices?.devices_total || 0),
+                active_30d: Number(devices?.devices_30d || 0),
+                android: Number(devices?.android || 0),
+                ios: Number(devices?.ios || 0),
+                web: Number(devices?.web || 0),
+                first_seen: devices?.first_seen ?? null,
+            },
+            activity: {
+                online_now: Number(activity?.online_now || 0),
+                active_24h: Number(activity?.active_24h || 0),
+                active_7d: Number(activity?.active_7d || 0),
+                active_30d: Number(activity?.active_30d || 0),
+            },
+            push: {
+                drivers_with_push: Number(push?.drivers_with_push || 0),
+                active_tokens: Number(push?.active_tokens || 0),
+            },
+            versions: (versions || []).map((v) => ({
+                version: v.version || "unknown",
+                devices: Number(v.devices || 0),
+                last_seen: v.last_seen,
+            })),
+        });
+    }
+    catch (err) {
+        res.status(500).json({ error: err?.message || "Could not read installs" });
+    }
+});
 exports.default = router;
 //# sourceMappingURL=adminAnalytics.js.map
