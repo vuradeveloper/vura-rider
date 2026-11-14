@@ -130,7 +130,9 @@ describe("flag OFF: the original haversine path runs, unchanged", () => {
     const cands = await findCandidates("ride-1", SANDTON.lat, SANDTON.lng, 3, false);
 
     expect(cands).toEqual([]);
-    expect(db.query).toHaveBeenCalledTimes(1);
+    // One extra query: the last-resort pool for drivers with no GPS fix.
+    expect(db.query).toHaveBeenCalledTimes(2);
+    expect(String(db.query.mock.calls[1][0])).toContain('current_lat IS NULL');
     const sql = String(db.query.mock.calls[0][0]);
     // Original shape: full scan over driver_profiles, literal 'available'.
     expect(sql).toContain("FROM driver_profiles dp");
