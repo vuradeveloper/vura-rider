@@ -318,6 +318,60 @@ function decideH3Path(cfg, riderId) {
  * closed; a cold index (rollout guard) or empty area also falls back rather
  * than reporting a false "no drivers".
  */
+/**
+ * LAST-RESORT POOL: online drivers who have NO usable GPS fix.
+ *
+ * Both candidate queries require `current_lat IS NOT NULL`. That is right for
+ * distance matching, but it made a common case invisible: a driver who granted
+ * location and went online while the phone never produced a fix (indoors, a
+ * WebView/provider hiccup, a device without Play services, or "while using"
+ * answered but the provider still failing). They are online, heartbeating and
+ * available, yet dispatch can never see them, so they sit on "Waiting for
+ * requests" forever. New drivers onboarding hit exactly this.
+ *
+ * The heartbeat is independent of GPS (driverHeartbeat()), so it is safe as a
+ * liveness signal here. These candidates are appended AFTER everyone with a
+ * real fix, so normal matching is unchanged; they are used only when the
+ * positioned pool is not enough. Distance is reported as 0 (unknown), and the
+ * ride trace records `no_gps_fallback` so support can see why the match
+ * happened.
+ */
+async function findCandidatesNoFix(rideId, limit, ignorePreviousOffers = false) {
+    if (limit <= 0)
+        return [];
+    try {
+        const rows = await (0, database_1.query)(`SELECT u.id, u.firebase_uid,
+              0::double precision AS current_lat,
+              0::double precision AS current_lng,
+              0::double precision AS distance_km
+         FROM driver_profiles dp
+         JOIN users u ON u.id = dp.user_id
+        WHERE COALESCE(dp.status, CASE WHEN dp.is_online THEN 'available' ELSE 'offline' END) = 'available'
+          AND dp.is_online = TRUE
+          AND (dp.current_lat IS NULL OR dp.current_lng IS NULL)
+          AND COALESCE(dp.last_heartbeat_at, dp.updated_at) > NOW() - INTERVAL '120 seconds'
+          AND u.id <> COALESCE((SELECT passenger_id FROM rides WHERE id = $1), '00000000-0000-0000-0000-000000000000'::uuid)
+          AND ($2::boolean OR NOT EXISTS (SELECT 1 FROM ride_offers ro WHERE ro.ride_id = $1 AND ro.driver_id = u.id))
+          AND NOT EXISTS (
+                SELECT 1 FROM rides r
+                 WHERE r.driver_id = u.id
+                   AND r.status IN ('accepted', 'driver_arrived', 'in_progress'))
+          AND NOT EXISTS (
+                SELECT 1 FROM rides rr
+                 WHERE rr.driver_id = u.id
+                   AND rr.status = 'scheduled'
+                   AND rr.scheduled_at > NOW()
+                   AND rr.scheduled_at <= NOW() + INTERVAL '60 minutes')
+        ORDER BY COALESCE(dp.last_heartbeat_at, dp.updated_at) DESC
+        LIMIT $3`, [rideId, ignorePreviousOffers, limit]);
+        return Array.isArray(rows) ? rows : [];
+    }
+    catch (err) {
+        // Never let the fallback break a dispatch round.
+        console.warn(`[dispatch] no-GPS fallback query failed ride=${rideId}:`, err?.message || err);
+        return [];
+    }
+}
 async function findCandidates(rideId, pickupLat, pickupLng, limit = 3, ignorePreviousOffers = false, round = 1, riderId = null) {
     let decision;
     let radiusLadder = [];
@@ -339,11 +393,30 @@ async function findCandidates(rideId, pickupLat, pickupLng, limit = 3, ignorePre
         radius_km: radiusLadder[0] ?? null,
         radius_ladder: radiusLadder.length ? radiusLadder : null,
     });
+    /**
+     * Give the round its last-resort pool: drivers with no GPS fix are appended
+     * AFTER everyone the map matched, never instead of them. Without this a
+     * driver whose phone never produced a fix is invisible to dispatch — online,
+     * heartbeating, and offered nothing, forever.
+     */
+    const withNoFix = async (list) => {
+        if (list.length >= limit)
+            return list;
+        const noFix = await findCandidatesNoFix(rideId, limit - list.length, ignorePreviousOffers);
+        if (!noFix.length)
+            return list;
+        (0, trace_1.trace)(rideId, "no_gps_fallback", {
+            without_fix: noFix.length,
+            positioned: list.length,
+            limit,
+        });
+        return [...list, ...noFix];
+    };
     if (!decision.useH3) {
-        return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
+        return withNoFix(await findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers));
     }
     try {
-        return await findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers, round);
+        return await withNoFix(await findCandidatesH3(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers, round));
     }
     catch (err) {
         // NEVER fail silently, NEVER leave the rider waiting: say what broke, then
@@ -355,7 +428,7 @@ async function findCandidates(rideId, pickupLat, pickupLng, limit = 3, ignorePre
         console.error(`[dispatch] H3 path FAILED ride=${rideId} (falling back to haversine):`, err?.message || err);
         (0, metrics_1.bump)("h3_path_failures");
         (0, metrics_1.bump)("fallback_used");
-        return findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers);
+        return withNoFix(await findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers));
     }
 }
 /** Flag-ON implementation. Throwing here is safe: findCandidates catches. */

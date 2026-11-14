@@ -78,26 +78,6 @@ type RolloutConfig = Pick<AppConfig, "h3_matching_enabled" | "h3_rollout_mode" |
  * themselves still refresh every 10s like everything else).
  */
 export declare function decideH3Path(cfg: RolloutConfig, riderId: string | null): H3RolloutDecision;
-/**
- * Matching entry point — rollout + kill-switch decision (one place).
- *
- * EVERY call records a `matching_path` trace stage {path: "h3"|"legacy",
- * reason}, so each ride shows exactly which path served it and why.
- *
- *   legacy  : the original haversine query above, byte-for-byte unchanged —
- *             used when the kill switch is off, the rollout excludes this
- *             rider, the mode is 'off', or config cannot be read.
- *   h3      : H3 cell lookup -> exact haversine <= radius -> eligibility
- *             filters (MATCHABLE_STATUSES from driverIndex, vehicle category,
- *             min rating, driver_blocks) -> rank by road ETA (haversine
- *             fallback) -> a ranked pool for the one-at-a-time offer loop.
- *
- * FAILURE POLICY: any throw anywhere in the H3 path (config, index, SQL, ETA)
- * is logged with an `h3_path_failed` trace stage and the request re-runs on the
- * haversine path. The rider is never left waiting and matching never fails
- * closed; a cold index (rollout guard) or empty area also falls back rather
- * than reporting a false "no drivers".
- */
 export declare function findCandidates(rideId: string, pickupLat: number, pickupLng: number, limit?: number, ignorePreviousOffers?: boolean, round?: number, riderId?: string | null): Promise<Candidate[]>;
 export interface DispatchRide {
     id: string;
