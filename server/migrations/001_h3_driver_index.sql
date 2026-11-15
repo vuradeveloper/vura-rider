@@ -109,7 +109,7 @@ INSERT INTO app_config (key, value) VALUES
     "h3_rollout_mode": "off",
     "h3_rollout_rider_ids": [],
     "h3_rollout_percent": 0,
-    "match_radius_km": [3, 5, 7],
+    "match_radius_km": [5, 7, 10],
     "search_timeout_ms": 90000,
     "still_looking_msg_ms": 30000,
     "h3_match_res": 8,

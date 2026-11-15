@@ -469,7 +469,7 @@ describe.skipIf(!enabled)("migration 003 against real Postgres", () => {
 
 describe.skipIf(!enabled)("flag ON dispatch against real Postgres", () => {
   it("offers the ranked driver once, then routes the next ride to the other driver", async () => {
-    // Config comes from the migration seed: flag ON, ladder [3,5,7], 90s budget.
+    // Config comes from the migration seed: flag ON, ladder [5,7,10], 90s budget.
     const cfg = await getConfig(true);
     expect(cfg.h3_matching_enabled).toBe(true);
 

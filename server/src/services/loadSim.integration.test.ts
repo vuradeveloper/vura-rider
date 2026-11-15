@@ -20,7 +20,7 @@ vi.mock("./config", async () => (await import("./testHarness")).appConfig);
 import { query, queryOne, execute } from "../config/database";
 import { acceptRide, cancelPendingOffers, expireOffers, offerToNextDriver, reviveWaitingRides } from "./dispatch";
 import { sendPushToUsers } from "./notify";
-import { makeIo } from "./testHarness";
+import { makeIo, patchDestinationConfig } from "./testHarness";
 
 const enabled = process.env.VURA_LOADTEST === "1";
 const DB_HOST = "127.0.0.1";
@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
   vehicle_categories JSONB DEFAULT '[]'::jsonb,
   vehicle_seats INTEGER,
   vehicle_suspended BOOLEAN DEFAULT FALSE,
+  destination_lat DOUBLE PRECISION,
+  destination_lng DOUBLE PRECISION,
+  destination_label TEXT,
+  destination_expires_at TIMESTAMPTZ,
   verification_status VARCHAR(20),
   updated_at TIMESTAMPTZ DEFAULT NOW(), created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -114,17 +118,36 @@ async function seedRider(i: number): Promise<string> {
   return id;
 }
 
-async function seedRide(riderId: string, status = "searching"): Promise<string> {
+async function seedRide(
+  riderId: string,
+  status = "searching",
+  destination = { lat: -26.145, lng: 28.04 },
+  pickup = BASE
+): Promise<string> {
   const id = randomUUID();
   await execute(
     `INSERT INTO rides
        (id, passenger_id, pickup_address, pickup_lat, pickup_lng,
         destination_address, destination_lat, destination_lng,
         status, estimated_fare, payment_method, tier, version)
-     VALUES ($1, $2, 'Sandton', $3, $4, 'Rosebank', $5, $6, $7, 120, 'cash', 'go', 0)`,
-    [id, riderId, BASE.lat, BASE.lng, -26.145, 28.04, status]
+     VALUES ($1, $2, 'Pickup', $3, $4, 'Destination', $5, $6, $7, 120, 'cash', 'go', 0)`,
+    [id, riderId, pickup.lat, pickup.lng, destination.lat, destination.lng, status]
   );
   return id;
+}
+
+async function setDriverDestination(
+  driverId: string,
+  lat: number,
+  lng: number
+): Promise<void> {
+  await execute(
+    `UPDATE driver_profiles
+        SET destination_lat = $2, destination_lng = $3, destination_label = 'Load destination',
+            destination_expires_at = NOW() + INTERVAL '2 hours'
+      WHERE user_id = $1`,
+    [driverId, lat, lng]
+  );
 }
 
 beforeAll(async () => {
@@ -149,6 +172,10 @@ beforeAll(async () => {
     ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_seats INTEGER;
     ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS body_type VARCHAR(30);
     ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_suspended BOOLEAN DEFAULT FALSE;
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS destination_lat DOUBLE PRECISION;
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS destination_lng DOUBLE PRECISION;
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS destination_label TEXT;
+    ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS destination_expires_at TIMESTAMPTZ;
   `);
 
   // Mirrors the production invariants.
@@ -452,5 +479,69 @@ describe.skipIf(!enabled)("Vura load / concurrency", () => {
     expect(offer?.status).toBe("expired");
     expect(!!drop).toBe(true);
     expect(after - before).toBe(0); // no "rider cancelled" push before acceptance
+  }, 60_000);
+
+  it("offers only rides heading toward a driver's set destination", async () => {
+    patchDestinationConfig({
+      destination_matching_enabled: true,
+      destination_rollout_mode: "all",
+      destination_rollout_driver_ids: [],
+    });
+    try {
+      // Isolate this scenario: earlier tests leave available drivers behind, and
+      // the legacy matcher does not apply a radius, so take them offline first.
+      await execute(`UPDATE driver_profiles SET is_online = FALSE, status = 'offline'`);
+
+      // Use a separate area (Pretoria) so drivers left over from earlier tests
+      // are far outside the matching radius.
+      const DEST_BASE = { lat: -25.75, lng: 28.2 };
+      // Both drivers are in Pretoria and want to finish near the north side.
+      const driverToward = await seedDriver(900, DEST_BASE.lat, DEST_BASE.lng);
+      await setDriverDestination(driverToward, -25.64, DEST_BASE.lng);
+      const driverAway = await seedDriver(901, DEST_BASE.lat + 0.001, DEST_BASE.lng + 0.001);
+      await setDriverDestination(driverAway, -25.64, DEST_BASE.lng);
+
+      // Toward: drop-off 2.2 km short of the destination; closer than pickup.
+      const towardRide = await seedRide(
+        await seedRider(900),
+        "searching",
+        { lat: -25.66, lng: DEST_BASE.lng },
+        DEST_BASE
+      );
+      // Away: drop-off 22 km south; farther from the destination than pickup.
+      const awayRide = await seedRide(
+        await seedRider(901),
+        "searching",
+        { lat: -25.84, lng: DEST_BASE.lng },
+        DEST_BASE
+      );
+
+      const { io } = makeIo(true);
+      const toward = await offerToNextDriver(io, towardRide);
+      const away = await offerToNextDriver(io, awayRide);
+      const awayOffers = await query<{ id: string }>(
+        `SELECT id FROM ride_offers WHERE ride_id = $1`,
+        [awayRide]
+      );
+      const awayStatus = await queryOne<{ status: string }>(
+        `SELECT status FROM rides WHERE id = $1`,
+        [awayRide]
+      );
+
+      console.log(
+        `[loadsim] destination mode -> toward=${toward.offered}, away=${away.offered}, away_offers=${awayOffers.length}, away_status=${awayStatus?.status}`
+      );
+
+      expect(toward.offered).toBe(true);
+      expect(away.offered).toBe(false);
+      expect(awayOffers.length).toBe(0);
+      expect(awayStatus?.status).toBe("no_drivers");
+    } finally {
+      patchDestinationConfig({
+        destination_matching_enabled: false,
+        destination_rollout_mode: "allowlist",
+        destination_rollout_driver_ids: [],
+      });
+    }
   }, 60_000);
 });

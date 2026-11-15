@@ -241,7 +241,7 @@ export function h3MaxOfferRounds(cfg: {
 
 /**
  * Escalation ladder: rounds are spread evenly across match_radius_km, so with
- * [3,5,7] and a 6-round budget it is 3km -> rounds 1-2, 5km -> 3-4, 7km -> 5-6.
+ * [5,7,10] and a 6-round budget it is 5km -> rounds 1-2, 7km -> 3-4, 10km -> 5-6.
  * null past the budget = stop searching (caller reports no-drivers).
  */
 export function radiusForRound(
@@ -397,6 +397,110 @@ async function findCandidatesNoFix(
   }
 }
 
+/**
+ * DESTINATION-MODE FILTER — shared by BOTH matching paths.
+ *
+ * Previously this lived inside findCandidatesH3, so a driver who set a
+ * destination still received every ride when H3 was off (the legacy path).
+ * Set Destination is a product promise, not an H3 experiment: a driver in
+ * destination mode must never be offered a ride going the other way,
+ * whichever matcher served the request.
+ *
+ * Flag off / no driver in rollout ⇒ returns the list untouched and runs no
+ * extra queries. Per-driver fail-closed: a throwing predicate removes only
+ * that driver.
+ */
+async function filterCandidatesForDestination(
+  rideId: string,
+  pickupLat: number,
+  pickupLng: number,
+  rows: Candidate[]
+): Promise<Candidate[]> {
+  if (rows.length === 0) return rows;
+
+  const dcfg = await getDestinationConfig();
+  const allow = new Set(dcfg.destination_rollout_driver_ids);
+  const destAll = dcfg.destination_rollout_mode === "all";
+  const inRollout = (id: string) => destAll || allow.has(String(id));
+  if (!dcfg.destination_matching_enabled || !rows.some((r) => inRollout(r.id))) {
+    return rows;
+  }
+
+  const ride = await queryOne<{ destination_lat: number | null; destination_lng: number | null }>(
+    `SELECT destination_lat, destination_lng FROM rides WHERE id = $1`,
+    [rideId]
+  ).catch(() => null);
+  const dests = await query<{
+    user_id: string;
+    destination_lat: number;
+    destination_lng: number;
+  }>(
+    `SELECT user_id, destination_lat, destination_lng FROM driver_profiles
+      WHERE user_id = ANY($1::uuid[])
+        AND destination_lat IS NOT NULL AND destination_lng IS NOT NULL
+        AND (destination_expires_at IS NULL OR destination_expires_at > NOW())`,
+    [rows.filter((r) => inRollout(r.id)).map((r) => r.id)]
+  ).catch(() => []);
+  const destBy = new Map(dests.map((d) => [d.user_id, d]));
+  const X =
+    ride?.destination_lat != null && ride.destination_lng != null
+      ? { lat: Number(ride.destination_lat), lng: Number(ride.destination_lng) }
+      : null;
+  const P = { lat: pickupLat, lng: pickupLng };
+  const th: FitThresholds = {
+    dropoffRadiusKm: dcfg.destination_match_dropoff_radius_km,
+    crossTrackKm: dcfg.destination_match_cross_track_km,
+    alongTolKm: dcfg.destination_match_along_tolerance_km,
+  };
+
+  let considered = 0;
+  let removed = 0;
+  let errors = 0;
+  const pool: Candidate[] = [];
+  for (const row of rows) {
+    // ANY active destination session hard-filters this driver: the rollout
+    // gates only whether a driver can START a session. A session driver must
+    // never be offered a ride that doesn't head their way.
+    const dest = destBy.get(row.id);
+    if (!dest) {
+      pool.push(row);
+      continue;
+    }
+    considered += 1;
+    try {
+      const verdict = destinationFit(
+        { lat: Number(row.current_lat), lng: Number(row.current_lng) },
+        { lat: Number(dest.destination_lat), lng: Number(dest.destination_lng) },
+        P,
+        X,
+        th
+      );
+      if (verdict === "accept") {
+        pool.push(row);
+      } else {
+        removed += 1;
+        bump("destination_filtered");
+      }
+    } catch (err: any) {
+      errors += 1;
+      bump("destination_predicate_error");
+      console.warn(
+        `[dispatch] destinationFit threw driver=${row.id} ride=${rideId}: ${err?.message || err}`
+      );
+    }
+  }
+
+  trace(rideId, "destination_filter", {
+    considered,
+    kept: pool.length,
+    removed,
+    errors,
+    mode: dcfg.destination_rollout_mode,
+    allowlist: allow.size,
+  });
+  return pool;
+}
+
 export async function findCandidates(
   rideId: string,
   pickupLat: number,
@@ -423,8 +527,8 @@ export async function findCandidates(
   trace(rideId, "matching_path", {
     path: decision.useH3 ? "h3" : "legacy",
     reason: decision.reason,
-    // RC4 Item 1b: the radius the escalation ladder starts at (3 km in the
-    // [3,5,7] config) so an admin can read path + radius off one stage.
+    // RC4 Item 1b: the radius the escalation ladder starts at (5 km in the
+    // [5,7,10] config) so an admin can read path + radius off one stage.
     radius_km: radiusLadder[0] ?? null,
     radius_ladder: radiusLadder.length ? radiusLadder : null,
   });
@@ -447,20 +551,28 @@ export async function findCandidates(
   };
 
   if (!decision.useH3) {
+    const base = await findCandidatesHaversine(
+      rideId,
+      pickupLat,
+      pickupLng,
+      limit,
+      ignorePreviousOffers
+    );
     return withNoFix(
-      await findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers)
+      await filterCandidatesForDestination(rideId, pickupLat, pickupLng, base)
     );
   }
   try {
-    return await withNoFix(
-      await findCandidatesH3(
-        rideId,
-        pickupLat,
-        pickupLng,
-        limit,
-        ignorePreviousOffers,
-        round
-      )
+    const base = await findCandidatesH3(
+      rideId,
+      pickupLat,
+      pickupLng,
+      limit,
+      ignorePreviousOffers,
+      round
+    );
+    return withNoFix(
+      await filterCandidatesForDestination(rideId, pickupLat, pickupLng, base)
     );
   } catch (err: any) {
     // NEVER fail silently, NEVER leave the rider waiting: say what broke, then
@@ -475,8 +587,15 @@ export async function findCandidates(
     );
     bump("h3_path_failures");
     bump("fallback_used");
+    const base = await findCandidatesHaversine(
+      rideId,
+      pickupLat,
+      pickupLng,
+      limit,
+      ignorePreviousOffers
+    );
     return withNoFix(
-      await findCandidatesHaversine(rideId, pickupLat, pickupLng, limit, ignorePreviousOffers)
+      await filterCandidatesForDestination(rideId, pickupLat, pickupLng, base)
     );
   }
 }
@@ -658,99 +777,11 @@ async function findCandidatesH3(
   );
   if (rows.length === 0) return [];
 
-  // ── Module 2: destination-mode filter (approved §8.2 rule, Q5) ────────────
-  // Only allowlisted drivers WITH a live destination are evaluated (Q7/Q12);
-  // everyone else passes through untouched. Per-driver fail-closed (Q13): a
-  // throwing predicate removes THAT driver, logs and counts — the query never
-  // aborts for the rest. Flag off / empty allowlist ⇒ no extra queries, no
-  // trace stage, behaviour byte-identical to Module 1.
-  let pool = rows;
-  const dcfg = await getDestinationConfig();
-  const allow = new Set(dcfg.destination_rollout_driver_ids);
-  // RC4 rollout-for-everyone: mode 'all' evaluates EVERY driver's destination
-  // (drivers without one pass through untouched, exactly as before);
-  // 'allowlist' (default when the field is absent) is the pre-RC4 behaviour.
-  const destAll = dcfg.destination_rollout_mode === "all";
-  const inRollout = (id: string) => destAll || allow.has(String(id));
-  if (
-    dcfg.destination_matching_enabled &&
-    rows.some((r) => inRollout(r.id))
-  ) {
-    const ride = await queryOne<{ destination_lat: number | null; destination_lng: number | null }>(
-      `SELECT destination_lat, destination_lng FROM rides WHERE id = $1`,
-      [rideId]
-    ).catch(() => null);
-    const dests = await query<{ user_id: string; destination_lat: number; destination_lng: number }>(
-      `SELECT user_id, destination_lat, destination_lng FROM driver_profiles
-        WHERE user_id = ANY($1::uuid[])
-          AND destination_lat IS NOT NULL AND destination_lng IS NOT NULL`,
-      [rows.filter((r) => inRollout(r.id)).map((r) => r.id)]
-    ).catch(() => []);
-    const destBy = new Map(dests.map((d) => [d.user_id, d]));
-    const X =
-      ride?.destination_lat != null && ride.destination_lng != null
-        ? { lat: Number(ride.destination_lat), lng: Number(ride.destination_lng) }
-        : null;
-    const P = { lat: pickupLat, lng: pickupLng };
-    const th: FitThresholds = {
-      dropoffRadiusKm: dcfg.destination_match_dropoff_radius_km,
-      crossTrackKm: dcfg.destination_match_cross_track_km,
-      alongTolKm: dcfg.destination_match_along_tolerance_km,
-    };
-    let considered = 0;
-    let removed = 0;
-    let errors = 0;
-    pool = [];
-    for (const row of rows) {
-      // ANY active destination session hard-filters this driver (2026-10-15):
-      // the rollout gates only whether a driver can START a session — once a
-      // session exists, a driver in destination mode must NEVER be offered a
-      // ride that doesn't head their way (the previous rollout re-check here
-      // let session drivers take anyone when they fell outside the bucket).
-      const dest = destBy.get(row.id);
-      if (!dest) {
-        pool.push(row); // not in destination mode
-        continue;
-      }
-      considered += 1;
-      try {
-        const verdict = destinationFit(
-          { lat: Number(row.current_lat), lng: Number(row.current_lng) },
-          { lat: Number(dest.destination_lat), lng: Number(dest.destination_lng) },
-          P,
-          X,
-          th
-        );
-        if (verdict === "accept") {
-          pool.push(row);
-        } else {
-          removed += 1;
-          bump("destination_filtered");
-        }
-      } catch (err: any) {
-        // Q13: fail closed for THIS driver only — the ride keeps serving.
-        errors += 1;
-        bump("destination_predicate_error");
-        console.warn(
-          `[dispatch] destinationFit threw driver=${row.id} ride=${rideId}: ${err?.message || err}`
-        );
-      }
-    }
-    trace(rideId, "destination_filter", {
-      considered,
-      kept: pool.length,
-      removed,
-      errors,
-      mode: dcfg.destination_rollout_mode,
-      allowlist: allow.size,
-    });
-  }
-
   // 6. Rank by ROAD ETA (one OSRM matrix call for the pool), haversine
   //    fallback per entry — never a reason to delay the offer.
   const etas = await etaMinutesList(
     { lat: pickupLat, lng: pickupLng },
-    pool.map((r) => ({ lat: Number(r.current_lat), lng: Number(r.current_lng) })),
+    rows.map((r) => ({ lat: Number(r.current_lat), lng: Number(r.current_lng) })),
     cfg.avg_speed_kmh
   );
   // ── Module 3: equal-ETA tie-break (behind performance_tier_enabled) ──────
@@ -759,7 +790,7 @@ async function findCandidatesH3(
   // no strict ties → breakTierTies returns the pairs untouched, and the
   // legacy findCandidatesHaversine path never reaches this code at all.
   const rankedPairs = await breakTierTies(
-    pool.map((row, i) => ({ row, eta: etas[i] })).sort((a, b) => a.eta - b.eta),
+    rows.map((row, i) => ({ row, eta: etas[i] })).sort((a, b) => a.eta - b.eta),
     rideId
   );
   const ranked = rankedPairs.map((x) => x.row);
@@ -844,8 +875,8 @@ export async function loadRide(rideId: string): Promise<DispatchRide | null> {
 //                   There is deliberately no degrade-to-everyone step: a ride
 //                   that nobody is eligible for parks as `no_drivers` and waits
 //                   for a matching car instead of being pushed to the wrong one.
-//   2. within 3km — …and if any of them is inside the first ladder rung
-//                   (match_radius_km [3,5,7]), ONLY those: the request goes to
+//   2. within 5km — …and if any of them is inside the first ladder rung
+//                   (match_radius_km [5,7,10]), ONLY those: the request goes to
 //                   the RIGHT car NEAR the rider.
 // The destination-mode module (Module 2) runs BEFORE this inside findCandidates
 // and is untouched: destination sessions keep their own accept/reject rules —
@@ -894,15 +925,18 @@ async function filterCandidatesForTier(
     });
     let pool = eligible;
     const mode = "strict";
-    const near3km = pool.filter((c) => Number(c.distance_km) <= 3);
-    if (near3km.length > 0) pool = near3km;
+    // Prefer the RIGHT car near the rider. The first ladder rung is now 5 km
+    // (match_radius_km [5,7,10]); if nobody eligible is that close, fall back
+    // to the full eligible pool rather than parking the ride.
+    const near5km = pool.filter((c) => Number(c.distance_km) <= 5);
+    if (near5km.length > 0) pool = near5km;
 
     trace(rideId, "tier_filter", {
       tier,
       found: candidates.length,
       eligible: eligible.length,
       pool: pool.length,
-      within_3km: near3km.length,
+      within_5km: near5km.length,
       mode,
     });
     if (mode !== "strict" || pool.length !== candidates.length) {
@@ -1072,7 +1106,7 @@ export async function offerToNextDriver(
   }
 
   // RIDE CLASS: narrow to drivers whose car matches the tier the rider booked,
-  // preferring the ones within 3 km (see filterCandidatesForTier). Never empty
+  // preferring the ones within 5 km (see filterCandidatesForTier). Never empty
   // for a non-empty candidate list (degradation ladder inside), so the loop
   // below always has someone to try; raw counts stay in the traces above.
   const pool = await filterCandidatesForTier(rideId, ride.tier, candidates);
