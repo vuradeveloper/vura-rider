@@ -46,6 +46,8 @@ exports.ADMIN_PERMISSIONS = [
     "settings.read",
     "settings.write",
     "money.read",
+    "paylater.read",
+    "paylater.grant",
     "admins.manage",
     "audit.read",
     "catalogue.read",
@@ -88,8 +90,9 @@ exports.ROLE_PERMISSIONS = {
         "settings.read",
         "catalogue.read",
         "catalogue.write",
+        "paylater.read",
     ],
-    finance: ["dashboard.read", "money.read"],
+    finance: ["dashboard.read", "money.read", "paylater.read", "paylater.grant"],
 };
 function roleHasPermission(role, perm) {
     return exports.ROLE_PERMISSIONS[role].includes(perm);

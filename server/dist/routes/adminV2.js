@@ -35,6 +35,7 @@ const emailCampaigns_1 = require("../services/emailCampaigns");
 const firebase_1 = require("../config/firebase");
 const adminInvite_1 = require("../services/adminInvite");
 const adminMoney_1 = require("../services/adminMoney");
+const adminPayLater_1 = require("../services/adminPayLater");
 const adminVehicleDb_1 = require("../services/adminVehicleDb");
 const vehicleImages_1 = require("../services/vehicleImages");
 const vehicleReview_1 = require("../services/vehicleReview");
@@ -1854,6 +1855,114 @@ router.get("/money/payouts", (0, adminAuth_1.requireAdmin)("money.read"), async 
 router.get("/money/earnings", (0, adminAuth_1.requireAdmin)("money.read"), async (_req, res) => {
     try {
         res.json({ earnings: await (0, adminMoney_1.listDriverEarnings)() });
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// ── Ride Now, Pay Later — eligibility is automatic, credit is MANUAL ─────────
+// The owner's rule: the server may LIST eligible riders, but only an admin can
+// move a credit limit. Every grant is audited with the funds position at the
+// time and a unique idempotency key, so a double-click cannot lend twice.
+// GET /api/admin/v2/paylater/overview — funds + eligible riders + accounts + graph.
+router.get("/paylater/overview", (0, adminAuth_1.requireAdmin)("paylater.read"), async (_req, res) => {
+    try {
+        res.json(await (0, adminPayLater_1.getPayLaterAdminOverview)());
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/paylater/grant — the ONE money action in this console.
+router.post("/paylater/grant", (0, adminAuth_1.requireAdmin)("paylater.grant"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const riderId = String(req.body?.riderId || "").trim();
+        if (!riderId) {
+            res.status(400).json({ error: "riderId is required" });
+            return;
+        }
+        const result = await (0, adminPayLater_1.grantPayLater)({
+            riderId,
+            amountRands: req.body?.amountRands == null ? undefined : Number(req.body.amountRands),
+            reason: req.body?.reason == null ? undefined : String(req.body.reason),
+            idempotencyKey: req.body?.idempotencyKey == null
+                ? undefined
+                : String(req.body.idempotencyKey),
+            override: req.body?.override === true,
+            actor,
+        });
+        res.json(result);
+    }
+    catch (err) {
+        if (err instanceof adminPayLater_1.PayLaterGrantError) {
+            res.status(err.code === "not_found"
+                ? 404
+                : err.code === "insufficient_funds"
+                    ? 409
+                    : 400).json({
+                error: err.message,
+                code: err.code,
+                funds: err.funds ?? null,
+            });
+            return;
+        }
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/paylater/:riderId/status — freeze / reactivate.
+router.post("/paylater/:riderId/status", (0, adminAuth_1.requireAdmin)("paylater.grant"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        const status = String(req.body?.status || "");
+        if (status !== "active" && status !== "frozen") {
+            res.status(400).json({ error: "status must be active or frozen" });
+            return;
+        }
+        res.json(await (0, adminPayLater_1.setPayLaterAccountStatus)(String(req.params.riderId), status, actor, req.body?.reason == null ? undefined : String(req.body.reason)));
+    }
+    catch (err) {
+        if (err instanceof adminPayLater_1.PayLaterGrantError) {
+            res.status(err.code === "not_found" ? 404 : 400).json({
+                error: err.message,
+                code: err.code,
+            });
+            return;
+        }
+        sendError(res, err);
+    }
+});
+// POST /api/admin/v2/paylater/demos — seed the 3 labelled demo riders.
+router.post("/paylater/demos", (0, adminAuth_1.requireAdmin)("paylater.grant"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        res.json(await (0, adminPayLater_1.seedPayLaterDemos)(actor));
+    }
+    catch (err) {
+        sendError(res, err);
+    }
+});
+// DELETE /api/admin/v2/paylater/demos — remove ONLY the demo users.
+router.delete("/paylater/demos", (0, adminAuth_1.requireAdmin)("paylater.grant"), async (req, res) => {
+    try {
+        const actor = await (0, adminAuth_1.resolveAdminActor)(req);
+        if (!actor) {
+            res.status(403).json({ error: "Admin only" });
+            return;
+        }
+        res.json(await (0, adminPayLater_1.clearPayLaterDemos)(actor));
     }
     catch (err) {
         sendError(res, err);

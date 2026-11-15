@@ -9,6 +9,12 @@ export interface PayLaterConfig {
     retryDays: number[];
     autoDebitThresholdR: number;
     workerIntervalMs: number;
+    /**
+     * TRUE (default): a rider who unlocks can only REQUEST activation; the
+     * admin console grants the actual credit. FALSE restores the old
+     * self-serve activation (PAY_LATER_ADMIN_APPROVAL=0).
+     */
+    adminApproval: boolean;
 }
 export declare function payLaterConfig(): PayLaterConfig;
 /** Credit ladder: 0 below the unlock threshold, then +limitStepR every
@@ -44,6 +50,9 @@ export declare function getPayLaterEligibility(dbUserId: string): Promise<{
     enrolled: boolean;
     status: any;
     unlocked: boolean;
+    /** The rider can request activation; only the admin can grant the credit. */
+    approval_required: boolean;
+    pending_approval: boolean;
     rides_completed: number;
     rides_required: number;
     progress_pct: number;
@@ -113,6 +122,8 @@ export interface EnrollInput {
  */
 export declare function enrollPayLater(dbUserId: string, input: EnrollInput): Promise<{
     account: any;
+    pending_approval: boolean;
+    approval_required: boolean;
     mandate: {
         token: null;
         bankVerified: boolean;
@@ -149,6 +160,9 @@ export declare function getPayLaterStatus(dbUserId: string): Promise<{
         enrolled: boolean;
         status: any;
         unlocked: boolean;
+        /** The rider can request activation; only the admin can grant the credit. */
+        approval_required: boolean;
+        pending_approval: boolean;
         rides_completed: number;
         rides_required: number;
         progress_pct: number;
@@ -207,6 +221,9 @@ export declare function getPayLaterStatus(dbUserId: string): Promise<{
         enrolled: boolean;
         status: any;
         unlocked: boolean;
+        /** The rider can request activation; only the admin can grant the credit. */
+        approval_required: boolean;
+        pending_approval: boolean;
         rides_completed: number;
         rides_required: number;
         progress_pct: number;
@@ -243,6 +260,13 @@ export declare function getPayLaterStatus(dbUserId: string): Promise<{
 export declare function refreshPayLaterLimit(dbUserId: string): Promise<{
     account: any;
     completed_rides: number;
+    admin_approval: boolean;
+    limit_managed_by: string;
+} | {
+    account: any;
+    completed_rides: number;
+    admin_approval?: undefined;
+    limit_managed_by?: undefined;
 }>;
 export interface RepayResult {
     success: boolean;

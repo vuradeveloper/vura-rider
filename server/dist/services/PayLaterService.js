@@ -89,6 +89,10 @@ function payLaterConfig() {
         autoDebitThresholdR: envNum(process.env.PAY_LATER_AUTO_DEBIT_THRESHOLD_R, 0),
         workerIntervalMs: envInt(process.env.PAY_LATER_WORKER_INTERVAL_MS, 6 * 60 * 60 * 1000, // every 6h
         60_000),
+        // Owner's rule: eligibility is automatic, giving the credit is NOT. The
+        // console's Grant button is the only path unless the operator explicitly
+        // opts back into self-serve with PAY_LATER_ADMIN_APPROVAL=0.
+        adminApproval: process.env.PAY_LATER_ADMIN_APPROVAL !== "0",
     };
 }
 /** Credit ladder: 0 below the unlock threshold, then +limitStepR every
@@ -339,6 +343,9 @@ async function getPayLaterEligibility(dbUserId) {
       WHERE r.passenger_id = $1 AND r.status = 'completed'`, [dbUserId, card?.transaction_index || ""]).catch(() => null);
     const outstanding = await ledgerOutstanding(dbUserId);
     const unlocked = rides >= cfg.ridesToUnlock;
+    // A pending request is NOT an active account yet: the old app must keep
+    // showing the unlock card instead of claiming "active" with a R0 limit.
+    const enrolled = !!account && String(account.status || "") !== "pending";
     const limit = account ? Number(account.credit_limit || 0) : computeCreditLimit(rides);
     const available = Math.max(0, Math.round((limit - outstanding) * 100) / 100);
     const pastDue = account ? await hasPastDueDebit(dbUserId) : false;
@@ -349,9 +356,12 @@ async function getPayLaterEligibility(dbUserId) {
     const inCycle = Number(account?.repay_ride_count || 0);
     const cfgRepay = cfg.ridesToRepay;
     return {
-        enrolled: !!account,
+        enrolled,
         status: account?.status || null,
         unlocked,
+        /** The rider can request activation; only the admin can grant the credit. */
+        approval_required: cfg.adminApproval,
+        pending_approval: String(account?.status || "") === "pending",
         rides_completed: rides,
         rides_required: cfg.ridesToUnlock,
         progress_pct: cfg.ridesToUnlock <= 0 ? 100 : Math.min(100, Math.round((rides / cfg.ridesToUnlock) * 100)),
@@ -496,14 +506,26 @@ async function enrollPayLater(dbUserId, input) {
     if (!mockBypass && rides < cfg.ridesToUnlock) {
         throw new Error(`Ride Now, Pay Later unlocks after ${cfg.ridesToUnlock} paid rides on the same card (you have ${rides}).`);
     }
-    const creditLimit = computeCreditLimit(mockBypass ? Math.max(rides, cfg.ridesToUnlock) : rides);
+    const creditLimit = cfg.adminApproval
+        ? 0
+        : computeCreditLimit(mockBypass ? Math.max(rides, cfg.ridesToUnlock) : rides);
+    const accountStatus = cfg.adminApproval ? "pending" : "active";
     const account = await (0, database_2.queryOne)(`INSERT INTO pay_later_accounts
        (user_id, credit_limit, status, card_token, account_holder, bank_code,
         account_number_masked, identity_fingerprint, terms_accepted_at)
-     VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, NULL)
+     VALUES ($1, $2, $8, $3, $4, $5, $6, $7, NULL)
      ON CONFLICT (user_id) DO UPDATE SET
-       credit_limit = EXCLUDED.credit_limit,
-       status = 'active',
+       -- An already-active (or frozen) account keeps the limit the admin gave
+       -- it. A pending request stays pending with R0 until the console grants.
+       credit_limit = CASE
+         WHEN pay_later_accounts.status IN ('active','frozen')
+           THEN pay_later_accounts.credit_limit
+         ELSE GREATEST(pay_later_accounts.credit_limit, EXCLUDED.credit_limit)
+       END,
+       status = CASE
+         WHEN pay_later_accounts.status IN ('active','frozen') THEN pay_later_accounts.status
+         ELSE EXCLUDED.status
+       END,
        card_token = COALESCE(EXCLUDED.card_token, pay_later_accounts.card_token),
        account_holder = COALESCE(EXCLUDED.account_holder, pay_later_accounts.account_holder),
        bank_code = COALESCE(EXCLUDED.bank_code, pay_later_accounts.bank_code),
@@ -517,12 +539,15 @@ async function enrollPayLater(dbUserId, input) {
         input.bankCode || null,
         input.accountNumber ? maskAccountNumber(input.accountNumber) : null,
         fingerprint,
+        accountStatus,
     ]);
     return {
         account: {
             ...account,
             available: Number(account.credit_limit) - Number(account.outstanding),
         },
+        pending_approval: String(account.status) === "pending",
+        approval_required: cfg.adminApproval,
         // Legacy shape kept for the old screen — the bank mandate rail is gone.
         mandate: { token: null, bankVerified: true },
         card: { verified: !!cardToken, holdReference: cardToken ? "saved-card" : "no-card" },
@@ -620,10 +645,24 @@ async function getPayLaterStatus(dbUserId) {
 }
 async function refreshPayLaterLimit(dbUserId) {
     await ensurePayLaterTables();
+    const cfg = payLaterConfig();
     const account = await getAccount(dbUserId);
     if (!account)
         throw new Error("You are not enrolled in Pay Later yet.");
     const rides = await countUnlockRides(dbUserId);
+    // Admin-approval mode: the console owns the limit. A refresh must never
+    // silently raise it behind the admin's back.
+    if (cfg.adminApproval) {
+        return {
+            account: {
+                ...account,
+                available: Number(account.credit_limit) - Number(account.outstanding),
+            },
+            completed_rides: rides,
+            admin_approval: true,
+            limit_managed_by: "admin",
+        };
+    }
     const newLimit = computeCreditLimit(rides);
     const updated = await (0, database_2.queryOne)(`UPDATE pay_later_accounts
         SET credit_limit = GREATEST(credit_limit, $2), updated_at = NOW()
