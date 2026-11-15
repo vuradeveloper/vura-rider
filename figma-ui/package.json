@@ -8,7 +8,7 @@
     "build": "vite build && node scripts/downlevel-css.mjs && node scripts/scan-legacy-compat.mjs",
     "preview": "vite preview",
     "format": "oxfmt",
-    "test": "node --test src/lib/webviewGuard.test.ts"
+    "test": "node --test src/lib/webviewGuard.test.ts src/lib/fareQuote.test.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

@@ -42,6 +42,7 @@ import { MapPicker } from './components/MapPicker'
 // imported here, so the map's route effect threw `getRoute is not defined` the
 // moment a screen rendered with two or more points — one of the white screens.
 import { getRoute } from './lib/backend'
+import { BOOKING_FEE_PCT, quoteTotals } from './lib/fareQuote'
 import WalletScreen from './components/WalletScreen'
 import { initPushNotifications, notifyRide, consumePushAction } from './lib/notify'
 import type { Earnings as EarningsSummary } from './lib/backend'
@@ -204,7 +205,6 @@ const RIDE_GROUPS: { label: string; ids: string[] }[] = [
 const RIDE_FARE = 5
 // Option A: card riders pay the fare + a 4% booking fee on top. The server
 // computes the same figure (services/fareFees.ts) — this is display only.
-const BOOKING_FEE_PCT = 4
 const RIDE_BOOKING_FEE = Math.round(RIDE_FARE * BOOKING_FEE_PCT) / 100
 const RIDE_CARD_TOTAL = RIDE_FARE + RIDE_BOOKING_FEE
 
@@ -1313,8 +1313,7 @@ function BookingScreen({ destination, onBack, onConfirm }: {
     }
     return f
   })()
-  const quoteBookingFee = Math.round(quoteFare * BOOKING_FEE_PCT) / 100
-  const quoteTotal = Math.round((quoteFare + quoteBookingFee) * 100) / 100
+  const { bookingFee: quoteBookingFee, total: quoteTotal } = quoteTotals(quoteFare, BOOKING_FEE_PCT)
 
   const payLabel = pay === PAY_CASH
     ? 'Cash'
