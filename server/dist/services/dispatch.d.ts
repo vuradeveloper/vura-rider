@@ -53,7 +53,7 @@ export declare function h3MaxOfferRounds(cfg: {
 }): number;
 /**
  * Escalation ladder: rounds are spread evenly across match_radius_km, so with
- * [3,5,7] and a 6-round budget it is 3km -> rounds 1-2, 5km -> 3-4, 7km -> 5-6.
+ * [5,7,10] and a 6-round budget it is 5km -> rounds 1-2, 7km -> 3-4, 10km -> 5-6.
  * null past the budget = stop searching (caller reports no-drivers).
  */
 export declare function radiusForRound(round: number, ladder: number[], maxRounds: number): number | null;

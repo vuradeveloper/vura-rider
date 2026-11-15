@@ -35,7 +35,7 @@ exports.DEFAULT_CONFIG = {
     // A missing/unreadable app_config therefore behaves exactly like the
     // pre-Module-1 server.
     h3_matching_enabled: false,
-    match_radius_km: [3, 5, 7],
+    match_radius_km: [5, 7, 10],
     search_timeout_ms: 90_000,
     still_looking_msg_ms: 30_000,
     h3_match_res: h3_1.DEFAULT_MATCH_RES,

@@ -879,6 +879,24 @@ async function start() {
         ADD COLUMN IF NOT EXISTS stop_fee NUMERIC(10,2) DEFAULT 0,
         ADD COLUMN IF NOT EXISTS cancel_driver_comp NUMERIC(10,2) DEFAULT 0
       `).catch((err) => console.warn("⚠ compensation columns migration skipped:", err?.message));
+            // Widen the initial matching radius from 3 km to 5 km. Only rewrite the
+            // exact old default so a deliberate admin value is never overwritten.
+            // The escalation ladder becomes 5/7/10 km.
+            try {
+                const widened = await (0, database_2.execute)(`
+          UPDATE app_config
+             SET value = jsonb_set(value, '{match_radius_km}', '[5,7,10]'::jsonb),
+                 updated_at = NOW()
+           WHERE key = 'matching'
+             AND value->'match_radius_km' = '[3,5,7]'::jsonb
+        `);
+                if (widened.rowCount) {
+                    console.log("✓ Matching radius widened: 3/5/7 km → 5/7/10 km");
+                }
+            }
+            catch (err) {
+                console.warn("⚠ matching radius update skipped:", err?.message);
+            }
             // Backfill so the new status column agrees with the old is_online boolean and
             // with trips already in flight (a driver mid-trip must not look available).
             await (0, database_2.execute)(`

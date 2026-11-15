@@ -6,7 +6,7 @@
 // (document (2).pdf: DATSUN GO, 7 seats, "Eligible Categories: Economy,XL,Send").
 // Riders pick a tier (go / comfort / xl / black) at booking — so the REQUEST for
 // that tier must land on drivers whose car is actually IN that class, near them
-// (the match ladder starts at 3 km — config `match_radius_km: [3,5,7]`).
+// (the match ladder starts at 5 km — config `match_radius_km: [5,7,10]`).
 //
 // This module is the single source of truth for both sides of that contract:
 // the profile PATCH canonicalises what CarScan printed, and dispatch asks

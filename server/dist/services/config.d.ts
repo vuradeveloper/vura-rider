@@ -1,7 +1,7 @@
 export interface AppConfig {
     /** Master switch: false => original haversine matching, H3 index unused. */
     h3_matching_enabled: boolean;
-    /** Escalation ladder searched in order, e.g. [3, 5, 7]. */
+    /** Escalation ladder searched in order, e.g. [5, 7, 10]. */
     match_radius_km: number[];
     /** Give up and tell the rider after this long. */
     search_timeout_ms: number;
