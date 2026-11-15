@@ -35,6 +35,7 @@ import { createRideHold, captureRideHold } from "./preauthorization";
 import { ensurePayLaterTables, registerPayLaterDebit, confirmRepaymentReference, acceptPayLaterTerms, takePayLaterRide } from "./PayLaterService";
 import {
   clearPayLaterDemos,
+  getPayLaterAdminOverview,
   getPayLaterEligibleRiders,
   getPayLaterFunds,
   grantPayLater,
@@ -726,6 +727,12 @@ describe.skipIf(!enabled)("Vura money safety", () => {
     const before = await getPayLaterFunds();
     expect(before.platform_revenue_zar).toBeGreaterThan(100);
 
+    // The graph payload is real: 30 daily points, not a stub.
+    const overview = await getPayLaterAdminOverview();
+    expect(overview.series).toHaveLength(30);
+    expect(overview.config.default_grant_r).toBe(100);
+    expect(overview.funds.available_to_lend_zar).toBe(before.available_to_lend_zar);
+
     const [first, second] = await Promise.all([
       grantPayLater({
         riderId: rider,
@@ -831,6 +838,8 @@ describe.skipIf(!enabled)("Vura money safety", () => {
     const afterDebit = await takePayLaterRide(rider, 50);
     expect(afterDebit.available_r).toBe(50);
     await expect(takePayLaterRide(rider, 60)).rejects.toThrow(/available Pay Later credit/i);
+    const flow = await getPayLaterAdminOverview();
+    expect(flow.series[flow.series.length - 1].outstanding_zar).toBeGreaterThanOrEqual(50);
 
     const ref = `PLRLOAD${Date.now()}`;
     await execute(
