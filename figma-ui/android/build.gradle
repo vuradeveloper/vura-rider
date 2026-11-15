@@ -27,6 +27,22 @@ allprojects {
     }
 }
 
+// Capacitor 8's plugin modules declare Java 21. This build machine has JDK 17,
+// and every plugin shipped here is Java-17 compatible (the app module is
+// already pinned to 17). Pin the library modules too so a clean `cap sync`
+// cannot break the build again.
+subprojects {
+    afterEvaluate { project ->
+        if (project.plugins.hasPlugin('com.android.library') ||
+            project.plugins.hasPlugin('com.android.application')) {
+            project.android.compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+    }
+}
+
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
