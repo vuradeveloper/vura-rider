@@ -1783,6 +1783,9 @@ export type PayLaterEligibility = {
   enrolled: boolean;
   status: string | null;
   unlocked: boolean;
+  /** TRUE = the console grants the credit; the rider can only request it. */
+  approval_required?: boolean;
+  pending_approval?: boolean;
   rides_completed: number;
   rides_required: number;
   progress_pct: number;

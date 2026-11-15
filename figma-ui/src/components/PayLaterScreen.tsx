@@ -87,11 +87,16 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
     if (busy) return
     setBusy('activate'); setFlash(null)
     try {
-      await enrollPayLater()
+      const res = await enrollPayLater()
       // Enrollment alone leaves terms unaccepted — the booking guard requires
       // both, so accept immediately (the rider tapped through the offer).
       if (!elig?.terms_accepted_at) await acceptPayLaterTerms()
-      setFlash({ kind: 'ok', text: 'Ride Now, Pay Later is active on your account.' })
+      setFlash({
+        kind: 'ok',
+        text: (res as any)?.pending_approval
+          ? 'Request sent — Vura reviews every Pay Later account personally. Your credit appears as soon as it is approved.'
+          : 'Ride Now, Pay Later is active on your account.',
+      })
       await load()
     } catch (e: any) {
       setFlash({ kind: 'err', text: e?.message || 'Could not activate Pay Later.' })
@@ -214,6 +219,17 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
               </div>
             )}
 
+            {/* Pending approval — credit is granted by the admin, never auto. */}
+            {elig.pending_approval && (
+              <div className="mx-4 mt-3 rounded-2xl border border-[#FBBC04]/60 bg-[#FFF8E1] p-4">
+                <p className="text-[12px] font-bold text-[#8A6D00]">Activation requested</p>
+                <p className="text-[11px] text-[#8A6D00]/80 mt-1 leading-snug">
+                  Vura reviews every Pay Later account personally. Your credit will appear here
+                  as soon as it is approved — cash and card rides still work in the meantime.
+                </p>
+              </div>
+            )}
+
             {/* ── Balance card (enrolled) ── */}
             <div className="mx-4 mt-4 rounded-2xl bg-white border border-[#F0F0F0] p-5 shadow-sm">
               <p className="text-[10px] uppercase tracking-widest text-[#ADADAD] font-semibold">Outstanding balance</p>
@@ -273,7 +289,7 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
             )}
 
             {/* ── Unlocked, not yet activated ── */}
-            {unlocked && !enrolled && (
+            {unlocked && !enrolled && !elig.pending_approval && (
               <div className="mx-4 mt-3 rounded-2xl bg-white border border-[#F0F0F0] p-5 shadow-sm">
                 <div className="flex items-baseline justify-between mb-2">
                   <p className="text-[13px] font-bold text-[#1A1A1A]">You’ve unlocked Pay Later</p>
@@ -292,7 +308,11 @@ export default function PayLaterScreen({ onBack }: { onBack: () => void }) {
                   disabled={busy !== null || !elig.has_card}
                   className="w-full mt-3.5 h-11 rounded-xl bg-[#EA4335] text-white text-[13px] font-bold active:opacity-90 disabled:opacity-50"
                 >
-                  {busy === 'activate' ? 'Activating…' : 'Activate Ride Now, Pay Later'}
+                  {busy === 'activate'
+                    ? 'Requesting…'
+                    : elig.approval_required
+                      ? 'Request activation'
+                      : 'Activate Ride Now, Pay Later'}
                 </button>
               </div>
             )}
