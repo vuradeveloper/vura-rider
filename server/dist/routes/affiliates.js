@@ -39,7 +39,7 @@ router.post("/register", auth_1.requireAuth, resolveDbUserId, async (req, res) =
 router.post("/claim", auth_1.requireAuth, resolveDbUserId, async (req, res) => {
     try {
         const { code } = req.body;
-        const result = await (0, AffiliateService_1.claimReferral)(req.dbUserId, code || "");
+        const result = await (0, AffiliateService_1.claimReferral)(req.dbUserId, code || "", req.user?.name);
         res.json(result);
     }
     catch (err) {

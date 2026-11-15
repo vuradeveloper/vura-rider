@@ -158,7 +158,7 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
             if (user?.id && referralCode) {
                 try {
                     await (0, AffiliateService_1.ensureAffiliateTables)();
-                    await (0, AffiliateService_1.claimReferral)(user.id, String(referralCode));
+                    await (0, AffiliateService_1.claimReferral)(user.id, String(referralCode), user.full_name || req.user?.name);
                 }
                 catch (err) {
                     console.warn("Referral claim skipped:", err.message);
@@ -209,7 +209,7 @@ router.post("/sync", auth_1.requireAuth, async (req, res) => {
             if (user?.id && referralCode) {
                 try {
                     await (0, AffiliateService_1.ensureAffiliateTables)();
-                    await (0, AffiliateService_1.claimReferral)(user.id, String(referralCode));
+                    await (0, AffiliateService_1.claimReferral)(user.id, String(referralCode), user.full_name || req.user?.name);
                 }
                 catch (err) {
                     console.warn("Referral claim skipped:", err.message);

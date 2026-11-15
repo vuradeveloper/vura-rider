@@ -109,7 +109,7 @@ async function getOrCreateAffiliate(dbUserId, name) {
      VALUES ($1, $2) RETURNING id, user_id, referral_code, balance, status, created_at`, [dbUserId, code]);
     return aff;
 }
-async function claimReferral(dbUserId, rawCode) {
+async function claimReferral(dbUserId, rawCode, name) {
     await ensureAffiliateTables();
     const code = normalizeCode(rawCode);
     if (!code)
@@ -121,11 +121,30 @@ async function claimReferral(dbUserId, rawCode) {
         throw new Error("You can't use your own referral code");
     const already = await (0, database_2.queryOne)("SELECT id FROM referrals WHERE referred_user_id = $1", [dbUserId]);
     if (already)
-        return { success: true, alreadyReferred: true };
-    await (0, database_2.execute)(`INSERT INTO referrals (affiliate_id, referred_user_id, code_used)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (referred_user_id) DO NOTHING`, [affiliate.id, dbUserId, code]);
-    return { success: true };
+        return { success: true, alreadyReferred: true, credit: 0 };
+    // The app promises "You both get R5 off a ride". The inviter's R5 is settled
+    // after the invitee's first completed ride (settleFirstRide); the INVITEE's R5
+    // is credited here, immediately, so it is usable on their own next booking.
+    // Their affiliate wallet is created first, then the referral + credit happen
+    // in ONE transaction so a duplicate/concurrent claim can never pay twice.
+    const inviteeAffiliate = await getOrCreateAffiliate(dbUserId, name);
+    if (!inviteeAffiliate)
+        throw new Error("Could not create the invitee wallet");
+    const referralId = await (0, database_2.withTransaction)(async (client) => {
+        const ins = await client.query(`INSERT INTO referrals (affiliate_id, referred_user_id, code_used)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (referred_user_id) DO NOTHING
+       RETURNING id`, [affiliate.id, dbUserId, code]);
+        if (!ins.rowCount)
+            return null;
+        await client.query("UPDATE affiliates SET balance = balance + $1 WHERE id = $2", [exports.REFERRAL_REWARD, inviteeAffiliate.id]);
+        await client.query(`INSERT INTO affiliate_transactions (affiliate_id, type, amount, ride_id, reference)
+       VALUES ($1, 'referral_join', $2, NULL, $3)`, [inviteeAffiliate.id, exports.REFERRAL_REWARD, ins.rows[0].id]);
+        return ins.rows[0].id;
+    });
+    if (!referralId)
+        return { success: true, alreadyReferred: true, credit: 0 };
+    return { success: true, credit: exports.REFERRAL_REWARD };
 }
 async function settleFirstRide(rideId) {
     try {

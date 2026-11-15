@@ -4,11 +4,13 @@ export declare function ensureAffiliateTables(): Promise<void>;
 export declare function normalizeCode(code: string): string;
 export declare function getAffiliateByUser(dbUserId: string): Promise<any>;
 export declare function getOrCreateAffiliate(dbUserId: string, name?: string | null): Promise<any>;
-export declare function claimReferral(dbUserId: string, rawCode: string): Promise<{
+export declare function claimReferral(dbUserId: string, rawCode: string, name?: string | null): Promise<{
     success: boolean;
     alreadyReferred: boolean;
+    credit: number;
 } | {
     success: boolean;
+    credit: number;
     alreadyReferred?: undefined;
 }>;
 export declare function settleFirstRide(rideId: string): Promise<void>;
