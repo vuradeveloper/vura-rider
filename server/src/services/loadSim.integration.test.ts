@@ -21,6 +21,16 @@ import { query, queryOne, execute } from "../config/database";
 import { acceptRide, cancelPendingOffers, expireOffers, offerToNextDriver, reviveWaitingRides } from "./dispatch";
 import { sendPushToUsers } from "./notify";
 import { makeIo, patchDestinationConfig } from "./testHarness";
+import {
+  claimReferral,
+  ensureAffiliateTables,
+  getAffiliateStats,
+  getOrCreateAffiliate,
+  inviteCreditAvailable,
+  spendInviteCredit,
+  settleFirstRide,
+} from "./AffiliateService";
+import { ensureWalletTables, recordRideCompletion } from "./walletService";
 
 const enabled = process.env.VURA_LOADTEST === "1";
 const DB_HOST = "127.0.0.1";
@@ -70,6 +80,8 @@ CREATE TABLE IF NOT EXISTS rides (
   tier VARCHAR(20) NOT NULL DEFAULT 'go',
   scheduled_at TIMESTAMPTZ, accepted_at TIMESTAMPTZ,
   no_drivers_at TIMESTAMPTZ,
+  affiliate_credit NUMERIC(12,2) NOT NULL DEFAULT 0,
+  platform_fee NUMERIC(10,2),
   created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE TABLE IF NOT EXISTS ride_offers (
@@ -85,6 +97,16 @@ CREATE TABLE IF NOT EXISTS ride_offers (
 CREATE TABLE IF NOT EXISTS ride_events (
   id BIGSERIAL PRIMARY KEY,
   ride_id UUID, driver_id UUID, event TEXT, detail JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS driver_earnings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id UUID NOT NULL REFERENCES users(id),
+  ride_id UUID,
+  gross_amount NUMERIC(10,2) DEFAULT 0,
+  fee NUMERIC(10,2) DEFAULT 0,
+  request_fee NUMERIC(10,2) DEFAULT 0,
+  net_amount NUMERIC(10,2) DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 `;
@@ -168,6 +190,8 @@ beforeAll(async () => {
     ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'go';
     ALTER TABLE rides ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
     ALTER TABLE rides ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS affiliate_credit NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE rides ADD COLUMN IF NOT EXISTS platform_fee NUMERIC(10,2);
     ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_categories JSONB DEFAULT '[]'::jsonb;
     ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_seats INTEGER;
     ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS body_type VARCHAR(30);
@@ -543,5 +567,66 @@ describe.skipIf(!enabled)("Vura load / concurrency", () => {
         destination_rollout_driver_ids: [],
       });
     }
+  }, 60_000);
+
+  it("credits the invited rider R5 and discounts their ride", async () => {
+    await ensureAffiliateTables();
+    await ensureWalletTables();
+
+    const inviter = await seedRider(1000);
+    const invitee = await seedRider(1001);
+    const inviterAffiliate = await getOrCreateAffiliate(inviter, "Inviter");
+    expect(inviterAffiliate?.referral_code).toBeTruthy();
+
+    const claimed = await claimReferral(
+      invitee,
+      String(inviterAffiliate.referral_code),
+      "Invitee"
+    );
+    expect(claimed.credit).toBe(5);
+
+    const inviteeBefore = await getAffiliateStats(invitee);
+    expect(inviteeBefore?.balance).toBe(5);
+    expect(await inviteCreditAvailable(invitee, 12.5)).toBe(5);
+
+    // This is the booking-time path: fare R12.50, credit R5 → rider pays R7.50.
+    const rideId = await seedRide(invitee, "searching");
+    await execute(`UPDATE rides SET estimated_fare = $2 WHERE id = $1`, [rideId, 7.5]);
+    const spent = await spendInviteCredit(invitee, rideId, 5);
+    expect(spent).toBe(true);
+    await execute(`UPDATE rides SET affiliate_credit = $2 WHERE id = $1`, [rideId, 5]);
+
+    const ride = await queryOne<{ estimated_fare: string; affiliate_credit: string }>(
+      `SELECT estimated_fare, affiliate_credit FROM rides WHERE id = $1`,
+      [rideId]
+    );
+    expect(Number(ride?.estimated_fare)).toBe(7.5);
+    expect(Number(ride?.affiliate_credit)).toBe(5);
+
+    const inviteeAfter = await getAffiliateStats(invitee);
+    expect(inviteeAfter?.balance).toBe(0);
+
+    // The inviter is paid R5 when the invitee's FIRST ride completes.
+    await execute(`UPDATE rides SET status = 'completed' WHERE id = $1`, [rideId]);
+    await settleFirstRide(rideId);
+    const inviterAfter = await getAffiliateStats(inviter);
+    expect(inviterAfter?.balance).toBe(5);
+
+    // The driver must be paid on the PRE-discount R12.50, not the R7.50 the
+    // rider paid: Vura funds the referral, not the driver.
+    const driver = await seedDriver(1002, BASE.lat, BASE.lng);
+    await execute(`UPDATE rides SET driver_id = $2 WHERE id = $1`, [rideId, driver]);
+    await recordRideCompletion(driver, rideId, 12.5, "cash");
+    const earning = await queryOne<{ gross_amount: string; net_amount: string }>(
+      `SELECT gross_amount, net_amount FROM driver_earnings WHERE ride_id = $1`,
+      [rideId]
+    );
+
+    console.log(
+      `[loadsim] referral -> invitee_credit=${claimed.credit}, ride_fare=${ride?.estimated_fare}, affiliate_credit=${ride?.affiliate_credit}, invitee_balance=${inviteeAfter?.balance}, inviter_balance=${inviterAfter?.balance}, driver_gross=${earning?.gross_amount}, driver_net=${earning?.net_amount}`
+    );
+
+    expect(Number(earning?.gross_amount)).toBe(12.5);
+    expect(Number(earning?.net_amount)).toBe(11.25);
   }, 60_000);
 });

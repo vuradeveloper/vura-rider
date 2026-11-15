@@ -1,5 +1,5 @@
 import getPool from "../config/database";
-import { query, queryOne, execute } from "../config/database";
+import { query, queryOne, execute, withTransaction } from "../config/database";
 
 export const REFERRAL_REWARD = 5; // R5 per referred rider's first ride, paid by Vura (FNB)
 export const REFERRAL_WINDOW_DAYS = 90; // invitee must finish their first ride within 90 days
@@ -106,7 +106,7 @@ export async function getOrCreateAffiliate(dbUserId: string, name?: string | nul
   return aff;
 }
 
-export async function claimReferral(dbUserId: string, rawCode: string) {
+export async function claimReferral(dbUserId: string, rawCode: string, name?: string | null) {
   await ensureAffiliateTables();
   const code = normalizeCode(rawCode);
   if (!code) throw new Error("Referral code is required");
@@ -122,15 +122,40 @@ export async function claimReferral(dbUserId: string, rawCode: string) {
     "SELECT id FROM referrals WHERE referred_user_id = $1",
     [dbUserId]
   );
-  if (already) return { success: true, alreadyReferred: true };
+  if (already) return { success: true, alreadyReferred: true, credit: 0 };
 
-  await execute(
-    `INSERT INTO referrals (affiliate_id, referred_user_id, code_used)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (referred_user_id) DO NOTHING`,
-    [affiliate.id, dbUserId, code]
-  );
-  return { success: true };
+  // The app promises "You both get R5 off a ride". The inviter's R5 is settled
+  // after the invitee's first completed ride (settleFirstRide); the INVITEE's R5
+  // is credited here, immediately, so it is usable on their own next booking.
+  // Their affiliate wallet is created first, then the referral + credit happen
+  // in ONE transaction so a duplicate/concurrent claim can never pay twice.
+  const inviteeAffiliate = await getOrCreateAffiliate(dbUserId, name);
+  if (!inviteeAffiliate) throw new Error("Could not create the invitee wallet");
+
+  const referralId = await withTransaction(async (client) => {
+    const ins = await client.query<{ id: string }>(
+      `INSERT INTO referrals (affiliate_id, referred_user_id, code_used)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (referred_user_id) DO NOTHING
+       RETURNING id`,
+      [affiliate.id, dbUserId, code]
+    );
+    if (!ins.rowCount) return null;
+
+    await client.query(
+      "UPDATE affiliates SET balance = balance + $1 WHERE id = $2",
+      [REFERRAL_REWARD, inviteeAffiliate.id]
+    );
+    await client.query(
+      `INSERT INTO affiliate_transactions (affiliate_id, type, amount, ride_id, reference)
+       VALUES ($1, 'referral_join', $2, NULL, $3)`,
+      [inviteeAffiliate.id, REFERRAL_REWARD, ins.rows[0].id]
+    );
+    return ins.rows[0].id;
+  });
+
+  if (!referralId) return { success: true, alreadyReferred: true, credit: 0 };
+  return { success: true, credit: REFERRAL_REWARD };
 }
 
 export async function settleFirstRide(rideId: string) {

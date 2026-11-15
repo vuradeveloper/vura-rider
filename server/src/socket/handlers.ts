@@ -1831,8 +1831,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
           console.warn(`[complete] driver socket has no db user — completion ignored ride=${rideId}`);
           return;
         }
-        const ride = await queryOne<{ id: string; driver_id: string; fare: number; status: string }>(
-          "SELECT id, driver_id, status, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare FROM rides WHERE id = $1 AND driver_id = $2",
+        const ride = await queryOne<{
+          id: string;
+          driver_id: string;
+          fare: number;
+          status: string;
+          affiliate_credit: number | null;
+        }>(
+          "SELECT id, driver_id, status, GREATEST(COALESCE(NULLIF(actual_fare, 0), estimated_fare, 0.20), COALESCE(actual_fare, 0)) AS fare, COALESCE(affiliate_credit, 0) AS affiliate_credit FROM rides WHERE id = $1 AND driver_id = $2",
           [rideId, dbUserId]
         );
         if (!ride) {
@@ -1917,7 +1923,15 @@ export function setupSocketHandlers(io: SocketIOServer) {
           // Seed this driver's pre-wallet history FIRST (once — the guard is
           // "no ledger rows at all"), then post this ride (idempotent).
           await backfillDriverLedger(dbUserId).catch(() => { });
-          await recordRideCompletion(dbUserId, rideId, Number(ride.fare || 0), method);
+          // The rider's invite credit reduced the fare they pay, but the driver
+          // must not fund the referral: base their earnings on the PRE-discount
+          // fare (rider fare + affiliate_credit). Vura covers the difference.
+          await recordRideCompletion(
+            dbUserId,
+            rideId,
+            Number(ride.fare || 0) + Number(ride.affiliate_credit || 0),
+            method
+          );
         } catch (e: any) {
           console.warn(`[wallet] completion hook ride=${rideId}:`, e?.message || e);
         }

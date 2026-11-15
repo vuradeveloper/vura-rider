@@ -70,7 +70,7 @@ router.post(
   async (req: AffiliateRequest, res: Response) => {
     try {
       const { code } = req.body;
-      const result = await claimReferral(req.dbUserId!, code || "");
+      const result = await claimReferral(req.dbUserId!, code || "", req.user?.name);
       res.json(result);
     } catch (err: any) {
       console.error("Affiliate claim error:", err);
