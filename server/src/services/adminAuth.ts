@@ -62,6 +62,8 @@ export const ADMIN_PERMISSIONS = [
   "settings.read",
   "settings.write",
   "money.read",
+  "paylater.read",
+  "paylater.grant",
   "admins.manage",
   "audit.read",
   "catalogue.read",
@@ -106,8 +108,9 @@ export const ROLE_PERMISSIONS: Record<AdminRole, readonly AdminPermission[]> = {
     "settings.read",
     "catalogue.read",
     "catalogue.write",
+    "paylater.read",
   ],
-  finance: ["dashboard.read", "money.read"],
+  finance: ["dashboard.read", "money.read", "paylater.read", "paylater.grant"],
 };
 
 export function roleHasPermission(role: AdminRole, perm: AdminPermission): boolean {

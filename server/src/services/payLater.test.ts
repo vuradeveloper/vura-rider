@@ -145,6 +145,7 @@ const ACTIVE_ACCOUNT = {
 
 describe("payLaterConfig — every brief number is env-configurable", () => {
   it("reads the PAY_LATER_* knobs", () => {
+    delete process.env.PAY_LATER_ADMIN_APPROVAL;
     process.env.PAY_LATER_RIDES_TO_UNLOCK = "7";
     process.env.PAY_LATER_CREDIT_LIMIT_R = "250";
     process.env.PAY_LATER_LIMIT_STEP_R = "75";
@@ -167,6 +168,7 @@ describe("payLaterConfig — every brief number is env-configurable", () => {
       retryDays: [2, 5],
       autoDebitThresholdR: 80,
       workerIntervalMs: 120000,
+      adminApproval: true,
     });
   });
 
@@ -434,24 +436,56 @@ describe("enrollPayLater — card-first (v1 upgrade)", () => {
     );
   });
 
-  it("upserts an active account with the computed limit (5 rides → R100)", async () => {
+  it("upserts an active account with the computed limit in self-serve mode (5 rides → R100)", async () => {
+    process.env.PAY_LATER_ADMIN_APPROVAL = "0";
+    try {
+      vi.mocked(getDefaultCardToken).mockResolvedValue({ transaction_index: "IDX-1" } as any);
+      vi.mocked(queryOne).mockImplementation(
+        oneMock([
+          ...userRows,
+          ["FROM saved_cards", { id: "card-1" }],
+          ["SUM(LEAST(per_driver.c, 4))", { total: "5" }],
+          ["INSERT INTO pay_later_accounts", { ...ACTIVE_ACCOUNT, credit_limit: 100 }],
+        ])
+      );
+      const res = await enrollPayLater("rider-1", {});
+      expect(res.account.credit_limit).toBe(100);
+      expect(res.account.available).toBe(100);
+      expect(res.completed_rides).toBe(5);
+      expect(res.pending_approval).toBe(false);
+      const ins = vi
+        .mocked(queryOne)
+        .mock.calls.find(([sql]) => String(sql).includes("INSERT INTO pay_later_accounts"));
+      expect(ins?.[1]).toContain(100); // credit-limit parameter
+    } finally {
+      delete process.env.PAY_LATER_ADMIN_APPROVAL;
+    }
+  });
+
+  it("admin-approval mode (default) creates a pending R0 request — no auto credit", async () => {
+    delete process.env.PAY_LATER_ADMIN_APPROVAL;
     vi.mocked(getDefaultCardToken).mockResolvedValue({ transaction_index: "IDX-1" } as any);
     vi.mocked(queryOne).mockImplementation(
       oneMock([
         ...userRows,
         ["FROM saved_cards", { id: "card-1" }],
         ["SUM(LEAST(per_driver.c, 4))", { total: "5" }],
-        ["INSERT INTO pay_later_accounts", { ...ACTIVE_ACCOUNT, credit_limit: 100 }],
+        [
+          "INSERT INTO pay_later_accounts",
+          { ...ACTIVE_ACCOUNT, status: "pending", credit_limit: 0 },
+        ],
       ])
     );
     const res = await enrollPayLater("rider-1", {});
-    expect(res.account.credit_limit).toBe(100);
-    expect(res.account.available).toBe(100);
-    expect(res.completed_rides).toBe(5);
+    expect(res.account.credit_limit).toBe(0);
+    expect(res.account.available).toBe(0);
+    expect(res.pending_approval).toBe(true);
+    expect(res.approval_required).toBe(true);
     const ins = vi
       .mocked(queryOne)
       .mock.calls.find(([sql]) => String(sql).includes("INSERT INTO pay_later_accounts"));
-    expect(ins?.[1]).toContain(100); // credit-limit parameter
+    expect(ins?.[1]).toContain(0);
+    expect(ins?.[1]).toContain("pending");
   });
 });
 
