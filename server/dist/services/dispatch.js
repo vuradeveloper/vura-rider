@@ -1274,10 +1274,19 @@ async function acceptRide(io, params) {
             if (ride.driver_id === driverId) {
                 return { ok: true, duplicate: true, rideId, version: ride.version ?? 0 };
             }
-            return { ok: false, error: "Ride no longer available" };
+            return {
+                ok: false,
+                error: "This ride was already picked up by another driver.",
+            };
+        }
+        if (ride.status === "cancelled") {
+            return { ok: false, error: "The rider already cancelled this ride." };
+        }
+        if (ride.status === "completed") {
+            return { ok: false, error: "This ride is already completed." };
         }
         if (!["searching", "scheduled", "no_drivers"].includes(ride.status)) {
-            return { ok: false, error: `Ride is ${ride.status}` };
+            return { ok: false, error: `This ride is no longer available (${ride.status}).` };
         }
         // ONE DRIVER, ONE LIVE TRIP — serialize accepts per driver.
         // Two rides have different ride rows, so without this lock both can pass the
@@ -1714,7 +1723,14 @@ async function cancelPendingOffers(io, rideId, reason = "cancelled") {
             if (reason === "ride_taken")
                 io.to(`user:${d.firebase_uid}`).emit("ride:taken", payload);
         }
-        void (0, notify_1.sendPushToUsers)([d.id], { ...offerGoneCopy(reason), rideId }).catch(() => 0);
+        // A rider cancelling BEFORE any driver accepted is not a cancellation the
+        // pending driver needs a notification for. Silently drop the card; only the
+        // driver who already accepted gets the "Ride cancelled" push from the
+        // passenger:cancel handler. This stops the phantom "the rider cancelled"
+        // notification on drivers who were merely being asked.
+        if (reason !== "rider_cancelled") {
+            void (0, notify_1.sendPushToUsers)([d.id], { ...offerGoneCopy(reason), rideId }).catch(() => 0);
+        }
     }
     await logRideEvent(rideId, null, "offers_cancelled", { reason, drivers: driverIds.length });
     return rows.length;
