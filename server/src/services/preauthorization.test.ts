@@ -387,6 +387,46 @@ describe("createRideHold guards", () => {
     expect(c.body.split.subaccounts[0].share).toBe(56); // 40c commission + 16c fee
   });
 
+  it("R200 ride: holds R208 and routes R13 (R5 commission + R8 fee)", async () => {
+    const ride = {
+      id: "ride-200",
+      passenger_id: "u1",
+      driver_id: null,
+      payment_method: "card",
+      status: "searching",
+      estimated_fare: 200,
+      actual_fare: null,
+      payment_status: "NONE",
+      preauth_reference: null,
+      hold_checkout_url: null,
+      hold_expires_at: null,
+      hold_amount_cents: null,
+      captured_amount: null,
+      booking_fee_cents: null,
+      platform_share_cents: null,
+      split_applied: null,
+    };
+    vi.mocked(queryOne).mockImplementation(async (sql: any) => {
+      const s = String(sql);
+      if (s.includes("FROM rides WHERE id = $1")) return ride as any;
+      if (s.includes("FROM saved_cards")) return { transaction_index: "AUTH_saved" } as any;
+      return null as any;
+    });
+
+    await createRideHold({
+      rideId: "ride-200",
+      userId: "u1",
+      amountRands: 200,
+      email: "rider@vura.com",
+    });
+
+    const c = lastCall();
+    // The rider pays R200 + 4% = R208; Vura's flat split is R5 + R8 = R13,
+    // never 10% of the fare (R20).
+    expect(c.body.amount).toBe(20800);
+    expect(c.body.split.subaccounts[0].share).toBe(1300);
+  });
+
   it("captures the fare + stored booking fee (R5.20), never the fare alone", async () => {
     const ride = {
       id: "ride-1",

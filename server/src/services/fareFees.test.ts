@@ -84,6 +84,24 @@ describe("rideFareBreakdown — Option A, commission capped at R5", () => {
     expect(b.rider_total_cents).toBe(104000);
   });
 
+  it("R200 (owner's example): R5 commission + R8 fee = R13 Vura, driver R195, rider R208", () => {
+    const b = rideFareBreakdown(200, cfg);
+    expect(b.fare_cents).toBe(20000);
+    expect(b.commission_cents).toBe(500);
+    expect(b.booking_fee_cents).toBe(800);
+    expect(b.platform_cents).toBe(1300);
+    expect(b.driver_net_cents).toBe(19500);
+    expect(b.rider_total_cents).toBe(20800);
+    expect(platformShareCents(200, cfg)).toBe(1300);
+    expect(driverOfferBreakdown(200, cfg)).toEqual({
+      fare: 200,
+      commission: 5,
+      bookingFee: 8,
+      riderTotal: 208,
+      driverNet: 195,
+    });
+  });
+
   it("never takes more than R5 commission at any fare", () => {
     for (const fare of [1, 5, 10, 20, 50, 51, 100, 250, 1000, 10000]) {
       const b = rideFareBreakdown(fare, cfg);
