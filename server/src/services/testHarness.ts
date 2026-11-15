@@ -68,7 +68,7 @@ export const TEST_DEST_CONFIG = {
   destination_arrival_radius_km: 0.5,
   destination_offline_grace_seconds: 300,
   destination_max_minutes_without_trip: 180,
-  destination_match_dropoff_radius_km: 3,
+  destination_match_dropoff_radius_km: 5,
   destination_match_cross_track_km: 5,
   destination_match_along_tolerance_km: 0.5,
 };

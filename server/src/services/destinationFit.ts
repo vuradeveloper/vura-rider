@@ -6,7 +6,7 @@
 //
 //   (a) pickup within the normal matching radius → the eligibility SQL, never here
 //   (b) hav(X,T) < hav(P,T)                       strictly closer than the pickup
-//   (c) hav(X,T) ≤ 3 km  OR  (|xt| ≤ 5 km AND −0.5 ≤ along ≤ dAB + 0.5)
+//   (c) hav(X,T) ≤ 5 km  OR  (|xt| ≤ 5 km AND −0.5 ≤ along ≤ dAB + 0.5)
 //
 // Coordinates are WGS84 degrees, distances in km, R = 6371 km — the SAME
 // constant as the matching SQL's `6371 * acos(...)`.
@@ -35,7 +35,7 @@ export interface FitThresholds {
 
 /** Seed values — mirror app_config key `destination` (002 migration). */
 export const DEFAULT_FIT_THRESHOLDS: FitThresholds = {
-  dropoffRadiusKm: 3,
+  dropoffRadiusKm: 5,
   crossTrackKm: 5,
   alongTolKm: 0.5,
 };
@@ -94,8 +94,8 @@ export function destinationFit(
   // (b) strictly closer — inclusive equality REJECTS (fixture 6c).
   if (!(dtX < dtP)) return "reject";
 
-  // (c1) pure 3 km disk around T — no along-track limit (approved wording:
-  // a drop-off ≤ 3 km from the destination is accepted from anywhere).
+  // (c1) pure 5 km disk around T — no along-track limit (approved wording:
+  // a drop-off ≤ 5 km from the destination is accepted from anywhere).
   if (dtX <= th.dropoffRadiusKm) return "accept";
 
   // (c2) cross-track corridor + along-track segment between D and T ± tol.

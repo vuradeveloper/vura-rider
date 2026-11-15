@@ -936,6 +936,22 @@ async function start() {
       } catch (err: any) {
         console.warn("⚠ matching radius update skipped:", err?.message);
       }
+      // Set Destination: widen the drop-off disk around the driver's chosen
+      // destination from 3 km to 5 km. Only rewrite the exact old default.
+      try {
+        const destWidened = await execute(`
+          UPDATE app_config
+             SET value = jsonb_set(value, '{destination_match_dropoff_radius_km}', '5'::jsonb),
+                 updated_at = NOW()
+           WHERE key = 'destination'
+             AND value->'destination_match_dropoff_radius_km' = '3'::jsonb
+        `);
+        if (destWidened.rowCount) {
+          console.log("✓ Destination drop-off radius widened: 3 km → 5 km");
+        }
+      } catch (err: any) {
+        console.warn("⚠ destination radius update skipped:", err?.message);
+      }
       // Backfill so the new status column agrees with the old is_online boolean and
       // with trips already in flight (a driver mid-trip must not look available).
       await execute(`
