@@ -18,7 +18,8 @@ vi.mock("./pinService", () => ({ mintRidePin: vi.fn(async () => undefined) }));
 vi.mock("./config", async () => (await import("./testHarness")).appConfig);
 
 import { query, queryOne, execute } from "../config/database";
-import { acceptRide, expireOffers, offerToNextDriver, reviveWaitingRides } from "./dispatch";
+import { acceptRide, cancelPendingOffers, expireOffers, offerToNextDriver, reviveWaitingRides } from "./dispatch";
+import { sendPushToUsers } from "./notify";
 import { makeIo } from "./testHarness";
 
 const enabled = process.env.VURA_LOADTEST === "1";
@@ -360,5 +361,96 @@ describe.skipIf(!enabled)("Vura load / concurrency", () => {
 
     expect(ids.size).toBe(1);
     expect(active.length).toBe(1);
+  }, 60_000);
+
+  it("drops every other driver's offer the instant one driver accepts", async () => {
+    const rider = await seedRider(800);
+    const ride = await seedRide(rider);
+    const winners = await Promise.all([
+      seedDriver(800, BASE.lat, BASE.lng),
+      seedDriver(801, BASE.lat + 0.001, BASE.lng + 0.001),
+      seedDriver(802, BASE.lat + 0.002, BASE.lng + 0.002),
+    ]);
+    for (const driver of winners) {
+      await execute(
+        `INSERT INTO ride_offers (ride_id, driver_id, status, expires_at, round)
+         VALUES ($1, $2, 'pending', NOW() + INTERVAL '15 seconds', 1)`,
+        [ride, driver]
+      );
+    }
+
+    const { io, emitted } = makeIo(true);
+    const won = await acceptRide(io, { rideId: ride, driverId: winners[0] });
+    expect(won.ok).toBe(true);
+
+    const offers = await query<{ driver_id: string; status: string }>(
+      `SELECT driver_id, status FROM ride_offers WHERE ride_id = $1`,
+      [ride]
+    );
+    const losers = offers.filter((o) => o.driver_id !== winners[0]);
+    const drops = emitted.filter(
+      (e) => e.event === "ride:offer:cancelled" && e.payload?.rideId === ride
+    );
+
+    console.log(
+      `[loadsim] accept cleared offers -> expired=${losers.filter((o) => o.status === "expired").length}, drop_events=${drops.length}`
+    );
+
+    expect(losers.every((o) => o.status === "expired")).toBe(true);
+    expect(drops.length).toBe(2);
+
+    // The race is already over: a late Accept must get the precise reason,
+    // not a generic "no longer available".
+    const late = await acceptRide(io, { rideId: ride, driverId: winners[1] });
+    console.log(`[loadsim] late accept -> ok=${late.ok}, error=${late.error || ""}`);
+    expect(late.ok).toBe(false);
+    expect(String(late.error)).toMatch(/already picked up/i);
+  }, 60_000);
+
+  it("refuses a cancelled ride with a rider-cancelled message", async () => {
+    const rider = await seedRider(810);
+    const ride = await seedRide(rider, "cancelled");
+    const driver = await seedDriver(810, BASE.lat, BASE.lng);
+    const { io } = makeIo(true);
+
+    const refused = await acceptRide(io, { rideId: ride, driverId: driver });
+    console.log(
+      `[loadsim] cancelled accept -> ok=${refused.ok}, error=${refused.error || ""}`
+    );
+
+    expect(refused.ok).toBe(false);
+    expect(String(refused.error)).toMatch(/rider already cancelled/i);
+  }, 60_000);
+
+  it("removes a pending offer on rider cancel without notifying the driver", async () => {
+    const rider = await seedRider(820);
+    const ride = await seedRide(rider);
+    const driver = await seedDriver(820, BASE.lat, BASE.lng);
+    await execute(
+      `INSERT INTO ride_offers (ride_id, driver_id, status, expires_at, round)
+       VALUES ($1, $2, 'pending', NOW() + INTERVAL '15 seconds', 1)`,
+      [ride, driver]
+    );
+
+    const { io, emitted } = makeIo(true);
+    const before = vi.mocked(sendPushToUsers).mock.calls.length;
+    const cancelled = await cancelPendingOffers(io, ride, "rider_cancelled");
+    const after = vi.mocked(sendPushToUsers).mock.calls.length;
+    const offer = await queryOne<{ status: string }>(
+      `SELECT status FROM ride_offers WHERE ride_id = $1 AND driver_id = $2`,
+      [ride, driver]
+    );
+    const drop = emitted.find(
+      (e) => e.event === "ride:offer:cancelled" && e.payload?.rideId === ride
+    );
+
+    console.log(
+      `[loadsim] rider cancel -> offers=${cancelled}, status=${offer?.status}, drop_event=${!!drop}, push_delta=${after - before}`
+    );
+
+    expect(cancelled).toBe(1);
+    expect(offer?.status).toBe("expired");
+    expect(!!drop).toBe(true);
+    expect(after - before).toBe(0); // no "rider cancelled" push before acceptance
   }, 60_000);
 });
